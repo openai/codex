@@ -86,11 +86,11 @@ impl ScrollableDiff {
         self.scroll_by(delta);
     }
 
-    pub fn to_top(&mut self) {
+    pub fn scroll_to_top(&mut self) {
         self.state.scroll = 0;
     }
 
-    pub fn to_bottom(&mut self) {
+    pub fn scroll_to_bottom(&mut self) {
         self.state.scroll = self.max_scroll();
     }
 

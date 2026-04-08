@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
-use codex_core::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
-use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
+use codex_core::PLUGIN_TEXT_MENTION_SIGIL;
+use codex_core::TOOL_MENTION_SIGIL;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LinkedMention {

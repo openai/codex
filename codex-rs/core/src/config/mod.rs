@@ -52,9 +52,12 @@ use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
+use codex_features::FeatureToml;
 use codex_features::Features;
+use codex_features::FeaturesToml;
+use codex_features::MultiAgentV2ConfigToml;
 use codex_login::AuthManagerConfig;
-use codex_mcp::mcp::McpConfig;
+use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -100,7 +103,7 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub mod service;
+pub(crate) mod service;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -242,8 +245,11 @@ pub struct Config {
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
+    /// Path to the global AGENTS file loaded into `user_instructions`.
+    pub user_instructions_path: Option<PathBuf>,
+
     /// Base instructions override.
-    pub base_instructions: Option<Option<String>>,
+    pub base_instructions: Option<String>,
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
@@ -520,6 +526,9 @@ pub struct Config {
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
 
+    /// Settings specific to the task-path-based multi-agent tool surface.
+    pub multi_agent_v2: MultiAgentV2Config,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
 
@@ -562,6 +571,23 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiAgentV2Config {
+    pub usage_hint_enabled: bool,
+    pub usage_hint_text: Option<String>,
+    pub hide_spawn_agent_metadata: bool,
+}
+
+impl Default for MultiAgentV2Config {
+    fn default() -> Self {
+        Self {
+            usage_hint_enabled: true,
+            usage_hint_text: None,
+            hide_spawn_agent_metadata: false,
+        }
+    }
 }
 
 impl AuthManagerConfig for Config {
@@ -687,7 +713,7 @@ impl Config {
             model_context_window: self.model_context_window,
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
             tool_output_token_limit: self.tool_output_token_limit,
-            base_instructions: self.base_instructions.clone().flatten(),
+            base_instructions: self.base_instructions.clone(),
             personality_enabled: self.features.enabled(Feature::Personality),
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
             model_catalog: self.model_catalog.clone(),
@@ -1200,8 +1226,8 @@ pub struct ConfigOverrides {
     pub js_repl_node_path: Option<PathBuf>,
     pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
     pub zsh_path: Option<PathBuf>,
-    pub base_instructions: Option<Option<String>>,
-    pub developer_instructions: Option<Option<String>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
@@ -1279,6 +1305,42 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_multi_agent_v2_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> MultiAgentV2Config {
+    let base = multi_agent_v2_toml_config(config_toml.features.as_ref());
+    let profile = multi_agent_v2_toml_config(config_profile.features.as_ref());
+    let default = MultiAgentV2Config::default();
+
+    let usage_hint_enabled = profile
+        .and_then(|config| config.usage_hint_enabled)
+        .or_else(|| base.and_then(|config| config.usage_hint_enabled))
+        .unwrap_or(default.usage_hint_enabled);
+    let usage_hint_text = profile
+        .and_then(|config| config.usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.usage_hint_text);
+    let hide_spawn_agent_metadata = profile
+        .and_then(|config| config.hide_spawn_agent_metadata)
+        .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
+        .unwrap_or(default.hide_spawn_agent_metadata);
+
+    MultiAgentV2Config {
+        usage_hint_enabled,
+        usage_hint_text,
+        hide_spawn_agent_metadata,
+    }
+}
+
+fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
+    match features?.multi_agent_v2.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -1349,7 +1411,10 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let (user_instructions, user_instructions_path) =
+            Self::load_instructions(Some(&codex_home))
+                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
+                .unwrap_or((None, None));
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1445,7 +1510,7 @@ impl Config {
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
             .unwrap_or(ProjectConfig { trust_level: None });
@@ -1607,6 +1672,7 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -1760,9 +1826,8 @@ impl Config {
             .or(cfg.model_instructions_file.as_ref());
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
-        let base_instructions = base_instructions.or_else(|| file_base_instructions.map(Some));
-        let developer_instructions =
-            developer_instructions.unwrap_or_else(|| cfg.developer_instructions.clone());
+        let base_instructions = base_instructions.or(file_base_instructions);
+        let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let include_permissions_instructions = config_profile
             .include_permissions_instructions
             .or(cfg.include_permissions_instructions)
@@ -1942,6 +2007,7 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
+            user_instructions_path,
             base_instructions,
             personality,
             developer_instructions,
@@ -2029,6 +2095,7 @@ impl Config {
                 .map_or_else(RealtimeConfig::default, |realtime| RealtimeConfig {
                     version: realtime.version.unwrap_or_default(),
                     session_type: realtime.session_type.unwrap_or_default(),
+                    transport: realtime.transport.unwrap_or_default(),
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
@@ -2041,6 +2108,7 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
+            multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -2108,7 +2176,7 @@ impl Config {
         Ok(config)
     }
 
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
+    fn load_instructions(codex_dir: Option<&Path>) -> Option<LoadedUserInstructions> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
             let mut path = base.to_path_buf();
@@ -2116,7 +2184,10 @@ impl Config {
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
+                    return Some(LoadedUserInstructions {
+                        contents: trimmed.to_string(),
+                        path,
+                    });
                 }
             }
         }
@@ -2188,6 +2259,11 @@ impl Config {
     pub fn bundled_skills_enabled(&self) -> bool {
         crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
+}
+
+struct LoadedUserInstructions {
+    contents: String,
+    path: PathBuf,
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {

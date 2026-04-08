@@ -5,30 +5,28 @@ use std::collections::BTreeMap;
 
 pub fn create_update_plan_tool() -> ToolSpec {
     let plan_item_properties = BTreeMap::from([
-        ("step".to_string(), JsonSchema::String { description: None }),
+        ("step".to_string(), JsonSchema::string(/*description*/ None)),
         (
             "status".to_string(),
-            JsonSchema::String {
-                description: Some("One of: pending, in_progress, completed".to_string()),
-            },
+            JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
         ),
     ]);
 
     let properties = BTreeMap::from([
         (
             "explanation".to_string(),
-            JsonSchema::String { description: None },
+            JsonSchema::string(/*description*/ None),
         ),
         (
             "plan".to_string(),
-            JsonSchema::Array {
-                description: Some("The list of steps".to_string()),
-                items: Box::new(JsonSchema::Object {
-                    properties: plan_item_properties,
-                    required: Some(vec!["step".to_string(), "status".to_string()]),
-                    additional_properties: Some(false.into()),
-                }),
-            },
+            JsonSchema::array(
+                JsonSchema::object(
+                    plan_item_properties,
+                    Some(vec!["step".to_string(), "status".to_string()]),
+                    Some(false.into()),
+                ),
+                Some("The list of steps".to_string()),
+            ),
         ),
     ]);
 
@@ -41,11 +39,11 @@ At most one step can be in_progress at a time.
         .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec!["plan".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+            Some(vec!["plan".to_string()]),
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 }

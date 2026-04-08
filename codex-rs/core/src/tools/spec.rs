@@ -5,11 +5,12 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolHandlerKind;
+use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanAppTool;
 use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
@@ -33,6 +34,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
+    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -86,6 +88,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         config,
         ToolRegistryPlanParams {
             mcp_tools: mcp_tools.as_ref(),
+            tool_namespaces: tool_namespaces.as_ref(),
             app_tools: app_tool_sources.as_deref(),
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,

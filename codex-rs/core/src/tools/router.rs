@@ -8,7 +8,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
-use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
@@ -16,6 +16,7 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::ToolNamespace;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use rmcp::model::Tool;
@@ -41,15 +42,43 @@ pub struct ToolRouter {
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
+    pub(crate) tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+}
+
+pub(crate) struct McpToolRouterInputs {
+    pub(crate) mcp_tools: HashMap<String, Tool>,
+    pub(crate) tool_namespaces: HashMap<String, ToolNamespace>,
+}
+
+pub(crate) fn map_mcp_tool_infos(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolRouterInputs {
+    McpToolRouterInputs {
+        mcp_tools: mcp_tools
+            .iter()
+            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
+            .collect(),
+        tool_namespaces: mcp_tools
+            .iter()
+            .map(|(name, tool)| {
+                (
+                    name.clone(),
+                    ToolNamespace {
+                        name: tool.tool_namespace.clone(),
+                        description: tool.server_instructions.clone(),
+                    },
+                )
+            })
+            .collect(),
+    }
 }
 
 impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
         let ToolRouterParams {
             mcp_tools,
+            tool_namespaces,
             app_tools,
             discoverable_tools,
             dynamic_tools,
@@ -58,6 +87,7 @@ impl ToolRouter {
             config,
             mcp_tools,
             app_tools,
+            tool_namespaces,
             discoverable_tools,
             dynamic_tools,
         );

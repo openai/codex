@@ -153,8 +153,7 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
+    pub instructions: String,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<serde_json::Value>,
     pub tool_choice: String,
@@ -169,6 +168,8 @@ pub struct ResponsesApiRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata: Option<HashMap<String, String>>,
 }
 
 impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
@@ -189,7 +190,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
             generate: None,
-            client_metadata: None,
+            client_metadata: request.client_metadata.clone(),
         }
     }
 }
@@ -197,8 +198,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
 #[derive(Debug, Serialize)]
 pub struct ResponseCreateWsRequest {
     pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
+    pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,

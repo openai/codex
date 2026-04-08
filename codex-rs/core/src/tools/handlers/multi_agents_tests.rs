@@ -1,4 +1,5 @@
 use super::*;
+use crate::CodexThread;
 use crate::ThreadManager;
 use crate::codex::make_session_and_context;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
@@ -110,6 +111,74 @@ fn history_contains_inter_agent_communication(
             ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
         })
     })
+}
+
+async fn wait_for_turn_aborted(
+    thread: &Arc<CodexThread>,
+    expected_turn_id: &str,
+    expected_reason: TurnAbortReason,
+) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let event = thread
+                .next_event()
+                .await
+                .expect("child thread should emit events");
+            if matches!(
+                event.msg,
+                EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some(ref turn_id),
+                    ref reason,
+                    ..
+                }) if turn_id == expected_turn_id && *reason == expected_reason
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("expected child turn to be interrupted");
+}
+
+async fn wait_for_redirected_envelope_in_history(
+    thread: &Arc<CodexThread>,
+    expected: &InterAgentCommunication,
+) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let history_items = thread
+                .codex
+                .session
+                .clone_history()
+                .await
+                .raw_items()
+                .to_vec();
+            let saw_envelope =
+                history_contains_inter_agent_communication(&history_items, expected);
+            let saw_user_message = history_items.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "user"
+                            && content.iter().any(|content_item| matches!(
+                                content_item,
+                                ContentItem::InputText { text }
+                                    if text == &expected.content
+                            ))
+                )
+            });
+            if saw_envelope {
+                assert!(
+                    !saw_user_message,
+                    "redirected followup should be stored as an assistant envelope, not a plain user message"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("redirected followup envelope should appear in history");
 }
 
 #[derive(Clone, Copy)]
@@ -1203,6 +1272,7 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         .expect("worker thread should exist");
 
     let active_turn = thread.codex.session.new_default_turn().await;
+    let interrupted_turn_id = active_turn.sub_id.clone();
     thread
         .codex
         .session
@@ -1247,44 +1317,18 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         )
     }));
 
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let history_items = thread
-                .codex
-                .session
-                .clone_history()
-                .await
-                .raw_items()
-                .to_vec();
-            let saw_envelope = history_contains_inter_agent_communication(
-                &history_items,
-                &InterAgentCommunication::new(
-                    AgentPath::root(),
-                    AgentPath::try_from("/root/worker").expect("agent path"),
-                    Vec::new(),
-                    "continue".to_string(),
-                    /*trigger_turn*/ true,
-                ),
-            );
-            let saw_user_message = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "user"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::InputText { text } if text == "continue"
-                            ))
-                )
-            });
-            if saw_envelope && !saw_user_message {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("interrupting v2 followup_task should preserve the redirected message");
+    wait_for_turn_aborted(&thread, &interrupted_turn_id, TurnAbortReason::Interrupted).await;
+    wait_for_redirected_envelope_in_history(
+        &thread,
+        &InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            Vec::new(),
+            "continue".to_string(),
+            /*trigger_turn*/ true,
+        ),
+    )
+    .await;
 
     let _ = thread
         .submit(Op::Shutdown {})
@@ -3211,9 +3255,9 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_spawn_config(Some(&base_instructions), &turn).expect("spawn config");
+    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
     let mut expected = (*turn.config).clone();
-    expected.base_instructions = Some(Some(base_instructions.text));
+    expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.clone();
     expected.model_reasoning_effort = turn.reasoning_effort;
@@ -3249,7 +3293,7 @@ async fn build_agent_spawn_config_preserves_base_user_instructions() {
         text: "base".to_string(),
     };
 
-    let config = build_agent_spawn_config(Some(&base_instructions), &turn).expect("spawn config");
+    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
 
     assert_eq!(config.user_instructions, base_config.user_instructions);
 }
@@ -3258,7 +3302,7 @@ async fn build_agent_spawn_config_preserves_base_user_instructions() {
 async fn build_agent_resume_config_clears_base_instructions() {
     let (_session, mut turn) = make_session_and_context().await;
     let mut base_config = (*turn.config).clone();
-    base_config.base_instructions = Some(Some("caller-base".to_string()));
+    base_config.base_instructions = Some("caller-base".to_string());
     turn.config = Arc::new(base_config);
     turn.approval_policy
         .set(AskForApproval::OnRequest)

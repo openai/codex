@@ -34,11 +34,11 @@ fn parse_mcp_tool_inserts_empty_properties() {
         ToolDefinition {
             name: "no_props".to_string(),
             description: "No properties".to_string(),
-            input_schema: JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            input_schema: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: false,
         }
@@ -72,11 +72,11 @@ fn parse_mcp_tool_preserves_top_level_output_schema() {
         ToolDefinition {
             name: "with_output".to_string(),
             description: "Has output schema".to_string(),
-            input_schema: JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            input_schema: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "properties": {
                     "result": {
@@ -112,11 +112,11 @@ fn parse_mcp_tool_preserves_output_schema_without_inferred_type() {
         ToolDefinition {
             name: "with_enum_output".to_string(),
             description: "Has enum output schema".to_string(),
-            input_schema: JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            input_schema: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "enum": ["ok", "error"]
             }))),

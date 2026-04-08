@@ -1,4 +1,5 @@
 use super::*;
+use crate::JsonSchema;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -11,30 +12,22 @@ fn list_mcp_resources_tool_matches_expected_spec() {
             description: "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.".to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "server".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Optional MCP server name. When omitted, lists resources from every configured server."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "cursor".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Opaque cursor returned by a previous list_mcp_resources call for the same server."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
-                ]),
-                required: None,
-                additional_properties: Some(false.into()),
-            },
+                ]), /*required*/ None, Some(false.into())),
             output_schema: None,
         })
     );
@@ -49,30 +42,22 @@ fn list_mcp_resource_templates_tool_matches_expected_spec() {
             description: "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.".to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "server".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Optional MCP server name. When omitted, lists resource templates from all configured servers."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "cursor".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
-                ]),
-                required: None,
-                additional_properties: Some(false.into()),
-            },
+                ]), /*required*/ None, Some(false.into())),
             output_schema: None,
         })
     );
@@ -89,30 +74,22 @@ fn read_mcp_resource_tool_matches_expected_spec() {
                     .to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "server".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "uri".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
-                ]),
-                required: Some(vec!["server".to_string(), "uri".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                ]), Some(vec!["server".to_string(), "uri".to_string()]), Some(false.into())),
             output_schema: None,
         })
     );

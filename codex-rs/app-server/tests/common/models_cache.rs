@@ -28,6 +28,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         },
         supported_in_api: preset.supported_in_api,
         priority,
+        additional_speed_tiers: preset.additional_speed_tiers.clone(),
         upgrade: preset.upgrade.as_ref().map(Into::into),
         base_instructions: "base instructions".to_string(),
         model_messages: None,

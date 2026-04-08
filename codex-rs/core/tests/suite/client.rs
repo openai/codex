@@ -81,6 +81,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
+const INSTALLATION_ID_FILENAME: &str = "installation_id";
+
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
@@ -760,10 +762,18 @@ async fn includes_conversation_id_and_model_headers_in_request() {
         .header("authorization")
         .expect("authorization header");
     let request_originator = request.header("originator").expect("originator header");
+    let request_body = request.body_json();
+    let installation_id =
+        std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
+            .expect("read installation id");
 
     assert_eq!(request_session_id, session_id.to_string());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
+    assert_eq!(
+        request_body["client_metadata"]["x-codex-installation-id"].as_str(),
+        Some(installation_id.as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -868,6 +878,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             "unused-api-key",
         ))),
         conversation_id,
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         SessionSource::Exec,
         config.model_verbosity,
@@ -921,7 +932,7 @@ async fn includes_base_instructions_override_in_request() {
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
-            config.base_instructions = Some(Some("test instructions".to_string()));
+            config.base_instructions = Some("test instructions".to_string());
         });
     let codex = builder
         .build(&server)
@@ -951,47 +962,6 @@ async fn includes_base_instructions_override_in_request() {
             .unwrap()
             .contains("test instructions")
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn omits_explicit_null_base_instructions_from_request() {
-    skip_if_no_network!();
-    // Mock server
-    let server = MockServer::start().await;
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::from_api_key("Test API Key"))
-        .with_config(|config| {
-            config.base_instructions = Some(None);
-        });
-    let codex = builder
-        .build(&server)
-        .await
-        .expect("create new conversation")
-        .codex;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let request = resp_mock.single_request();
-    let request_body = request.body_json();
-
-    assert_eq!(request_body.get("instructions"), None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1048,11 +1018,18 @@ async fn chatgpt_auth_sends_correct_request() {
     let request_body = request.body_json();
 
     let session_id = request.header("session_id").expect("session_id header");
+    let installation_id =
+        std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
+            .expect("read installation id");
     assert_eq!(session_id, thread_id.to_string());
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
     assert_eq!(request_chatgpt_account_id, "account_id");
+    assert_eq!(
+        request_body["client_metadata"]["x-codex-installation-id"].as_str(),
+        Some(installation_id.as_str())
+    );
     assert!(request_body["stream"].as_bool().unwrap());
     assert_eq!(
         request_body["include"][0].as_str().unwrap(),
@@ -2179,6 +2156,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let client = ModelClient::new(
         /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
