@@ -989,7 +989,7 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
 
     let thread_id = started.started.thread_id.clone();
     harness.append_audio(thread_id.clone()).await?;
-    harness.append_text(thread_id).await?;
+    harness.append_text(thread_id, "hello").await?;
 
     let transcript = harness
         .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
