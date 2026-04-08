@@ -5,11 +5,17 @@ use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::CodexToolCallEventParams;
+use crate::events::CodexToolCallEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ToolCallFailureKind;
+use crate::events::ToolCallFinalReviewOutcome;
+use crate::events::ToolCallTerminalStatus;
+use crate::events::ToolKind;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
@@ -27,7 +33,16 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandExecutionSource;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadItem;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_login::default_client::originator;
@@ -36,15 +51,33 @@ use codex_protocol::protocol::SkillScope;
 use sha1::Digest;
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
     connections: HashMap<u64, ConnectionState>,
+    tool_calls: HashMap<String, ToolCallState>,
 }
 
 struct ConnectionState {
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
+}
+
+struct ToolCallState {
+    connection_id: u64,
+    started_at: u64,
+}
+
+struct ToolCallCompletedMetadata {
+    tool_call_id: String,
+    tool_name: String,
+    tool_kind: ToolKind,
+    terminal_status: ToolCallTerminalStatus,
+    failure_kind: Option<ToolCallFailureKind>,
+    exit_code: Option<i32>,
+    duration_ms: Option<u64>,
 }
 
 impl AnalyticsReducer {
@@ -83,7 +116,12 @@ impl AnalyticsReducer {
             AnalyticsFact::ServerResponse {
                 response: _response,
             } => {}
-            AnalyticsFact::Notification(_notification) => {}
+            AnalyticsFact::Notification {
+                connection_id,
+                notification,
+            } => {
+                self.ingest_notification(connection_id, *notification, out);
+            }
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
@@ -282,6 +320,315 @@ impl AnalyticsReducer {
             },
         ));
     }
+
+    fn ingest_notification(
+        &mut self,
+        connection_id: u64,
+        notification: ServerNotification,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        match notification {
+            ServerNotification::ItemStarted(notification) => {
+                if let Some(tool_call_id) = tool_call_id(&notification.item) {
+                    self.tool_calls
+                        .entry(tool_call_id.to_string())
+                        .or_insert_with(|| ToolCallState {
+                            connection_id,
+                            started_at: now_unix_secs(),
+                        });
+                }
+            }
+            ServerNotification::ItemCompleted(notification) => {
+                let Some(completed_metadata) = tool_call_completed_metadata(&notification.item)
+                else {
+                    return;
+                };
+                let Some(started) = self.tool_calls.remove(&completed_metadata.tool_call_id) else {
+                    return;
+                };
+                let Some(connection_state) = self.connections.get(&started.connection_id) else {
+                    return;
+                };
+                let completed_at = now_unix_secs();
+                let duration_ms = completed_metadata.duration_ms.or_else(|| {
+                    completed_at
+                        .checked_sub(started.started_at)
+                        .map(|duration_secs| duration_secs.saturating_mul(1000))
+                });
+
+                out.push(TrackEventRequest::ToolCall(CodexToolCallEventRequest {
+                    event_type: "codex_tool_call_event",
+                    event_params: CodexToolCallEventParams {
+                        thread_id: notification.thread_id,
+                        turn_id: notification.turn_id,
+                        tool_call_id: completed_metadata.tool_call_id,
+                        app_server_client: connection_state.app_server_client.clone(),
+                        runtime: connection_state.runtime.clone(),
+                        tool_name: completed_metadata.tool_name,
+                        tool_kind: completed_metadata.tool_kind,
+                        started_at: started.started_at,
+                        completed_at: Some(completed_at),
+                        duration_ms,
+                        execution_started: true,
+                        review_count: 0,
+                        guardian_review_count: 0,
+                        user_review_count: 0,
+                        final_review_outcome: ToolCallFinalReviewOutcome::NotNeeded,
+                        terminal_status: completed_metadata.terminal_status,
+                        failure_kind: completed_metadata.failure_kind,
+                        exit_code: completed_metadata.exit_code,
+                        requested_additional_permissions: false,
+                        requested_network_access: false,
+                        retry_count: 0,
+                    },
+                }));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+fn tool_call_id(item: &ThreadItem) -> Option<&str> {
+    match item {
+        ThreadItem::CommandExecution { id, .. }
+        | ThreadItem::FileChange { id, .. }
+        | ThreadItem::McpToolCall { id, .. }
+        | ThreadItem::DynamicToolCall { id, .. }
+        | ThreadItem::CollabAgentToolCall { id, .. }
+        | ThreadItem::WebSearch { id, .. }
+        | ThreadItem::ImageGeneration { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+fn tool_call_completed_metadata(item: &ThreadItem) -> Option<ToolCallCompletedMetadata> {
+    match item {
+        ThreadItem::CommandExecution {
+            id,
+            source,
+            status,
+            exit_code,
+            duration_ms,
+            ..
+        } => {
+            let (terminal_status, failure_kind) = command_execution_outcome(status)?;
+            let tool_kind = command_execution_tool_kind(source);
+            Some(ToolCallCompletedMetadata {
+                tool_call_id: id.clone(),
+                tool_name: command_execution_tool_name(source).to_string(),
+                tool_kind,
+                terminal_status,
+                failure_kind,
+                exit_code: *exit_code,
+                duration_ms: option_i64_to_u64(*duration_ms),
+            })
+        }
+        ThreadItem::FileChange { id, status, .. } => {
+            let (terminal_status, failure_kind) = patch_apply_outcome(status)?;
+            Some(ToolCallCompletedMetadata {
+                tool_call_id: id.clone(),
+                tool_name: "apply_patch".to_string(),
+                tool_kind: ToolKind::ApplyPatch,
+                terminal_status,
+                failure_kind,
+                exit_code: None,
+                duration_ms: None,
+            })
+        }
+        ThreadItem::McpToolCall {
+            id,
+            tool,
+            status,
+            duration_ms,
+            ..
+        } => {
+            let (terminal_status, failure_kind) = mcp_tool_call_outcome(status)?;
+            Some(ToolCallCompletedMetadata {
+                tool_call_id: id.clone(),
+                tool_name: tool.clone(),
+                tool_kind: ToolKind::Mcp,
+                terminal_status,
+                failure_kind,
+                exit_code: None,
+                duration_ms: option_i64_to_u64(*duration_ms),
+            })
+        }
+        ThreadItem::DynamicToolCall {
+            id,
+            tool,
+            status,
+            duration_ms,
+            ..
+        } => {
+            let (terminal_status, failure_kind) = dynamic_tool_call_outcome(status)?;
+            Some(ToolCallCompletedMetadata {
+                tool_call_id: id.clone(),
+                tool_name: tool.clone(),
+                tool_kind: ToolKind::Dynamic,
+                terminal_status,
+                failure_kind,
+                exit_code: None,
+                duration_ms: option_i64_to_u64(*duration_ms),
+            })
+        }
+        ThreadItem::CollabAgentToolCall {
+            id, tool, status, ..
+        } => {
+            let (terminal_status, failure_kind) = collab_tool_call_outcome(status)?;
+            Some(ToolCallCompletedMetadata {
+                tool_call_id: id.clone(),
+                tool_name: collab_agent_tool_name(tool).to_string(),
+                tool_kind: ToolKind::Other,
+                terminal_status,
+                failure_kind,
+                exit_code: None,
+                duration_ms: None,
+            })
+        }
+        ThreadItem::WebSearch { id, .. } => Some(ToolCallCompletedMetadata {
+            tool_call_id: id.clone(),
+            tool_name: "web_search".to_string(),
+            tool_kind: ToolKind::Other,
+            terminal_status: ToolCallTerminalStatus::Completed,
+            failure_kind: None,
+            exit_code: None,
+            duration_ms: None,
+        }),
+        ThreadItem::ImageGeneration { id, status, .. } => {
+            let (terminal_status, failure_kind) = image_generation_outcome(status.as_str());
+            Some(ToolCallCompletedMetadata {
+                tool_call_id: id.clone(),
+                tool_name: "image_generation".to_string(),
+                tool_kind: ToolKind::Other,
+                terminal_status,
+                failure_kind,
+                exit_code: None,
+                duration_ms: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn command_execution_tool_kind(source: &CommandExecutionSource) -> ToolKind {
+    match source {
+        CommandExecutionSource::UnifiedExecStartup
+        | CommandExecutionSource::UnifiedExecInteraction => ToolKind::UnifiedExec,
+        CommandExecutionSource::Agent | CommandExecutionSource::UserShell => ToolKind::Shell,
+    }
+}
+
+fn command_execution_tool_name(source: &CommandExecutionSource) -> &'static str {
+    match source {
+        CommandExecutionSource::UnifiedExecStartup
+        | CommandExecutionSource::UnifiedExecInteraction => "unified_exec",
+        CommandExecutionSource::UserShell => "user_shell",
+        CommandExecutionSource::Agent => "shell",
+    }
+}
+
+fn command_execution_outcome(
+    status: &CommandExecutionStatus,
+) -> Option<(ToolCallTerminalStatus, Option<ToolCallFailureKind>)> {
+    match status {
+        CommandExecutionStatus::InProgress => None,
+        CommandExecutionStatus::Completed => Some((ToolCallTerminalStatus::Completed, None)),
+        CommandExecutionStatus::Failed => Some((
+            ToolCallTerminalStatus::Failed,
+            Some(ToolCallFailureKind::ToolError),
+        )),
+        CommandExecutionStatus::Declined => Some((
+            ToolCallTerminalStatus::Rejected,
+            Some(ToolCallFailureKind::ApprovalDenied),
+        )),
+    }
+}
+
+fn patch_apply_outcome(
+    status: &PatchApplyStatus,
+) -> Option<(ToolCallTerminalStatus, Option<ToolCallFailureKind>)> {
+    match status {
+        PatchApplyStatus::InProgress => None,
+        PatchApplyStatus::Completed => Some((ToolCallTerminalStatus::Completed, None)),
+        PatchApplyStatus::Failed => Some((
+            ToolCallTerminalStatus::Failed,
+            Some(ToolCallFailureKind::ToolError),
+        )),
+        PatchApplyStatus::Declined => Some((
+            ToolCallTerminalStatus::Rejected,
+            Some(ToolCallFailureKind::ApprovalDenied),
+        )),
+    }
+}
+
+fn mcp_tool_call_outcome(
+    status: &McpToolCallStatus,
+) -> Option<(ToolCallTerminalStatus, Option<ToolCallFailureKind>)> {
+    match status {
+        McpToolCallStatus::InProgress => None,
+        McpToolCallStatus::Completed => Some((ToolCallTerminalStatus::Completed, None)),
+        McpToolCallStatus::Failed => Some((
+            ToolCallTerminalStatus::Failed,
+            Some(ToolCallFailureKind::ToolError),
+        )),
+    }
+}
+
+fn dynamic_tool_call_outcome(
+    status: &DynamicToolCallStatus,
+) -> Option<(ToolCallTerminalStatus, Option<ToolCallFailureKind>)> {
+    match status {
+        DynamicToolCallStatus::InProgress => None,
+        DynamicToolCallStatus::Completed => Some((ToolCallTerminalStatus::Completed, None)),
+        DynamicToolCallStatus::Failed => Some((
+            ToolCallTerminalStatus::Failed,
+            Some(ToolCallFailureKind::ToolError),
+        )),
+    }
+}
+
+fn collab_tool_call_outcome(
+    status: &CollabAgentToolCallStatus,
+) -> Option<(ToolCallTerminalStatus, Option<ToolCallFailureKind>)> {
+    match status {
+        CollabAgentToolCallStatus::InProgress => None,
+        CollabAgentToolCallStatus::Completed => Some((ToolCallTerminalStatus::Completed, None)),
+        CollabAgentToolCallStatus::Failed => Some((
+            ToolCallTerminalStatus::Failed,
+            Some(ToolCallFailureKind::ToolError),
+        )),
+    }
+}
+
+fn image_generation_outcome(status: &str) -> (ToolCallTerminalStatus, Option<ToolCallFailureKind>) {
+    match status {
+        "failed" | "error" => (
+            ToolCallTerminalStatus::Failed,
+            Some(ToolCallFailureKind::ToolError),
+        ),
+        _ => (ToolCallTerminalStatus::Completed, None),
+    }
+}
+
+fn collab_agent_tool_name(tool: &CollabAgentTool) -> &'static str {
+    match tool {
+        CollabAgentTool::SpawnAgent => "spawn_agent",
+        CollabAgentTool::SendInput => "send_input",
+        CollabAgentTool::ResumeAgent => "resume_agent",
+        CollabAgentTool::Wait => "wait_agent",
+        CollabAgentTool::CloseAgent => "close_agent",
+    }
+}
+
+fn option_i64_to_u64(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
 }
 
 pub(crate) fn skill_id_for_local_skill(
