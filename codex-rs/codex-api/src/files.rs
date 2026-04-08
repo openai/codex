@@ -5,14 +5,18 @@ use std::time::Duration;
 use crate::AuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use reqwest::StatusCode;
+use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
 use tokio::fs::File;
+use tokio::time::Instant;
 use tokio_util::io::ReaderStream;
 
 pub const OPENAI_FILE_URI_PREFIX: &str = "sediment://";
 pub const OPENAI_FILE_UPLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const OPENAI_FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const OPENAI_FILE_FINALIZE_TIMEOUT: Duration = Duration::from_secs(30);
+const OPENAI_FILE_FINALIZE_RETRY_DELAY: Duration = Duration::from_millis(250);
 const OPENAI_FILE_USE_CASE: &str = "codex";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +166,7 @@ pub async fn upload_local_file(
         .put(&create_payload.upload_url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
         .header("x-ms-blob-type", "BlockBlob")
+        .header(CONTENT_LENGTH, metadata.len())
         .body(reqwest::Body::wrap_stream(ReaderStream::new(upload_file)))
         .send()
         .await
@@ -184,53 +189,65 @@ pub async fn upload_local_file(
         base_url.trim_end_matches('/'),
         create_payload.file_id,
     );
-    let finalize_response = authorized_request(auth, reqwest::Method::POST, &finalize_url)
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: finalize_url.clone(),
-            source,
-        })?;
-    let finalize_status = finalize_response.status();
-    let finalize_body = finalize_response.text().await.unwrap_or_default();
-    if !finalize_status.is_success() {
-        return Err(OpenAiFileError::UnexpectedStatus {
-            url: finalize_url.clone(),
-            status: finalize_status,
-            body: finalize_body,
-        });
-    }
-    let finalize_payload: DownloadLinkResponse =
-        serde_json::from_str(&finalize_body).map_err(|source| OpenAiFileError::Decode {
-            url: finalize_url,
-            source,
-        })?;
+    let finalize_started_at = Instant::now();
+    loop {
+        let finalize_response = authorized_request(auth, reqwest::Method::POST, &finalize_url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|source| OpenAiFileError::Request {
+                url: finalize_url.clone(),
+                source,
+            })?;
+        let finalize_status = finalize_response.status();
+        let finalize_body = finalize_response.text().await.unwrap_or_default();
+        if !finalize_status.is_success() {
+            return Err(OpenAiFileError::UnexpectedStatus {
+                url: finalize_url.clone(),
+                status: finalize_status,
+                body: finalize_body,
+            });
+        }
+        let finalize_payload: DownloadLinkResponse =
+            serde_json::from_str(&finalize_body).map_err(|source| OpenAiFileError::Decode {
+                url: finalize_url.clone(),
+                source,
+            })?;
 
-    match finalize_payload.status.as_str() {
-        "success" => Ok(UploadedOpenAiFile {
-            file_id: create_payload.file_id.clone(),
-            uri: openai_file_uri(&create_payload.file_id),
-            download_url: finalize_payload.download_url.ok_or_else(|| {
-                OpenAiFileError::UploadFailed {
+        match finalize_payload.status.as_str() {
+            "success" => {
+                return Ok(UploadedOpenAiFile {
                     file_id: create_payload.file_id.clone(),
-                    message: "missing download_url".to_string(),
+                    uri: openai_file_uri(&create_payload.file_id),
+                    download_url: finalize_payload.download_url.ok_or_else(|| {
+                        OpenAiFileError::UploadFailed {
+                            file_id: create_payload.file_id.clone(),
+                            message: "missing download_url".to_string(),
+                        }
+                    })?,
+                    file_name: finalize_payload.file_name.unwrap_or(file_name),
+                    file_size_bytes: metadata.len(),
+                    mime_type: finalize_payload.mime_type,
+                    path: path.to_path_buf(),
+                });
+            }
+            "retry" => {
+                if finalize_started_at.elapsed() >= OPENAI_FILE_FINALIZE_TIMEOUT {
+                    return Err(OpenAiFileError::UploadNotReady {
+                        file_id: create_payload.file_id,
+                    });
                 }
-            })?,
-            file_name: finalize_payload.file_name.unwrap_or(file_name),
-            file_size_bytes: metadata.len(),
-            mime_type: finalize_payload.mime_type,
-            path: path.to_path_buf(),
-        }),
-        "retry" => Err(OpenAiFileError::UploadNotReady {
-            file_id: create_payload.file_id,
-        }),
-        _ => Err(OpenAiFileError::UploadFailed {
-            file_id: create_payload.file_id,
-            message: finalize_payload
-                .error_message
-                .unwrap_or_else(|| "upload finalization returned an error".to_string()),
-        }),
+                tokio::time::sleep(OPENAI_FILE_FINALIZE_RETRY_DELAY).await;
+            }
+            _ => {
+                return Err(OpenAiFileError::UploadFailed {
+                    file_id: create_payload.file_id,
+                    message: finalize_payload
+                        .error_message
+                        .unwrap_or_else(|| "upload finalization returned an error".to_string()),
+                });
+            }
+        }
     }
 }
 
@@ -264,9 +281,13 @@ mod tests {
     use super::*;
     use crate::CoreAuthProvider;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use tempfile::TempDir;
     use wiremock::Mock;
     use wiremock::MockServer;
+    use wiremock::Request;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::body_json;
     use wiremock::matchers::header;
@@ -300,18 +321,30 @@ mod tests {
             .await;
         Mock::given(method("PUT"))
             .and(path("/upload/file_123"))
+            .and(header("content-length", "5"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
+        let finalize_attempts = Arc::new(AtomicUsize::new(0));
+        let finalize_attempts_responder = Arc::clone(&finalize_attempts);
+        let download_url = format!("{}/download/file_123", server.uri());
         Mock::given(method("POST"))
             .and(path("/backend-api/files/file_123/uploaded"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "success",
-                "download_url": format!("{}/download/file_123", server.uri()),
-                "file_name": "hello.txt",
-                "mime_type": "text/plain",
-                "file_size_bytes": 5
-            })))
+            .respond_with(move |_request: &Request| {
+                if finalize_attempts_responder.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "status": "retry"
+                    }));
+                }
+
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": "success",
+                    "download_url": download_url,
+                    "file_name": "hello.txt",
+                    "mime_type": "text/plain",
+                    "file_size_bytes": 5
+                }))
+            })
             .mount(&server)
             .await;
 
@@ -332,5 +365,6 @@ mod tests {
         );
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
+        assert_eq!(finalize_attempts.load(Ordering::SeqCst), 2);
     }
 }

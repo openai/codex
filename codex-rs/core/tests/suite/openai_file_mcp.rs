@@ -70,6 +70,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         .await;
     Mock::given(method("PUT"))
         .and(path("/upload/file_123"))
+        .and(header("content-length", "11"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
         .mount(&server)
