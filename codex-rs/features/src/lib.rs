@@ -525,6 +525,8 @@ impl From<BTreeMap<String, bool>> for FeaturesToml {
     }
 }
 
+// To be used for features that need more configuration than just enabled/disabled and
+// require a custom config struct under `[features]`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(untagged)]
 pub enum FeatureToml<T> {
@@ -541,6 +543,8 @@ impl<T: FeatureConfig> FeatureToml<T> {
     }
 }
 
+// A trait to be implemented by custom feature config structs when defining a feature that needs more configuration than
+// just enabled/disabled.
 pub trait FeatureConfig {
     fn enabled(&self) -> Option<bool>;
 }
