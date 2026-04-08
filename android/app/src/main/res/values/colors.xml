@@ -1,6 +1,6 @@
 <resources>
     <color name="ic_launcher_background">#FFFFFFFF</color>
-    <color name="ic_session_manager_background">#0F5B50</color>
+    <color name="ic_session_manager_background">#00000000</color>
     <color name="codex_session_popup_primary_button_background">#5F6867</color>
     <color name="codex_session_popup_primary_button_text">#FFFFFFFF</color>
     <color name="codex_session_popup_secondary_button_border">#C4C7C5</color>
