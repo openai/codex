@@ -850,7 +850,7 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
 }
 
 #[test]
-fn test_mcp_tool_integer_normalized_to_number() {
+fn test_mcp_tool_preserves_integer_schema() {
     let config = test_config();
     let model_info = construct_model_info_offline("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -891,7 +891,10 @@ fn test_mcp_tool_integer_normalized_to_number() {
             name: "dash/paginate".to_string(),
             parameters: JsonSchema::object(
                 /*properties*/
-                BTreeMap::from([("page".to_string(), JsonSchema::number(/*description*/ None),)]),
+                BTreeMap::from([(
+                    "page".to_string(),
+                    JsonSchema::integer(/*description*/ None),
+                )]),
                 /*required*/ None,
                 /*additional_properties*/ None
             ),

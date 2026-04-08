@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
-/// This mirrors the OpenAI Structured Outputs "Supported types" subset:
-/// string, number, boolean, integer, object, array, enum, and anyOf.
+/// This mirrors the OpenAI Structured Outputs subset for JSON Schema `type`:
+/// string, number, boolean, integer, object, array, and null.
+/// Keywords such as `enum`, `const`, and `anyOf` are modeled separately.
 /// See <https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas>.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -22,10 +23,6 @@ pub enum JsonSchemaPrimitiveType {
 }
 
 /// JSON Schema `type` supports either a single type name or a union of names.
-///
-/// OpenAI Structured Outputs allows `anyOf`, while the root schema must still
-/// be an object. Nested unions can be represented either through `anyOf` or a
-/// multi-valued `type`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum JsonSchemaType {
@@ -95,17 +92,13 @@ impl JsonSchema {
         Self::typed(JsonSchemaPrimitiveType::Null, description)
     }
 
-    pub fn enumeration(values: Vec<JsonValue>, description: Option<String>) -> Self {
+    pub fn string_enum(values: Vec<JsonValue>, description: Option<String>) -> Self {
         Self {
-            schema_type: infer_enum_type(Some(&values)).map(JsonSchemaType::Single),
+            schema_type: Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::String)),
             description,
             enum_values: Some(values),
             ..Default::default()
         }
-    }
-
-    pub fn string_enum(values: Vec<JsonValue>, description: Option<String>) -> Self {
-        Self::enumeration(values, description)
     }
 
     pub fn array(items: JsonSchema, description: Option<String>) -> Self {
@@ -164,8 +157,8 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 /// - Ensures every typed schema object has a `"type"` when required.
 /// - Preserves explicit `anyOf`.
 /// - Collapses `const` into single-value `enum`.
-/// - Fills required child fields (e.g. array items, object properties) with
-///   permissive defaults when absent.
+/// - Fills required child fields for object/array schema types, including
+///   nullable unions, with permissive defaults when absent.
 fn sanitize_json_schema(value: &mut JsonValue) {
     match value {
         JsonValue::Bool(_) => {
@@ -202,71 +195,51 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 
             if let Some(const_value) = map.remove("const") {
                 map.insert("enum".to_string(), JsonValue::Array(vec![const_value]));
-                if matches!(
-                    map.get("type").and_then(JsonValue::as_str),
-                    Some("const") | None
-                ) {
-                    map.remove("type");
-                }
             }
 
-            normalize_type_field(map);
+            let mut schema_types = normalized_schema_types(map);
 
-            let mut schema_type = map
-                .get("type")
-                .and_then(JsonValue::as_str)
-                .map(str::to_string);
-
-            if matches!(schema_type.as_deref(), Some("enum") | Some("const")) {
-                schema_type = None;
-                map.remove("type");
-            }
-
-            if let Some(types) = map.get("type").and_then(JsonValue::as_array).cloned() {
-                ensure_default_children_for_type_union(map, &types);
+            if schema_types.is_empty() && map.contains_key("anyOf") {
                 return;
             }
 
-            if schema_type.is_none() && map.contains_key("anyOf") {
-                return;
-            }
-
-            if schema_type.is_none() {
+            if schema_types.is_empty() {
                 if map.contains_key("properties")
                     || map.contains_key("required")
                     || map.contains_key("additionalProperties")
                 {
-                    schema_type = Some("object".to_string());
+                    schema_types.push(JsonSchemaPrimitiveType::Object);
                 } else if map.contains_key("items") || map.contains_key("prefixItems") {
-                    schema_type = Some("array".to_string());
+                    schema_types.push(JsonSchemaPrimitiveType::Array);
                 } else if map.contains_key("enum") || map.contains_key("format") {
-                    schema_type = infer_enum_type(map.get("enum").and_then(JsonValue::as_array))
-                        .map(schema_type_name)
-                        .map(str::to_string)
-                        .or_else(|| Some("string".to_string()));
+                    schema_types.push(JsonSchemaPrimitiveType::String);
                 } else if map.contains_key("minimum")
                     || map.contains_key("maximum")
                     || map.contains_key("exclusiveMinimum")
                     || map.contains_key("exclusiveMaximum")
                     || map.contains_key("multipleOf")
                 {
-                    schema_type = Some("number".to_string());
+                    schema_types.push(JsonSchemaPrimitiveType::Number);
                 } else {
-                    schema_type = Some("string".to_string());
+                    schema_types.push(JsonSchemaPrimitiveType::String);
                 }
             }
 
-            let schema_type = schema_type.unwrap_or_else(|| "string".to_string());
-            map.insert("type".to_string(), JsonValue::String(schema_type.clone()));
+            write_schema_types(map, &schema_types);
+            ensure_default_children_for_schema_types(map, &schema_types);
 
-            if schema_type == "object" && !map.contains_key("properties") {
+            if matches!(schema_types.as_slice(), [JsonSchemaPrimitiveType::Object])
+                && !map.contains_key("properties")
+            {
                 map.insert(
                     "properties".to_string(),
                     JsonValue::Object(serde_json::Map::new()),
                 );
             }
 
-            if schema_type == "array" && !map.contains_key("items") {
+            if matches!(schema_types.as_slice(), [JsonSchemaPrimitiveType::Array])
+                && !map.contains_key("items")
+            {
                 map.insert("items".to_string(), json!({ "type": "string" }));
             }
         }
@@ -274,81 +247,79 @@ fn sanitize_json_schema(value: &mut JsonValue) {
     }
 }
 
-fn normalize_type_field(map: &mut serde_json::Map<String, JsonValue>) {
-    if let Some(schema_type) = map.get("type").and_then(JsonValue::as_array).cloned() {
-        let normalized = schema_type
-            .into_iter()
-            .filter_map(|value| value.as_str().and_then(normalize_schema_type_name))
-            .map(|value| JsonValue::String(value.to_string()))
-            .collect::<Vec<_>>();
-        match normalized.as_slice() {
-            [] => {
-                map.remove("type");
-            }
-            [single] => {
-                map.insert("type".to_string(), single.clone());
-            }
-            _ => {
-                map.insert("type".to_string(), JsonValue::Array(normalized));
-            }
-        }
-    } else if let Some(schema_type) = map.get("type").and_then(JsonValue::as_str)
-        && normalize_schema_type_name(schema_type).is_none()
-    {
-        map.remove("type");
-    }
-}
-
-fn ensure_default_children_for_type_union(
+fn ensure_default_children_for_schema_types(
     map: &mut serde_json::Map<String, JsonValue>,
-    types: &[JsonValue],
+    schema_types: &[JsonSchemaPrimitiveType],
 ) {
-    let has_object = types.iter().any(|value| value.as_str() == Some("object"));
-    if has_object && !map.contains_key("properties") {
+    if schema_types.contains(&JsonSchemaPrimitiveType::Object) && !map.contains_key("properties") {
         map.insert(
             "properties".to_string(),
             JsonValue::Object(serde_json::Map::new()),
         );
     }
 
-    let has_array = types.iter().any(|value| value.as_str() == Some("array"));
-    if has_array && !map.contains_key("items") {
+    if schema_types.contains(&JsonSchemaPrimitiveType::Array) && !map.contains_key("items") {
         map.insert("items".to_string(), json!({ "type": "string" }));
     }
 }
 
-fn infer_enum_type(values: Option<&Vec<JsonValue>>) -> Option<JsonSchemaPrimitiveType> {
-    let values = values?;
-    let first = infer_json_value_type(values.first()?)?;
-    if values
-        .iter()
-        .all(|value| infer_json_value_type(value) == Some(first))
-    {
-        Some(first)
-    } else {
-        None
-    }
-}
+fn normalized_schema_types(
+    map: &serde_json::Map<String, JsonValue>,
+) -> Vec<JsonSchemaPrimitiveType> {
+    let Some(schema_type) = map.get("type") else {
+        return Vec::new();
+    };
 
-fn infer_json_value_type(value: &JsonValue) -> Option<JsonSchemaPrimitiveType> {
-    match value {
-        JsonValue::String(_) => Some(JsonSchemaPrimitiveType::String),
-        JsonValue::Number(_) => Some(JsonSchemaPrimitiveType::Number),
-        JsonValue::Bool(_) => Some(JsonSchemaPrimitiveType::Boolean),
-        JsonValue::Null => Some(JsonSchemaPrimitiveType::Null),
-        _ => None,
-    }
-}
-
-fn normalize_schema_type_name(schema_type: &str) -> Option<&'static str> {
     match schema_type {
-        "string" => Some("string"),
-        "number" => Some("number"),
-        "boolean" => Some("boolean"),
-        "integer" => Some("integer"),
-        "object" => Some("object"),
-        "array" => Some("array"),
-        "null" => Some("null"),
+        JsonValue::String(schema_type) => schema_type_from_str(schema_type).into_iter().collect(),
+        JsonValue::Array(schema_types) => schema_types
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .filter_map(schema_type_from_str)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn write_schema_types(
+    map: &mut serde_json::Map<String, JsonValue>,
+    schema_types: &[JsonSchemaPrimitiveType],
+) {
+    match schema_types {
+        [] => {
+            map.remove("type");
+        }
+        [schema_type] => {
+            map.insert(
+                "type".to_string(),
+                JsonValue::String(schema_type_name(*schema_type).to_string()),
+            );
+        }
+        _ => {
+            map.insert(
+                "type".to_string(),
+                JsonValue::Array(
+                    schema_types
+                        .iter()
+                        .map(|schema_type| {
+                            JsonValue::String(schema_type_name(*schema_type).to_string())
+                        })
+                        .collect(),
+                ),
+            );
+        }
+    }
+}
+
+fn schema_type_from_str(schema_type: &str) -> Option<JsonSchemaPrimitiveType> {
+    match schema_type {
+        "string" => Some(JsonSchemaPrimitiveType::String),
+        "number" => Some(JsonSchemaPrimitiveType::Number),
+        "boolean" => Some(JsonSchemaPrimitiveType::Boolean),
+        "integer" => Some(JsonSchemaPrimitiveType::Integer),
+        "object" => Some(JsonSchemaPrimitiveType::Object),
+        "array" => Some(JsonSchemaPrimitiveType::Array),
+        "null" => Some(JsonSchemaPrimitiveType::Null),
         _ => None,
     }
 }
