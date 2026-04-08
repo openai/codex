@@ -43,7 +43,13 @@ impl ProcessHandler {
         self.process.require_initialized_for(method_family)
     }
 
-    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec(
+        &self,
+        mut params: ExecParams,
+    ) -> Result<ExecResponse, JSONRPCErrorError> {
+        // TODO(exec-server): replace this process-wide inherit with an
+        // exec-server-side environment policy and explicit request overrides.
+        params.env = std::env::vars().collect();
         self.process.exec(params).await
     }
 
