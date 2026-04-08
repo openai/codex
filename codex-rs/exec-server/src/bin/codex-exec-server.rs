@@ -20,8 +20,13 @@ struct ExecServerArgs {
 fn main() -> anyhow::Result<()> {
     dispatch_linux_sandbox_arg0();
 
-    let linux_sandbox_alias = LinuxSandboxAlias::create();
-    let codex_linux_sandbox_exe = linux_sandbox_alias.as_ref().map(|alias| alias.path.clone());
+    let _linux_sandbox_alias = LinuxSandboxAlias::create();
+    #[cfg(target_os = "linux")]
+    let codex_linux_sandbox_exe = _linux_sandbox_alias
+        .as_ref()
+        .map(|alias| alias.path.clone());
+    #[cfg(not(target_os = "linux"))]
+    let codex_linux_sandbox_exe = None;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

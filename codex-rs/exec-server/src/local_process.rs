@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
@@ -513,7 +514,8 @@ fn build_sandbox_command(
     Ok(SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
-        cwd: cwd.to_path_buf(),
+        cwd: AbsolutePathBuf::try_from(cwd)
+            .map_err(|err| invalid_params(format!("cwd must be absolute: {err}")))?,
         env: env.clone(),
         additional_permissions,
     })
@@ -537,7 +539,7 @@ fn prepare_exec_launch(
             // sandbox profile generation preserves proxy-specific allowances.
             /*network*/
             None,
-            runtime.codex_linux_sandbox_exe.as_ref(),
+            runtime.codex_linux_sandbox_exe.as_deref(),
         )
         .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))?;
     launch.prepare_env_for_spawn();
