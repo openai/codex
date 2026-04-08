@@ -12,14 +12,11 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     Ok(cmd)
 }
 
-#[tokio::test]
-async fn marketplace_add_local_directory_installs_valid_marketplace_root() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let source = TempDir::new()?;
-    std::fs::create_dir_all(source.path().join(".agents/plugins"))?;
-    std::fs::create_dir_all(source.path().join("plugins/sample/.codex-plugin"))?;
+fn write_marketplace_source(source: &Path, marker: &str) -> Result<()> {
+    std::fs::create_dir_all(source.join(".agents/plugins"))?;
+    std::fs::create_dir_all(source.join("plugins/sample/.codex-plugin"))?;
     std::fs::write(
-        source.path().join(".agents/plugins/marketplace.json"),
+        source.join(".agents/plugins/marketplace.json"),
         r#"{
   "name": "debug",
   "plugins": [
@@ -34,11 +31,18 @@ async fn marketplace_add_local_directory_installs_valid_marketplace_root() -> Re
 }"#,
     )?;
     std::fs::write(
-        source
-            .path()
-            .join("plugins/sample/.codex-plugin/plugin.json"),
+        source.join("plugins/sample/.codex-plugin/plugin.json"),
         r#"{"name":"sample"}"#,
     )?;
+    std::fs::write(source.join("plugins/sample/marker.txt"), marker)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_local_directory_installs_valid_marketplace_root() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "first install")?;
 
     let mut add_cmd = codex_command(codex_home.path())?;
     add_cmd
@@ -53,6 +57,38 @@ async fn marketplace_add_local_directory_installs_valid_marketplace_root() -> Re
         installed_root
             .join("plugins/sample/.codex-plugin/plugin.json")
             .is_file()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_same_source_is_idempotent() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "first install")?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("Added marketplace `debug`"));
+
+    std::fs::write(
+        source.path().join("plugins/sample/marker.txt"),
+        "source changed after add",
+    )?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("Marketplace `debug` is already added"));
+
+    let installed_root = marketplace_install_root(codex_home.path()).join("debug");
+    assert_eq!(
+        std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt"))?,
+        "first install"
     );
 
     Ok(())

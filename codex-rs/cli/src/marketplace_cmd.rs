@@ -3,6 +3,7 @@ use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
 use codex_core::config::find_codex_home;
+use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::marketplace_install_root;
 use codex_core::plugins::validate_marketplace_root;
 use codex_utils_cli::CliConfigOverrides;
@@ -10,6 +11,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+
+mod metadata;
 
 #[derive(Debug, Parser)]
 pub struct MarketplaceCli {
@@ -41,11 +44,15 @@ struct AddMarketplaceArgs {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum MarketplaceSource {
-    LocalDirectory(PathBuf),
+pub(super) enum MarketplaceSource {
+    LocalDirectory {
+        path: PathBuf,
+        source_id: String,
+    },
     Git {
         url: String,
         ref_name: Option<String>,
+        source_id: String,
     },
 }
 
@@ -90,20 +97,45 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
             install_root.display()
         )
     })?;
+    let install_metadata =
+        metadata::MarketplaceInstallMetadata::from_source(&source, &sparse_paths);
+    if let Some(existing_root) =
+        metadata::installed_marketplace_root_for_source(&install_root, &install_metadata.source_id)?
+    {
+        let marketplace_name = validate_marketplace_root(&existing_root).with_context(|| {
+            format!(
+                "failed to validate installed marketplace at {}",
+                existing_root.display()
+            )
+        })?;
+        println!(
+            "Marketplace `{marketplace_name}` is already added from {}.",
+            source.display()
+        );
+        println!("Installed marketplace root: {}", existing_root.display());
+        return Ok(());
+    }
 
+    let staging_root = marketplace_staging_root(&install_root);
+    fs::create_dir_all(&staging_root).with_context(|| {
+        format!(
+            "failed to create marketplace staging directory {}",
+            staging_root.display()
+        )
+    })?;
     let staged_dir = tempfile::Builder::new()
         .prefix("marketplace-add-")
-        .tempdir_in(&install_root)
+        .tempdir_in(&staging_root)
         .with_context(|| {
             format!(
                 "failed to create temporary marketplace directory in {}",
-                install_root.display()
+                staging_root.display()
             )
         })?;
     let staged_root = staged_dir.path().to_path_buf();
 
     match &source {
-        MarketplaceSource::LocalDirectory(path) => {
+        MarketplaceSource::LocalDirectory { path, .. } => {
             copy_dir_recursive(path, &staged_root).with_context(|| {
                 format!(
                     "failed to copy marketplace source {} into {}",
@@ -112,14 +144,22 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
                 )
             })?;
         }
-        MarketplaceSource::Git { url, ref_name } => {
+        MarketplaceSource::Git { url, ref_name, .. } => {
             clone_git_source(url, ref_name.as_deref(), &sparse_paths, &staged_root)?;
         }
     }
 
     let marketplace_name = validate_marketplace_root(&staged_root)
         .with_context(|| format!("failed to validate marketplace from {}", source.display()))?;
+    if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+        bail!(
+            "marketplace `{OPENAI_CURATED_MARKETPLACE_NAME}` is reserved and cannot be added from {}",
+            source.display()
+        );
+    }
+    metadata::write_marketplace_source_metadata(&staged_root, &install_metadata)?;
     let destination = install_root.join(safe_marketplace_dir_name(&marketplace_name)?);
+    ensure_marketplace_destination_is_inside_install_root(&install_root, &destination)?;
     replace_marketplace_root(&staged_root, &destination)
         .with_context(|| format!("failed to install marketplace at {}", destination.display()))?;
 
@@ -143,38 +183,69 @@ fn parse_marketplace_source(
 
     let source = expand_home(source);
     let path = PathBuf::from(&source);
-    if path.exists() || looks_like_local_path(&source) {
-        if !path.exists() {
+    let path_exists = path.try_exists().with_context(|| {
+        format!(
+            "failed to access local marketplace source {}",
+            path.display()
+        )
+    })?;
+    if path_exists || looks_like_local_path(&source) {
+        if !path_exists {
             bail!(
                 "local marketplace source does not exist: {}",
                 path.display()
             );
         }
-        if !path.is_dir() {
+        let metadata = path.metadata().with_context(|| {
+            format!("failed to read local marketplace source {}", path.display())
+        })?;
+        if metadata.is_file() {
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                bail!(
+                    "local marketplace JSON files are not supported yet; pass the marketplace root directory containing .agents/plugins/marketplace.json: {}",
+                    path.display()
+                );
+            }
             bail!(
-                "local marketplace source must be a directory containing .agents/plugins/marketplace.json: {}",
+                "local marketplace source file must be a JSON marketplace manifest or a directory containing .agents/plugins/marketplace.json: {}",
+                path.display()
+            );
+        }
+        if !metadata.is_dir() {
+            bail!(
+                "local marketplace source must be a file or directory: {}",
                 path.display()
             );
         }
         let path = path
             .canonicalize()
             .with_context(|| format!("failed to resolve {}", path.display()))?;
-        return Ok(MarketplaceSource::LocalDirectory(path));
+        return Ok(MarketplaceSource::LocalDirectory {
+            source_id: format!("directory:{}", path.display()),
+            path,
+        });
     }
 
     let (base_source, parsed_ref) = split_source_ref(&source);
     let ref_name = explicit_ref.or(parsed_ref);
 
     if is_ssh_git_url(&base_source) || is_http_git_url(&base_source) {
+        let url = normalize_git_url(&base_source);
         return Ok(MarketplaceSource::Git {
-            url: normalize_git_url(&base_source),
+            source_id: git_source_id("git", &url, ref_name.as_deref()),
+            url,
             ref_name,
         });
     }
 
     if looks_like_github_shorthand(&base_source) {
+        let url = format!("https://github.com/{base_source}.git");
         return Ok(MarketplaceSource::Git {
-            url: format!("https://github.com/{base_source}.git"),
+            source_id: git_source_id("github", &base_source, ref_name.as_deref()),
+            url,
             ref_name,
         });
     }
@@ -186,6 +257,14 @@ fn parse_marketplace_source(
     }
 
     bail!("invalid marketplace source format: {source}");
+}
+
+fn git_source_id(kind: &str, source: &str, ref_name: Option<&str>) -> String {
+    if let Some(ref_name) = ref_name {
+        format!("{kind}:{source}#{ref_name}")
+    } else {
+        format!("{kind}:{source}")
+    }
 }
 
 fn split_source_ref(source: &str) -> (String, Option<String>) {
@@ -259,7 +338,7 @@ fn is_github_shorthand_segment(segment: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
-fn clone_git_source(
+pub(super) fn clone_git_source(
     url: &str,
     ref_name: Option<&str>,
     sparse_paths: &[String],
@@ -292,9 +371,10 @@ fn clone_git_source(
     Ok(())
 }
 
-fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<()> {
+pub(super) fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let mut command = Command::new("git");
     command.args(args);
+    command.env("GIT_TERMINAL_PROMPT", "0");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -317,7 +397,7 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     );
 }
 
-fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
+pub(super) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     fs::create_dir_all(target)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -355,19 +435,20 @@ fn copy_symlink_target(source: &Path, target: &Path) -> Result<()> {
     }
 }
 
-fn replace_marketplace_root(staged_root: &Path, destination: &Path) -> Result<()> {
+pub(super) fn replace_marketplace_root(staged_root: &Path, destination: &Path) -> Result<()> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
 
     let backup = if destination.exists() {
+        let parent = destination
+            .parent()
+            .context("marketplace destination has no parent")?;
+        let staging_root = marketplace_staging_root(parent);
+        fs::create_dir_all(&staging_root)?;
         let backup = tempfile::Builder::new()
             .prefix("marketplace-backup-")
-            .tempdir_in(
-                destination
-                    .parent()
-                    .context("marketplace destination has no parent")?,
-            )?;
+            .tempdir_in(&staging_root)?;
         let backup_root = backup.path().join("previous");
         fs::rename(destination, &backup_root)?;
         Some((backup, backup_root))
@@ -383,6 +464,10 @@ fn replace_marketplace_root(staged_root: &Path, destination: &Path) -> Result<()
     }
 
     Ok(())
+}
+
+pub(super) fn marketplace_staging_root(install_root: &Path) -> PathBuf {
+    install_root.join(".staging")
 }
 
 fn safe_marketplace_dir_name(marketplace_name: &str) -> Result<String> {
@@ -403,11 +488,47 @@ fn safe_marketplace_dir_name(marketplace_name: &str) -> Result<String> {
     Ok(safe)
 }
 
+fn ensure_marketplace_destination_is_inside_install_root(
+    install_root: &Path,
+    destination: &Path,
+) -> Result<()> {
+    let install_root = install_root.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve marketplace install root {}",
+            install_root.display()
+        )
+    })?;
+    let destination_parent = destination
+        .parent()
+        .context("marketplace destination has no parent")?
+        .canonicalize()
+        .with_context(|| {
+            format!(
+                "failed to resolve marketplace destination parent {}",
+                destination.display()
+            )
+        })?;
+    if !destination_parent.starts_with(&install_root) {
+        bail!(
+            "marketplace destination {} is outside install root {}",
+            destination.display(),
+            install_root.display()
+        );
+    }
+    Ok(())
+}
+
 impl MarketplaceSource {
+    fn source_id(&self) -> &str {
+        match self {
+            Self::LocalDirectory { source_id, .. } | Self::Git { source_id, .. } => source_id,
+        }
+    }
+
     fn display(&self) -> String {
         match self {
-            Self::LocalDirectory(path) => path.display().to_string(),
-            Self::Git { url, ref_name } => {
+            Self::LocalDirectory { path, .. } => path.display().to_string(),
+            Self::Git { url, ref_name, .. } => {
                 if let Some(ref_name) = ref_name {
                     format!("{url}#{ref_name}")
                 } else {
@@ -430,6 +551,7 @@ mod tests {
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: Some("main".to_string()),
+                source_id: "github:owner/repo#main".to_string(),
             }
         );
     }
@@ -445,6 +567,7 @@ mod tests {
             MarketplaceSource::Git {
                 url: "https://example.com/team/repo.git".to_string(),
                 ref_name: Some("v1".to_string()),
+                source_id: "git:https://example.com/team/repo.git#v1".to_string(),
             }
         );
     }
@@ -460,6 +583,35 @@ mod tests {
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: Some("release".to_string()),
+                source_id: "github:owner/repo#release".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn github_shorthand_and_git_url_have_different_source_ids() {
+        let shorthand = parse_marketplace_source("owner/repo", /* explicit_ref */ None).unwrap();
+        let git_url = parse_marketplace_source(
+            "https://github.com/owner/repo.git",
+            /* explicit_ref */ None,
+        )
+        .unwrap();
+
+        assert_ne!(shorthand.source_id(), git_url.source_id());
+        assert_eq!(
+            shorthand,
+            MarketplaceSource::Git {
+                url: "https://github.com/owner/repo.git".to_string(),
+                ref_name: None,
+                source_id: "github:owner/repo".to_string(),
+            }
+        );
+        assert_eq!(
+            git_url,
+            MarketplaceSource::Git {
+                url: "https://github.com/owner/repo.git".to_string(),
+                ref_name: None,
+                source_id: "git:https://github.com/owner/repo.git".to_string(),
             }
         );
     }
