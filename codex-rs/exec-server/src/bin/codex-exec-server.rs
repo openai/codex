@@ -1,10 +1,6 @@
 use clap::Parser;
 
-use std::future::Future;
 use std::path::PathBuf;
-
-#[cfg(target_os = "linux")]
-use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 
 #[derive(Debug, Parser)]
 struct ExecServerArgs {
@@ -18,7 +14,13 @@ struct ExecServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    linux_sandbox_arg0_dispatch_or_else(run_main)
+    #[cfg(target_os = "linux")]
+    codex_linux_sandbox::dispatch_if_requested();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_main(linux_sandbox_exe()))
 }
 
 async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
@@ -30,75 +32,12 @@ async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     Ok(())
 }
 
-// Keep this standalone-server wrapper local instead of using
-// codex_arg0::arg0_dispatch_or_else: codex-arg0 owns CLI aliases such as
-// apply_patch, and depends on codex-exec-server to apply patches.
-fn linux_sandbox_arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
-where
-    F: FnOnce(Option<PathBuf>) -> Fut,
-    Fut: Future<Output = anyhow::Result<()>>,
-{
-    dispatch_linux_sandbox_arg0();
-
-    let _linux_sandbox_alias = LinuxSandboxAlias::create();
-    #[cfg(target_os = "linux")]
-    let codex_linux_sandbox_exe = _linux_sandbox_alias
-        .as_ref()
-        .map(|alias| alias.path.clone());
-    #[cfg(not(target_os = "linux"))]
-    let codex_linux_sandbox_exe = None;
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(main_fn(codex_linux_sandbox_exe))
-}
-
 #[cfg(target_os = "linux")]
-struct LinuxSandboxAlias {
-    _temp_dir: tempfile::TempDir,
-    path: PathBuf,
+fn linux_sandbox_exe() -> Option<PathBuf> {
+    std::env::current_exe().ok()
 }
 
 #[cfg(not(target_os = "linux"))]
-struct LinuxSandboxAlias;
-
-#[cfg(target_os = "linux")]
-impl LinuxSandboxAlias {
-    fn create() -> Option<Self> {
-        let current_exe = std::env::current_exe().ok()?;
-        let temp_dir = tempfile::Builder::new()
-            .prefix("codex-exec-server-")
-            .tempdir()
-            .ok()?;
-        let path = temp_dir.path().join(CODEX_LINUX_SANDBOX_ARG0);
-        std::os::unix::fs::symlink(current_exe, &path).ok()?;
-        Some(Self {
-            _temp_dir: temp_dir,
-            path,
-        })
-    }
+fn linux_sandbox_exe() -> Option<PathBuf> {
+    None
 }
-
-#[cfg(not(target_os = "linux"))]
-impl LinuxSandboxAlias {
-    fn create() -> Option<Self> {
-        None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn dispatch_linux_sandbox_arg0() {
-    let argv0 = std::env::args_os().next().unwrap_or_default();
-    let exe_name = std::path::Path::new(&argv0)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-
-    if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
-        codex_linux_sandbox::run_main();
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn dispatch_linux_sandbox_arg0() {}
