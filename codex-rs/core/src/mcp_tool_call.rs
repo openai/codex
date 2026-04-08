@@ -23,6 +23,7 @@ use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
+use crate::guardian::guardian_rejection_message;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
@@ -232,8 +233,8 @@ pub(crate) async fn handle_mcp_tool_call(
                 .await;
                 (result, Some(duration))
             }
-            McpToolApprovalDecision::Decline => {
-                let message = "user rejected MCP tool call".to_string();
+            McpToolApprovalDecision::Decline { message } => {
+                let message = message.unwrap_or_else(|| "user rejected MCP tool call".to_string());
                 (
                     notify_mcp_tool_call_skip(
                         sess.as_ref(),
@@ -553,7 +554,7 @@ enum McpToolApprovalDecision {
     Accept,
     AcceptForSession,
     AcceptAndRemember,
-    Decline,
+    Decline { message: Option<String> },
     Cancel,
     BlockedBySafetyMonitor(String),
 }
@@ -750,7 +751,7 @@ async fn maybe_request_mcp_tool_approval(
             monitor_reason.clone(),
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(decision);
+        let decision = mcp_tool_approval_decision_from_guardian(sess, call_id, decision).await;
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -938,13 +939,20 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     }
 }
 
-fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
+async fn mcp_tool_approval_decision_from_guardian(
+    sess: &Session,
+    call_id: &str,
+    decision: ReviewDecision,
+) -> McpToolApprovalDecision {
     match decision {
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied | ReviewDecision::Abort => McpToolApprovalDecision::Decline,
+        ReviewDecision::Denied => McpToolApprovalDecision::Decline {
+            message: Some(guardian_rejection_message(sess, call_id).await),
+        },
+        ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
 }
 
@@ -1316,7 +1324,7 @@ fn parse_mcp_tool_approval_elicitation_response(
                 decision => decision,
             }
         }
-        ElicitationAction::Decline => McpToolApprovalDecision::Decline,
+        ElicitationAction::Decline => McpToolApprovalDecision::Decline { message: None },
         ElicitationAction::Cancel => McpToolApprovalDecision::Cancel,
     }
 }
@@ -1366,7 +1374,7 @@ fn parse_mcp_tool_approval_response(
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC)
     {
-        McpToolApprovalDecision::Decline
+        McpToolApprovalDecision::Decline { message: None }
     } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
@@ -1434,7 +1442,7 @@ async fn apply_mcp_tool_approval_decision(
             }
         }
         McpToolApprovalDecision::Accept
-        | McpToolApprovalDecision::Decline
+        | McpToolApprovalDecision::Decline { .. }
         | McpToolApprovalDecision::Cancel
         | McpToolApprovalDecision::BlockedBySafetyMonitor(_) => {}
     }

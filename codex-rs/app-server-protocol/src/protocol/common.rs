@@ -1005,6 +1005,8 @@ server_notification_definitions! {
     ThreadRealtimeTranscriptUpdated => "thread/realtime/transcriptUpdated" (v2::ThreadRealtimeTranscriptUpdatedNotification),
     #[experimental("thread/realtime/outputAudio/delta")]
     ThreadRealtimeOutputAudioDelta => "thread/realtime/outputAudio/delta" (v2::ThreadRealtimeOutputAudioDeltaNotification),
+    #[experimental("thread/realtime/sdp")]
+    ThreadRealtimeSdp => "thread/realtime/sdp" (v2::ThreadRealtimeSdpNotification),
     #[experimental("thread/realtime/error")]
     ThreadRealtimeError => "thread/realtime/error" (v2::ThreadRealtimeErrorNotification),
     #[experimental("thread/realtime/closed")]
@@ -1761,6 +1763,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: Some("sess_456".to_string()),
+                transport: None,
             },
         };
         assert_eq!(
@@ -1770,7 +1773,8 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456"
+                    "sessionId": "sess_456",
+                    "transport": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1850,6 +1854,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: None,
+                transport: None,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);

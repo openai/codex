@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::RolloutRecorder;
@@ -46,6 +47,7 @@ pub(crate) struct SessionServices {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
+    pub(crate) guardian_rejection_rationales: Mutex<HashMap<String, String>>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,

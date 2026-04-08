@@ -1050,7 +1050,7 @@ impl JsReplManager {
                 "--experimental-vm-modules".to_string(),
                 kernel_path.to_string_lossy().to_string(),
             ],
-            cwd: turn.cwd.to_path_buf(),
+            cwd: turn.cwd.clone(),
             env,
             additional_permissions: None,
         };
@@ -1068,7 +1068,7 @@ impl JsReplManager {
                 enforce_managed_network: has_managed_network_requirements,
                 network: None,
                 sandbox_policy_cwd: &turn.cwd,
-                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
+                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
                 windows_sandbox_private_desktop: turn
@@ -1561,16 +1561,13 @@ impl JsReplManager {
             .await
             .list_all_tools()
             .await;
+        let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&mcp_tools);
 
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
-                mcp_tools: Some(
-                    mcp_tools
-                        .into_iter()
-                        .map(|(name, tool)| (name, tool.tool))
-                        .collect(),
-                ),
+                mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+                tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
                 app_tools: None,
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),

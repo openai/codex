@@ -20,7 +20,7 @@ pub const MAX_WIDTH: u32 = 2048;
 /// Maximum height used when resizing images before uploading.
 pub const MAX_HEIGHT: u32 = 768;
 
-pub(crate) mod error;
+pub mod error;
 
 pub use crate::error::ImageProcessingError;
 
