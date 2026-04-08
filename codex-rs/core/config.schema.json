@@ -990,7 +990,7 @@
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
-        "debug_hide_spawn_agent_metadata": {
+        "hide_spawn_agent_metadata": {
           "type": "boolean"
         },
         "enabled": {

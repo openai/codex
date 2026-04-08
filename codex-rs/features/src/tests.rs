@@ -268,7 +268,7 @@ fn multi_agent_v2_feature_config_deserializes_table() {
 [multi_agent_v2]
 enabled = true
 usage_hint = false
-debug_hide_spawn_agent_metadata = true
+hide_spawn_agent_metadata = true
 "#,
     )
     .expect("features table should deserialize");
@@ -282,7 +282,7 @@ debug_hide_spawn_agent_metadata = true
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: Some(true),
             usage_hint: Some(false),
-            debug_hide_spawn_agent_metadata: Some(true),
+            hide_spawn_agent_metadata: Some(true),
         }))
     );
 }
@@ -312,7 +312,7 @@ usage_hint = false
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: None,
             usage_hint: Some(false),
-            debug_hide_spawn_agent_metadata: None,
+            hide_spawn_agent_metadata: None,
         }))
     );
 }

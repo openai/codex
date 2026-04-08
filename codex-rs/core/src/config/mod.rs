@@ -573,14 +573,14 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
     pub usage_hint: bool,
-    pub debug_hide_spawn_agent_metadata: bool,
+    pub hide_spawn_agent_metadata: bool,
 }
 
 impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self {
             usage_hint: true,
-            debug_hide_spawn_agent_metadata: false,
+            hide_spawn_agent_metadata: false,
         }
     }
 }
@@ -1312,14 +1312,14 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.usage_hint)
         .or_else(|| base.and_then(|config| config.usage_hint))
         .unwrap_or(default.usage_hint);
-    let debug_hide_spawn_agent_metadata = profile
-        .and_then(|config| config.debug_hide_spawn_agent_metadata)
-        .or_else(|| base.and_then(|config| config.debug_hide_spawn_agent_metadata))
-        .unwrap_or(default.debug_hide_spawn_agent_metadata);
+    let hide_spawn_agent_metadata = profile
+        .and_then(|config| config.hide_spawn_agent_metadata)
+        .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
+        .unwrap_or(default.hide_spawn_agent_metadata);
 
     MultiAgentV2Config {
         usage_hint,
-        debug_hide_spawn_agent_metadata,
+        hide_spawn_agent_metadata,
     }
 }
 

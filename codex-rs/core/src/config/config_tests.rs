@@ -6108,7 +6108,7 @@ async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
         r#"[features.multi_agent_v2]
 enabled = true
 usage_hint = false
-debug_hide_spawn_agent_metadata = true
+hide_spawn_agent_metadata = true
 "#,
     )?;
 
@@ -6120,7 +6120,7 @@ debug_hide_spawn_agent_metadata = true
 
     assert!(config.features.enabled(Feature::MultiAgentV2));
     assert!(!config.multi_agent_v2.usage_hint);
-    assert!(config.multi_agent_v2.debug_hide_spawn_agent_metadata);
+    assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
 
     Ok(())
 }
@@ -6134,11 +6134,11 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
 
 [features.multi_agent_v2]
 usage_hint = true
-debug_hide_spawn_agent_metadata = true
+hide_spawn_agent_metadata = true
 
 [profiles.no_hint.features.multi_agent_v2]
 usage_hint = false
-debug_hide_spawn_agent_metadata = false
+hide_spawn_agent_metadata = false
 "#,
     )?;
 
@@ -6149,7 +6149,7 @@ debug_hide_spawn_agent_metadata = false
         .await?;
 
     assert!(!config.multi_agent_v2.usage_hint);
-    assert!(!config.multi_agent_v2.debug_hide_spawn_agent_metadata);
+    assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
 
     Ok(())
 }

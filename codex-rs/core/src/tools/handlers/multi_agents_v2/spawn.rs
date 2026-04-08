@@ -206,7 +206,7 @@ impl ToolHandler for Handler {
             )
         })?;
 
-        let hide_agent_metadata = turn.config.multi_agent_v2.debug_hide_spawn_agent_metadata;
+        let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
         if hide_agent_metadata {
             Ok(SpawnAgentResult::HiddenMetadata { task_name })
         } else {

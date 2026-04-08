@@ -962,7 +962,7 @@ impl TurnContext {
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_has_environment(self.tools_config.has_environment)
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint)
-        .with_hide_spawn_agent_metadata(config.multi_agent_v2.debug_hide_spawn_agent_metadata)
+        .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
@@ -1446,11 +1446,7 @@ impl Session {
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_has_environment(environment.is_some())
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint)
-        .with_hide_spawn_agent_metadata(
-            per_turn_config
-                .multi_agent_v2
-                .debug_hide_spawn_agent_metadata,
-        )
+        .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -5630,7 +5626,7 @@ async fn spawn_review_thread(
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_has_environment(parent_turn_context.environment.is_some())
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint)
-    .with_hide_spawn_agent_metadata(config.multi_agent_v2.debug_hide_spawn_agent_metadata)
+    .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
     .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         &config.agent_roles,
     ));
