@@ -37,6 +37,7 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_exec_server::EnvironmentManager;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -238,6 +239,7 @@ async fn start_embedded_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
         arg0_paths,
@@ -246,6 +248,7 @@ async fn start_embedded_app_server(
         loader_overrides,
         cloud_requirements,
         feedback,
+        environment_manager,
         InProcessAppServerClient::start,
     )
     .await
@@ -352,6 +355,7 @@ async fn connect_remote_app_server(
     Ok(AppServerClient::Remote(app_server))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_app_server(
     target: &AppServerTarget,
     arg0_paths: Arg0DispatchPaths,
@@ -360,6 +364,7 @@ async fn start_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
         AppServerTarget::Embedded => start_embedded_app_server(
@@ -369,6 +374,7 @@ async fn start_app_server(
             loader_overrides,
             cloud_requirements,
             feedback,
+            environment_manager,
         )
         .await
         .map(AppServerClient::InProcess),
@@ -382,6 +388,7 @@ async fn start_app_server(
 pub(crate) async fn start_app_server_for_picker(
     config: &Config,
     target: &AppServerTarget,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerSession> {
     let app_server = start_app_server(
         target,
@@ -391,6 +398,7 @@ pub(crate) async fn start_app_server_for_picker(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
+        environment_manager,
     )
     .await?;
     Ok(AppServerSession::new(app_server))
@@ -400,9 +408,15 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
-    start_app_server_for_picker(config, &AppServerTarget::Embedded).await
+    start_app_server_for_picker(
+        config,
+        &AppServerTarget::Embedded,
+        Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server_with<F, Fut>(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
@@ -410,6 +424,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    environment_manager: Arc<EnvironmentManager>,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
 where
@@ -433,6 +448,7 @@ where
         loader_overrides,
         cloud_requirements,
         feedback,
+        environment_manager,
         config_warnings,
         session_source: codex_protocol::protocol::SessionSource::Cli,
         enable_codex_api_key_env: false,
@@ -590,15 +606,19 @@ fn latest_session_lookup_params(
 fn config_cwd_for_app_server_target(
     cwd: Option<&Path>,
     app_server_target: &AppServerTarget,
-) -> std::io::Result<AbsolutePathBuf> {
-    if matches!(app_server_target, AppServerTarget::Remote { .. }) {
-        return AbsolutePathBuf::current_dir();
+    environment_manager: &EnvironmentManager,
+) -> std::io::Result<Option<AbsolutePathBuf>> {
+    if environment_manager.is_remote()
+        || matches!(app_server_target, AppServerTarget::Remote { .. })
+    {
+        return Ok(None);
     }
 
-    match cwd {
+    let cwd = match cwd {
         Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?),
         None => AbsolutePathBuf::current_dir(),
-    }
+    }?;
+    Ok(Some(cwd))
 }
 
 fn latest_session_cwd_filter<'a>(
@@ -689,13 +709,15 @@ pub async fn run_main(
         }
     };
 
+    let environment_manager = Arc::new(EnvironmentManager::from_env());
     let cwd = cli.cwd.clone();
-    let config_cwd = config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target)?;
+    let config_cwd =
+        config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
         &codex_home,
-        &config_cwd,
+        config_cwd.as_ref(),
         cli_kv_overrides.clone(),
     )
     .await
@@ -952,6 +974,7 @@ pub async fn run_main(
         feedback,
         remote_url,
         remote_auth_token,
+        environment_manager,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -971,6 +994,7 @@ async fn run_ratatui_app(
     feedback: codex_feedback::CodexFeedback,
     remote_url: Option<String>,
     remote_auth_token: Option<String>,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppExitInfo> {
     let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
     color_eyre::install()?;
@@ -1026,6 +1050,7 @@ async fn run_ratatui_app(
             loader_overrides.clone(),
             cloud_requirements.clone(),
             feedback.clone(),
+            environment_manager.clone(),
         )
         .await
         {
@@ -1351,6 +1376,7 @@ async fn run_ratatui_app(
             loader_overrides,
             cloud_requirements.clone(),
             feedback.clone(),
+            environment_manager.clone(),
         )
         .await
         {
@@ -1379,6 +1405,7 @@ async fn run_ratatui_app(
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
+        environment_manager,
     )
     .await;
 
@@ -1697,6 +1724,7 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -1717,6 +1745,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         )
         .await
     }
@@ -1865,8 +1894,7 @@ mod tests {
     }
 
     #[test]
-    fn config_cwd_for_app_server_target_uses_current_dir_for_remote_sessions() -> std::io::Result<()>
-    {
+    fn config_cwd_for_app_server_target_omits_cwd_for_remote_sessions() -> std::io::Result<()> {
         let remote_only_cwd = if cfg!(windows) {
             Path::new(r"C:\definitely\not\local\to\this\test")
         } else {
@@ -1876,10 +1904,12 @@ mod tests {
             websocket_url: "ws://127.0.0.1:1234/".to_string(),
             auth_token: None,
         };
+        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
 
-        let config_cwd = config_cwd_for_app_server_target(Some(remote_only_cwd), &target)?;
+        let config_cwd =
+            config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
 
-        assert_eq!(config_cwd, AbsolutePathBuf::current_dir()?);
+        assert_eq!(config_cwd, None);
         Ok(())
     }
 
@@ -1887,13 +1917,34 @@ mod tests {
     fn config_cwd_for_app_server_target_canonicalizes_embedded_cli_cwd() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::Embedded;
+        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
 
-        let config_cwd = config_cwd_for_app_server_target(Some(temp_dir.path()), &target)?;
+        let config_cwd =
+            config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
 
         assert_eq!(
             config_cwd,
-            AbsolutePathBuf::from_absolute_path(temp_dir.path().canonicalize()?)?
+            Some(AbsolutePathBuf::from_absolute_path(
+                temp_dir.path().canonicalize()?
+            )?)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn config_cwd_for_app_server_target_omits_cwd_for_remote_exec_server() -> std::io::Result<()> {
+        let remote_only_cwd = if cfg!(windows) {
+            Path::new(r"C:\definitely\not\local\to\this\test")
+        } else {
+            Path::new("/definitely/not/local/to/this/test")
+        };
+        let target = AppServerTarget::Embedded;
+        let environment_manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
+
+        let config_cwd =
+            config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
+
+        assert_eq!(config_cwd, None);
         Ok(())
     }
 
@@ -2017,6 +2068,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
         .await;

@@ -74,7 +74,7 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
 #[test]
 fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() {
     let manager = SandboxManager::new();
-    let cwd = std::env::current_dir().expect("current dir");
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     let exec_request = manager
         .transform(SandboxTransformRequest {
             command: SandboxCommand {
@@ -113,7 +113,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
 #[test]
 fn transform_additional_permissions_enable_network_for_external_sandbox() {
     let manager = SandboxManager::new();
-    let cwd = std::env::current_dir().expect("current dir");
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     let temp_dir = TempDir::new().expect("create temp dir");
     let path = AbsolutePathBuf::from_absolute_path(
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
@@ -167,7 +167,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
 #[test]
 fn transform_additional_permissions_preserves_denied_entries() {
     let manager = SandboxManager::new();
-    let cwd = std::env::current_dir().expect("current dir");
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     let temp_dir = TempDir::new().expect("create temp dir");
     let workspace_root = AbsolutePathBuf::from_absolute_path(
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
@@ -247,10 +247,10 @@ fn transform_additional_permissions_preserves_denied_entries() {
 
 #[cfg(target_os = "linux")]
 fn transform_linux_seccomp_request(
-    codex_linux_sandbox_exe: &std::path::PathBuf,
+    codex_linux_sandbox_exe: &std::path::Path,
 ) -> super::SandboxExecRequest {
     let manager = SandboxManager::new();
-    let cwd = std::env::current_dir().expect("current dir");
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     manager
         .transform(SandboxTransformRequest {
             command: SandboxCommand {

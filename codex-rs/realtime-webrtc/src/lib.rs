@@ -1,4 +1,4 @@
-#[cfg(all(target_os = "macos", not(codex_bazel)))]
+#[cfg(target_os = "macos")]
 mod native;
 
 use std::fmt;
@@ -31,7 +31,7 @@ pub struct StartedRealtimeWebrtcSession {
 }
 
 pub struct RealtimeWebrtcSessionHandle {
-    #[cfg(all(target_os = "macos", not(codex_bazel)))]
+    #[cfg(target_os = "macos")]
     inner: native::SessionHandle,
     local_audio_peak: Arc<AtomicU16>,
 }
@@ -45,11 +45,11 @@ impl fmt::Debug for RealtimeWebrtcSessionHandle {
 
 impl RealtimeWebrtcSessionHandle {
     pub fn apply_answer_sdp(&self, answer_sdp: String) -> Result<()> {
-        #[cfg(all(target_os = "macos", not(codex_bazel)))]
+        #[cfg(target_os = "macos")]
         {
             self.inner.apply_answer_sdp(answer_sdp)
         }
-        #[cfg(any(not(target_os = "macos"), codex_bazel))]
+        #[cfg(not(target_os = "macos"))]
         {
             let _ = answer_sdp;
             Err(RealtimeWebrtcError::UnsupportedPlatform)
@@ -57,7 +57,7 @@ impl RealtimeWebrtcSessionHandle {
     }
 
     pub fn close(&self) {
-        #[cfg(all(target_os = "macos", not(codex_bazel)))]
+        #[cfg(target_os = "macos")]
         self.inner.close();
     }
 
@@ -70,7 +70,7 @@ pub struct RealtimeWebrtcSession;
 
 impl RealtimeWebrtcSession {
     pub fn start() -> Result<StartedRealtimeWebrtcSession> {
-        #[cfg(all(target_os = "macos", not(codex_bazel)))]
+        #[cfg(target_os = "macos")]
         {
             let started = native::start()?;
             Ok(StartedRealtimeWebrtcSession {
@@ -82,7 +82,7 @@ impl RealtimeWebrtcSession {
                 events: started.events,
             })
         }
-        #[cfg(any(not(target_os = "macos"), codex_bazel))]
+        #[cfg(not(target_os = "macos"))]
         {
             Err(RealtimeWebrtcError::UnsupportedPlatform)
         }
