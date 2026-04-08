@@ -833,7 +833,10 @@ mod tests {
         let lines = vec![
             Line::from("  └ short"),
             Line::from("    this-is-a-very-long-token-that-wraps-many-rows"),
-            Line::from(format!("    {}", ExecCell::output_ellipsis_text(4))),
+            Line::from(format!(
+                "    {}",
+                ExecCell::output_ellipsis_text(/*omitted*/ 4)
+            )),
             Line::from("    tail"),
         ];
 
@@ -892,7 +895,7 @@ mod tests {
                 Line::from("second"),
                 Line::from("third"),
             ],
-            2,
+            /*keep*/ 2,
         );
         let rendered: Vec<String> = truncated.iter().map(render_line_text).collect();
 
