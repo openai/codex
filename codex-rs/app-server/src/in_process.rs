@@ -56,6 +56,7 @@ use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
+use crate::message_processor::analytics_events_client_from_config;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;
@@ -355,7 +356,14 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let auth_manager =
+            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
+        let analytics_events_client =
+            analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new_with_analytics(
+            outgoing_tx,
+            analytics_events_client.clone(),
+        ));
 
         let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(channel_capacity);
         let outbound_initialized = Arc::new(AtomicBool::new(false));
@@ -380,12 +388,11 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         });
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
-        let auth_manager =
-            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
             let mut processor = MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
+                analytics_events_client,
                 arg0_paths: args.arg0_paths,
                 config: args.config,
                 environment_manager: Arc::new(EnvironmentManager::from_env()),

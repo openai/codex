@@ -185,6 +185,7 @@ pub(crate) struct ConnectionSessionState {
 
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -200,12 +201,24 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
 }
 
+pub(crate) fn analytics_events_client_from_config(
+    auth_manager: Arc<AuthManager>,
+    config: &Config,
+) -> AnalyticsEventsClient {
+    AnalyticsEventsClient::new(
+        auth_manager,
+        config.chatgpt_base_url.trim_end_matches('/').to_string(),
+        config.analytics_enabled,
+    )
+}
+
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             environment_manager,
@@ -234,11 +247,6 @@ impl MessageProcessor {
             },
             environment_manager,
         ));
-        let analytics_events_client = AnalyticsEventsClient::new(
-            Arc::clone(&auth_manager),
-            config.chatgpt_base_url.trim_end_matches('/').to_string(),
-            config.analytics_enabled,
-        );
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
