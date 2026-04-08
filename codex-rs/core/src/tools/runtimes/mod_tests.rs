@@ -6,23 +6,20 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use tempfile::tempdir;
-use tokio::sync::watch;
 
 fn shell_with_snapshot(
     shell_type: ShellType,
     shell_path: &str,
     snapshot_path: PathBuf,
     snapshot_cwd: PathBuf,
-) -> Shell {
-    let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
+) -> (Shell, ShellSnapshot) {
+    let session_shell_snapshot = ShellSnapshot {
         path: snapshot_path,
         cwd: snapshot_cwd,
-    })));
-    Shell {
-        shell_type,
-        shell_path: PathBuf::from(shell_path),
-        shell_snapshot,
-    }
+    };
+    let mut session_shell = Shell::new(shell_type, PathBuf::from(shell_path));
+    session_shell.set_shell_snapshot(Some(Arc::new(session_shell_snapshot.clone())));
+    (session_shell, session_shell_snapshot)
 }
 
 #[test]
@@ -30,7 +27,7 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
         snapshot_path,
@@ -61,7 +58,7 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
         snapshot_path,
@@ -89,7 +86,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
         snapshot_path,
@@ -120,7 +117,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Sh,
         "/bin/sh",
         snapshot_path,
@@ -151,7 +148,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
         snapshot_path,
@@ -188,7 +185,7 @@ fn maybe_wrap_shell_lc_with_snapshot_skips_when_cwd_mismatch() {
     let command_cwd = dir.path().join("worktree-b");
     std::fs::create_dir_all(&snapshot_cwd).expect("create snapshot cwd");
     std::fs::create_dir_all(&command_cwd).expect("create command cwd");
-    let session_shell =
+    let (session_shell, _session_shell_snapshot) =
         shell_with_snapshot(ShellType::Zsh, "/bin/zsh", snapshot_path, snapshot_cwd);
     let command = vec![
         "/bin/bash".to_string(),
@@ -212,7 +209,7 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
         snapshot_path,
@@ -248,7 +245,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
         "# Snapshot file\nexport TEST_ENV_SNAPSHOT=global\nexport SNAPSHOT_ONLY=from_snapshot\n",
     )
     .expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
         snapshot_path,
@@ -327,7 +324,7 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
         "# Snapshot file\nexport PATH='/snapshot/bin'\n",
     )
     .expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
         snapshot_path,
@@ -363,7 +360,7 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
         "# Snapshot file\nexport PATH='/snapshot/bin'\n",
     )
     .expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
         snapshot_path,
@@ -401,7 +398,7 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
         "# Snapshot file\nexport OPENAI_API_KEY='snapshot-value'\n",
     )
     .expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
         snapshot_path,
@@ -449,7 +446,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         "# Snapshot file\nexport CODEX_TEST_UNSET_OVERRIDE='snapshot-value'\n",
     )
     .expect("write snapshot");
-    let session_shell = shell_with_snapshot(
+    let (session_shell, _session_shell_snapshot) = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
         snapshot_path,

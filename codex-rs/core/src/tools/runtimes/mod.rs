@@ -40,7 +40,7 @@ pub(crate) fn build_sandbox_command(
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
 /// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
+/// when a snapshot is configured for the session shell, rewrite the argv
 /// to a single non-login shell that sources the snapshot before running
 /// the original script:
 ///

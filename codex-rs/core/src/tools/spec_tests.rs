@@ -593,11 +593,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    let user_shell = Shell {
-        shell_type: ShellType::Zsh,
-        shell_path: PathBuf::from("/bin/zsh"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-    };
+    let user_shell = Shell::new(ShellType::Zsh, PathBuf::from("/bin/zsh"));
 
     assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
     assert_eq!(
@@ -611,7 +607,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     assert_eq!(
         tools_config
             .with_unified_exec_shell_mode_for_session(
-                tool_user_shell_type(&user_shell),
+                user_shell.shell_type,
                 Some(&PathBuf::from(if cfg!(windows) {
                     r"C:\opt\codex\zsh"
                 } else {

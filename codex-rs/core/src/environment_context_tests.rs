@@ -5,11 +5,7 @@ use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 
 fn fake_shell() -> Shell {
-    Shell {
-        shell_type: ShellType::Bash,
-        shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-    }
+    Shell::new(ShellType::Bash, PathBuf::from("/bin/bash"))
 }
 
 #[test]
@@ -219,11 +215,7 @@ fn equals_except_shell_compares_cwd_differences() {
 fn equals_except_shell_ignores_shell() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
-        Shell {
-            shell_type: ShellType::Bash,
-            shell_path: "/bin/bash".into(),
-            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-        },
+        Shell::new(ShellType::Bash, "/bin/bash".into()),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -231,11 +223,7 @@ fn equals_except_shell_ignores_shell() {
     );
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
-        Shell {
-            shell_type: ShellType::Zsh,
-            shell_path: "/bin/zsh".into(),
-            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-        },
+        Shell::new(ShellType::Zsh, "/bin/zsh".into()),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,

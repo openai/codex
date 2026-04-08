@@ -13,6 +13,7 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_shell::ShellType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::PathBuf;
 
@@ -20,15 +21,6 @@ use std::path::PathBuf;
 pub enum ShellCommandBackendConfig {
     Classic,
     ZshFork,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ToolUserShellType {
-    Zsh,
-    Bash,
-    PowerShell,
-    Sh,
-    Cmd,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -46,13 +38,13 @@ pub struct ZshForkConfig {
 impl UnifiedExecShellMode {
     pub fn for_session(
         shell_command_backend: ShellCommandBackendConfig,
-        user_shell_type: ToolUserShellType,
+        user_shell_type: ShellType,
         shell_zsh_path: Option<&PathBuf>,
         main_execve_wrapper_exe: Option<&PathBuf>,
     ) -> Self {
         if cfg!(unix)
             && shell_command_backend == ShellCommandBackendConfig::ZshFork
-            && matches!(user_shell_type, ToolUserShellType::Zsh)
+            && matches!(user_shell_type, ShellType::Zsh)
             && let (Some(shell_zsh_path), Some(main_execve_wrapper_exe)) =
                 (shell_zsh_path, main_execve_wrapper_exe)
             && let (Ok(shell_zsh_path), Ok(main_execve_wrapper_exe)) = (
@@ -279,7 +271,7 @@ impl ToolsConfig {
 
     pub fn with_unified_exec_shell_mode_for_session(
         mut self,
-        user_shell_type: ToolUserShellType,
+        user_shell_type: ShellType,
         shell_zsh_path: Option<&PathBuf>,
         main_execve_wrapper_exe: Option<&PathBuf>,
     ) -> Self {

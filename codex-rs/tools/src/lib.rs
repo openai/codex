@@ -88,7 +88,6 @@ pub use responses_api::mcp_tool_to_deferred_responses_api_tool;
 pub use responses_api::mcp_tool_to_responses_api_tool;
 pub use responses_api::tool_definition_to_responses_api_tool;
 pub use tool_config::ShellCommandBackendConfig;
-pub use tool_config::ToolUserShellType;
 pub use tool_config::ToolsConfig;
 pub use tool_config::ToolsConfigParams;
 pub use tool_config::UnifiedExecShellMode;

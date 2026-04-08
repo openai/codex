@@ -1,5 +1,3 @@
-use crate::shell::Shell;
-use crate::shell::ShellType;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
@@ -13,22 +11,11 @@ use codex_tools::ToolHandlerKind;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanAppTool;
 use codex_tools::ToolRegistryPlanParams;
-use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
 use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::build_tool_registry_plan;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
-    match user_shell.shell_type {
-        ShellType::Zsh => ToolUserShellType::Zsh,
-        ShellType::Bash => ToolUserShellType::Bash,
-        ShellType::PowerShell => ToolUserShellType::PowerShell,
-        ShellType::Sh => ToolUserShellType::Sh,
-        ShellType::Cmd => ToolUserShellType::Cmd,
-    }
-}
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
