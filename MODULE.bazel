@@ -47,6 +47,7 @@ osx.frameworks(names = [
     "DiskArbitration",
     "AudioToolbox",
     "AVFoundation",
+    "AVFAudio",
     "CFNetwork",
     "FontServices",
     "AudioUnit",
