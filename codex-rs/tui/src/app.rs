@@ -3423,11 +3423,7 @@ impl App {
         let Some(deadline) = self.resize_reflow_pending_until else {
             return Ok(());
         };
-        if Instant::now() < deadline
-            || self.overlay.is_some()
-            || self.chat_widget.has_active_agent_stream()
-            || self.chat_widget.has_active_plan_stream()
-        {
+        if Instant::now() < deadline || self.overlay.is_some() {
             return Ok(());
         }
 

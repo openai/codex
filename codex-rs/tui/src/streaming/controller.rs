@@ -1236,6 +1236,34 @@ mod tests {
     }
 
     #[test]
+    fn controller_live_tail_reflow_rerenders_table_tail_after_resize() {
+        let mut ctrl = stream_controller_with_live_tail_reflow(Some(96));
+        ctrl.push("| # | Feature | Details | Link |\n");
+        ctrl.push("| --- | --- | --- | --- |\n");
+        ctrl.push(
+            "| 1 | RESIZE_REPRO_SENTINEL | long wrapped content that should be reflowed | https://example.com/resize |\n",
+        );
+
+        for width in [48, 104, 56] {
+            ctrl.set_width(Some(width));
+            let tail = lines_to_plain_strings(&ctrl.current_tail_lines());
+
+            let mut expected = Vec::new();
+            crate::markdown::append_markdown_agent(
+                &ctrl.core.raw_source,
+                Some(width),
+                &mut expected,
+            );
+            let expected = lines_to_plain_strings(&expected);
+
+            assert_eq!(
+                tail, expected,
+                "expected live table tail to be rerendered at width {width}",
+            );
+        }
+    }
+
+    #[test]
     fn controller_set_width_partial_drain_no_lost_lines() {
         let mut ctrl = stream_controller(Some(40));
         ctrl.push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n");
