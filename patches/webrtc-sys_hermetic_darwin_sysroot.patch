@@ -1,8 +1,51 @@
 diff --git a/build.rs b/build.rs
-index 3b4a24a..e6fb056 100644
+index 3b4a24a..6aa06ff 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -378,6 +378,17 @@
+@@ -15,1 +15,2 @@
+-use std::path::Path;
++use std::fs;
++use std::path::Path;
+@@ -118,1 +119,9 @@
+-    println!("cargo:rustc-link-search=native={}", webrtc_lib.to_str().unwrap());
++    let webrtc_link_lib = if env::var_os("WEBRTC_SYS_LINK_OUT_DIR").is_some() {
++        let out_lib = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("lib");
++        fs::create_dir_all(&out_lib).unwrap();
++        fs::copy(webrtc_lib.join("libwebrtc.a"), out_lib.join("libwebrtc.a")).unwrap();
++        out_lib
++    } else {
++        webrtc_lib
++    };
++    println!("cargo:rustc-link-search=native={}", webrtc_link_lib.to_str().unwrap());
+@@ -255,1 +264,1 @@
+-            println!("cargo:rustc-link-lib=framework=Appkit");
++            println!("cargo:rustc-link-lib=framework=AppKit");
+@@ -320,1 +329,18 @@
+-    builder.warnings(false).compile("webrtcsys-cxx");
++    builder.warnings(false).compile("webrtcsys-cxx");
++    let cxxbridge_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("cxxbridge");
++    let cxx_header = cxxbridge_dir.join("include/rust/cxx.h");
++    if fs::symlink_metadata(&cxx_header)
++        .is_ok_and(|metadata| metadata.file_type().is_symlink())
++    {
++        if let Ok(header) = fs::read(&cxx_header) {
++            fs::remove_file(&cxx_header).unwrap();
++            fs::write(&cxx_header, header).unwrap();
++        }
++    }
++    let crate_link = cxxbridge_dir.join("crate/webrtc-sys");
++    if fs::symlink_metadata(&crate_link)
++        .is_ok_and(|metadata| metadata.file_type().is_symlink())
++    {
++        fs::remove_file(crate_link).unwrap();
++    }
++
+@@ -375,1 +384,3 @@
+-    println!("cargo:rustc-link-lib={}", clang_rt);
++    if env::var_os("WEBRTC_SYS_LINK_OUT_DIR").is_none() {
++        println!("cargo:rustc-link-lib={}", clang_rt);
++    }
+@@ -378,6 +389,21 @@
 -    let sysroot = Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output().unwrap();
 -
 -    let sysroot = String::from_utf8_lossy(&sysroot.stdout);
@@ -20,6 +63,10 @@ index 3b4a24a..e6fb056 100644
 +    let sysroot = sysroot.as_str();
 +    let sysroot = sysroot.trim();
 +    builder.flag(format!("-F{sysroot}/System/Library/Frameworks"));
++    builder.define("__APPLICATIONSERVICES__", None);
++    builder.flag("-include");
++    builder.flag("CoreGraphics/CoreGraphics.h");
++    builder.include(format!("{sysroot}/usr/include"));
 +
 +    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
 +    let search_dirs = Command::new(cc)

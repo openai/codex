@@ -37,6 +37,8 @@ MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
     "@platforms//os:macos": [
         "-C",
         "link-arg=-ObjC",
+        "-C",
+        "link-arg=-lc++",
     ],
     "//conditions:default": [],
 })

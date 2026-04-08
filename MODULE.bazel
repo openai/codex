@@ -40,7 +40,9 @@ osx.frameworks(names = [
     "ColorSync",
     "CoreFoundation",
     "CoreGraphics",
+    "CoreImage",
     "CoreMedia",
+    "CoreMIDI",
     "CoreServices",
     "CoreText",
     "CoreVideo",
@@ -48,6 +50,7 @@ osx.frameworks(names = [
     "AudioToolbox",
     "AVFoundation",
     "AVFAudio",
+    "AVRouting",
     "CFNetwork",
     "FontServices",
     "AudioUnit",
@@ -66,6 +69,7 @@ osx.frameworks(names = [
     "ScreenCaptureKit",
     "Security",
     "SystemConfiguration",
+    "UniformTypeIdentifiers",
     "VideoToolbox",
 ])
 use_repo(osx, "macos_sdk")
@@ -364,6 +368,7 @@ crate.annotation(
     ],
     build_script_env = {
         "WEBRTC_SYS_DARWIN_SDK_PATH": "$(location @macos_sdk//sysroot)",
+        "WEBRTC_SYS_LINK_OUT_DIR": "1",
     },
     crate = "webrtc-sys",
     gen_build_script = "on",
