@@ -549,6 +549,7 @@ async fn inherited_connected_tcp_socket_cannot_send_after_sandbox_exec() {
 }
 
 #[cfg(target_os = "linux")]
+#[expect(clippy::expect_used)]
 fn inherited_connected_tcp_socket_send_body() {
     let fd = std::env::var(INHERITED_CONNECTED_SOCKET_FD_ENV_VAR)
         .expect("inherited fd env var should be set")
