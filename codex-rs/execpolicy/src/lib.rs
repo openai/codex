@@ -5,7 +5,7 @@ pub(crate) mod execpolicycheck;
 mod executable_name;
 pub(crate) mod parser;
 pub(crate) mod policy;
-pub(crate) mod rule;
+pub mod rule;
 
 pub use amend::AmendError;
 pub use amend::blocking_append_allow_prefix_rule;

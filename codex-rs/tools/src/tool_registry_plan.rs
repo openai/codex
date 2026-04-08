@@ -61,6 +61,7 @@ use crate::tool_registry_plan_types::agent_type_description;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use rmcp::model::Tool as McpTool;
+use std::collections::BTreeMap;
 
 pub fn build_tool_registry_plan(
     config: &ToolsConfig,
@@ -70,6 +71,20 @@ pub fn build_tool_registry_plan(
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
     if config.code_mode_enabled {
+        let namespace_descriptions = params
+            .tool_namespaces
+            .into_iter()
+            .flatten()
+            .map(|(name, detail)| {
+                (
+                    name.clone(),
+                    codex_code_mode::ToolNamespaceDescription {
+                        name: detail.name.clone(),
+                        description: detail.description.clone().unwrap_or_default(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let nested_config = config.for_code_mode_nested_tools();
         let nested_plan = build_tool_registry_plan(
             &nested_config,
@@ -78,7 +93,7 @@ pub fn build_tool_registry_plan(
                 ..params
             },
         );
-        let enabled_tools = collect_code_mode_tool_definitions(
+        let mut enabled_tools = collect_code_mode_tool_definitions(
             nested_plan
                 .specs
                 .iter()
@@ -87,8 +102,15 @@ pub fn build_tool_registry_plan(
         .into_iter()
         .map(|tool| (tool.name, tool.description))
         .collect::<Vec<_>>();
+        enabled_tools.sort_by(|(left_name, _), (right_name, _)| {
+            compare_code_mode_tool_names(left_name, right_name, &namespace_descriptions)
+        });
         plan.push_spec(
-            create_code_mode_tool(&enabled_tools, config.code_mode_only_enabled),
+            create_code_mode_tool(
+                &enabled_tools,
+                &namespace_descriptions,
+                config.code_mode_only_enabled,
+            ),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -354,6 +376,8 @@ pub fn build_tool_registry_plan(
                     available_models: &config.available_models,
                     agent_type_description,
                     hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
+                    include_usage_hint: config.spawn_agent_usage_hint,
+                    usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -397,6 +421,8 @@ pub fn build_tool_registry_plan(
                     available_models: &config.available_models,
                     agent_type_description,
                     hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
+                    include_usage_hint: config.spawn_agent_usage_hint,
+                    usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
                 }),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -492,6 +518,41 @@ pub fn build_tool_registry_plan(
     }
 
     plan
+}
+
+fn compare_code_mode_tool_names(
+    left_name: &str,
+    right_name: &str,
+    namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+) -> std::cmp::Ordering {
+    let left_namespace = code_mode_namespace_name(left_name, namespace_descriptions);
+    let right_namespace = code_mode_namespace_name(right_name, namespace_descriptions);
+
+    left_namespace
+        .cmp(&right_namespace)
+        .then_with(|| {
+            code_mode_function_name(left_name, left_namespace)
+                .cmp(code_mode_function_name(right_name, right_namespace))
+        })
+        .then_with(|| left_name.cmp(right_name))
+}
+
+fn code_mode_namespace_name<'a>(
+    name: &str,
+    namespace_descriptions: &'a BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+) -> Option<&'a str> {
+    namespace_descriptions
+        .get(name)
+        .map(|namespace_description| namespace_description.name.as_str())
+}
+
+fn code_mode_function_name<'a>(name: &'a str, namespace: Option<&str>) -> &'a str {
+    namespace
+        .and_then(|namespace| {
+            name.strip_prefix(namespace)
+                .and_then(|suffix| suffix.strip_prefix("__"))
+        })
+        .unwrap_or(name)
 }
 
 #[cfg(test)]
