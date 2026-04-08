@@ -32,22 +32,28 @@ use ratatui::text::Span;
 /// Selects the terminal escape strategy for inserting history lines above the viewport.
 ///
 /// Standard terminals support `DECSTBM` scroll regions and Reverse Index (`ESC M`),
-/// which let us slide existing content down without redrawing it. Zellij silently
-/// drops or mishandles those sequences, so `Zellij` mode falls back to emitting
-/// newlines at the bottom of the screen and writing lines at absolute positions.
+/// which let us slide existing content down without redrawing it. Some terminal
+/// stacks either mishandle those sequences or do not promote content that scrolls
+/// out of a bounded scroll region into native scrollback; `BottomNewline` mode
+/// falls back to emitting newlines at the bottom of the screen and writing lines
+/// at absolute positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertHistoryMode {
     Standard,
-    Zellij,
+    BottomNewline,
 }
 
 impl InsertHistoryMode {
-    pub fn new(is_zellij: bool) -> Self {
-        if is_zellij {
-            Self::Zellij
+    pub fn from_bottom_newline_preference(prefers_bottom_newline: bool) -> Self {
+        if prefers_bottom_newline {
+            Self::BottomNewline
         } else {
             Self::Standard
         }
+    }
+
+    pub fn requires_full_repaint(self) -> bool {
+        matches!(self, Self::BottomNewline)
     }
 }
 
@@ -66,9 +72,9 @@ where
 /// Insert `lines` above the viewport, using the escape strategy selected by `mode`.
 ///
 /// In `Standard` mode this manipulates DECSTBM scroll regions to slide existing
-/// scrollback down and writes new lines into the freed space. In `Zellij` mode it
-/// emits newlines at the screen bottom to create space (since Zellij ignores scroll
-/// region escapes) and writes lines at computed absolute positions. Both modes
+/// scrollback down and writes new lines into the freed space. In `BottomNewline`
+/// mode it emits newlines at the screen bottom to create space and writes lines
+/// at computed absolute positions. Both modes
 /// update `terminal.viewport_area` so subsequent draw passes know where the
 /// viewport moved to.
 pub fn insert_history_lines_with_mode<B>(
@@ -116,7 +122,7 @@ where
     }
     let wrapped_lines = wrapped_rows as u16;
 
-    if matches!(mode, InsertHistoryMode::Zellij) {
+    if matches!(mode, InsertHistoryMode::BottomNewline) {
         let space_below = screen_size.height.saturating_sub(area.bottom());
         let shift_down = wrapped_lines.min(space_below);
         let scroll_up_amount = wrapped_lines.saturating_sub(shift_down);
@@ -801,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn vt100_zellij_mode_inserts_history_and_updates_viewport() {
+    fn vt100_bottom_newline_mode_inserts_history_and_updates_viewport() {
         let width: u16 = 32;
         let height: u16 = 8;
         let backend = VT100Backend::new(width, height);
@@ -810,7 +816,7 @@ mod tests {
         term.set_viewport_area(viewport);
 
         let line: Line<'static> = Line::from("zellij history");
-        insert_history_lines_with_mode(&mut term, vec![line], InsertHistoryMode::Zellij)
+        insert_history_lines_with_mode(&mut term, vec![line], InsertHistoryMode::BottomNewline)
             .expect("insert zellij history");
 
         let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();

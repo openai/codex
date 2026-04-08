@@ -40,6 +40,7 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::insert_history::InsertHistoryMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -47,6 +48,8 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use codex_config::types::NotificationMethod;
+use codex_terminal_detection::TerminalInfo;
+use codex_terminal_detection::TerminalName;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -255,8 +258,23 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     is_zellij: bool,
+    history_insertion_mode: InsertHistoryMode,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+}
+
+fn history_insertion_mode_for_terminal(terminal_info: &TerminalInfo) -> InsertHistoryMode {
+    InsertHistoryMode::from_bottom_newline_preference(
+        terminal_info.is_zellij()
+            || terminal_prefers_bottom_newline_history_insertion(terminal_info.name),
+    )
+}
+
+fn terminal_prefers_bottom_newline_history_insertion(terminal_name: TerminalName) -> bool {
+    matches!(
+        terminal_name,
+        TerminalName::VsCode | TerminalName::WindowsTerminal
+    )
 }
 
 impl Tui {
@@ -270,10 +288,9 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
-        let is_zellij = matches!(
-            codex_terminal_detection::terminal_info().multiplexer,
-            Some(codex_terminal_detection::Multiplexer::Zellij {})
-        );
+        let terminal_info = codex_terminal_detection::terminal_info();
+        let is_zellij = terminal_info.is_zellij();
+        let history_insertion_mode = history_insertion_mode_for_terminal(&terminal_info);
 
         Self {
             frame_requester,
@@ -289,6 +306,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             is_zellij,
+            history_insertion_mode,
             alt_screen_enabled: true,
         }
     }
@@ -512,12 +530,13 @@ impl Tui {
     }
 
     /// Write any buffered history lines above the viewport and clear the buffer.
-    /// Returns `true` when Zellij mode was used, signaling that the caller must
-    /// invalidate the diff buffer for a full repaint.
+    /// Returns `true` when the selected insertion mode moved screen content
+    /// outside ratatui's diff model, signaling that the caller must invalidate
+    /// the diff buffer for a full repaint.
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
         pending_history_lines: &mut Vec<Line<'static>>,
-        is_zellij: bool,
+        history_insertion_mode: InsertHistoryMode,
     ) -> Result<bool> {
         if pending_history_lines.is_empty() {
             return Ok(false);
@@ -526,10 +545,10 @@ impl Tui {
         crate::insert_history::insert_history_lines_with_mode(
             terminal,
             pending_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::new(is_zellij),
+            history_insertion_mode,
         )?;
         pending_history_lines.clear();
-        Ok(is_zellij)
+        Ok(history_insertion_mode.requires_full_repaint())
     }
 
     pub fn draw(
@@ -565,7 +584,7 @@ impl Tui {
             needs_full_repaint |= Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
-                self.is_zellij,
+                self.history_insertion_mode,
             )?;
 
             if needs_full_repaint {
@@ -612,5 +631,27 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bottom_newline_history_insertion_is_used_for_known_scrollback_problem_terminals() {
+        assert!(terminal_prefers_bottom_newline_history_insertion(
+            TerminalName::VsCode
+        ));
+        assert!(terminal_prefers_bottom_newline_history_insertion(
+            TerminalName::WindowsTerminal
+        ));
+
+        assert!(!terminal_prefers_bottom_newline_history_insertion(
+            TerminalName::Iterm2
+        ));
+        assert!(!terminal_prefers_bottom_newline_history_insertion(
+            TerminalName::Unknown
+        ));
     }
 }
