@@ -431,7 +431,7 @@ fn record_windows_sandbox_spawn_failure(
     } else {
         "legacy"
     };
-    if let Some(metrics) = codex_otel::metrics::global() {
+    if let Some(metrics) = codex_otel::global() {
         let _ = metrics.counter(
             "codex.windows_sandbox.createprocessasuserw_failed",
             /*inc*/ 1,

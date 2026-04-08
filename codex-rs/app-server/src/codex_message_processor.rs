@@ -76,6 +76,8 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MarketplaceInterface;
+use codex_app_server_protocol::McpResourceReadParams;
+use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
@@ -144,6 +146,7 @@ use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
+use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -246,12 +249,12 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
-use codex_mcp::mcp::McpSnapshotDetail;
-use codex_mcp::mcp::auth::discover_supported_scopes;
-use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::collect_mcp_snapshot_with_detail;
-use codex_mcp::mcp::effective_mcp_servers;
-use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
+use codex_mcp::McpSnapshotDetail;
+use codex_mcp::collect_mcp_snapshot_with_detail;
+use codex_mcp::discover_supported_scopes;
+use codex_mcp::effective_mcp_servers;
+use codex_mcp::qualified_mcp_tool_name_prefix;
+use codex_mcp::resolve_oauth_scopes;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -267,6 +270,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -880,6 +884,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::McpResourceRead { request_id, params } => {
+                self.read_mcp_resource(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::WindowsSandboxSetupStart { request_id, params } => {
@@ -5162,7 +5170,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ListMcpServerStatusParams,
         config: Config,
-        mcp_config: codex_mcp::mcp::McpConfig,
+        mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
     ) {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
@@ -5295,6 +5303,58 @@ impl CodexMessageProcessor {
         let response = ListMcpServerStatusResponse { data, next_cursor };
 
         outgoing.send_response(request_id, response).await;
+    }
+
+    async fn read_mcp_resource(
+        &self,
+        request_id: ConnectionRequestId,
+        params: McpResourceReadParams,
+    ) {
+        let outgoing = Arc::clone(&self.outgoing);
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(thread) => thread,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            let result = thread.read_mcp_resource(&params.server, &params.uri).await;
+            match result {
+                Ok(result) => match serde_json::from_value::<McpResourceReadResponse>(result) {
+                    Ok(response) => {
+                        outgoing.send_response(request_id, response).await;
+                    }
+                    Err(error) => {
+                        outgoing
+                            .send_error(
+                                request_id,
+                                JSONRPCErrorError {
+                                    code: INTERNAL_ERROR_CODE,
+                                    message: format!(
+                                        "failed to deserialize MCP resource read response: {error}"
+                                    ),
+                                    data: None,
+                                },
+                            )
+                            .await;
+                    }
+                },
+                Err(error) => {
+                    outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("{error:#}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                }
+            }
+        });
     }
 
     async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
@@ -6793,6 +6853,14 @@ impl CodexMessageProcessor {
                 Op::RealtimeConversationStart(ConversationStartParams {
                     prompt: params.prompt,
                     session_id: params.session_id,
+                    transport: params.transport.map(|transport| match transport {
+                        ThreadRealtimeStartTransport::Websocket => {
+                            ConversationStartTransport::Websocket
+                        }
+                        ThreadRealtimeStartTransport::Webrtc { sdp } => {
+                            ConversationStartTransport::Webrtc { sdp }
+                        }
+                    }),
                 }),
             )
             .await;
@@ -7607,42 +7675,101 @@ impl CodexMessageProcessor {
         }
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
-        let sqlite_feedback_logs = if include_logs {
+        let (feedback_thread_ids, sqlite_feedback_logs, state_db_ctx) = if include_logs {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
             let state_db_ctx = get_state_db(&self.config).await;
-            match (state_db_ctx.as_ref(), conversation_id) {
-                (Some(state_db_ctx), Some(conversation_id)) => {
-                    let thread_id_text = conversation_id.to_string();
-                    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
-                        Ok(logs) if logs.is_empty() => None,
-                        Ok(logs) => Some(logs),
-                        Err(err) => {
-                            warn!(
-                                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
-                            );
-                            None
+            let feedback_thread_ids = match conversation_id {
+                Some(conversation_id) => match self
+                    .thread_manager
+                    .list_agent_subtree_thread_ids(conversation_id)
+                    .await
+                {
+                    Ok(thread_ids) => thread_ids,
+                    Err(err) => {
+                        warn!(
+                            "failed to list feedback subtree for thread_id={conversation_id}: {err}"
+                        );
+                        let mut thread_ids = vec![conversation_id];
+                        if let Some(state_db_ctx) = state_db_ctx.as_ref() {
+                            for status in [
+                                codex_state::DirectionalThreadSpawnEdgeStatus::Open,
+                                codex_state::DirectionalThreadSpawnEdgeStatus::Closed,
+                            ] {
+                                match state_db_ctx
+                                    .list_thread_spawn_descendants_with_status(
+                                        conversation_id,
+                                        status,
+                                    )
+                                    .await
+                                {
+                                    Ok(descendant_ids) => thread_ids.extend(descendant_ids),
+                                    Err(err) => warn!(
+                                        "failed to list persisted feedback subtree for thread_id={conversation_id}: {err}"
+                                    ),
+                                }
+                            }
                         }
+                        thread_ids
+                    }
+                },
+                None => Vec::new(),
+            };
+            let sqlite_feedback_logs = if let Some(state_db_ctx) = state_db_ctx.as_ref()
+                && !feedback_thread_ids.is_empty()
+            {
+                let thread_id_texts = feedback_thread_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let thread_id_refs = thread_id_texts
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                match state_db_ctx
+                    .query_feedback_logs_for_threads(&thread_id_refs)
+                    .await
+                {
+                    Ok(logs) if logs.is_empty() => None,
+                    Ok(logs) => Some(logs),
+                    Err(err) => {
+                        let thread_ids = thread_id_texts.join(", ");
+                        warn!(
+                            "failed to query feedback logs from sqlite for thread_ids=[{thread_ids}]: {err}"
+                        );
+                        None
                     }
                 }
-                _ => None,
-            }
+            } else {
+                None
+            };
+            (feedback_thread_ids, sqlite_feedback_logs, state_db_ctx)
         } else {
-            None
+            (Vec::new(), None, None)
         };
 
-        let validated_rollout_path = if include_logs {
-            match conversation_id {
-                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
-                None => None,
+        let mut attachment_paths = Vec::new();
+        let mut seen_attachment_paths = HashSet::new();
+        if include_logs {
+            for feedback_thread_id in &feedback_thread_ids {
+                let Some(rollout_path) = self
+                    .resolve_rollout_path(*feedback_thread_id, state_db_ctx.as_ref())
+                    .await
+                else {
+                    continue;
+                };
+                if seen_attachment_paths.insert(rollout_path.clone()) {
+                    attachment_paths.push(rollout_path);
+                }
             }
-        } else {
-            None
-        };
-        let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
+        }
         if let Some(extra_log_files) = extra_log_files {
-            attachment_paths.extend(extra_log_files);
+            for extra_log_file in extra_log_files {
+                if seen_attachment_paths.insert(extra_log_file.clone()) {
+                    attachment_paths.push(extra_log_file);
+                }
+            }
         }
 
         let session_source = self.thread_manager.session_source();
@@ -7761,11 +7888,25 @@ impl CodexMessageProcessor {
         });
     }
 
-    async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
-        match self.thread_manager.get_thread(conversation_id).await {
-            Ok(conv) => conv.rollout_path(),
-            Err(_) => None,
+    async fn resolve_rollout_path(
+        &self,
+        conversation_id: ThreadId,
+        state_db_ctx: Option<&StateDbHandle>,
+    ) -> Option<PathBuf> {
+        if let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await
+            && let Some(rollout_path) = conversation.rollout_path()
+        {
+            return Some(rollout_path);
         }
+
+        let state_db_ctx = state_db_ctx?;
+        state_db_ctx
+            .find_rollout_path_by_id(conversation_id, /*archived_only*/ None)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
+                None
+            })
     }
 }
 

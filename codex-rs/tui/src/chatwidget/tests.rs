@@ -117,7 +117,9 @@ pub(super) use codex_protocol::models::FileSystemPermissions;
 pub(super) use codex_protocol::models::MessagePhase;
 pub(super) use codex_protocol::models::NetworkPermissions;
 pub(super) use codex_protocol::models::PermissionProfile;
+pub(super) use codex_protocol::openai_models::ModelInfo;
 pub(super) use codex_protocol::openai_models::ModelPreset;
+pub(super) use codex_protocol::openai_models::ModelsResponse;
 pub(super) use codex_protocol::openai_models::ReasoningEffortPreset;
 pub(super) use codex_protocol::openai_models::default_input_modalities;
 pub(super) use codex_protocol::parse_command::ParsedCommand;
@@ -197,6 +199,7 @@ pub(super) use crossterm::event::KeyCode;
 pub(super) use crossterm::event::KeyEvent;
 pub(super) use crossterm::event::KeyModifiers;
 pub(super) use insta::assert_snapshot;
+pub(super) use serde_json::json;
 #[cfg(target_os = "windows")]
 pub(super) use serial_test::serial;
 pub(super) use std::collections::BTreeMap;
@@ -262,4 +265,5 @@ mod status_command_tests;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;
+pub(crate) use helpers::set_fast_mode_test_catalog;
 pub(super) use helpers::*;

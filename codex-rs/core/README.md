@@ -41,7 +41,8 @@ too old to support `--argv0`, the helper keeps using system bubblewrap and
 switches to a no-`--argv0` compatibility path for the inner re-exec. If
 `bwrap` is missing, it falls back to the vendored bubblewrap path compiled into
 the binary and Codex surfaces a startup warning through its normal notification
-path instead of printing directly from the sandbox helper.
+path instead of printing directly from the sandbox helper. Codex also surfaces
+a startup warning when bubblewrap cannot create user namespaces.
 
 ### Windows
 

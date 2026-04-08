@@ -19,6 +19,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WarningEvent;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -116,6 +117,13 @@ enum NetworkApprovalOutcome {
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
 fn allows_network_approval_flow(policy: AskForApproval) -> bool {
     !matches!(policy, AskForApproval::Never)
+}
+
+fn sandbox_policy_allows_network_approval_flow(policy: &SandboxPolicy) -> bool {
+    matches!(
+        policy,
+        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+    )
 }
 
 impl PendingApprovalDecision {
@@ -334,6 +342,16 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
+        if !sandbox_policy_allows_network_approval_flow(turn_context.sandbox_policy.get()) {
+            pending.set_decision(PendingApprovalDecision::Deny).await;
+            let mut pending_approvals = self.pending_host_approvals.lock().await;
+            pending_approvals.remove(&key);
+            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
+                policy_denial_message,
+            ))
+            .await;
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
+        }
         if !allows_network_approval_flow(turn_context.approval_policy.value()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;

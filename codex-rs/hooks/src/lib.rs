@@ -1,5 +1,5 @@
 mod engine;
-pub mod events;
+pub(crate) mod events;
 mod legacy_notify;
 mod registry;
 mod schema;

@@ -54,7 +54,7 @@ use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_login::AuthManagerConfig;
-use codex_mcp::mcp::McpConfig;
+use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -100,7 +100,7 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub mod service;
+pub(crate) mod service;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -1445,7 +1445,7 @@ impl Config {
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
             .unwrap_or(ProjectConfig { trust_level: None });

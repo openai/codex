@@ -15,7 +15,7 @@ use crate::tools::format_exec_output_str;
 
 use codex_features::Features;
 use codex_login::CodexAuth;
-use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::ToolInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -36,9 +36,9 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
+use crate::RolloutRecorderParams;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
-use crate::rollout::recorder::RolloutRecorderParams;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -255,6 +255,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*auth_manager*/ None,
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
         /*model_verbosity*/ None,
@@ -539,6 +540,139 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
     assert_eq!(
         current_cfg.network.allowed_domains(),
         Some(vec!["managed.example.com".to_string()])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_network_proxy_refreshes_when_sandbox_policy_changes() -> anyhow::Result<()> {
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([(
+                    "blocked.example.com".to_string(),
+                    NetworkDomainPermissionToml::Deny,
+                )]),
+            }),
+            danger_full_access_denylist_only: Some(true),
+            allow_local_binding: Some(false),
+            ..Default::default()
+        }),
+        &SandboxPolicy::new_workspace_write_policy(),
+    )?;
+    let exec_policy = Policy::empty();
+
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &exec_policy,
+        &SandboxPolicy::new_workspace_write_policy(),
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+
+    assert!(!started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::DangerFullAccess)?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+
+    assert!(started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(
+        current_cfg.network.allowed_domains(),
+        Some(vec!["*".to_string()])
+    );
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+
+    assert!(!started_proxy.proxy().allow_local_binding());
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+    assert_eq!(
+        current_cfg.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::Result<()> {
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            danger_full_access_denylist_only: Some(true),
+            ..Default::default()
+        }),
+        &SandboxPolicy::DangerFullAccess,
+    )?;
+    let exec_policy = Policy::empty();
+    let decider_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let network_policy_decider: Arc<dyn codex_network_proxy::NetworkPolicyDecider> = Arc::new({
+        let decider_calls = Arc::clone(&decider_calls);
+        move |_request| {
+            decider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { codex_network_proxy::NetworkDecision::ask("not_allowed") }
+        }
+    });
+
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &exec_policy,
+        &SandboxPolicy::DangerFullAccess,
+        Some(network_policy_decider),
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ true,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+
+    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())?;
+    spec.apply_to_started_proxy(&started_proxy).await?;
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(current_cfg.network.allowed_domains(), None);
+
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut stream = tokio::net::TcpStream::connect(started_proxy.proxy().http_addr()).await?;
+    stream
+        .write_all(
+            b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+        )
+        .await?;
+    let mut buffer = [0_u8; 4096];
+    let bytes_read = tokio::time::timeout(StdDuration::from_secs(2), stream.read(&mut buffer))
+        .await
+        .expect("timed out waiting for proxy response")?;
+    let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+
+    assert!(
+        response.starts_with("HTTP/1.1 403 Forbidden"),
+        "unexpected proxy response: {response}"
+    );
+    assert!(
+        response.contains("x-proxy-error: blocked-by-allowlist"),
+        "unexpected proxy response: {response}"
+    );
+    assert_eq!(
+        decider_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "unexpected proxy response: {response}"
     );
     Ok(())
 }
@@ -2503,10 +2637,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 #[tokio::test]
 async fn session_update_settings_keeps_runtime_cwds_absolute() {
     let (session, turn_context) = make_session_and_context().await;
-    let updated_cwd = turn_context
-        .cwd
-        .join("project")
-        .expect("resolve project dir");
+    let updated_cwd = turn_context.cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
     session
@@ -2612,14 +2743,16 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         agent_status_tx,
         InitialHistory::New,
         SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
         skills_manager,
         plugins_manager,
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
+        Some(Arc::new(
+            codex_exec_server::Environment::create(/*exec_server_url*/ None)
+                .await
+                .expect("create environment"),
+        )),
     )
     .await;
 
@@ -2760,6 +2893,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             conversation_id,
+            /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,
@@ -2810,6 +2944,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
+        managed_network_proxy_refresh_lock: Mutex::new(()),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -3600,6 +3735,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             conversation_id,
+            /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,
@@ -3650,6 +3786,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
+        managed_network_proxy_refresh_lock: Mutex::new(()),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -4083,18 +4220,13 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let image_output_dir = image_output_path
         .parent()
         .expect("generated image path should have a parent");
-    let save_message: ResponseItem = DeveloperInstructions::new(format!(
-        "Generated images are saved to {} as {} by default.",
+    let image_message: ResponseItem = DeveloperInstructions::new(format!(
+        "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
         image_output_dir.display(),
         image_output_path.display(),
     ))
     .into();
-    let copy_message: ResponseItem = DeveloperInstructions::new(
-        "If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
-            .to_string(),
-    )
-    .into();
-    assert_eq!(history.raw_items(), &[save_message, copy_message, item]);
+    assert_eq!(history.raw_items(), &[image_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"

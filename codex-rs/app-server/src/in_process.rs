@@ -398,6 +398,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 session_source: args.session_source,
                 auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
+                remote_control_handle: None,
             });
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();

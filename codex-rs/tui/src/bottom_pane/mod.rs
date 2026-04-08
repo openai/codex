@@ -76,7 +76,7 @@ pub(crate) struct MentionBinding {
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
-pub mod custom_prompt_view;
+pub(crate) mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
@@ -108,7 +108,7 @@ pub(crate) use title_setup::TerminalTitleSetupView;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
-pub mod popup_consts;
+pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
