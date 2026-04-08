@@ -516,6 +516,8 @@ impl RealtimeWebsocketClient {
         let ws_url = websocket_url_from_api_url_for_call(
             self.provider.base_url.as_str(),
             self.provider.query_params.as_ref(),
+            config.event_parser,
+            config.session_mode,
             call_id,
         )?;
         self.connect_realtime_websocket_url(ws_url, config, extra_headers, default_headers)
@@ -666,14 +668,16 @@ fn websocket_url_from_api_url(
 fn websocket_url_from_api_url_for_call(
     api_url: &str,
     query_params: Option<&HashMap<String, String>>,
+    event_parser: RealtimeEventParser,
+    session_mode: RealtimeSessionMode,
     call_id: &str,
 ) -> Result<Url, ApiError> {
     let mut url = websocket_url_from_api_url(
         api_url,
         query_params,
         /*model*/ None,
-        RealtimeEventParser::RealtimeV2,
-        RealtimeSessionMode::Conversational,
+        event_parser,
+        session_mode,
     )?;
     url.query_pairs_mut().append_pair("call_id", call_id);
     Ok(url)
