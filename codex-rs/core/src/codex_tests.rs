@@ -5405,7 +5405,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
