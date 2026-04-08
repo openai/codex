@@ -63,6 +63,50 @@ pub struct SubAgentThreadStartedInput {
     pub created_at: u64,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionTrigger {
+    Manual,
+    AutoPreTurn,
+    AutoMidTurn,
+    ModelDownshift,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionMode {
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStatus {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Clone)]
+pub struct CodexCompactionEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub trigger: CompactionTrigger,
+    pub mode: CompactionMode,
+    pub status: CompactionStatus,
+    pub error: Option<String>,
+    pub started_at: u64,
+    pub completed_at: u64,
+    pub duration_ms: Option<u64>,
+    pub input_tokens_before: Option<i64>,
+    pub input_tokens_after: Option<i64>,
+    pub estimated_tokens_before: Option<i64>,
+    pub estimated_tokens_after: Option<i64>,
+    pub history_items_before: usize,
+    pub history_items_after: usize,
+    pub deleted_items_before_remote_compact: Option<usize>,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -89,6 +133,7 @@ pub(crate) enum AnalyticsFact {
 
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
+    Compaction(Box<CodexCompactionEvent>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

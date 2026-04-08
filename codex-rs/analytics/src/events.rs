@@ -1,4 +1,5 @@
 use crate::facts::AppInvocation;
+use crate::facts::CodexCompactionEvent;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
@@ -37,6 +38,7 @@ pub(crate) enum TrackEventRequest {
     ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    Compaction(Box<CodexCompactionEventRequest>),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -123,6 +125,34 @@ pub(crate) struct CodexAppUsedEventRequest {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexCompactionEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) trigger: crate::facts::CompactionTrigger,
+    pub(crate) mode: crate::facts::CompactionMode,
+    pub(crate) status: crate::facts::CompactionStatus,
+    pub(crate) error: Option<String>,
+    pub(crate) started_at: u64,
+    pub(crate) completed_at: u64,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) input_tokens_before: Option<i64>,
+    pub(crate) input_tokens_after: Option<i64>,
+    pub(crate) estimated_tokens_before: Option<i64>,
+    pub(crate) estimated_tokens_after: Option<i64>,
+    pub(crate) history_items_before: usize,
+    pub(crate) history_items_after: usize,
+    pub(crate) deleted_items_before_remote_compact: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexCompactionEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexCompactionEventParams,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexPluginMetadata {
     pub(crate) plugin_id: Option<String>,
     pub(crate) plugin_name: Option<String>,
@@ -198,6 +228,33 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
                 .collect()
         }),
         product_client_id: Some(originator().value),
+    }
+}
+
+pub(crate) fn codex_compaction_event_params(
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
+    input: CodexCompactionEvent,
+) -> CodexCompactionEventParams {
+    CodexCompactionEventParams {
+        thread_id: input.thread_id,
+        turn_id: input.turn_id,
+        app_server_client,
+        runtime,
+        trigger: input.trigger,
+        mode: input.mode,
+        status: input.status,
+        error: input.error,
+        started_at: input.started_at,
+        completed_at: input.completed_at,
+        duration_ms: input.duration_ms,
+        input_tokens_before: input.input_tokens_before,
+        input_tokens_after: input.input_tokens_after,
+        estimated_tokens_before: input.estimated_tokens_before,
+        estimated_tokens_after: input.estimated_tokens_after,
+        history_items_before: input.history_items_before,
+        history_items_after: input.history_items_after,
+        deleted_items_before_remote_compact: input.deleted_items_before_remote_compact,
     }
 }
 
