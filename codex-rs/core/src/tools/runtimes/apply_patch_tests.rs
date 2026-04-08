@@ -99,6 +99,11 @@ fn build_sandbox_command_prefers_configured_codex_self_exe_for_apply_patch() {
         .expect("build sandbox command");
 
     assert_eq!(command.program, codex_self_exe.into_os_string());
+    assert_eq!(command.args, vec![CODEX_CORE_APPLY_PATCH_ARG1.to_string()]);
+    assert_eq!(
+        command.stdin.as_deref(),
+        Some(request.action.patch.as_bytes())
+    );
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -134,5 +139,10 @@ fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
         std::env::current_exe()
             .expect("current exe")
             .into_os_string()
+    );
+    assert_eq!(command.args, vec![CODEX_CORE_APPLY_PATCH_ARG1.to_string()]);
+    assert_eq!(
+        command.stdin.as_deref(),
+        Some(request.action.patch.as_bytes())
     );
 }
