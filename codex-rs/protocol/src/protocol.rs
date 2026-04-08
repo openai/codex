@@ -3409,18 +3409,13 @@ pub enum TurnAbortReason {
     ReviewEnded,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum CollabAgentSpawnTool {
+    #[default]
     SpawnAgent,
     SpawnAgentsOnCsv,
-}
-
-impl Default for CollabAgentSpawnTool {
-    fn default() -> Self {
-        Self::SpawnAgent
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
