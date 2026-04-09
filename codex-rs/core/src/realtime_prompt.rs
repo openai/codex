@@ -50,7 +50,10 @@ mod tests {
     #[test]
     fn prepare_realtime_backend_prompt_uses_request_prompt() {
         assert_eq!(
-            prepare_realtime_backend_prompt(Some(Some("prompt from request".to_string())), None),
+            prepare_realtime_backend_prompt(
+                Some(Some("prompt from request".to_string())),
+                /*config_prompt*/ None,
+            ),
             "prompt from request"
         );
     }
@@ -58,15 +61,19 @@ mod tests {
     #[test]
     fn prepare_realtime_backend_prompt_preserves_empty_request_prompt() {
         assert_eq!(
-            prepare_realtime_backend_prompt(Some(Some(String::new())), None),
+            prepare_realtime_backend_prompt(Some(Some(String::new())), /*config_prompt*/ None),
             ""
         );
-        assert_eq!(prepare_realtime_backend_prompt(Some(None), None), "");
+        assert_eq!(
+            prepare_realtime_backend_prompt(Some(None), /*config_prompt*/ None),
+            ""
+        );
     }
 
     #[test]
     fn prepare_realtime_backend_prompt_renders_default() {
-        let prompt = prepare_realtime_backend_prompt(None, None);
+        let prompt =
+            prepare_realtime_backend_prompt(/*prompt*/ None, /*config_prompt*/ None);
 
         assert!(prompt.starts_with("You are **Codex**"));
         assert!(prompt.contains("The user's name is "));

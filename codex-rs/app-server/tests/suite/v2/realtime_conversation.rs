@@ -201,7 +201,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .as_str()
             .context("expected startup context instructions")?
             .to_string();
-    assert!(startup_context_instructions.starts_with("You are **Codex**"));
+    assert!(startup_context_instructions.starts_with("backend prompt"));
     assert!(startup_context_instructions.contains(STARTUP_CONTEXT_HEADER));
 
     let audio_append_request_id = mcp
