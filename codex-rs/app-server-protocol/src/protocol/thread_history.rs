@@ -2091,8 +2091,8 @@ mod tests {
                 id: "guardian-exec".into(),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "command",
@@ -2106,8 +2106,8 @@ mod tests {
                 id: "guardian-exec".into(),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::Denied,
-                risk_score: Some(97),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("Would delete user data.".into()),
                 action: serde_json::from_value(serde_json::json!({
                     "type": "command",
@@ -2164,8 +2164,8 @@ mod tests {
                 id: "guardian-execve".into(),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "execve",

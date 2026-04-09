@@ -618,7 +618,7 @@ mod tests {
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
@@ -811,7 +811,7 @@ approval_policy = "never"
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,

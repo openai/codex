@@ -116,9 +116,10 @@ async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
 async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<()> {
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 

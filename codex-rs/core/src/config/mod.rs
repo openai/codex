@@ -38,8 +38,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
-use codex_config::types::NotificationMethod;
-use codex_config::types::Notifications;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
@@ -47,6 +45,7 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
@@ -254,8 +253,11 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
-    /// Guardian-specific developer instructions override from requirements.toml.
-    pub guardian_developer_instructions: Option<String>,
+    /// Guardian-specific tenant policy config override from requirements.toml.
+    /// This is inserted into the fixed guardian prompt template under the
+    /// `# Policy Configuration` section rather than replacing the whole
+    /// guardian developer prompt.
+    pub guardian_policy_config: Option<String>,
 
     /// Whether to inject the `<permissions instructions>` developer block.
     pub include_permissions_instructions: bool,
@@ -298,12 +300,8 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// TUI notifications preference. When set, the TUI will send terminal notifications on
-    /// approvals and turn completions when not focused.
-    pub tui_notifications: Notifications,
-
-    /// Notification method for terminal notifications (osc9 or bel).
-    pub tui_notification_method: NotificationMethod,
+    /// TUI notification settings, including enabled events, delivery method, and focus condition.
+    pub tui_notifications: TuiNotificationSettings,
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
@@ -1840,9 +1838,8 @@ impl Config {
             .include_environment_context
             .or(cfg.include_environment_context)
             .unwrap_or(true);
-        let guardian_developer_instructions = guardian_developer_instructions_from_requirements(
-            config_layer_stack.requirements_toml(),
-        );
+        let guardian_policy_config =
+            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml());
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
@@ -2065,7 +2062,7 @@ impl Config {
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
-            guardian_developer_instructions,
+            guardian_policy_config,
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
@@ -2096,6 +2093,7 @@ impl Config {
                     version: realtime.version.unwrap_or_default(),
                     session_type: realtime.session_type.unwrap_or_default(),
                     transport: realtime.transport.unwrap_or_default(),
+                    voice: realtime.voice,
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
@@ -2133,12 +2131,7 @@ impl Config {
             tui_notifications: cfg
                 .tui
                 .as_ref()
-                .map(|t| t.notifications.clone())
-                .unwrap_or_default(),
-            tui_notification_method: cfg
-                .tui
-                .as_ref()
-                .map(|t| t.notification_method)
+                .map(|t| t.notification_settings.clone())
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
@@ -2273,11 +2266,11 @@ pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayer
         .any(|layer| toml_uses_deprecated_instructions_file(&layer.config))
 }
 
-fn guardian_developer_instructions_from_requirements(
+fn guardian_policy_config_from_requirements(
     requirements_toml: &ConfigRequirementsToml,
 ) -> Option<String> {
     requirements_toml
-        .guardian_developer_instructions
+        .guardian_policy_config
         .as_deref()
         .and_then(|value| {
             let trimmed = value.trim();

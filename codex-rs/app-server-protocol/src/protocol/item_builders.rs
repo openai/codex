@@ -225,8 +225,8 @@ pub fn guardian_auto_approval_review_notification(
                 GuardianApprovalReviewStatus::Aborted
             }
         },
-        risk_score: assessment.risk_score,
         risk_level: assessment.risk_level.map(Into::into),
+        user_authorization: assessment.user_authorization.map(Into::into),
         rationale: assessment.rationale.clone(),
     };
     let action = assessment.action.clone().into();
