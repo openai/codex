@@ -7,7 +7,6 @@ use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventRequest;
-use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
@@ -29,6 +28,7 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
@@ -251,6 +251,16 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         collaboration_mode: ModeKind::Plan,
         personality: None,
         is_first_turn: true,
+    }
+}
+
+fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
+    CodexAppServerClientMetadata {
+        product_client_id: "codex-tui".to_string(),
+        client_name: Some("codex-tui".to_string()),
+        client_version: Some("1.0.0".to_string()),
+        rpc_transport: AppServerRpcTransport::Stdio,
+        experimental_api_enabled: None,
     }
 }
 
