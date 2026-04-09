@@ -1,6 +1,5 @@
 use crate::agent::AgentStatus;
 use crate::agent::SubAgentConfigBuilder;
-use crate::agent::SubAgentExtensionInheritance;
 use crate::agent::SubAgentPromptInheritance;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -227,12 +226,7 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     let builder = SubAgentConfigBuilder::from_parent_turn(turn).map_err(|err| {
         FunctionCallError::RespondToModel(format!("spawn config is invalid: {err}"))
     })?;
-    let builder = builder
-        .prompt_inheritance(SubAgentPromptInheritance::InheritParent)
-        .extension_inheritance(SubAgentExtensionInheritance::InheritParent)
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("spawn config is invalid: {err}"))
-        })?;
+    let builder = builder.prompt_inheritance(SubAgentPromptInheritance::InheritParent);
     Ok(builder.build())
 }
 

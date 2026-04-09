@@ -1208,39 +1208,19 @@ fn guardian_review_session_config_strips_parent_prompt_and_tooling_surface() {
     assert!(!guardian_config.include_apps_instructions);
     assert!(guardian_config.include_environment_context);
     assert_eq!(guardian_config.project_doc_max_bytes, 4096);
-    assert_eq!(
-        super::review_session::guardian_review_initial_context_inclusions(),
-        crate::initial_context::InitialContextInclusions {
-            developer_instructions: true,
-            separate_developer_instructions: true,
-            user_instructions: true,
-            environment_context: true,
-            ..crate::initial_context::InitialContextInclusions::none()
-        },
-    );
-    assert!(guardian_config.mcp_servers.is_empty());
-    assert_eq!(guardian_config.js_repl_node_path, None);
-    assert_eq!(
-        guardian_config.js_repl_node_module_dirs,
-        Vec::<PathBuf>::new()
-    );
-    assert_eq!(guardian_config.zsh_path, None);
-    assert_eq!(guardian_config.main_execve_wrapper_exe, None);
+    let guardian_surface = crate::session_surface::SessionSurfacePolicy::guardian_review();
+    assert!(guardian_surface.prompt.developer_instructions);
+    assert!(guardian_surface.prompt.separate_developer_instructions);
+    assert!(guardian_surface.prompt.user_instructions);
+    assert!(guardian_surface.prompt.environment_context);
+    assert!(!guardian_surface.capabilities.mcp);
+    assert!(!guardian_surface.capabilities.apps);
+    assert!(!guardian_surface.capabilities.plugins);
+    assert!(!guardian_surface.capabilities.skills);
+    assert!(!guardian_surface.capabilities.memory);
     assert!(!guardian_config.include_apply_patch_tool);
     assert!(!guardian_config.use_experimental_unified_exec_tool);
     assert!(!guardian_config.permissions.allow_login_shell);
-    for disabled_feature in [
-        Feature::JsRepl,
-        Feature::CodeMode,
-        Feature::MemoryTool,
-        Feature::Collab,
-        Feature::SpawnCsv,
-        Feature::ChildAgentsMd,
-        Feature::ApplyPatchFreeform,
-        Feature::CodexGitCommit,
-    ] {
-        assert!(!guardian_config.features.enabled(disabled_feature));
-    }
 }
 
 #[test]
@@ -1288,32 +1268,33 @@ fn guardian_review_session_config_uses_live_network_proxy_state() {
 }
 
 #[test]
-fn guardian_review_session_config_rejects_pinned_collab_feature() {
+fn guardian_review_session_config_allows_pinned_parent_extension_features() {
     let mut parent_config = test_config();
     parent_config.features = ManagedFeatures::from_configured(
         parent_config.features.get().clone(),
         Some(Sourced {
             value: FeatureRequirementsToml {
-                entries: BTreeMap::from([("multi_agent".to_string(), true)]),
+                entries: BTreeMap::from([
+                    ("apps".to_string(), true),
+                    ("multi_agent".to_string(), true),
+                ]),
             },
             source: RequirementSource::Unknown,
         }),
     )
     .expect("managed features");
 
-    let err = build_guardian_review_session_config_for_test(
+    let _guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
     )
-    .expect_err("guardian config should fail when collab is pinned on");
+    .expect("guardian config should not fail when parent extension features are pinned on");
 
-    let err = err.to_string();
-    assert!(
-        err.contains("`features.multi_agent`"),
-        "error should name the pinned feature: {err}"
-    );
+    let guardian_surface = crate::session_surface::SessionSurfacePolicy::guardian_review();
+    assert!(!guardian_surface.capabilities.apps);
+    assert!(!guardian_surface.capabilities.subagents);
 }
 
 #[test]

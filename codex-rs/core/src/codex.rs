@@ -106,6 +106,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
+use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -134,6 +135,8 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
+use codex_tools::ShellCommandBackendConfig;
+use codex_tools::UnifiedExecShellMode;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
@@ -268,7 +271,6 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
-use crate::initial_context::InitialContextInclusions;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
@@ -285,7 +287,8 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
-use crate::project_doc::get_user_instructions;
+use crate::project_doc::UserInstructionExtras;
+use crate::project_doc::get_user_instructions_with_extras;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -293,6 +296,8 @@ use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
+use crate::session_surface::CapabilityInclusions;
+use crate::session_surface::SessionSurfacePolicy;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills_watcher::SkillsWatcher;
@@ -395,6 +400,55 @@ fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> boo
     )
 }
 
+fn apply_capabilities_to_tools_config(
+    mut tools_config: ToolsConfig,
+    capabilities: CapabilityInclusions,
+) -> ToolsConfig {
+    if !capabilities.web_search {
+        tools_config.search_tool = false;
+        tools_config.web_search_mode = Some(WebSearchMode::Disabled);
+        tools_config.web_search_config = None;
+    }
+    if !capabilities.apps || !capabilities.plugins {
+        tools_config.tool_suggest = false;
+    }
+    if !capabilities.image_generation {
+        tools_config.image_gen_tool = false;
+        tools_config.can_request_original_image_detail = false;
+    }
+    if !capabilities.apply_patch {
+        tools_config.apply_patch_tool_type = None;
+    }
+    if !capabilities.request_permissions {
+        tools_config.exec_permission_approvals_enabled = false;
+        tools_config.request_permissions_tool_enabled = false;
+    }
+    if !capabilities.code_mode {
+        tools_config.code_mode_enabled = false;
+        tools_config.code_mode_only_enabled = false;
+    }
+    if !capabilities.js_repl {
+        tools_config.js_repl_enabled = false;
+        tools_config.js_repl_tools_only = false;
+    }
+    if !capabilities.shell_zsh_fork {
+        tools_config.shell_command_backend = ShellCommandBackendConfig::Classic;
+        tools_config.unified_exec_shell_mode = UnifiedExecShellMode::Direct;
+    }
+    if !capabilities.unified_exec && tools_config.shell_type == ConfigShellToolType::UnifiedExec {
+        tools_config.shell_type = ConfigShellToolType::ShellCommand;
+        tools_config.unified_exec_shell_mode = UnifiedExecShellMode::Direct;
+    }
+    if !capabilities.subagents {
+        tools_config.collab_tools = false;
+        tools_config.multi_agent_v2 = false;
+        tools_config.spawn_agent_usage_hint = false;
+        tools_config.agent_jobs_tools = false;
+        tools_config.agent_jobs_worker_tools = false;
+    }
+    tools_config
+}
+
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
@@ -420,7 +474,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
-    pub(crate) initial_context_inclusions: InitialContextInclusions,
+    pub(crate) surface_policy: SessionSurfacePolicy,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -475,7 +529,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
-            initial_context_inclusions,
+            surface_policy,
             auth_manager,
             models_manager,
             environment_manager,
@@ -497,17 +551,24 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let plugin_outcome = plugins_manager.plugins_for_config(&config);
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
-        let loaded_skills = skills_manager.skills_for_config(&skills_input);
+        if surface_policy.capabilities.skills {
+            let effective_skill_roots = if surface_policy.capabilities.plugins {
+                plugins_manager
+                    .plugins_for_config(&config)
+                    .effective_skill_roots()
+            } else {
+                Vec::new()
+            };
+            let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
+            let loaded_skills = skills_manager.skills_for_config(&skills_input);
 
-        for err in &loaded_skills.errors {
-            error!(
-                "failed to load skill {}: {}",
-                err.path.display(),
-                err.message
-            );
+            for err in &loaded_skills.errors {
+                error!(
+                    "failed to load skill {}: {}",
+                    err.path.display(),
+                    err.message
+                );
+            }
         }
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
@@ -517,7 +578,8 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
-        if config.features.enabled(Feature::JsRepl)
+        if surface_policy.capabilities.js_repl
+            && config.features.enabled(Feature::JsRepl)
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {
             let _ = config.features.disable(Feature::JsRepl);
@@ -534,7 +596,8 @@ impl Codex {
             warn!("{message}");
             config.startup_warnings.push(message);
         }
-        if config.features.enabled(Feature::CodeMode)
+        if surface_policy.capabilities.code_mode
+            && config.features.enabled(Feature::CodeMode)
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {
             let message = format!(
@@ -549,7 +612,16 @@ impl Codex {
             .current()
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
-        let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
+        let user_instruction_extras = UserInstructionExtras {
+            js_repl: surface_policy.capabilities.js_repl,
+            child_agents_md: surface_policy.capabilities.subagents,
+        };
+        let user_instructions = get_user_instructions_with_extras(
+            &config,
+            environment.as_deref(),
+            user_instruction_extras,
+        )
+        .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -598,7 +670,9 @@ impl Codex {
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
-        let persisted_tools = if dynamic_tools.is_empty() {
+        let persisted_tools = if surface_policy.capabilities.dynamic_tools
+            && dynamic_tools.is_empty()
+        {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
@@ -615,7 +689,9 @@ impl Codex {
         } else {
             None
         };
-        let dynamic_tools = if dynamic_tools.is_empty() {
+        let dynamic_tools = if !surface_policy.capabilities.dynamic_tools {
+            Vec::new()
+        } else if dynamic_tools.is_empty() {
             persisted_tools
                 .or_else(|| conversation_history.get_dynamic_tools())
                 .unwrap_or_default()
@@ -643,7 +719,7 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
-            initial_context_inclusions,
+            surface_policy,
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -896,6 +972,7 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) features: ManagedFeatures,
+    pub(crate) surface_policy: SessionSurfacePolicy,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
@@ -923,7 +1000,8 @@ impl TurnContext {
             .and_then(AuthManager::auth_cached)
             .as_ref()
             .is_some_and(CodexAuth::is_chatgpt_auth);
-        self.features.apps_enabled_for_auth(is_chatgpt_auth)
+        self.surface_policy.capabilities.apps
+            && self.features.apps_enabled_for_auth(is_chatgpt_auth)
     }
 
     pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
@@ -961,30 +1039,33 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            available_models: &models_manager
-                .list_models(RefreshStrategy::OnlineIfUncached)
-                .await,
-            features: &features,
-            image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(
-                self.auth_manager.as_deref(),
-            ),
-            web_search_mode: self.tools_config.web_search_mode,
-            session_source: self.session_source.clone(),
-            sandbox_policy: self.sandbox_policy.get(),
-            windows_sandbox_level: self.windows_sandbox_level,
-        })
-        .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
-        .with_web_search_config(self.tools_config.web_search_config.clone())
-        .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_has_environment(self.tools_config.has_environment)
-        .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
-        .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
-        .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-            &config.agent_roles,
-        ));
+        let tools_config = apply_capabilities_to_tools_config(
+            ToolsConfig::new(&ToolsConfigParams {
+                model_info: &model_info,
+                available_models: &models_manager
+                    .list_models(RefreshStrategy::OnlineIfUncached)
+                    .await,
+                features: &features,
+                image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(
+                    self.auth_manager.as_deref(),
+                ),
+                web_search_mode: self.tools_config.web_search_mode,
+                session_source: self.session_source.clone(),
+                sandbox_policy: self.sandbox_policy.get(),
+                windows_sandbox_level: self.windows_sandbox_level,
+            })
+            .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
+            .with_web_search_config(self.tools_config.web_search_config.clone())
+            .with_allow_login_shell(self.tools_config.allow_login_shell)
+            .with_has_environment(self.tools_config.has_environment)
+            .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
+            .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
+            .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
+            .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+                &config.agent_roles,
+            )),
+            self.surface_policy.capabilities,
+        );
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -1020,6 +1101,7 @@ impl TurnContext {
             shell_environment_policy: self.shell_environment_policy.clone(),
             tools_config,
             features,
+            surface_policy: self.surface_policy,
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
@@ -1124,12 +1206,12 @@ pub(crate) struct SessionConfiguration {
     /// Compact prompt override.
     compact_prompt: Option<String>,
 
-    /// Session-scoped policy for which startup context blocks are model-visible.
+    /// Session-scoped policy for model-visible startup context and runtime surfaces.
     ///
     /// This is chosen at spawn time. It is intentionally separate from the
     /// loaded user config so internally spawned subagents can have narrower
-    /// startup prompts without mutating config.toml-derived settings.
-    initial_context_inclusions: InitialContextInclusions,
+    /// prompts/tools without mutating config.toml-derived settings.
+    surface_policy: SessionSurfacePolicy,
 
     /// When to escalate for approval for execution
     approval_policy: Constrained<AskForApproval>,
@@ -1497,30 +1579,37 @@ impl Session {
         let auth_manager_for_context = auth_manager;
         let provider_for_context = provider;
         let session_telemetry_for_context = session_telemetry;
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            available_models: &models_manager.try_list_models().unwrap_or_default(),
-            features: &per_turn_config.features,
-            image_generation_tool_auth_allowed,
-            web_search_mode: Some(per_turn_config.web_search_mode.value()),
-            session_source: session_source.clone(),
-            sandbox_policy: session_configuration.sandbox_policy.get(),
-            windows_sandbox_level: session_configuration.windows_sandbox_level,
-        })
-        .with_unified_exec_shell_mode_for_session(
-            crate::tools::spec::tool_user_shell_type(user_shell),
-            shell_zsh_path,
-            main_execve_wrapper_exe,
-        )
-        .with_web_search_config(per_turn_config.web_search_config.clone())
-        .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_has_environment(environment.is_some())
-        .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
-        .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
-        .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-            &per_turn_config.agent_roles,
-        ));
+        let tools_config = apply_capabilities_to_tools_config(
+            ToolsConfig::new(&ToolsConfigParams {
+                model_info: &model_info,
+                available_models: &models_manager.try_list_models().unwrap_or_default(),
+                features: &per_turn_config.features,
+                image_generation_tool_auth_allowed,
+                web_search_mode: Some(per_turn_config.web_search_mode.value()),
+                session_source: session_source.clone(),
+                sandbox_policy: session_configuration.sandbox_policy.get(),
+                windows_sandbox_level: session_configuration.windows_sandbox_level,
+            })
+            .with_unified_exec_shell_mode_for_session(
+                crate::tools::spec::tool_user_shell_type(user_shell),
+                shell_zsh_path,
+                main_execve_wrapper_exe,
+            )
+            .with_web_search_config(per_turn_config.web_search_config.clone())
+            .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
+            .with_has_environment(environment.is_some())
+            .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
+            .with_spawn_agent_usage_hint_text(
+                per_turn_config.multi_agent_v2.usage_hint_text.clone(),
+            )
+            .with_hide_spawn_agent_metadata(
+                per_turn_config.multi_agent_v2.hide_spawn_agent_metadata,
+            )
+            .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+                &per_turn_config.agent_roles,
+            )),
+            session_configuration.surface_policy.capabilities,
+        );
 
         let cwd = session_configuration.cwd.clone();
 
@@ -1564,6 +1653,7 @@ impl Session {
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
             tools_config,
             features: per_turn_config.features.clone(),
+            surface_policy: session_configuration.surface_policy,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_self_exe: per_turn_config.codex_self_exe.clone(),
@@ -1701,9 +1791,14 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
+        let surface_policy_for_mcp = session_configuration.surface_policy;
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_servers = mcp_manager_for_mcp.effective_servers(&config_for_mcp, auth.as_ref());
+            let mcp_servers = if surface_policy_for_mcp.capabilities.mcp {
+                mcp_manager_for_mcp.effective_servers(&config_for_mcp, auth.as_ref())
+            } else {
+                HashMap::new()
+            };
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
@@ -1851,7 +1946,11 @@ impl Session {
             config.active_profile.clone(),
         );
 
-        let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
+        let use_zsh_fork_shell = session_configuration
+            .surface_policy
+            .capabilities
+            .shell_zsh_fork
+            && config.features.enabled(Feature::ShellZshFork);
         let mut default_shell = if let Some(user_shell_override) =
             session_configuration.user_shell_override.clone()
         {
@@ -1873,7 +1972,12 @@ impl Session {
             shell::default_user_shell()
         };
         // Create the mutable state for the Session.
-        let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
+        let shell_snapshot_tx = if session_configuration
+            .surface_policy
+            .capabilities
+            .shell_snapshot
+            && config.features.enabled(Feature::ShellSnapshot)
+        {
             if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
                 let (tx, rx) = watch::channel(Some(snapshot));
                 default_shell.shell_snapshot = rx;
@@ -2122,7 +2226,11 @@ impl Session {
         required_mcp_servers.sort();
         let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
         let required_mcp_server_count = required_mcp_servers.len();
-        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
+        let tool_plugin_provenance = if session_configuration.surface_policy.capabilities.plugins {
+            mcp_manager.tool_plugin_provenance(config.as_ref())
+        } else {
+            codex_mcp::ToolPluginProvenance::default()
+        };
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -2608,17 +2716,26 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
-        let plugin_outcome = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&per_turn_config);
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let skills_outcome = Arc::new(
-            self.services
-                .skills_manager
-                .skills_for_config(&skills_input),
-        );
+        let skills_outcome = if session_configuration.surface_policy.capabilities.skills {
+            let effective_skill_roots = if session_configuration.surface_policy.capabilities.plugins
+            {
+                self.services
+                    .plugins_manager
+                    .plugins_for_config(&per_turn_config)
+                    .effective_skill_roots()
+            } else {
+                Vec::new()
+            };
+            let skills_input =
+                skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+            Arc::new(
+                self.services
+                    .skills_manager
+                    .skills_for_config(&skills_input),
+            )
+        } else {
+            Arc::new(SkillLoadOutcome::default())
+        };
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
@@ -3696,7 +3813,7 @@ impl Session {
             previous_turn_settings,
             collaboration_mode,
             base_instructions,
-            initial_context,
+            surface_policy,
         ) = {
             let state = self.state.lock().await;
             (
@@ -3704,10 +3821,12 @@ impl Session {
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
-                state.session_configuration.initial_context_inclusions,
+                state.session_configuration.surface_policy,
             )
         };
-        if initial_context.model_update
+        let prompt_context = surface_policy.prompt;
+        let capabilities = surface_policy.capabilities;
+        if prompt_context.model_update
             && let Some(model_switch_message) =
                 crate::context_manager::updates::build_model_instructions_update_item(
                     previous_turn_settings.as_ref(),
@@ -3716,7 +3835,7 @@ impl Session {
         {
             developer_sections.push(model_switch_message.into_text());
         }
-        if initial_context.permissions && turn_context.config.include_permissions_instructions {
+        if prompt_context.permissions && turn_context.config.include_permissions_instructions {
             developer_sections.push(
                 DeveloperInstructions::from_policy(
                     turn_context.sandbox_policy.get(),
@@ -3736,14 +3855,14 @@ impl Session {
         }
         // Some internally spawned subagents keep their role policy separate from the
         // aggregated developer bundle so their top-level instructions are easy to audit.
-        if initial_context.developer_instructions
-            && !initial_context.separate_developer_instructions
+        if prompt_context.developer_instructions
+            && !prompt_context.separate_developer_instructions
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
         {
             developer_sections.push(developer_instructions.to_string());
         }
         // Add developer instructions for memories.
-        if initial_context.memory
+        if capabilities.memory
             && turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
             && let Some(memory_prompt) =
@@ -3752,13 +3871,13 @@ impl Session {
             developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if initial_context.collaboration
+        if prompt_context.collaboration
             && let Some(collab_instructions) =
                 DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
             developer_sections.push(collab_instructions.into_text());
         }
-        if initial_context.realtime
+        if prompt_context.realtime
             && let Some(realtime_update) =
                 crate::context_manager::updates::build_initial_realtime_item(
                     reference_context_item.as_ref(),
@@ -3768,7 +3887,7 @@ impl Session {
         {
             developer_sections.push(realtime_update.into_text());
         }
-        if initial_context.personality
+        if prompt_context.personality
             && self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
         {
@@ -3788,7 +3907,7 @@ impl Session {
                 );
             }
         }
-        if initial_context.apps
+        if capabilities.apps
             && turn_context.config.include_apps_instructions
             && turn_context.apps_enabled()
         {
@@ -3803,7 +3922,7 @@ impl Session {
                 developer_sections.push(apps_section);
             }
         }
-        if initial_context.skills {
+        if capabilities.skills {
             let implicit_skills = turn_context
                 .turn_skills
                 .outcome
@@ -3812,7 +3931,7 @@ impl Session {
                 developer_sections.push(skills_section);
             }
         }
-        if initial_context.plugins {
+        if capabilities.plugins {
             let loaded_plugins = self
                 .services
                 .plugins_manager
@@ -3823,7 +3942,8 @@ impl Session {
                 developer_sections.push(plugin_section);
             }
         }
-        if initial_context.commit
+        if prompt_context.commit
+            && capabilities.git_commit
             && turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
@@ -3831,7 +3951,7 @@ impl Session {
         {
             developer_sections.push(commit_message_instruction);
         }
-        if initial_context.user_instructions
+        if prompt_context.user_instructions
             && let Some(user_instructions) = turn_context.user_instructions.as_deref()
         {
             contextual_user_sections.push(
@@ -3842,7 +3962,7 @@ impl Session {
                 .serialize_to_text(),
             );
         }
-        if initial_context.environment_context && turn_context.config.include_environment_context {
+        if prompt_context.environment_context && turn_context.config.include_environment_context {
             let subagents = self
                 .services
                 .agent_control
@@ -3867,8 +3987,8 @@ impl Session {
             items.push(contextual_user_message);
         }
         // Emit selected role policy as a separate developer item.
-        if initial_context.developer_instructions
-            && initial_context.separate_developer_instructions
+        if prompt_context.developer_instructions
+            && prompt_context.separate_developer_instructions
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && let Some(guardian_developer_message) =
                 crate::context_manager::updates::build_developer_update_item(vec![
@@ -4466,6 +4586,9 @@ impl Session {
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
     ) {
+        if !turn_context.surface_policy.capabilities.mcp {
+            return;
+        }
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
         let mcp_config = config.to_mcp_config(self.services.plugins_manager.as_ref());
@@ -5793,6 +5916,7 @@ async fn spawn_review_thread(
         environment: parent_turn_context.environment.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),
+        surface_policy: parent_turn_context.surface_policy,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
@@ -5941,39 +6065,46 @@ pub(crate) async fn run_turn(
         client_session.reset_websocket_session();
     }
 
-    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
+    let capabilities = turn_context.surface_policy.capabilities;
+    let skills_outcome = capabilities
+        .skills
+        .then_some(turn_context.turn_skills.outcome.as_ref());
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
-    let loaded_plugins = sess
-        .services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config);
+    let loaded_plugins = if capabilities.plugins {
+        sess.services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config)
+    } else {
+        Default::default()
+    };
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
-    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
-        // Plugin mentions need raw MCP/app inventory even when app tools
-        // are normally hidden so we can describe the plugin's currently
-        // usable capabilities for this turn.
-        match sess
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return None,
-            Err(_) => HashMap::new(),
-        }
-    } else {
-        HashMap::new()
-    };
+    let mcp_tools =
+        if capabilities.mcp && (turn_context.apps_enabled() || !mentioned_plugins.is_empty()) {
+            // Plugin mentions need raw MCP/app inventory even when app tools
+            // are normally hidden so we can describe the plugin's currently
+            // usable capabilities for this turn.
+            match sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .or_cancel(&cancellation_token)
+                .await
+            {
+                Ok(mcp_tools) => mcp_tools,
+                Err(_) if turn_context.apps_enabled() => return None,
+                Err(_) => HashMap::new(),
+            }
+        } else {
+            HashMap::new()
+        };
     let available_connectors = if turn_context.apps_enabled() {
         let connectors = connectors::merge_plugin_apps_with_accessible(
             loaded_plugins.effective_apps(),
@@ -5998,21 +6129,24 @@ pub(crate) async fn run_turn(
         )
     });
     let config = turn_context.config.clone();
-    if config
-        .features
-        .enabled(Feature::SkillEnvVarDependencyPrompt)
+    if capabilities.skill_dependencies
+        && config
+            .features
+            .enabled(Feature::SkillEnvVarDependencyPrompt)
     {
         let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
         resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
     }
 
-    maybe_prompt_and_install_mcp_dependencies(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &cancellation_token,
-        &mentioned_skills,
-    )
-    .await;
+    if capabilities.skill_dependencies {
+        maybe_prompt_and_install_mcp_dependencies(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &cancellation_token,
+            &mentioned_skills,
+        )
+        .await;
+    }
 
     let session_telemetry = turn_context.session_telemetry.clone();
     let thread_id = sess.conversation_id.to_string();
@@ -6734,16 +6868,19 @@ async fn run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let _code_mode_worker = sess
-        .services
-        .code_mode_service
-        .start_turn_worker(
-            &sess,
-            &turn_context,
-            Arc::clone(&router),
-            Arc::clone(&turn_diff_tracker),
-        )
-        .await;
+    let _code_mode_worker = if turn_context.surface_policy.capabilities.code_mode {
+        sess.services
+            .code_mode_service
+            .start_turn_worker(
+                &sess,
+                &turn_context,
+                Arc::clone(&router),
+                Arc::clone(&turn_diff_tracker),
+            )
+            .await
+    } else {
+        None
+    };
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(
@@ -6841,17 +6978,25 @@ pub(crate) async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-    let has_mcp_servers = mcp_connection_manager.has_servers();
-    let mut mcp_tools = mcp_connection_manager
-        .list_all_tools()
-        .or_cancel(cancellation_token)
-        .await?;
-    drop(mcp_connection_manager);
-    let loaded_plugins = sess
-        .services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config);
+    let capabilities = turn_context.surface_policy.capabilities;
+    let (has_mcp_servers, mut mcp_tools) = if capabilities.mcp {
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+        let has_mcp_servers = mcp_connection_manager.has_servers();
+        let mcp_tools = mcp_connection_manager
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await?;
+        (has_mcp_servers, mcp_tools)
+    } else {
+        (false, HashMap::new())
+    };
+    let loaded_plugins = if capabilities.plugins {
+        sess.services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config)
+    } else {
+        Default::default()
+    };
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
@@ -6958,7 +7103,11 @@ pub(crate) async fn built_tools(
                 .map(|inputs| inputs.tool_namespaces.clone()),
             app_tools,
             discoverable_tools,
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            dynamic_tools: if capabilities.dynamic_tools {
+                turn_context.dynamic_tools.as_slice()
+            } else {
+                &[]
+            },
         },
     )))
 }

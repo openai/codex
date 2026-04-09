@@ -41,13 +41,13 @@ use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
-use crate::initial_context::InitialContextInclusions;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
+use crate::session_surface::SessionSurfacePolicy;
 use codex_login::AuthManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_protocol::error::CodexErr;
@@ -64,7 +64,7 @@ use crate::codex::completed_session_loop_termination;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_thread_interactive(
     config: Config,
-    initial_context_inclusions: InitialContextInclusions,
+    surface_policy: SessionSurfacePolicy,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     parent_session: Arc<Session>,
@@ -78,7 +78,7 @@ pub(crate) async fn run_codex_thread_interactive(
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
-        initial_context_inclusions,
+        surface_policy,
         auth_manager,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::from_environment(
@@ -174,7 +174,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     let child_cancel = cancel_token.child_token();
     let io = run_codex_thread_interactive(
         config,
-        InitialContextInclusions::full(),
+        SessionSurfacePolicy::full(),
         auth_manager,
         models_manager,
         parent_session,

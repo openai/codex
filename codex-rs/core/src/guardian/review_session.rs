@@ -25,7 +25,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::agent::SubAgentConfigBuilder;
-use crate::agent::SubAgentExtensionInheritance;
 use crate::agent::SubAgentPromptInheritance;
 use crate::agent::SubAgentPromptSelection;
 use crate::codex::Codex;
@@ -36,8 +35,8 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
-use crate::initial_context::InitialContextInclusions;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::session_surface::SessionSurfacePolicy;
 use codex_model_provider_info::ModelProviderInfo;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
@@ -449,7 +448,7 @@ async fn spawn_guardian_review_session(
     let has_prior_review = initial_history.is_some();
     let codex = run_codex_thread_interactive(
         spawn_config,
-        guardian_review_initial_context_inclusions(),
+        SessionSurfacePolicy::guardian_review(),
         params.parent_session.services.auth_manager.clone(),
         params.parent_session.services.models_manager.clone(),
         Arc::clone(&params.parent_session),
@@ -627,7 +626,6 @@ pub(crate) fn build_guardian_review_session_config(
         .prompt_inheritance(SubAgentPromptInheritance::Select(
             guardian_review_prompt_selection(),
         ))
-        .extension_inheritance(SubAgentExtensionInheritance::None)?
         .build();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
@@ -669,28 +667,15 @@ pub(crate) fn build_guardian_review_session_config(
     Ok(guardian_config)
 }
 
-pub(crate) fn guardian_review_initial_context_inclusions() -> InitialContextInclusions {
-    guardian_review_prompt_selection().initial_context_inclusions()
-}
-
 const fn guardian_review_prompt_selection() -> SubAgentPromptSelection {
     SubAgentPromptSelection {
-        model_update: false,
         base_instructions: false,
         user_instructions: false,
         project_docs: true,
         developer_instructions: true,
-        separate_developer_instructions: true,
         compact_prompt: false,
         permissions: false,
-        memory: false,
-        collaboration: false,
-        realtime: false,
-        personality: false,
         apps: false,
-        skills: false,
-        plugins: false,
-        commit: false,
         environment_context: true,
     }
 }

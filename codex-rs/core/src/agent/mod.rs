@@ -14,6 +14,5 @@ pub(crate) use registry::exceeds_thread_spawn_depth_limit;
 pub(crate) use registry::next_thread_spawn_depth;
 pub(crate) use status::agent_status_from_event;
 pub(crate) use subagent_config::SubAgentConfigBuilder;
-pub(crate) use subagent_config::SubAgentExtensionInheritance;
 pub(crate) use subagent_config::SubAgentPromptInheritance;
 pub(crate) use subagent_config::SubAgentPromptSelection;

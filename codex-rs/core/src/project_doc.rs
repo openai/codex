@@ -42,6 +42,12 @@ pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 /// be concatenated with the following separator.
 const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UserInstructionExtras {
+    pub(crate) js_repl: bool,
+    pub(crate) child_agents_md: bool,
+}
+
 fn render_js_repl_instructions(config: &Config) -> Option<String> {
     if !config.features.enabled(Feature::JsRepl) {
         return None;
@@ -78,17 +84,19 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
-pub(crate) async fn get_user_instructions(
+pub(crate) async fn get_user_instructions_with_extras(
     config: &Config,
     environment: Option<&Environment>,
+    extras: UserInstructionExtras,
 ) -> Option<String> {
     let fs = environment?.get_filesystem();
-    get_user_instructions_with_fs(config, fs.as_ref()).await
+    get_user_instructions_with_fs(config, fs.as_ref(), extras).await
 }
 
 pub(crate) async fn get_user_instructions_with_fs(
     config: &Config,
     fs: &dyn ExecutorFileSystem,
+    extras: UserInstructionExtras,
 ) -> Option<String> {
     let project_docs = read_project_docs_with_fs(config, fs).await;
 
@@ -111,14 +119,16 @@ pub(crate) async fn get_user_instructions_with_fs(
         }
     };
 
-    if let Some(js_repl_section) = render_js_repl_instructions(config) {
+    if extras.js_repl
+        && let Some(js_repl_section) = render_js_repl_instructions(config)
+    {
         if !output.is_empty() {
             output.push_str("\n\n");
         }
         output.push_str(&js_repl_section);
     }
 
-    if config.features.enabled(Feature::ChildAgentsMd) {
+    if extras.child_agents_md && config.features.enabled(Feature::ChildAgentsMd) {
         if !output.is_empty() {
             output.push_str("\n\n");
         }
