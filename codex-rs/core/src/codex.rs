@@ -659,6 +659,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            thread_initialization_mode: ThreadInitializationMode::New,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -1095,6 +1096,14 @@ impl TurnContext {
     }
 }
 
+fn thread_initialization_mode(initial_history: &InitialHistory) -> ThreadInitializationMode {
+    match initial_history {
+        InitialHistory::New => ThreadInitializationMode::New,
+        InitialHistory::Forked(_) => ThreadInitializationMode::Forked,
+        InitialHistory::Resumed(_) => ThreadInitializationMode::Resumed,
+    }
+}
+
 fn local_time_context() -> (String, String) {
     match iana_time_zone::get_timezone() {
         Ok(timezone) => (Local::now().format("%Y-%m-%d").to_string(), timezone),
@@ -1176,6 +1185,7 @@ pub(crate) struct SessionConfiguration {
     app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    thread_initialization_mode: ThreadInitializationMode,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1200,6 +1210,7 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            initialization_mode: self.thread_initialization_mode,
         }
     }
 
@@ -1621,6 +1632,8 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
+        session_configuration.thread_initialization_mode =
+            thread_initialization_mode(&initial_history);
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
@@ -4190,6 +4203,7 @@ impl Session {
                     turn_kind: NonSteerableTurnKind::Compact,
                 });
             }
+            None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
