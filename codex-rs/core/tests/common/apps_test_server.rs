@@ -251,9 +251,9 @@ impl Respond for CodexAppsJsonRpcResponder {
                                             "type": "object",
                                             "description": "Document file payload.",
                                             "properties": {
-                                                "fileId": { "type": "string" }
+                                                "file_id": { "type": "string" }
                                             },
-                                            "required": ["fileId"]
+                                            "required": ["file_id"]
                                         }
                                     },
                                     "required": ["file"],
@@ -319,7 +319,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let file_id = body
-                    .pointer("/params/arguments/file/fileId")
+                    .pointer("/params/arguments/file/file_id")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let codex_apps_meta = body.pointer("/params/_meta/_codex_apps").cloned();

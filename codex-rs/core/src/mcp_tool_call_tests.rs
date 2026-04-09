@@ -1396,6 +1396,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Reads calendar data.".to_string()),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(

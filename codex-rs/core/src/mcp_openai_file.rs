@@ -129,12 +129,12 @@ async fn build_uploaded_local_argument_value(
         None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
     })?;
     Ok(serde_json::json!({
-        "downloadUrl": uploaded.download_url,
-        "fileId": uploaded.file_id,
-        "mimeType": uploaded.mime_type,
-        "fileName": uploaded.file_name,
+        "download_url": uploaded.download_url,
+        "file_id": uploaded.file_id,
+        "mime_type": uploaded.mime_type,
+        "file_name": uploaded.file_name,
         "uri": uploaded.uri,
-        "fileSizeBytes": uploaded.file_size_bytes,
+        "file_size_bytes": uploaded.file_size_bytes,
     }))
 }
 
@@ -237,12 +237,12 @@ mod tests {
         assert_eq!(
             rewritten,
             serde_json::json!({
-                "downloadUrl": format!("{}/download/file_123", server.uri()),
-                "fileId": "file_123",
-                "mimeType": "text/csv",
-                "fileName": "file_report.csv",
+                "download_url": format!("{}/download/file_123", server.uri()),
+                "file_id": "file_123",
+                "mime_type": "text/csv",
+                "file_name": "file_report.csv",
                 "uri": "sediment://file_123",
-                "fileSizeBytes": 5,
+                "file_size_bytes": 5,
             })
         );
     }
@@ -316,12 +316,12 @@ mod tests {
         assert_eq!(
             rewritten,
             Some(serde_json::json!({
-                "downloadUrl": format!("{}/download/file_123", server.uri()),
-                "fileId": "file_123",
-                "mimeType": "text/csv",
-                "fileName": "file_report.csv",
+                "download_url": format!("{}/download/file_123", server.uri()),
+                "file_id": "file_123",
+                "mime_type": "text/csv",
+                "file_name": "file_report.csv",
                 "uri": "sediment://file_123",
-                "fileSizeBytes": 5,
+                "file_size_bytes": 5,
             }))
         );
     }
@@ -431,20 +431,20 @@ mod tests {
             rewritten,
             Some(serde_json::json!([
                 {
-                    "downloadUrl": format!("{}/download/file_1", server.uri()),
-                    "fileId": "file_1",
-                    "mimeType": "text/csv",
-                    "fileName": "one.csv",
+                    "download_url": format!("{}/download/file_1", server.uri()),
+                    "file_id": "file_1",
+                    "mime_type": "text/csv",
+                    "file_name": "one.csv",
                     "uri": "sediment://file_1",
-                    "fileSizeBytes": 3,
+                    "file_size_bytes": 3,
                 },
                 {
-                    "downloadUrl": format!("{}/download/file_2", server.uri()),
-                    "fileId": "file_2",
-                    "mimeType": "text/csv",
-                    "fileName": "two.csv",
+                    "download_url": format!("{}/download/file_2", server.uri()),
+                    "file_id": "file_2",
+                    "mime_type": "text/csv",
+                    "file_name": "two.csv",
                     "uri": "sediment://file_2",
-                    "fileSizeBytes": 3,
+                    "file_size_bytes": 3,
                 }
             ]))
         );

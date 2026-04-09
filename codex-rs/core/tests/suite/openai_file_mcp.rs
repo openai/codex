@@ -152,12 +152,12 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     assert_eq!(
         apps_tool_call.pointer("/params/arguments/file"),
         Some(&json!({
-            "downloadUrl": format!("{}/download/file_123", server.uri()),
-            "fileId": "file_123",
-            "mimeType": "text/plain",
-            "fileName": "report.txt",
+            "download_url": format!("{}/download/file_123", server.uri()),
+            "file_id": "file_123",
+            "mime_type": "text/plain",
+            "file_name": "report.txt",
             "uri": "sediment://file_123",
-            "fileSizeBytes": 11,
+            "file_size_bytes": 11,
         }))
     );
     assert_eq!(
