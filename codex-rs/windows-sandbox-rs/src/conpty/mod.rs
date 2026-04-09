@@ -6,10 +6,8 @@
 //! `tty=true`. The helpers are not tied to the IPC layer and can be reused by other
 //! Windows sandbox flows that need a PTY.
 
-mod proc_thread_attr;
-
-use self::proc_thread_attr::ProcThreadAttributeList;
 use crate::desktop::LaunchDesktop;
+use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;

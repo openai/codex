@@ -3,15 +3,15 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
+use crate::ProcessDriver;
 use crate::SpawnedProcess;
 use crate::TerminalSize;
 use crate::combine_output_receivers;
-use crate::spawn_from_driver;
 #[cfg(unix)]
 use crate::pipe::spawn_process_no_stdin_with_inherited_fds;
 #[cfg(unix)]
 use crate::pty::spawn_process_with_inherited_fds;
-use crate::ProcessDriver;
+use crate::spawn_from_driver;
 use crate::spawn_pipe_process;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;

@@ -1,20 +1,20 @@
 use crate::acl::add_allow_ace;
 use crate::acl::add_deny_write_ace;
 use crate::acl::allow_null_device;
-use crate::allow::compute_allow_paths;
 use crate::allow::AllowDenyPaths;
+use crate::allow::compute_allow_paths;
 use crate::cap::load_or_create_cap_sids;
 use crate::cap::workspace_cap_sid_for_cwd;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
 use crate::env::inherit_path_env;
 use crate::env::normalize_null_device_env;
-use crate::identity::require_logon_sandbox_creds;
 use crate::identity::SandboxCreds;
+use crate::identity::require_logon_sandbox_creds;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
-use crate::policy::parse_policy;
 use crate::policy::SandboxPolicy;
+use crate::policy::parse_policy;
 use crate::sandbox_utils::ensure_codex_home_exists;
 use crate::sandbox_utils::inject_git_safe_directory;
 use crate::token::convert_string_sid_to_sid;
@@ -31,9 +31,9 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
 
 pub(crate) struct SpawnContext {
     pub(crate) policy: SandboxPolicy,

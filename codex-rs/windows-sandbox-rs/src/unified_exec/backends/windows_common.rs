@@ -1,16 +1,16 @@
-use crate::ipc_framed::decode_bytes;
-use crate::ipc_framed::encode_bytes;
 use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::OutputStream;
 use crate::ipc_framed::ResizePayload;
 use crate::ipc_framed::StdinPayload;
+use crate::ipc_framed::decode_bytes;
+use crate::ipc_framed::encode_bytes;
 use anyhow::Result;
-use codex_utils_pty::spawn_from_driver;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
+use codex_utils_pty::spawn_from_driver;
 use std::fs::File;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -98,61 +98,63 @@ pub(crate) fn start_runner_stdout_reader(
     stderr_tx: Option<broadcast::Sender<Vec<u8>>>,
     exit_tx: oneshot::Sender<i32>,
 ) {
-    std::thread::spawn(move || loop {
-        let msg = match crate::ipc_framed::read_frame(&mut pipe_read) {
-            Ok(Some(v)) => v,
-            Ok(None) => {
-                send_runner_error(
-                    "runner pipe closed before exit",
-                    &stdout_tx,
-                    stderr_tx.as_ref(),
-                );
-                let _ = exit_tx.send(-1);
-                break;
-            }
-            Err(err) => {
-                send_runner_error(
-                    &format!("runner read failed: {err}"),
-                    &stdout_tx,
-                    stderr_tx.as_ref(),
-                );
-                let _ = exit_tx.send(-1);
-                break;
-            }
-        };
+    std::thread::spawn(move || {
+        loop {
+            let msg = match crate::ipc_framed::read_frame(&mut pipe_read) {
+                Ok(Some(v)) => v,
+                Ok(None) => {
+                    send_runner_error(
+                        "runner pipe closed before exit",
+                        &stdout_tx,
+                        stderr_tx.as_ref(),
+                    );
+                    let _ = exit_tx.send(-1);
+                    break;
+                }
+                Err(err) => {
+                    send_runner_error(
+                        &format!("runner read failed: {err}"),
+                        &stdout_tx,
+                        stderr_tx.as_ref(),
+                    );
+                    let _ = exit_tx.send(-1);
+                    break;
+                }
+            };
 
-        match msg.message {
-            Message::Output { payload } => {
-                if let Ok(data) = decode_bytes(&payload.data_b64) {
-                    match payload.stream {
-                        OutputStream::Stdout => {
-                            let _ = stdout_tx.send(data);
-                        }
-                        OutputStream::Stderr => {
-                            if let Some(stderr_tx) = stderr_tx.as_ref() {
-                                let _ = stderr_tx.send(data);
-                            } else {
+            match msg.message {
+                Message::Output { payload } => {
+                    if let Ok(data) = decode_bytes(&payload.data_b64) {
+                        match payload.stream {
+                            OutputStream::Stdout => {
                                 let _ = stdout_tx.send(data);
+                            }
+                            OutputStream::Stderr => {
+                                if let Some(stderr_tx) = stderr_tx.as_ref() {
+                                    let _ = stderr_tx.send(data);
+                                } else {
+                                    let _ = stdout_tx.send(data);
+                                }
                             }
                         }
                     }
                 }
+                Message::Exit { payload } => {
+                    let _ = exit_tx.send(payload.exit_code);
+                    break;
+                }
+                Message::Error { payload } => {
+                    send_runner_error(&payload.message, &stdout_tx, stderr_tx.as_ref());
+                    let _ = exit_tx.send(-1);
+                    break;
+                }
+                Message::SpawnReady { .. }
+                | Message::Stdin { .. }
+                | Message::CloseStdin { .. }
+                | Message::Resize { .. }
+                | Message::SpawnRequest { .. }
+                | Message::Terminate { .. } => {}
             }
-            Message::Exit { payload } => {
-                let _ = exit_tx.send(payload.exit_code);
-                break;
-            }
-            Message::Error { payload } => {
-                send_runner_error(&payload.message, &stdout_tx, stderr_tx.as_ref());
-                let _ = exit_tx.send(-1);
-                break;
-            }
-            Message::SpawnReady { .. }
-            | Message::Stdin { .. }
-            | Message::CloseStdin { .. }
-            | Message::Resize { .. }
-            | Message::SpawnRequest { .. }
-            | Message::Terminate { .. } => {}
         }
     });
 }
