@@ -1,7 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
-use codex_config::config_toml::RealtimeWsVersion;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;

@@ -5,6 +5,10 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_api::RealtimeEventParser;
+use codex_api::RealtimeSessionConfig;
+use codex_api::RealtimeSessionMode;
+use codex_api::session_update_session_json;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -962,35 +966,20 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         "unexpected close reason: {closed_notification:?}"
     );
 
-    let request = call_capture.single_request();
-    assert_eq!(request.url.path(), "/v1/realtime/calls");
-    assert_eq!(request.url.query(), None);
-    assert_eq!(
-        request
-            .headers
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-        Some("multipart/form-data; boundary=codex-realtime-call-boundary")
-    );
-    let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","model":"gpt-realtime-1.5","type":"realtime","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"codex","description":"Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to Codex."}},"required":["prompt"],"additionalProperties":false}}]}"#;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             v=offer\r\n\
-             \r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
-    );
+    let mut session = session_update_session_json(RealtimeSessionConfig {
+        instructions: "backend prompt".to_string(),
+        model: Some("gpt-realtime-1.5".to_string()),
+        session_id: Some("ignored".to_string()),
+        event_parser: RealtimeEventParser::RealtimeV2,
+        session_mode: RealtimeSessionMode::Conversational,
+        voice: RealtimeVoice::Marin,
+    })?;
+    session
+        .as_object_mut()
+        .expect("session should be an object")
+        .remove("id");
+    let session = serde_json::to_string(&session).expect("session should serialize");
+    assert_call_create_multipart(call_capture.single_request(), "v=offer\r\n", &session)?;
 
     realtime_server.shutdown().await;
     Ok(())
