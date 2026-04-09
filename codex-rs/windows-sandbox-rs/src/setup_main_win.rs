@@ -638,6 +638,25 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let cap_sid_str = caps.workspace;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
+    let real_user_sid = resolve_sid(&payload.real_user).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSidResolveFailed,
+            format!(
+                "resolve SID for real user {} failed: {err}",
+                payload.real_user
+            ),
+        ))
+    })?;
+    let real_user_sid_str = string_from_sid_bytes(&real_user_sid).map_err(anyhow::Error::msg)?;
+    let real_user_psid = sid_bytes_to_psid(&real_user_sid).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSidResolveFailed,
+            format!(
+                "convert real user {} SID to PSID failed: {err}",
+                payload.real_user
+            ),
+        ))
+    })?;
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
@@ -670,6 +689,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         };
         for (label, psid) in [
             ("sandbox_group", sandbox_group_psid),
+            ("real_user", real_user_psid),
             (cap_label, cap_psid_for_root),
         ] {
             let has =
@@ -700,7 +720,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             log_line(
                 log,
                 &format!(
-                    "granting write ACE to {} for sandbox group and capability SID",
+                    "granting write ACE to {} for sandbox group, real user, and capability SID",
                     root.display()
                 ),
             )?;
@@ -713,9 +733,17 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         for root in grant_tasks {
             let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
             let sid_strings = if is_command_cwd {
-                vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
+                vec![
+                    sandbox_group_sid_str.clone(),
+                    real_user_sid_str.clone(),
+                    workspace_sid_str.clone(),
+                ]
             } else {
-                vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
+                vec![
+                    sandbox_group_sid_str.clone(),
+                    real_user_sid_str.clone(),
+                    cap_sid_str.clone(),
+                ]
             };
             let tx = tx.clone();
             scope.spawn(move || {
@@ -882,6 +910,9 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     unsafe {
         if !sandbox_group_psid.is_null() {
             LocalFree(sandbox_group_psid as HLOCAL);
+        }
+        if !real_user_psid.is_null() {
+            LocalFree(real_user_psid as HLOCAL);
         }
         if !cap_psid.is_null() {
             LocalFree(cap_psid as HLOCAL);
