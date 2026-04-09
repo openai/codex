@@ -1993,6 +1993,7 @@ async fn set_rate_limits_retains_previous_credits() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        initial_context_inclusions: InitialContextInclusions::full(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2095,6 +2096,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        initial_context_inclusions: InitialContextInclusions::full(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2444,6 +2446,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        initial_context_inclusions: InitialContextInclusions::full(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2707,6 +2710,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        initial_context_inclusions: InitialContextInclusions::full(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2810,6 +2814,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        initial_context_inclusions: InitialContextInclusions::full(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -3654,6 +3659,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        initial_context_inclusions: InitialContextInclusions::full(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),

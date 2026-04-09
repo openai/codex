@@ -4,7 +4,6 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::Constrained;
-use crate::config::InitialContextInclusions;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
@@ -1210,23 +1209,14 @@ fn guardian_review_session_config_strips_parent_prompt_and_tooling_surface() {
     assert!(guardian_config.include_environment_context);
     assert_eq!(guardian_config.project_doc_max_bytes, 4096);
     assert_eq!(
-        guardian_config.initial_context_inclusions,
-        InitialContextInclusions {
-            model_update: false,
-            permissions: false,
+        super::review_session::guardian_review_initial_context_inclusions(),
+        crate::initial_context::InitialContextInclusions {
             developer_instructions: true,
             separate_developer_instructions: true,
-            memory: false,
-            collaboration: false,
-            realtime: false,
-            personality: false,
-            apps: false,
-            skills: false,
-            plugins: false,
-            commit: false,
             user_instructions: true,
             environment_context: true,
-        }
+            ..crate::initial_context::InitialContextInclusions::none()
+        },
     );
     assert!(guardian_config.mcp_servers.is_empty());
     assert_eq!(guardian_config.js_repl_node_path, None);

@@ -34,9 +34,9 @@ use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
-use crate::config::InitialContextInclusions;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
+use crate::initial_context::InitialContextInclusions;
 use crate::rollout::recorder::RolloutRecorder;
 use codex_model_provider_info::ModelProviderInfo;
 
@@ -449,6 +449,7 @@ async fn spawn_guardian_review_session(
     let has_prior_review = initial_history.is_some();
     let codex = run_codex_thread_interactive(
         spawn_config,
+        guardian_review_initial_context_inclusions(),
         params.parent_session.services.auth_manager.clone(),
         params.parent_session.services.models_manager.clone(),
         Arc::clone(&params.parent_session),
@@ -623,42 +624,10 @@ pub(crate) fn build_guardian_review_session_config(
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> anyhow::Result<Config> {
     let mut guardian_config = SubAgentConfigBuilder::from_parent_config(parent_config)
-        .prompt_inheritance(SubAgentPromptInheritance::Select(SubAgentPromptSelection {
-            model_update: false,
-            base_instructions: false,
-            user_instructions: false,
-            project_docs: true,
-            developer_instructions: true,
-            separate_developer_instructions: true,
-            compact_prompt: false,
-            permissions: false,
-            memory: false,
-            collaboration: false,
-            realtime: false,
-            personality: false,
-            apps: false,
-            skills: false,
-            plugins: false,
-            commit: false,
-            environment_context: true,
-        }))
+        .prompt_inheritance(SubAgentPromptInheritance::Select(
+            guardian_review_prompt_selection(),
+        ))
         .extension_inheritance(SubAgentExtensionInheritance::None)?
-        .initial_context_inclusions(InitialContextInclusions {
-            model_update: false,
-            permissions: false,
-            developer_instructions: true,
-            separate_developer_instructions: true,
-            memory: false,
-            collaboration: false,
-            realtime: false,
-            personality: false,
-            apps: false,
-            skills: false,
-            plugins: false,
-            commit: false,
-            user_instructions: true,
-            environment_context: true,
-        })
         .build();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
@@ -698,6 +667,32 @@ pub(crate) fn build_guardian_review_session_config(
         )?);
     }
     Ok(guardian_config)
+}
+
+pub(crate) fn guardian_review_initial_context_inclusions() -> InitialContextInclusions {
+    guardian_review_prompt_selection().initial_context_inclusions()
+}
+
+const fn guardian_review_prompt_selection() -> SubAgentPromptSelection {
+    SubAgentPromptSelection {
+        model_update: false,
+        base_instructions: false,
+        user_instructions: false,
+        project_docs: true,
+        developer_instructions: true,
+        separate_developer_instructions: true,
+        compact_prompt: false,
+        permissions: false,
+        memory: false,
+        collaboration: false,
+        realtime: false,
+        personality: false,
+        apps: false,
+        skills: false,
+        plugins: false,
+        commit: false,
+        environment_context: true,
+    }
 }
 
 async fn run_before_review_deadline<T>(

@@ -269,12 +269,6 @@ pub struct Config {
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
 
-    /// In-memory policy for which startup context blocks are model-visible.
-    ///
-    /// This is not loaded from config.toml. It is used by internally spawned
-    /// subagents that need a narrower prompt than the parent session.
-    pub(crate) initial_context_inclusions: InitialContextInclusions,
-
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
@@ -580,64 +574,6 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InitialContextInclusions {
-    pub(crate) model_update: bool,
-    pub(crate) permissions: bool,
-    pub(crate) developer_instructions: bool,
-    pub(crate) separate_developer_instructions: bool,
-    pub(crate) memory: bool,
-    pub(crate) collaboration: bool,
-    pub(crate) realtime: bool,
-    pub(crate) personality: bool,
-    pub(crate) apps: bool,
-    pub(crate) skills: bool,
-    pub(crate) plugins: bool,
-    pub(crate) commit: bool,
-    pub(crate) user_instructions: bool,
-    pub(crate) environment_context: bool,
-}
-
-impl InitialContextInclusions {
-    pub(crate) const fn full() -> Self {
-        Self {
-            model_update: true,
-            permissions: true,
-            developer_instructions: true,
-            separate_developer_instructions: false,
-            memory: true,
-            collaboration: true,
-            realtime: true,
-            personality: true,
-            apps: true,
-            skills: true,
-            plugins: true,
-            commit: true,
-            user_instructions: true,
-            environment_context: true,
-        }
-    }
-
-    pub(crate) const fn none() -> Self {
-        Self {
-            model_update: false,
-            permissions: false,
-            developer_instructions: false,
-            separate_developer_instructions: false,
-            memory: false,
-            collaboration: false,
-            realtime: false,
-            personality: false,
-            apps: false,
-            skills: false,
-            plugins: false,
-            commit: false,
-            user_instructions: false,
-            environment_context: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2082,7 +2018,6 @@ impl Config {
             include_permissions_instructions,
             include_apps_instructions,
             include_environment_context,
-            initial_context_inclusions: InitialContextInclusions::full(),
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),

@@ -4,7 +4,7 @@ use codex_features::Feature;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::Constrained;
-use crate::config::InitialContextInclusions;
+use crate::initial_context::InitialContextInclusions;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -33,6 +33,27 @@ pub(crate) struct SubAgentPromptSelection {
     pub(crate) plugins: bool,
     pub(crate) commit: bool,
     pub(crate) environment_context: bool,
+}
+
+impl SubAgentPromptSelection {
+    pub(crate) fn initial_context_inclusions(self) -> InitialContextInclusions {
+        let mut inclusions = InitialContextInclusions::none();
+        inclusions.model_update = self.model_update;
+        inclusions.permissions = self.permissions;
+        inclusions.developer_instructions = self.developer_instructions;
+        inclusions.separate_developer_instructions = self.separate_developer_instructions;
+        inclusions.memory = self.memory;
+        inclusions.collaboration = self.collaboration;
+        inclusions.realtime = self.realtime;
+        inclusions.personality = self.personality;
+        inclusions.apps = self.apps;
+        inclusions.skills = self.skills;
+        inclusions.plugins = self.plugins;
+        inclusions.commit = self.commit;
+        inclusions.user_instructions = self.user_instructions || self.project_docs;
+        inclusions.environment_context = self.environment_context;
+        inclusions
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -124,7 +145,6 @@ impl SubAgentConfigBuilder {
                 self.config.include_permissions_instructions = false;
                 self.config.include_apps_instructions = false;
                 self.config.include_environment_context = false;
-                self.config.initial_context_inclusions = InitialContextInclusions::none();
             }
             SubAgentPromptInheritance::Select(selection) => {
                 self.apply_prompt_selection(selection);
@@ -147,14 +167,6 @@ impl SubAgentConfigBuilder {
             }
         }
         Ok(self)
-    }
-
-    pub(crate) fn initial_context_inclusions(
-        mut self,
-        inclusions: InitialContextInclusions,
-    ) -> Self {
-        self.config.initial_context_inclusions = inclusions;
-        self
     }
 
     pub(crate) fn build(self) -> Config {
@@ -182,22 +194,6 @@ impl SubAgentConfigBuilder {
         self.config.include_permissions_instructions = selection.permissions;
         self.config.include_apps_instructions = selection.apps;
         self.config.include_environment_context = selection.environment_context;
-        self.config.initial_context_inclusions = InitialContextInclusions {
-            model_update: selection.model_update,
-            permissions: selection.permissions,
-            developer_instructions: selection.developer_instructions,
-            separate_developer_instructions: selection.separate_developer_instructions,
-            memory: selection.memory,
-            collaboration: selection.collaboration,
-            realtime: selection.realtime,
-            personality: selection.personality,
-            apps: selection.apps,
-            skills: selection.skills,
-            plugins: selection.plugins,
-            commit: selection.commit,
-            user_instructions: selection.user_instructions || selection.project_docs,
-            environment_context: selection.environment_context,
-        };
     }
 
     fn apply_extension_selection(

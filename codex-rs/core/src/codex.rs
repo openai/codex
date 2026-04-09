@@ -268,6 +268,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
+use crate::initial_context::InitialContextInclusions;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
@@ -419,6 +420,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) initial_context_inclusions: InitialContextInclusions,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -473,6 +475,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            initial_context_inclusions,
             auth_manager,
             models_manager,
             environment_manager,
@@ -640,6 +643,7 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
+            initial_context_inclusions,
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -1119,6 +1123,13 @@ pub(crate) struct SessionConfiguration {
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
+
+    /// Session-scoped policy for which startup context blocks are model-visible.
+    ///
+    /// This is chosen at spawn time. It is intentionally separate from the
+    /// loaded user config so internally spawned subagents can have narrower
+    /// startup prompts without mutating config.toml-derived settings.
+    initial_context_inclusions: InitialContextInclusions,
 
     /// When to escalate for approval for execution
     approval_policy: Constrained<AskForApproval>,
@@ -3680,16 +3691,22 @@ impl Session {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
-        let (reference_context_item, previous_turn_settings, collaboration_mode, base_instructions) = {
+        let (
+            reference_context_item,
+            previous_turn_settings,
+            collaboration_mode,
+            base_instructions,
+            initial_context,
+        ) = {
             let state = self.state.lock().await;
             (
                 state.reference_context_item(),
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
+                state.session_configuration.initial_context_inclusions,
             )
         };
-        let initial_context = turn_context.config.initial_context_inclusions;
         if initial_context.model_update
             && let Some(model_switch_message) =
                 crate::context_manager::updates::build_model_instructions_update_item(
