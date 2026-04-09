@@ -10905,7 +10905,7 @@ impl ChatWidget {
         } else {
             "Vim mode disabled."
         };
-        self.add_info_message(message.to_string(), None);
+        self.add_info_message(message.to_string(), /*hint*/ None);
     }
 
     pub(crate) fn submit_user_message_with_mode(
