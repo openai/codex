@@ -767,9 +767,12 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             continue;
         }
 
-        // These are explicit read-only carveouts from the transformed sandbox policy, not
-        // optional workspace sentinels such as `.codex` or `.agents` (those are protected
-        // best-effort below and still skip missing directories).
+        // These are explicit read-only-under-a-writable-root carveouts from the transformed
+        // sandbox policy; they are not deny-read paths.
+        //
+        // They are also not optional workspace sentinels such as `.codex` or `.agents`: those
+        // are protected best-effort below and still skip missing directories so we do not leave
+        // empty protection artifacts behind in a workspace.
         //
         // Deny ACEs attach to filesystem objects; if a policy carveout does not exist during
         // setup, the sandbox could otherwise create it later under a writable parent and
