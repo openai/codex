@@ -12,7 +12,7 @@
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
-//! - Context usage (remaining meter, window size)
+//! - Context usage (meter, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (ID, tokens used)
 //! - Application version
@@ -62,7 +62,7 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
-    /// Visual meter of context window remaining.
+    /// Visual meter of context window usage.
     ContextRemaining,
 
     /// Legacy alias for the context window meter.
@@ -106,7 +106,7 @@ impl StatusLineItem {
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
             StatusLineItem::ContextRemaining => {
-                "Visual meter of context window remaining (omitted when unknown)"
+                "Visual meter of context window usage (omitted when unknown)"
             }
             StatusLineItem::ContextUsed => StatusLineItem::ContextRemaining.description(),
             StatusLineItem::FiveHourLimit => {
