@@ -17,6 +17,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -67,6 +68,13 @@ pub struct TurnResolvedConfigFact {
     pub collaboration_mode: ModeKind,
     pub personality: Option<Personality>,
     pub is_first_turn: bool,
+}
+
+#[derive(Clone)]
+pub struct TurnTokenUsageFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub token_usage: TokenUsage,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -137,6 +145,7 @@ pub(crate) enum AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnTokenUsage(Box<TurnTokenUsageFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
