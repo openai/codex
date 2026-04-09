@@ -1131,12 +1131,35 @@ fn parse_timer_fired_user_message(message: &str) -> Option<TimerFiredUserMessage
     })
 }
 
+fn parse_synthetic_user_message_display(message: &str) -> Option<String> {
+    let trimmed = message.trim();
+    if !trimmed.starts_with("<codex_tui_synthetic_user_message>")
+        || !trimmed.ends_with("</codex_tui_synthetic_user_message>")
+    {
+        return None;
+    }
+
+    let display = extract_xml_tag(trimmed, "display")?;
+    let display = xml_unescape(display.trim());
+    (!display.is_empty()).then_some(display)
+}
+
 fn extract_timer_fired_tag(message: &str, tag: &str) -> Option<String> {
+    extract_xml_tag(message, tag)
+}
+
+fn extract_xml_tag(message: &str, tag: &str) -> Option<String> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
     let after_open = message.split_once(&open)?.1;
     let value = after_open.split_once(&close)?.0;
     Some(value.to_string())
+}
+
+fn xml_unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 struct PendingSteer {
@@ -5892,6 +5915,8 @@ impl ChatWidget {
 
         // Show replayable user content in conversation history.
         if render_in_history && !text.is_empty() {
+            let history_text =
+                parse_synthetic_user_message_display(&text).unwrap_or_else(|| text.clone());
             let local_image_paths = local_images
                 .into_iter()
                 .map(|img| img.path)
@@ -5904,7 +5929,7 @@ impl ChatWidget {
                     remote_image_urls.clone(),
                 ));
             self.add_to_history(history_cell::new_user_prompt(
-                text,
+                history_text,
                 text_elements,
                 local_image_paths,
                 remote_image_urls,
@@ -7257,8 +7282,10 @@ impl ChatWidget {
             || !event.text_elements.is_empty()
             || !remote_image_urls.is_empty()
         {
+            let message = parse_synthetic_user_message_display(&event.message)
+                .unwrap_or_else(|| event.message);
             self.add_to_history(history_cell::new_user_prompt(
-                event.message,
+                message,
                 event.text_elements,
                 event.local_images,
                 remote_image_urls,

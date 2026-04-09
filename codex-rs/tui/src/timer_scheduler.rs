@@ -1,5 +1,8 @@
 pub(crate) fn build_timer_list_prompt() -> String {
-    "List the thread timers that are currently scheduled. Call the TimerList tool directly, then summarize the pending timers briefly for the user. If there are no pending timers, say that none are scheduled.".to_string()
+    wrap_synthetic_user_message(
+        "/loop",
+        "List the thread timers that are currently scheduled. Call the TimerList tool directly, then summarize the pending timers briefly for the user. If there are no pending timers, say that none are scheduled.",
+    )
 }
 
 pub(crate) fn build_loop_timer_prompt(spec: &str) -> Result<String, String> {
@@ -9,7 +12,7 @@ pub(crate) fn build_loop_timer_prompt(spec: &str) -> Result<String, String> {
     }
     let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S");
     let timezone = chrono::Local::now().offset().to_string();
-    Ok(format!(
+    let prompt = format!(
         r#"Create a Codex thread timer from this `/loop` request. Call the TimerCreate tool directly; do not only describe the timer.
 
 Current local datetime: {now}
@@ -30,7 +33,29 @@ Interpretation rules:
 - For recurring calendar timing, use a schedule trigger with rrule set to an RFC 5545 RRULE string and dtstart set when the user supplies a start datetime; otherwise omit dtstart.
 - For schedule triggers, use floating local wall-clock datetimes without timezone suffixes.
 - After TimerCreate succeeds, briefly confirm the schedule and the timer prompt."#
+    );
+    Ok(wrap_synthetic_user_message(
+        &format!("/loop {spec}"),
+        &prompt,
     ))
+}
+
+fn wrap_synthetic_user_message(display: &str, prompt: &str) -> String {
+    format!(
+        r#"<codex_tui_synthetic_user_message>
+<display>{}</display>
+<prompt>
+{prompt}
+</prompt>
+</codex_tui_synthetic_user_message>"#,
+        xml_escape(display)
+    )
+}
+
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -45,6 +70,7 @@ mod tests {
         assert!(prompt.contains("Call the TimerCreate tool directly"));
         assert!(prompt.contains("every 5 minutes run tests"));
         assert!(prompt.contains("Current local datetime:"));
+        assert!(prompt.contains("<display>/loop every 5 minutes run tests</display>"));
     }
 
     #[test]
@@ -52,5 +78,6 @@ mod tests {
         let prompt = build_timer_list_prompt();
 
         assert!(prompt.contains("Call the TimerList tool directly"));
+        assert!(prompt.contains("<display>/loop</display>"));
     }
 }
