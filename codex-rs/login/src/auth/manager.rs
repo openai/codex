@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::watch;
 
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
@@ -1106,6 +1107,7 @@ pub struct AuthManager {
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
     refresh_lock: AsyncMutex<()>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
+    auth_state_tx: watch::Sender<()>,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -1154,6 +1156,7 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
+        let (auth_state_tx, _) = watch::channel(());
         let managed_auth = load_auth(
             &codex_home,
             enable_codex_api_key_env,
@@ -1172,11 +1175,13 @@ impl AuthManager {
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
+            auth_state_tx,
         }
     }
 
     /// Create an AuthManager with a specific CodexAuth, for testing only.
     pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
+        let (auth_state_tx, _) = watch::channel(());
         let cached = CachedAuth {
             auth: Some(auth),
             permanent_refresh_failure: None,
@@ -1190,11 +1195,13 @@ impl AuthManager {
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
+            auth_state_tx,
         })
     }
 
     /// Create an AuthManager with a specific CodexAuth and codex home, for testing only.
     pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
+        let (auth_state_tx, _) = watch::channel(());
         let cached = CachedAuth {
             auth: Some(auth),
             permanent_refresh_failure: None,
@@ -1207,10 +1214,12 @@ impl AuthManager {
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
+            auth_state_tx,
         })
     }
 
     pub fn external_bearer_only(config: ModelProviderAuthInfo) -> Arc<Self> {
+        let (auth_state_tx, _) = watch::channel(());
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(CachedAuth {
@@ -1224,6 +1233,7 @@ impl AuthManager {
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
+            auth_state_tx,
         })
     }
 
@@ -1363,6 +1373,7 @@ impl AuthManager {
             }
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
+            self.auth_state_tx.send_replace(());
             changed
         } else {
             false
@@ -1372,18 +1383,23 @@ impl AuthManager {
     pub fn set_external_auth(&self, external_auth: Arc<dyn ExternalAuth>) {
         if let Ok(mut guard) = self.external_auth.write() {
             *guard = Some(external_auth);
+            self.auth_state_tx.send_replace(());
         }
     }
 
     pub fn clear_external_auth(&self) {
         if let Ok(mut guard) = self.external_auth.write() {
             *guard = None;
+            self.auth_state_tx.send_replace(());
         }
     }
 
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
-        if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write() {
+        if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write()
+            && *guard != workspace_id
+        {
             *guard = workspace_id;
+            self.auth_state_tx.send_replace(());
         }
     }
 
@@ -1392,6 +1408,10 @@ impl AuthManager {
             .read()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    pub fn subscribe_auth_state(&self) -> watch::Receiver<()> {
+        self.auth_state_tx.subscribe()
     }
 
     pub fn has_external_auth(&self) -> bool {

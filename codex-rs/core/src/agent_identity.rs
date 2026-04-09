@@ -21,7 +21,6 @@ use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -108,6 +107,10 @@ impl AgentIdentityManager {
         }
     }
 
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.feature_enabled
+    }
+
     pub(crate) async fn ensure_registered_identity(&self) -> Result<Option<StoredAgentIdentity>> {
         if !self.feature_enabled {
             return Ok(None);
@@ -153,69 +156,45 @@ impl AgentIdentityManager {
         };
 
         let client = create_client();
-        let urls = agent_registration_urls(&self.chatgpt_base_url);
+        let url = agent_registration_url(&self.chatgpt_base_url);
+        let response = client
+            .post(&url)
+            .bearer_auth(&binding.access_token)
+            .header("chatgpt-account-id", &binding.chatgpt_account_id)
+            .json(&request_body)
+            .timeout(AGENT_REGISTRATION_TIMEOUT)
+            .send()
+            .await
+            .with_context(|| {
+                format!("failed to send agent identity registration request to {url}")
+            })?;
 
-        for (index, url) in urls.iter().enumerate() {
-            let response = client
-                .post(url)
-                .bearer_auth(&binding.access_token)
-                .header("chatgpt-account-id", &binding.chatgpt_account_id)
-                .json(&request_body)
-                .timeout(AGENT_REGISTRATION_TIMEOUT)
-                .send()
+        if response.status().is_success() {
+            let response_body = response
+                .json::<RegisterAgentResponse>()
                 .await
-                .with_context(|| {
-                    format!("failed to send agent identity registration request to {url}")
-                })?;
-
-            if response.status().is_success() {
-                let response_body = response
-                    .json::<RegisterAgentResponse>()
-                    .await
-                    .with_context(|| {
-                        format!("failed to parse agent identity response from {url}")
-                    })?;
-                let stored_identity = StoredAgentIdentity {
-                    binding_id: binding.binding_id.clone(),
-                    chatgpt_account_id: binding.chatgpt_account_id.clone(),
-                    chatgpt_user_id: binding.chatgpt_user_id.clone(),
-                    agent_runtime_id: response_body.agent_runtime_id,
-                    private_key_pkcs8_base64: key_material.private_key_pkcs8_base64,
-                    public_key_ssh: key_material.public_key_ssh,
-                    registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                    abom: self.abom.clone(),
-                };
-                info!(
-                    agent_runtime_id = %stored_identity.agent_runtime_id,
-                    binding_id = %binding.binding_id,
-                    "registered agent identity"
-                );
-                return Ok(stored_identity);
-            }
-
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            let is_last_candidate = index + 1 == urls.len();
-            if !is_last_candidate
-                && matches!(
-                    status,
-                    StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
-                )
-            {
-                debug!(
-                    url = %url,
-                    status = %status,
-                    "agent identity registration endpoint unavailable at candidate URL; trying fallback"
-                );
-                continue;
-            }
-
-            anyhow::bail!(
-                "agent identity registration failed with status {status} from {url}: {body}"
+                .with_context(|| format!("failed to parse agent identity response from {url}"))?;
+            let stored_identity = StoredAgentIdentity {
+                binding_id: binding.binding_id.clone(),
+                chatgpt_account_id: binding.chatgpt_account_id.clone(),
+                chatgpt_user_id: binding.chatgpt_user_id.clone(),
+                agent_runtime_id: response_body.agent_runtime_id,
+                private_key_pkcs8_base64: key_material.private_key_pkcs8_base64,
+                public_key_ssh: key_material.public_key_ssh,
+                registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                abom: self.abom.clone(),
+            };
+            info!(
+                agent_runtime_id = %stored_identity.agent_runtime_id,
+                binding_id = %binding.binding_id,
+                "registered agent identity"
             );
+            return Ok(stored_identity);
         }
 
-        anyhow::bail!("no candidate URLs were available for agent identity registration")
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("agent identity registration failed with status {status} from {url}: {body}")
     }
 
     fn load_stored_identity(
@@ -410,15 +389,12 @@ fn secret_scope(binding: &AgentIdentityBinding) -> Result<SecretScope> {
         .context("agent identity binding must be a valid secrets scope")
 }
 
-fn agent_registration_urls(chatgpt_base_url: &str) -> Vec<String> {
+fn agent_registration_url(chatgpt_base_url: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
     if let Some(root) = trimmed.strip_suffix("/backend-api") {
-        return vec![
-            format!("{root}/v1/agent/register"),
-            format!("{trimmed}/v1/agent/register"),
-        ];
+        return format!("{root}/v1/agent/register");
     }
-    vec![format!("{trimmed}/v1/agent/register")]
+    format!("{trimmed}/v1/agent/register")
 }
 
 #[cfg(test)]
@@ -589,18 +565,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_registered_identity_falls_back_to_backend_api_v1() {
+    async fn ensure_registered_identity_uses_canonical_agent_registration_url() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/agent/register"))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/backend-api/v1/agent/register"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "agent_runtime_id": "agent_fallback",
+                "agent_runtime_id": "agent_canonical",
             })))
             .expect(1)
             .mount(&server)
@@ -628,7 +598,7 @@ mod tests {
             .await
             .unwrap()
             .expect("identity should be registered");
-        assert_eq!(stored.agent_runtime_id, "agent_fallback");
+        assert_eq!(stored.agent_runtime_id, "agent_canonical");
     }
 
     #[test]
