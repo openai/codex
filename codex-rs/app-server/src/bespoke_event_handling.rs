@@ -2980,16 +2980,16 @@ mod tests {
         turn_id: &str,
         status: GuardianAssessmentStatus,
     ) -> GuardianAssessmentEvent {
-        let (risk_score, risk_level, rationale) = match status {
+        let (risk_level, user_authorization, rationale) = match status {
             GuardianAssessmentStatus::InProgress => (None, None, None),
             GuardianAssessmentStatus::Approved => (
-                Some(12),
                 Some(codex_protocol::protocol::GuardianRiskLevel::Low),
+                Some(codex_protocol::protocol::GuardianUserAuthorization::High),
                 Some("looks safe".to_string()),
             ),
             GuardianAssessmentStatus::Denied => (
-                Some(88),
                 Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 Some("too risky".to_string()),
             ),
             GuardianAssessmentStatus::Aborted => (None, None, None),
@@ -2998,8 +2998,8 @@ mod tests {
             id: id.to_string(),
             turn_id: turn_id.to_string(),
             status,
-            risk_score,
             risk_level,
+            user_authorization,
             rationale,
             action: serde_json::from_value(json!({
                 "type": "command",
@@ -3058,8 +3058,8 @@ mod tests {
                 id: "item-1".to_string(),
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: action.clone(),
             },
@@ -3074,8 +3074,8 @@ mod tests {
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
                 );
-                assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.user_authorization, None);
                 assert_eq!(payload.review.rationale, None);
                 assert_eq!(payload.action, action.into());
             }
@@ -3098,8 +3098,8 @@ mod tests {
                 id: "item-2".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
-                risk_score: Some(91),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
                 action: action.clone(),
             },
@@ -3111,10 +3111,13 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
-                assert_eq!(payload.review.risk_score, Some(91));
                 assert_eq!(
                     payload.review.risk_level,
                     Some(codex_app_server_protocol::GuardianRiskLevel::High)
+                );
+                assert_eq!(
+                    payload.review.user_authorization,
+                    Some(codex_app_server_protocol::GuardianUserAuthorization::Low)
                 );
                 assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
                 assert_eq!(payload.action, action.into());
@@ -3139,8 +3142,8 @@ mod tests {
                 id: "item-3".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: action.clone(),
             },
@@ -3152,8 +3155,8 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-3");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
-                assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.user_authorization, None);
                 assert_eq!(payload.review.rationale, None);
                 assert_eq!(payload.action, action.into());
             }

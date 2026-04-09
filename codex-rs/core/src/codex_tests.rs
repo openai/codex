@@ -2859,6 +2859,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
+            &config.permissions.sandbox_policy,
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -2884,6 +2885,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
+        guardian_rejection_rationales: Mutex::new(std::collections::HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -3701,6 +3703,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
+            &config.permissions.sandbox_policy,
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -3726,6 +3729,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
+        guardian_rejection_rationales: Mutex::new(std::collections::HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,

@@ -3231,13 +3231,13 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[test]
-fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+fn load_config_uses_requirements_guardian_policy_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
         crate::config_loader::ConfigRequirementsToml {
-            guardian_developer_instructions: Some(
+            guardian_policy_config: Some(
                 "  Use the workspace-managed guardian policy.  ".to_string(),
             ),
             ..Default::default()
@@ -3256,7 +3256,7 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
     )?;
 
     assert_eq!(
-        config.guardian_developer_instructions.as_deref(),
+        config.guardian_policy_config.as_deref(),
         Some("Use the workspace-managed guardian policy.")
     );
 
@@ -3264,13 +3264,13 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
 }
 
 #[test]
-fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+fn load_config_ignores_empty_requirements_guardian_policy_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
         crate::config_loader::ConfigRequirementsToml {
-            guardian_developer_instructions: Some("   ".to_string()),
+            guardian_policy_config: Some("   ".to_string()),
             ..Default::default()
         },
     )
@@ -3286,7 +3286,7 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
         config_layer_stack,
     )?;
 
-    assert_eq!(config.guardian_developer_instructions, None);
+    assert_eq!(config.guardian_policy_config, None);
 
     Ok(())
 }
@@ -4558,7 +4558,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_startup_context: None,
             base_instructions: None,
             developer_instructions: None,
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
             include_environment_context: true,
@@ -4705,7 +4705,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_environment_context: true,
@@ -4850,7 +4850,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_environment_context: true,
@@ -4981,7 +4981,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_environment_context: true,
@@ -5041,7 +5041,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         rules: None,
         enforce_residency: None,
         network: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
     };
     let requirement_source = crate::config_loader::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();
@@ -5662,7 +5662,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         rules: None,
         enforce_residency: None,
         network: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
     };
 
     let config = ConfigBuilder::without_managed_config_for_tests()

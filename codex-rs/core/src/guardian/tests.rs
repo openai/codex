@@ -25,6 +25,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
@@ -522,12 +523,13 @@ fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_
 #[test]
 fn parse_guardian_assessment_extracts_embedded_json() {
     let parsed = parse_guardian_assessment(Some(
-        "preface {\"risk_level\":\"medium\",\"risk_score\":42,\"rationale\":\"ok\",\"evidence\":[]}",
+        "preface {\"risk_level\":\"medium\",\"user_authorization\":\"low\",\"outcome\":\"allow\",\"rationale\":\"ok\"}",
     ))
     .expect("guardian assessment");
 
-    assert_eq!(parsed.risk_score, 42);
     assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
+    assert_eq!(parsed.user_authorization, GuardianUserAuthorization::Low);
+    assert_eq!(parsed.outcome, GuardianAssessmentOutcome::Allow);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -538,12 +540,9 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let server = start_mock_server().await;
     let guardian_assessment = serde_json::json!({
         "risk_level": "medium",
-        "risk_score": 35,
+        "user_authorization": "high",
+        "outcome": "allow",
         "rationale": "The user explicitly requested pushing the reviewed branch to the known remote.",
-        "evidence": [{
-            "message": "The user asked to check repo visibility and then push the docs fix.",
-            "why": "This authorizes the specific network action under review.",
-        }],
     })
     .to_string();
     let request_log = mount_sse_once(
@@ -606,7 +605,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
         panic!("expected guardian assessment");
     };
-    assert_eq!(assessment.risk_score, 35);
+    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
 
     let request = request_log.single_request();
     let mut settings = Settings::clone_current();
@@ -640,7 +639,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 ev_assistant_message(
                     "msg-guardian-1",
                     &format!(
-                        "{{\"risk_level\":\"low\",\"risk_score\":5,\"rationale\":\"{first_rationale}\",\"evidence\":[]}}"
+                        "{{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"{first_rationale}\"}}"
                     ),
                 ),
                 ev_completed("resp-guardian-1"),
@@ -649,7 +648,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 ev_response_created("resp-guardian-2"),
                 ev_assistant_message(
                     "msg-guardian-2",
-                    "{\"risk_level\":\"low\",\"risk_score\":7,\"rationale\":\"second guardian rationale\",\"evidence\":[]}",
+                    "{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"second guardian rationale\"}",
                 ),
                 ev_completed("resp-guardian-2"),
             ]),
@@ -713,8 +712,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
         panic!("expected second guardian assessment");
     };
-    assert_eq!(first_assessment.risk_score, 5);
-    assert_eq!(second_assessment.risk_score, 7);
+    assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 2);
@@ -730,8 +729,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             "Use prior reviews as context, not binding precedent. ",
             "Follow the Workspace Policy. ",
             "If the user explicitly approves a previously rejected action after being ",
-            "informed of the concrete risks, treat the action as authorized and assign ",
-            "low/medium risk."
+            "informed of the concrete risks, set user_authorization to high and derive ",
+            "outcome from policy."
         )),
         "follow-up guardian request should include the follow-up reminder"
     );
@@ -855,6 +854,13 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         }),
         "denial rationale should not fall back to the generic missing payload error"
     );
+    let rejection_message =
+        guardian_rejection_message(session.as_ref(), "shell-guardian-error").await;
+    assert!(
+        rejection_message.contains("Reason: Automatic approval review failed:")
+            && rejection_message.contains(error_message),
+        "rejection message should include guardian rationale: {rejection_message}"
+    );
 
     Ok(())
 }
@@ -863,23 +869,23 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
     let first_assessment = serde_json::json!({
         "risk_level": "low",
-        "risk_score": 4,
+        "user_authorization": "high",
+        "outcome": "allow",
         "rationale": "first guardian rationale",
-        "evidence": [],
     })
     .to_string();
     let second_assessment = serde_json::json!({
         "risk_level": "low",
-        "risk_score": 7,
+        "user_authorization": "high",
+        "outcome": "allow",
         "rationale": "second guardian rationale",
-        "evidence": [],
     })
     .to_string();
     let third_assessment = serde_json::json!({
         "risk_level": "low",
-        "risk_score": 9,
+        "user_authorization": "high",
+        "outcome": "allow",
         "rationale": "third guardian rationale",
-        "evidence": [],
     })
     .to_string();
     let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
@@ -1166,14 +1172,14 @@ fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_
 }
 
 #[test]
-fn guardian_review_session_config_uses_requirements_guardian_override() {
+fn guardian_review_session_config_uses_requirements_guardian_policy_config() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let workspace = tempfile::tempdir().expect("create temp dir");
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
         crate::config_loader::ConfigRequirementsToml {
-            guardian_developer_instructions: Some(
+            guardian_policy_config: Some(
                 "  Use the workspace-managed guardian policy.  ".to_string(),
             ),
             ..Default::default()
@@ -1201,7 +1207,9 @@ fn guardian_review_session_config_uses_requirements_guardian_override() {
 
     assert_eq!(
         guardian_config.developer_instructions,
-        Some("Use the workspace-managed guardian policy.".to_string())
+        Some(guardian_policy_prompt_with_config(
+            "Use the workspace-managed guardian policy."
+        ))
     );
 }
 

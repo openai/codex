@@ -29,7 +29,9 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::start_websocket_server;
+use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
@@ -429,10 +431,23 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     Mock::given(method("POST"))
         .and(path("/v1/realtime/calls"))
         .and(call_capture.clone())
-        .respond_with(ResponseTemplate::new(200).set_body_string("v=answer\r\n"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/realtime/calls/rtc_app_test")
+                .set_body_string("v=answer\r\n"),
+        )
         .mount(&responses_server)
         .await;
-    let realtime_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_webrtc", "instructions": "backend prompt" }
+        })]],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(
@@ -475,6 +490,12 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     .await??;
     let _: ThreadRealtimeStartResponse = to_response(start_response)?;
 
+    let started =
+        read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+            .await?;
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
     let sdp_notification =
         read_notification::<ThreadRealtimeSdpNotification>(&mut mcp, "thread/realtime/sdp").await?;
     assert_eq!(
@@ -484,20 +505,59 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             sdp: "v=answer\r\n".to_string()
         }
     );
+
+    let session_update = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(
+        session_update.body_json()["type"].as_str(),
+        Some("session.update")
+    );
+    assert!(
+        session_update.body_json()["session"]["instructions"]
+            .as_str()
+            .context("expected session.update instructions")?
+            .contains("startup context")
+    );
+    assert_eq!(
+        realtime_server.single_handshake().uri(),
+        "/v1/realtime?call_id=rtc_app_test"
+    );
+
+    let stop_request_id = mcp
+        .send_thread_realtime_stop_request(ThreadRealtimeStopParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let stop_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(stop_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeStopResponse = to_response(stop_response)?;
+
     let closed_notification =
         read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
             .await?;
-    assert_eq!(
-        closed_notification,
-        ThreadRealtimeClosedNotification {
-            thread_id: thread_id.clone(),
-            reason: Some("transport_closed".to_string())
-        }
+    assert_eq!(closed_notification.thread_id, thread_id);
+    assert!(
+        matches!(
+            closed_notification.reason.as_deref(),
+            Some("requested" | "transport_closed")
+        ),
+        "unexpected close reason: {closed_notification:?}"
     );
 
     let request = call_capture.single_request();
     assert_eq!(request.url.path(), "/v1/realtime/calls");
     assert_eq!(request.url.query(), None);
+    assert_eq!(
+        request
+            .headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("multipart/form-data; boundary=codex-realtime-call-boundary")
+    );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
     let session = r#"{"tool_choice":"auto","type":"realtime","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"codex","description":"Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to Codex."}},"required":["prompt"],"additionalProperties":false}}]}"#;
     assert_eq!(

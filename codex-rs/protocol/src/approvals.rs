@@ -87,6 +87,16 @@ pub enum GuardianRiskLevel {
     Low,
     Medium,
     High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianUserAuthorization {
+    Unknown,
+    Low,
+    Medium,
+    High,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -154,14 +164,14 @@ pub struct GuardianAssessmentEvent {
     #[serde(default)]
     pub turn_id: String,
     pub status: GuardianAssessmentStatus,
-    /// Numeric risk score from 0-100. Omitted while the assessment is in progress.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub risk_score: Option<u8>,
-    /// Coarse risk label paired with `risk_score`. Omitted while in progress.
+    /// Coarse risk label. Omitted while the assessment is in progress.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub risk_level: Option<GuardianRiskLevel>,
+    /// How directly the transcript authorizes the reviewed action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_authorization: Option<GuardianUserAuthorization>,
     /// Human-readable explanation of the final assessment. Omitted while in progress.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
