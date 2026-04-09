@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolOrigin;
 use crate::ToolSpec;
 use std::collections::BTreeMap;
 
@@ -45,5 +46,6 @@ At most one step can be in_progress at a time.
             Some(false.into()),
         ),
         output_schema: None,
+        origin: ToolOrigin::Native,
     })
 }

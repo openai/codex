@@ -20,6 +20,7 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
                     JsonSchema::string(Some("Local filesystem path to an image file".to_string()),),
                 )]), Some(vec!["path".to_string()]), Some(false.into())),
             output_schema: Some(view_image_output_schema()),
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -49,6 +50,7 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
                     ),
                 ]), Some(vec!["path".to_string()]), Some(false.into())),
             output_schema: Some(view_image_output_schema()),
+            origin: ToolOrigin::Native,
         })
     );
 }

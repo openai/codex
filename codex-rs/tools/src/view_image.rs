@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolOrigin;
 use crate::ToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use serde_json::Value;
@@ -33,6 +34,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["path".to_string()]), Some(false.into())),
         output_schema: Some(view_image_output_schema()),
+        origin: ToolOrigin::Native,
     })
 }
 

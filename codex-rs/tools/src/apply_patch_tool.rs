@@ -2,6 +2,7 @@ use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolOrigin;
 use crate::ToolSpec;
 use serde::Deserialize;
 use serde::Serialize;
@@ -118,6 +119,7 @@ pub fn create_apply_patch_json_tool() -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: None,
+        origin: ToolOrigin::Native,
     })
 }
 

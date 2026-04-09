@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolOrigin;
 use crate::parse_dynamic_tool;
 use crate::parse_mcp_tool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -34,6 +35,8 @@ pub struct ResponsesApiTool {
     pub parameters: JsonSchema,
     #[serde(skip)]
     pub output_schema: Option<Value>,
+    #[serde(skip)]
+    pub origin: ToolOrigin,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -95,6 +98,7 @@ pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) ->
         defer_loading: tool_definition.defer_loading.then_some(true),
         parameters: tool_definition.input_schema,
         output_schema: tool_definition.output_schema,
+        origin: tool_definition.origin,
     }
 }
 

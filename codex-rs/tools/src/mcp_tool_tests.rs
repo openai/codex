@@ -2,6 +2,7 @@ use super::mcp_call_tool_result_output_schema;
 use super::parse_mcp_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolOrigin;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -40,6 +41,7 @@ fn parse_mcp_tool_inserts_empty_properties() {
                 /*additional_properties*/ None
             ),
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+            origin: ToolOrigin::Mcp,
             defer_loading: false,
         }
     );
@@ -87,6 +89,7 @@ fn parse_mcp_tool_preserves_top_level_output_schema() {
                 },
                 "required": ["result"]
             }))),
+            origin: ToolOrigin::Mcp,
             defer_loading: false,
         }
     );
@@ -120,6 +123,7 @@ fn parse_mcp_tool_preserves_output_schema_without_inferred_type() {
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "enum": ["ok", "error"]
             }))),
+            origin: ToolOrigin::Mcp,
             defer_loading: false,
         }
     );

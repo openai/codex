@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolOrigin;
 use crate::ToolSpec;
 use std::collections::BTreeMap;
 
@@ -60,6 +61,7 @@ pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["csv_path".to_string(), "instruction".to_string()]), Some(false.into())),
         output_schema: None,
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -99,6 +101,7 @@ pub fn create_report_agent_job_result_tool() -> ToolSpec {
                 "result".to_string(),
             ]), Some(false.into())),
         output_schema: None,
+        origin: ToolOrigin::Native,
     })
 }
 

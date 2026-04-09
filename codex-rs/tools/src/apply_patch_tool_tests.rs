@@ -41,6 +41,7 @@ fn create_apply_patch_json_tool_matches_expected_spec() {
                 Some(false.into())
             ),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }

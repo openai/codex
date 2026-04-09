@@ -29,6 +29,7 @@ fn list_mcp_resources_tool_matches_expected_spec() {
                     ),
                 ]), /*required*/ None, Some(false.into())),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -59,6 +60,7 @@ fn list_mcp_resource_templates_tool_matches_expected_spec() {
                     ),
                 ]), /*required*/ None, Some(false.into())),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -91,6 +93,7 @@ fn read_mcp_resource_tool_matches_expected_spec() {
                     ),
                 ]), Some(vec!["server".to_string(), "uri".to_string()]), Some(false.into())),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }

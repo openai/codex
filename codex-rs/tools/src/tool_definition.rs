@@ -1,6 +1,14 @@
 use crate::JsonSchema;
 use serde_json::Value as JsonValue;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolOrigin {
+    #[default]
+    Native,
+    Mcp,
+    Dynamic,
+}
+
 /// Tool metadata and schemas that downstream crates can adapt into higher-level
 /// tool specs.
 #[derive(Debug, PartialEq)]
@@ -9,6 +17,7 @@ pub struct ToolDefinition {
     pub description: String,
     pub input_schema: JsonSchema,
     pub output_schema: Option<JsonValue>,
+    pub origin: ToolOrigin,
     pub defer_loading: bool,
 }
 

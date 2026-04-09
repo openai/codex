@@ -69,6 +69,7 @@ fn spawn_agents_on_csv_tool_requires_csv_and_instruction() {
                     ),
                 ]), Some(vec!["csv_path".to_string(), "instruction".to_string()]), Some(false.into())),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -114,6 +115,7 @@ fn report_agent_job_result_tool_requires_result_payload() {
                     "result".to_string(),
                 ]), Some(false.into())),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }

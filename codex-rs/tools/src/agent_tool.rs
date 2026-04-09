@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolOrigin;
 use crate::ToolSpec;
 use codex_protocol::openai_models::ModelPreset;
 use serde_json::Value;
@@ -44,6 +45,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: Some(spawn_agent_output_schema_v1()),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -85,6 +87,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
         output_schema: Some(spawn_agent_output_schema_v2(
             options.hide_agent_type_model_reasoning,
         )),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -119,6 +122,7 @@ pub fn create_send_input_tool_v1() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
         output_schema: Some(send_input_output_schema()),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -146,6 +150,7 @@ pub fn create_send_message_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string(), "message".to_string()]), Some(false.into())),
         output_schema: None,
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -180,6 +185,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string(), "message".to_string()]), Some(false.into())),
         output_schema: None,
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -198,6 +204,7 @@ pub fn create_resume_agent_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["id".to_string()]), Some(false.into())),
         output_schema: Some(resume_agent_output_schema()),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -210,6 +217,7 @@ pub fn create_wait_agent_tool_v1(options: WaitAgentTimeoutOptions) -> ToolSpec {
         defer_loading: None,
         parameters: wait_agent_tool_parameters_v1(options),
         output_schema: Some(wait_output_schema_v1()),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -222,6 +230,7 @@ pub fn create_wait_agent_tool_v2(options: WaitAgentTimeoutOptions) -> ToolSpec {
         defer_loading: None,
         parameters: wait_agent_tool_parameters_v2(options),
         output_schema: Some(wait_output_schema_v2()),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -243,6 +252,7 @@ pub fn create_list_agents_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: Some(list_agents_output_schema()),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -259,6 +269,7 @@ pub fn create_close_agent_tool_v1() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
         output_schema: Some(close_agent_output_schema()),
+        origin: ToolOrigin::Native,
     })
 }
 
@@ -277,6 +288,7 @@ pub fn create_close_agent_tool_v2() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
         output_schema: Some(close_agent_output_schema()),
+        origin: ToolOrigin::Native,
     })
 }
 

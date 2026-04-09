@@ -36,6 +36,7 @@ fn js_repl_reset_tool_matches_expected_spec() {
                 Some(false.into())
             ),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }

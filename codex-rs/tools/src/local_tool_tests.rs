@@ -87,6 +87,7 @@ Examples of valid command strings:
                 Some(false.into())
             ),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -170,6 +171,7 @@ fn exec_command_tool_matches_expected_spec() {
                 Some(false.into())
             ),
             output_schema: Some(unified_exec_output_schema()),
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -220,6 +222,7 @@ fn write_stdin_tool_matches_expected_spec() {
                 Some(false.into())
             ),
             output_schema: Some(unified_exec_output_schema()),
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -291,6 +294,7 @@ Examples of valid command strings:
                 Some(false.into())
             ),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -323,6 +327,7 @@ fn request_permissions_tool_includes_full_permission_schema() {
                 Some(false.into())
             ),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }
@@ -397,6 +402,7 @@ Examples of valid command strings:
                 Some(false.into())
             ),
             output_schema: None,
+            origin: ToolOrigin::Native,
         })
     );
 }

@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolOrigin;
 use crate::ToolSpec;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
@@ -80,6 +81,7 @@ pub fn create_request_user_input_tool(description: String) -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: None,
+        origin: ToolOrigin::Native,
     })
 }
 

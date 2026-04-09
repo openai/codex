@@ -12,7 +12,12 @@ use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
 use crate::ToolNamespace;
+<<<<<<< HEAD
 use crate::ToolRegistryPlanDeferredTool;
+=======
+use crate::ToolOrigin;
+use crate::ToolRegistryPlanAppTool;
+>>>>>>> 546fa338d (Thread tool origin into code mode rendering)
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
 use crate::mcp_call_tool_result_output_schema;
@@ -1145,6 +1150,7 @@ fn test_build_specs_mcp_tools_converted() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
+            origin: ToolOrigin::Mcp,
         })
     );
 }

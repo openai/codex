@@ -1,5 +1,6 @@
 use super::ToolDefinition;
 use crate::JsonSchema;
+use crate::ToolOrigin;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -15,6 +16,7 @@ fn tool_definition() -> ToolDefinition {
         output_schema: Some(serde_json::json!({
             "type": "object",
         })),
+        origin: ToolOrigin::Native,
         defer_loading: false,
     }
 }
@@ -36,6 +38,7 @@ fn into_deferred_drops_output_schema_and_sets_defer_loading() {
         tool_definition().into_deferred(),
         ToolDefinition {
             output_schema: None,
+            origin: ToolOrigin::Native,
             defer_loading: true,
             ..tool_definition()
         }

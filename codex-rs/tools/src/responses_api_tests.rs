@@ -7,6 +7,7 @@ use super::mcp_tool_to_deferred_responses_api_tool;
 use super::tool_definition_to_responses_api_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolOrigin;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -27,6 +28,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(false.into())
             ),
             output_schema: Some(json!({"type": "object"})),
+            origin: ToolOrigin::Native,
             defer_loading: false,
         }),
         ResponsesApiTool {
@@ -43,6 +45,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(false.into())
             ),
             output_schema: Some(json!({"type": "object"})),
+            origin: ToolOrigin::Native,
         }
     );
 }
@@ -79,6 +82,7 @@ fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
                 Some(false.into())
             ),
             output_schema: None,
+            origin: ToolOrigin::Dynamic,
         }
     );
 }
@@ -120,6 +124,7 @@ fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
                     JsonSchema::string(/*description*/ None),
                 )]), Some(vec!["order_id".to_string()]), Some(false.into())),
             output_schema: None,
+            origin: ToolOrigin::Mcp,
         }
     );
 }
@@ -140,6 +145,7 @@ fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
                 /*additional_properties*/ None,
             ),
             output_schema: None,
+            origin: ToolOrigin::Mcp,
         })],
     });
 

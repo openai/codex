@@ -2,9 +2,11 @@ use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolOrigin;
 use crate::ToolSpec;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::ToolDefinition as CodeModeToolDefinition;
+use codex_code_mode::ToolOrigin as CodeModeToolOrigin;
 use std::collections::BTreeMap;
 
 /// Augment tool descriptions with code-mode-specific exec samples.
@@ -103,6 +105,7 @@ pub fn create_wait_tool() -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: None,
+        origin: ToolOrigin::Native,
         defer_loading: None,
     })
 }
@@ -145,6 +148,11 @@ fn code_mode_tool_definition_for_spec(spec: &ToolSpec) -> Option<CodeModeToolDef
             kind: CodeModeToolKind::Function,
             input_schema: serde_json::to_value(&tool.parameters).ok(),
             output_schema: tool.output_schema.clone(),
+            origin: match tool.origin {
+                ToolOrigin::Native => CodeModeToolOrigin::Native,
+                ToolOrigin::Mcp => CodeModeToolOrigin::Mcp,
+                ToolOrigin::Dynamic => CodeModeToolOrigin::Dynamic,
+            },
         }),
         ToolSpec::Freeform(tool) => Some(CodeModeToolDefinition {
             name: tool.name.clone(),
@@ -152,6 +160,7 @@ fn code_mode_tool_definition_for_spec(spec: &ToolSpec) -> Option<CodeModeToolDef
             kind: CodeModeToolKind::Freeform,
             input_schema: None,
             output_schema: None,
+            origin: CodeModeToolOrigin::Native,
         }),
         ToolSpec::LocalShell {}
         | ToolSpec::ImageGeneration { .. }

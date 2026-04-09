@@ -1,4 +1,5 @@
 use crate::ToolDefinition;
+use crate::ToolOrigin;
 use crate::parse_tool_input_schema;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 
@@ -14,6 +15,7 @@ pub fn parse_dynamic_tool(tool: &DynamicToolSpec) -> Result<ToolDefinition, serd
         description: description.clone(),
         input_schema: parse_tool_input_schema(input_schema)?,
         output_schema: None,
+        origin: ToolOrigin::Dynamic,
         defer_loading: *defer_loading,
     })
 }
