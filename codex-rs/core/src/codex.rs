@@ -4090,7 +4090,6 @@ impl Session {
                     turn_kind: NonSteerableTurnKind::Compact,
                 });
             }
-            None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
