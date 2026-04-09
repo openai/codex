@@ -24,9 +24,6 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::agent::SubAgentConfigBuilder;
-use crate::agent::SubAgentPromptInheritance;
-use crate::agent::SubAgentPromptSelection;
 use crate::codex::Codex;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -622,11 +619,7 @@ pub(crate) fn build_guardian_review_session_config(
     active_model: &str,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> anyhow::Result<Config> {
-    let mut guardian_config = SubAgentConfigBuilder::from_parent_config(parent_config)
-        .prompt_inheritance(SubAgentPromptInheritance::Select(
-            guardian_review_prompt_selection(),
-        ))
-        .build();
+    let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.personality = None;
@@ -665,19 +658,6 @@ pub(crate) fn build_guardian_review_session_config(
         )?);
     }
     Ok(guardian_config)
-}
-
-const fn guardian_review_prompt_selection() -> SubAgentPromptSelection {
-    SubAgentPromptSelection {
-        base_instructions: false,
-        user_instructions: false,
-        project_docs: true,
-        developer_instructions: true,
-        compact_prompt: false,
-        permissions: false,
-        apps: false,
-        environment_context: true,
-    }
 }
 
 async fn run_before_review_deadline<T>(
