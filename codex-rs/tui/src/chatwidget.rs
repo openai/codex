@@ -2090,6 +2090,10 @@ impl ChatWidget {
 
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
+            if let Some(name) = event.thread_name.as_deref() {
+                let cell = Self::rename_confirmation_cell(name, self.thread_id);
+                self.add_boxed_history(Box::new(cell));
+            }
             self.thread_name = event.thread_name;
             self.refresh_terminal_title();
             self.request_redraw();
@@ -5399,9 +5403,6 @@ impl ChatWidget {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
-                let cell = Self::rename_confirmation_cell(&name, self.thread_id);
-                self.add_boxed_history(Box::new(cell));
-                self.request_redraw();
                 self.app_event_tx.set_thread_name(name);
                 self.bottom_pane.drain_pending_submission_state();
             }
@@ -5479,7 +5480,6 @@ impl ChatWidget {
         } else {
             "Name thread"
         };
-        let thread_id = self.thread_id;
         let view = CustomPromptView::new(
             title.to_string(),
             "Type a name and press Enter".to_string(),
@@ -5491,8 +5491,6 @@ impl ChatWidget {
                     )));
                     return;
                 };
-                let cell = Self::rename_confirmation_cell(&name, thread_id);
-                tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 tx.set_thread_name(name);
             }),
         );

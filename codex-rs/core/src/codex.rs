@@ -2217,14 +2217,19 @@ impl Session {
         }
     }
 
-    pub(crate) async fn ensure_rollout_materialized(&self) {
+    pub(crate) async fn try_ensure_rollout_materialized(&self) -> std::io::Result<()> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
         };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.persist().await
-        {
+        if let Some(rec) = recorder {
+            rec.persist().await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_rollout_materialized(&self) {
+        if let Err(e) = self.try_ensure_rollout_materialized().await {
             warn!("failed to materialize rollout recorder: {e}");
         }
     }
@@ -5540,6 +5545,18 @@ mod handlers {
             sess.send_event_raw(event).await;
             return;
         };
+
+        if let Err(e) = sess.try_ensure_rollout_materialized().await {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("Failed to set thread name: {e}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
 
         let codex_home = sess.codex_home().await;
         if let Err(e) =
