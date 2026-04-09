@@ -1745,10 +1745,10 @@ impl CodexMessageProcessor {
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
-        tracing::info!(?request_id, "handling account/rateLimits/read request");
+        tracing::debug!(?request_id, "handling account/rateLimits/read request");
         match self.fetch_account_rate_limits().await {
             Ok((rate_limits, rate_limits_by_limit_id)) => {
-                tracing::info!(
+                tracing::debug!(
                     ?request_id,
                     snapshot_count = rate_limits_by_limit_id.len(),
                     "account/rateLimits/read request succeeded"
@@ -1800,7 +1800,7 @@ impl CodexMessageProcessor {
             });
         }
 
-        tracing::info!(
+        tracing::debug!(
             base_url = %self.config.chatgpt_base_url,
             has_account_id = auth.get_account_id().is_some(),
             "fetching account rate limits from backend"
