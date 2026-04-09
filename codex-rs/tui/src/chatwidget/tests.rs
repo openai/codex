@@ -39,6 +39,7 @@ pub(super) use codex_app_server_protocol::GuardianApprovalReviewAction as AppSer
 pub(super) use codex_app_server_protocol::GuardianApprovalReviewStatus;
 pub(super) use codex_app_server_protocol::GuardianCommandSource as AppServerGuardianCommandSource;
 pub(super) use codex_app_server_protocol::GuardianRiskLevel as AppServerGuardianRiskLevel;
+pub(super) use codex_app_server_protocol::GuardianUserAuthorization as AppServerGuardianUserAuthorization;
 pub(super) use codex_app_server_protocol::HookCompletedNotification as AppServerHookCompletedNotification;
 pub(super) use codex_app_server_protocol::HookEventName as AppServerHookEventName;
 pub(super) use codex_app_server_protocol::HookExecutionMode as AppServerHookExecutionMode;
@@ -152,6 +153,7 @@ pub(super) use codex_protocol::protocol::GuardianAssessmentEvent;
 pub(super) use codex_protocol::protocol::GuardianAssessmentStatus;
 pub(super) use codex_protocol::protocol::GuardianCommandSource;
 pub(super) use codex_protocol::protocol::GuardianRiskLevel;
+pub(super) use codex_protocol::protocol::GuardianUserAuthorization;
 pub(super) use codex_protocol::protocol::ImageGenerationEndEvent;
 pub(super) use codex_protocol::protocol::ItemCompletedEvent;
 pub(super) use codex_protocol::protocol::McpStartupCompleteEvent;
