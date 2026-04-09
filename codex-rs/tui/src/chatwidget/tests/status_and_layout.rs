@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use pretty_assertions::assert_eq;
 
 /// Receiving a TokenCount event without usage clears the context indicator.
@@ -1138,6 +1139,56 @@ async fn terminal_title_model_updates_on_model_change_without_manual_refresh() {
     chat.set_model("gpt-5.3-codex");
 
     assert_eq!(chat.last_terminal_title, Some("gpt-5.3-codex".to_string()));
+}
+
+#[tokio::test]
+async fn default_terminal_title_omits_thread_until_available() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.cwd = test_project_path().abs();
+    chat.refresh_terminal_title();
+
+    assert_eq!(chat.last_terminal_title, Some("project".to_string()));
+}
+
+#[tokio::test]
+async fn default_terminal_title_includes_thread_name_when_available() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.cwd = test_project_path().abs();
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.handle_codex_event(Event {
+        id: "name-update".into(),
+        msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+            thread_id,
+            thread_name: Some("Investigate generated terminal title".to_string()),
+        }),
+    });
+
+    assert_eq!(
+        chat.last_terminal_title,
+        Some("Investigate generated terminal title | project".to_string())
+    );
+}
+
+#[tokio::test]
+async fn default_terminal_title_truncates_long_thread_name() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.cwd = test_project_path().abs();
+    let long_name = "Investigate generated terminal title that is definitely too long";
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.handle_codex_event(Event {
+        id: "name-update".into(),
+        msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+            thread_id,
+            thread_name: Some(long_name.to_string()),
+        }),
+    });
+
+    assert_eq!(
+        chat.last_terminal_title,
+        Some("Investigate generated terminal title that is ... | project".to_string())
+    );
 }
 
 #[tokio::test]
