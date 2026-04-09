@@ -6067,7 +6067,7 @@ Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.t
             return;
         }
 
-        if self.keymap.chat.edit_previous_message.is_pressed(key_event) {
+        if self.should_route_edit_previous_message(key_event) {
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)
@@ -6135,6 +6135,11 @@ Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.t
                 self.chat_widget.handle_key_event(key_event);
             }
         };
+    }
+
+    fn should_route_edit_previous_message(&self, key_event: KeyEvent) -> bool {
+        self.keymap.chat.edit_previous_message.is_pressed(key_event)
+            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
     fn refresh_status_line(&mut self) {
@@ -11155,6 +11160,29 @@ guardian_approval = true
         assert!(!app.backtrack_render_pending);
         assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
         assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+    }
+
+    #[tokio::test]
+    async fn edit_previous_shortcut_does_not_steal_empty_vim_insert_escape() {
+        let mut app = make_test_app().await;
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(app.chat_widget.composer_is_empty());
+        assert!(app.should_route_edit_previous_message(esc));
+
+        app.chat_widget.toggle_vim_mode_and_notify();
+        assert!(app.should_route_edit_previous_message(esc));
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+        assert!(!app.should_route_edit_previous_message(esc));
+
+        app.chat_widget.handle_key_event(esc);
+
+        assert!(!app.backtrack.primed);
+        assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
+        assert!(app.should_route_edit_previous_message(esc));
     }
 
     #[tokio::test]

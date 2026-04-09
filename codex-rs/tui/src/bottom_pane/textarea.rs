@@ -241,6 +241,14 @@ impl TextArea {
         self.vim_enabled && self.vim_mode == VimMode::Insert
     }
 
+    pub(crate) fn should_handle_vim_insert_escape(&self, event: KeyEvent) -> bool {
+        self.vim_enabled
+            && self.vim_mode == VimMode::Insert
+            && event.code == KeyCode::Esc
+            && event.modifiers == KeyModifiers::NONE
+            && matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+    }
+
     pub(crate) fn vim_mode_label(&self) -> Option<&'static str> {
         if !self.vim_enabled {
             return None;

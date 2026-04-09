@@ -10949,6 +10949,11 @@ impl ChatWidget {
         self.bottom_pane.is_normal_backtrack_mode()
     }
 
+    pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        self.bottom_pane
+            .composer_should_handle_vim_insert_escape(key_event)
+    }
+
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.bottom_pane.insert_str(text);
     }
