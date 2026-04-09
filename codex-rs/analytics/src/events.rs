@@ -367,3 +367,27 @@ fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String>
         _ => None,
     }
 }
+
+pub(crate) fn turn_subagent_source_name(thread_source: &SessionSource) -> Option<String> {
+    match thread_source {
+        SessionSource::SubAgent(subagent_source) => Some(subagent_source_name(subagent_source)),
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
+    }
+}
+
+pub(crate) fn turn_parent_thread_id(thread_source: &SessionSource) -> Option<String> {
+    match thread_source {
+        SessionSource::SubAgent(subagent_source) => subagent_parent_thread_id(subagent_source),
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
+    }
+}
