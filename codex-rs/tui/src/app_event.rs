@@ -84,6 +84,12 @@ pub(crate) struct RecentSessionMention {
     pub(crate) preview: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RememberThreadSource {
+    pub(crate) thread_id: String,
+    pub(crate) title: String,
+}
+
 /// Distinguishes why a rate-limit refresh was requested so the completion
 /// handler can route the result correctly.
 ///
@@ -153,6 +159,12 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(Op),
 
+    /// Copy hidden context from selected previous threads before forwarding an `Op`.
+    CodexOpRememberingThreads {
+        sources: Vec<RememberThreadSource>,
+        op: Op,
+    },
+
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
     /// is at most one in-flight search.
@@ -217,12 +229,6 @@ pub(crate) enum AppEvent {
     /// Result of fetching recent sessions for composer `#` mentions.
     RecentSessionMentionsLoaded {
         result: Result<Vec<RecentSessionMention>, String>,
-    },
-
-    /// Copy hidden context from a previous thread into the current thread.
-    RememberThread {
-        source_thread_id: String,
-        source_thread_title: String,
     },
 
     /// Fetch plugin marketplace state for the provided working directory.

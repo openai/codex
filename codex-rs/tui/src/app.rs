@@ -7,6 +7,7 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event::RecentSessionMention;
+use crate::app_event::RememberThreadSource;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -1752,6 +1753,46 @@ impl App {
             .filter(|thread| active_thread_id.as_ref() != Some(&thread.id))
             .map(recent_session_mention_from_thread)
             .collect())
+    }
+
+    async fn remember_threads_before_turn(
+        &mut self,
+        app_server: &mut AppServerSession,
+        sources: &[RememberThreadSource],
+    ) -> bool {
+        if sources.is_empty() {
+            return true;
+        }
+        let Some(thread_id) = self.current_displayed_thread_id() else {
+            self.chat_widget.add_error_message(
+                "No active thread is available for remembered context.".to_string(),
+            );
+            return false;
+        };
+
+        let mut source_thread_ids = Vec::with_capacity(sources.len());
+        for source in sources {
+            let Ok(source_thread_id) = ThreadId::from_string(&source.thread_id) else {
+                self.chat_widget.add_error_message(format!(
+                    "Selected session '{}' is not a valid thread.",
+                    source.title
+                ));
+                return false;
+            };
+            source_thread_ids.push(source_thread_id);
+        }
+
+        match app_server
+            .thread_remember(thread_id, source_thread_ids)
+            .await
+        {
+            Ok(_) => true,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to remember previous session: {err}"));
+                false
+            }
+        }
     }
 
     fn ignore_same_thread_resume(
@@ -4431,6 +4472,14 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op.into()).await?;
             }
+            AppEvent::CodexOpRememberingThreads { sources, op } => {
+                if self
+                    .remember_threads_before_turn(app_server, &sources)
+                    .await
+                {
+                    self.submit_active_thread_op(app_server, op.into()).await?;
+                }
+            }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
                     .await?;
@@ -4501,43 +4550,6 @@ impl App {
                     self.chat_widget.set_recent_session_mentions(Vec::new());
                 }
             },
-            AppEvent::RememberThread {
-                source_thread_id,
-                source_thread_title,
-            } => {
-                let Some(thread_id) = self.current_displayed_thread_id() else {
-                    self.chat_widget.add_error_message(
-                        "No active thread is available for remembered context.".to_string(),
-                    );
-                    return Ok(AppRunControl::Continue);
-                };
-                let Ok(source_thread_id) = ThreadId::from_string(&source_thread_id) else {
-                    self.chat_widget
-                        .add_error_message("Selected session is not a valid thread.".to_string());
-                    return Ok(AppRunControl::Continue);
-                };
-
-                match app_server
-                    .thread_remember(thread_id, vec![source_thread_id])
-                    .await
-                {
-                    Ok(response) => {
-                        let title = source_thread_title.trim();
-                        let message =
-                            if response.remembered_thread_ids.len() == 1 && !title.is_empty() {
-                                format!("Remembered context from {title}.")
-                            } else {
-                                "Remembered context from a previous session.".to_string()
-                            };
-                        self.chat_widget.add_info_message(message, /*hint*/ None);
-                    }
-                    Err(err) => {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to remember previous session: {err}"
-                        ));
-                    }
-                }
-            }
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
                     self.chat_widget.refresh_connectors(/*force_refetch*/ true);

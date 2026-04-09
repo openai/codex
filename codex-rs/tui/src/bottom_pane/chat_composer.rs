@@ -1562,7 +1562,6 @@ impl ChatComposer {
         };
 
         let mut selected_mention: Option<(String, Option<String>)> = None;
-        let mut selected_recent_session: Option<(String, String)> = None;
         let mut close_popup = false;
 
         let result = match key_event {
@@ -1607,15 +1606,7 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(mention) = popup.selected_mention() {
-                    if mention.insert_text.starts_with('#')
-                        && let Some(source_thread_id) = mention.path.clone()
-                    {
-                        selected_recent_session =
-                            Some((source_thread_id, mention.display_name.clone()));
-                    } else {
-                        selected_mention =
-                            Some((mention.insert_text.clone(), mention.path.clone()));
-                    }
+                    selected_mention = Some((mention.insert_text.clone(), mention.path.clone()));
                 }
                 close_popup = true;
                 (InputResult::None, true)
@@ -1624,16 +1615,7 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some((source_thread_id, source_thread_title)) = selected_recent_session {
-                let token_range = self.active_token_range();
-                let start_idx = token_range.start;
-                self.textarea.replace_range(token_range, "");
-                self.textarea.set_cursor(start_idx);
-                self.app_event_tx.send(AppEvent::RememberThread {
-                    source_thread_id,
-                    source_thread_title,
-                });
-            } else if let Some((insert_text, path)) = selected_mention {
+            if let Some((insert_text, path)) = selected_mention {
                 self.insert_selected_mention(&insert_text, path.as_deref());
             }
             self.active_popup = ActivePopup::None;
@@ -1988,8 +1970,7 @@ impl ChatComposer {
         self.textarea.set_cursor(start_idx);
         let id = self.textarea.insert_element(insert_text);
 
-        if let (Some(path), Some(mention)) =
-            (path, Self::mention_name_from_insert_text(insert_text))
+        if let (Some(path), Some(mention)) = (path, Self::mention_key_from_insert_text(insert_text))
         {
             self.mention_bindings.insert(
                 id,
@@ -2007,15 +1988,18 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-    fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
-        let name = insert_text.strip_prefix('$')?;
+    fn mention_key_from_insert_text(insert_text: &str) -> Option<String> {
+        let name = insert_text
+            .strip_prefix('$')
+            .or_else(|| insert_text.strip_prefix('#'))?;
         if name.is_empty() {
             return None;
         }
-        if name
-            .as_bytes()
-            .iter()
-            .all(|byte| is_mention_name_char(*byte))
+        if insert_text.starts_with('#')
+            || name
+                .as_bytes()
+                .iter()
+                .all(|byte| is_mention_name_char(*byte))
         {
             Some(name.to_string())
         } else {
@@ -2028,7 +2012,7 @@ impl ChatComposer {
             .text_element_snapshots()
             .into_iter()
             .filter_map(|snapshot| {
-                Self::mention_name_from_insert_text(snapshot.text.as_str())
+                Self::mention_key_from_insert_text(snapshot.text.as_str())
                     .map(|mention| (snapshot.id, mention))
             })
             .collect()
@@ -2058,7 +2042,12 @@ impl ChatComposer {
         let text = self.textarea.text().to_string();
         let mut scan_from = 0usize;
         for binding in mention_bindings {
-            let token = format!("${}", binding.mention);
+            let sigil = if binding.path.starts_with("thread://") {
+                '#'
+            } else {
+                '$'
+            };
+            let token = format!("{sigil}{}", binding.mention);
             let Some(range) =
                 find_next_mention_token_range(text.as_str(), token.as_str(), scan_from)
             else {
@@ -3247,13 +3236,13 @@ impl ChatComposer {
             .map(|(idx, session)| MentionItem {
                 display_name: session.title.clone(),
                 description: Some(session.preview.clone()),
-                insert_text: format!("#{}", session.thread_id),
+                insert_text: format!("#{}", session.title),
                 search_terms: vec![
                     session.title.clone(),
                     session.preview.clone(),
                     session.thread_id.clone(),
                 ],
-                path: Some(session.thread_id.clone()),
+                path: Some(format!("thread://{}", session.thread_id)),
                 category_tag: Some("[Session]".to_string()),
                 sort_rank: idx.try_into().unwrap_or(u8::MAX),
             })
@@ -5058,8 +5047,8 @@ mod tests {
     }
 
     #[test]
-    fn hash_item_popup_remembers_selected_session() {
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+    fn hash_item_popup_inserts_bound_session_title() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
             /*has_input_focus*/ true,
@@ -5070,11 +5059,16 @@ mod tests {
         );
         composer.set_recent_session_mentions(vec![RecentSessionMention {
             thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
-            title: "Answer an open question".to_string(),
+            title: "Favorite hobbies".to_string(),
             preview: "Prior session preview".to_string(),
         }]);
 
-        type_chars_humanlike(&mut composer, &['#', 'q']);
+        type_chars_humanlike(
+            &mut composer,
+            &"Remember my favorite hobbies that I mentioned in #"
+                .chars()
+                .collect::<Vec<_>>(),
+        );
 
         let ActivePopup::Skill(popup) = &composer.active_popup else {
             panic!("expected hash item popup to open");
@@ -5082,24 +5076,22 @@ mod tests {
         let mention = popup
             .selected_mention()
             .expect("expected hash item to be selected");
-        assert_eq!(
-            mention.insert_text,
-            "#11111111-1111-1111-1111-111111111111".to_string()
-        );
+        assert_eq!(mention.insert_text, "#Favorite hobbies".to_string());
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(composer.current_text(), "");
+        assert_eq!(
+            composer.current_text(),
+            "Remember my favorite hobbies that I mentioned in #Favorite hobbies "
+        );
         assert!(matches!(composer.active_popup, ActivePopup::None));
-        let event = rx.try_recv().expect("expected remember event");
-        assert!(matches!(
-            event,
-            AppEvent::RememberThread {
-                source_thread_id,
-                source_thread_title,
-            } if source_thread_id == "11111111-1111-1111-1111-111111111111"
-                && source_thread_title == "Answer an open question"
-        ));
+        assert_eq!(
+            composer.take_mention_bindings(),
+            vec![MentionBinding {
+                mention: "Favorite hobbies".to_string(),
+                path: "thread://11111111-1111-1111-1111-111111111111".to_string(),
+            }]
+        );
     }
 
     #[test]

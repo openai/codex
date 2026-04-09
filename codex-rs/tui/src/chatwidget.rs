@@ -298,6 +298,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
 use crate::app_event::RateLimitRefreshOrigin;
+use crate::app_event::RememberThreadSource;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -1089,6 +1090,27 @@ pub(crate) struct ThreadInputState {
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
     agent_turn_running: bool,
+}
+
+fn remembered_thread_sources(mention_bindings: &[MentionBinding]) -> Vec<RememberThreadSource> {
+    let mut selected_thread_ids = HashSet::new();
+    let mut sources = Vec::new();
+    for binding in mention_bindings {
+        let Some(thread_id) = binding
+            .path
+            .strip_prefix("thread://")
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        if selected_thread_ids.insert(thread_id.to_string()) {
+            sources.push(RememberThreadSource {
+                thread_id: thread_id.to_string(),
+                title: binding.mention.clone(),
+            });
+        }
+    }
+    sources
 }
 
 impl From<String> for UserMessage {
@@ -5934,7 +5956,8 @@ impl ChatWidget {
             personality,
         );
 
-        if !self.submit_op(op) {
+        let remembered_thread_sources = remembered_thread_sources(&mention_bindings);
+        if !self.submit_op_remembering_threads(op, remembered_thread_sources) {
             return;
         }
 
@@ -10898,6 +10921,14 @@ impl ChatWidget {
         T: Into<AppCommand>,
     {
         let op: AppCommand = op.into();
+        self.submit_op_remembering_threads(op, Vec::new())
+    }
+
+    fn submit_op_remembering_threads(
+        &mut self,
+        op: AppCommand,
+        remembered_thread_sources: Vec<RememberThreadSource>,
+    ) -> bool {
         if op.is_review() && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
@@ -10910,7 +10941,15 @@ impl ChatWidget {
                 }
             }
             CodexOpTarget::AppEvent => {
-                self.app_event_tx.send(AppEvent::CodexOp(op.into()));
+                let op = op.into();
+                if remembered_thread_sources.is_empty() {
+                    self.app_event_tx.send(AppEvent::CodexOp(op));
+                } else {
+                    self.app_event_tx.send(AppEvent::CodexOpRememberingThreads {
+                        sources: remembered_thread_sources,
+                        op,
+                    });
+                }
             }
         }
         true
@@ -11549,6 +11588,35 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+#[cfg(test)]
+mod remembered_thread_source_tests {
+    use super::*;
+
+    #[test]
+    fn remembered_thread_sources_extract_thread_mentions_once() {
+        assert_eq!(
+            remembered_thread_sources(&[
+                MentionBinding {
+                    mention: "Favorite hobbies".to_string(),
+                    path: "thread://11111111-1111-1111-1111-111111111111".to_string(),
+                },
+                MentionBinding {
+                    mention: "Plugin".to_string(),
+                    path: "plugin://sample@test".to_string(),
+                },
+                MentionBinding {
+                    mention: "Favorite hobbies duplicate".to_string(),
+                    path: "thread://11111111-1111-1111-1111-111111111111".to_string(),
+                },
+            ]),
+            vec![RememberThreadSource {
+                thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
+                title: "Favorite hobbies".to_string(),
+            }]
+        );
+    }
 }
 
 #[cfg(test)]
