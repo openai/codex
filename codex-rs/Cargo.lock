@@ -1356,16 +1356,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
-name = "codex-account"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-backend-client",
- "codex-login",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1374,6 +1364,16 @@ dependencies = [
  "serde",
  "termcolor",
  "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "codex-account"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-backend-client",
+ "codex-login",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
