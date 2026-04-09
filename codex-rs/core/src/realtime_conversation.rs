@@ -1,6 +1,7 @@
 use crate::client::ModelClient;
 use crate::codex::Session;
 use crate::realtime_context::build_realtime_startup_context;
+use crate::realtime_prompt::prepare_realtime_backend_prompt;
 use async_channel::Receiver;
 use async_channel::Sender;
 use async_channel::TrySendError;
@@ -38,6 +39,8 @@ use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationSdpEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
@@ -58,6 +61,7 @@ const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
+const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 const ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 
@@ -520,7 +524,7 @@ async fn prepare_realtime_start(
     }
     let version = config.realtime.version;
     let session_config =
-        build_realtime_session_config(sess, params.prompt, params.session_id).await?;
+        build_realtime_session_config(sess, params.prompt, params.session_id, params.voice).await?;
     let requested_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
@@ -546,14 +550,15 @@ async fn prepare_realtime_start(
 
 pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
-    prompt: String,
+    prompt: Option<Option<String>>,
     session_id: Option<String>,
+    voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
-    let prompt = config
-        .experimental_realtime_ws_backend_prompt
-        .clone()
-        .unwrap_or(prompt);
+    let prompt = prepare_realtime_backend_prompt(
+        prompt,
+        config.experimental_realtime_ws_backend_prompt.clone(),
+    );
     let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
         Some(startup_context) => startup_context,
         None => {
@@ -562,12 +567,18 @@ pub(crate) async fn build_realtime_session_config(
                 .unwrap_or_default()
         }
     };
-    let prompt = if startup_context.is_empty() {
-        prompt
-    } else {
-        format!("{prompt}\n\n{startup_context}")
+    let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => startup_context,
+        (false, true) => prompt,
+        (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
-    let model = config.experimental_realtime_ws_model.clone();
+    let model = Some(
+        config
+            .experimental_realtime_ws_model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_REALTIME_MODEL.to_string()),
+    );
     let event_parser = match config.realtime.version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
@@ -576,13 +587,51 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
+    let voice = voice
+        .or(config.realtime.voice)
+        .unwrap_or_else(|| default_realtime_voice(config.realtime.version));
+    validate_realtime_voice(config.realtime.version, voice)?;
     Ok(RealtimeSessionConfig {
         instructions: prompt,
         model,
         session_id: Some(session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
         event_parser,
         session_mode,
+        voice,
     })
+}
+
+fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
+    let voices = RealtimeVoicesList::builtin();
+    match version {
+        RealtimeWsVersion::V1 => voices.default_v1,
+        RealtimeWsVersion::V2 => voices.default_v2,
+    }
+}
+
+fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
+    let voices = RealtimeVoicesList::builtin();
+    let allowed = match version {
+        RealtimeWsVersion::V1 => &voices.v1,
+        RealtimeWsVersion::V2 => &voices.v2,
+    };
+    if allowed.contains(&voice) {
+        return Ok(());
+    }
+
+    let version = match version {
+        RealtimeWsVersion::V1 => "v1",
+        RealtimeWsVersion::V2 => "v2",
+    };
+    let allowed = allowed
+        .iter()
+        .map(|voice| voice.wire_name())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(CodexErr::InvalidRequest(format!(
+        "realtime voice `{}` is not supported for {version}; supported voices: {allowed}",
+        voice.wire_name()
+    )))
 }
 
 async fn handle_start_inner(

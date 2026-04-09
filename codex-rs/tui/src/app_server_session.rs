@@ -645,6 +645,7 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     prompt: params.prompt,
                     session_id: params.session_id,
+                    voice: params.voice,
                     transport: params.transport.map(|transport| match transport {
                         ConversationStartTransport::Websocket => {
                             ThreadRealtimeStartTransport::Websocket

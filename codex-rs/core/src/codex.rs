@@ -2217,14 +2217,19 @@ impl Session {
         }
     }
 
-    pub(crate) async fn ensure_rollout_materialized(&self) {
+    pub(crate) async fn try_ensure_rollout_materialized(&self) -> std::io::Result<()> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
         };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.persist().await
-        {
+        if let Some(rec) = recorder {
+            rec.persist().await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_rollout_materialized(&self) {
+        if let Err(e) = self.try_ensure_rollout_materialized().await {
             warn!("failed to materialize rollout recorder: {e}");
         }
     }
@@ -4621,6 +4626,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handle_realtime_conversation_close(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::RealtimeConversationListVoices => {
+                    handlers::realtime_conversation_list_voices(&sess, sub.id.clone()).await;
+                    false
+                }
                 Op::OverrideTurnContext {
                     cwd,
                     approval_policy,
@@ -4855,6 +4864,8 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
+    use codex_protocol::protocol::RealtimeVoicesList;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
@@ -4887,6 +4898,18 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
+    }
+
+    pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::RealtimeConversationListVoicesResponse(
+                RealtimeConversationListVoicesResponseEvent {
+                    voices: RealtimeVoicesList::builtin(),
+                },
+            ),
+        })
+        .await;
     }
 
     pub async fn override_turn_context(
@@ -5540,6 +5563,18 @@ mod handlers {
             sess.send_event_raw(event).await;
             return;
         };
+
+        if let Err(e) = sess.try_ensure_rollout_materialized().await {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("Failed to set thread name: {e}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
 
         let codex_home = sess.codex_home().await;
         if let Err(e) =
@@ -7172,6 +7207,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListSkillsResponse(_)
+        | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)

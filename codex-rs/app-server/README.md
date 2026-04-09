@@ -601,6 +601,9 @@ Then send `offer.sdp` to app-server. Core uses `experimental_realtime_ws_backend
 } }
 ```
 
+Omit `prompt` to use Codex's default realtime backend prompt. Send `prompt: null` or
+`prompt: ""` when the session should start without that default backend prompt.
+
 ```javascript
 await pc.setRemoteDescription({
   type: "answer",

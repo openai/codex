@@ -11,6 +11,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
+use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -306,9 +307,10 @@ impl RealtimeWebsocketWriter {
         &self,
         instructions: String,
         session_mode: RealtimeSessionMode,
+        voice: RealtimeVoice,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
-        let session = session_update_session(self.event_parser, instructions, session_mode);
+        let session = session_update_session(self.event_parser, instructions, session_mode, voice);
         self.send_json(&RealtimeOutboundMessage::SessionUpdate { session })
             .await
     }
@@ -577,7 +579,7 @@ impl RealtimeWebsocketClient {
         );
         connection
             .writer
-            .send_session_update(config.instructions, config.session_mode)
+            .send_session_update(config.instructions, config.session_mode, config.voice)
             .await?;
         Ok(connection)
     }
@@ -722,6 +724,7 @@ mod tests {
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
     use codex_protocol::protocol::RealtimeResponseCancelled;
+    use codex_protocol::protocol::RealtimeVoice;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
@@ -1238,7 +1241,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("fathom".to_string())
+                Value::String("breeze".to_string())
             );
 
             ws.send(Message::Text(
@@ -1371,6 +1374,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                    voice: RealtimeVoice::Breeze,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1546,7 +1550,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("marin".to_string())
+                Value::String("cedar".to_string())
             );
             assert_eq!(
                 first_json["session"]["tools"][0]["type"],
@@ -1644,6 +1648,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Conversational,
+                    voice: RealtimeVoice::Cedar,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1748,6 +1753,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Transcription,
+                    voice: RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1811,7 +1817,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("fathom".to_string())
+                Value::String("cove".to_string())
             );
             assert!(first_json["session"].get("tools").is_none());
 
@@ -1850,6 +1856,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Transcription,
+                    voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1938,6 +1945,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                    voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),

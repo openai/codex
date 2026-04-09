@@ -1676,6 +1676,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-exec",
+ "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
  "codex-login",
@@ -1994,6 +1995,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which 8.0.0",
+ "whoami",
  "windows-sys 0.52.0",
  "wiremock",
  "zip 2.4.2",
@@ -11762,6 +11764,7 @@ checksum = "5d4a4db5077702ca3015d3d02d74974948aba2ad9e12ab7df718ee64ccd7e97d"
 dependencies = [
  "libredox",
  "wasite",
+ "web-sys",
 ]
 
 [[package]]
