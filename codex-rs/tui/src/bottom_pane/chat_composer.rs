@@ -311,6 +311,7 @@ pub(crate) struct ChatComposer {
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
     selected_remote_image_index: Option<usize>,
+    pending_slash_command_history: Option<HistoryEntry>,
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     // Monotonically increasing identifier for textarea elements we insert.
@@ -434,6 +435,7 @@ impl ChatComposer {
             footer_hint_override: None,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
+            pending_slash_command_history: None,
             footer_flash: None,
             context_window_percent: None,
             #[cfg(not(target_os = "linux"))]
@@ -1063,6 +1065,16 @@ impl ChatComposer {
         std::mem::take(&mut self.recent_submission_mention_bindings)
     }
 
+    pub(crate) fn discard_pending_slash_command_history(&mut self) {
+        self.pending_slash_command_history = None;
+    }
+
+    pub(crate) fn record_pending_slash_command_history(&mut self) {
+        if let Some(entry) = self.pending_slash_command_history.take() {
+            self.history.record_local_submission(entry);
+        }
+    }
+
     fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
         if self.attached_images.is_empty() {
             return;
@@ -1281,6 +1293,7 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     let CommandItem::Builtin(cmd) = sel;
                     if cmd == SlashCommand::Skills {
+                        self.stage_selected_slash_command_history(cmd);
                         self.textarea.set_text_clearing_elements("");
                         return (InputResult::Command(cmd), true);
                     }
@@ -1305,6 +1318,7 @@ impl ChatComposer {
             } => {
                 if let Some(sel) = popup.selected_item() {
                     let CommandItem::Builtin(cmd) = sel;
+                    self.stage_selected_slash_command_history(cmd);
                     self.textarea.set_text_clearing_elements("");
                     return (InputResult::Command(cmd), true);
                 }
@@ -2274,6 +2288,7 @@ impl ChatComposer {
             if self.reject_slash_command_if_unavailable(cmd) {
                 return Some(InputResult::None);
             }
+            self.stage_slash_command_history();
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
         } else {
@@ -2305,6 +2320,8 @@ impl ChatComposer {
         if self.reject_slash_command_if_unavailable(cmd) {
             return Some(InputResult::None);
         }
+
+        self.stage_slash_command_history();
 
         let mut args_elements =
             Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
@@ -2351,6 +2368,29 @@ impl ChatComposer {
             history_cell::new_error_event(message),
         )));
         true
+    }
+
+    fn stage_slash_command_history(&mut self) {
+        self.stage_slash_command_history_text(self.textarea.text().trim().to_string());
+    }
+
+    fn stage_selected_slash_command_history(&mut self, cmd: SlashCommand) {
+        self.stage_slash_command_history_text(format!("/{}", cmd.command()));
+    }
+
+    fn stage_slash_command_history_text(&mut self, text: String) {
+        self.pending_slash_command_history = Some(HistoryEntry {
+            text,
+            text_elements: self.textarea.text_elements(),
+            local_image_paths: self
+                .attached_images
+                .iter()
+                .map(|img| img.path.clone())
+                .collect(),
+            remote_image_urls: self.remote_image_urls.clone(),
+            mention_bindings: self.snapshot_mention_bindings(),
+            pending_pastes: self.pending_pastes.clone(),
+        });
     }
 
     /// Translate full-text element ranges into command-argument ranges.
@@ -7861,6 +7901,90 @@ mod tests {
             matches!(composer.active_popup, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
         );
+    }
+
+    #[test]
+    fn bare_slash_command_can_be_recalled_after_recording_pending_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content("/diff".to_string(), Vec::new(), Vec::new());
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::Command(SlashCommand::Diff));
+        composer.record_pending_slash_command_history();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "/diff");
+    }
+
+    #[test]
+    fn popup_selected_slash_command_records_canonical_command_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content("/di".to_string(), Vec::new(), Vec::new());
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::Command(SlashCommand::Diff));
+        composer.record_pending_slash_command_history();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "/diff");
+    }
+
+    #[test]
+    fn inline_slash_command_can_be_recalled_after_recording_pending_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_collaboration_modes_enabled(/*enabled*/ true);
+
+        composer.set_text_content("/plan investigate this".to_string(), Vec::new(), Vec::new());
+        composer.active_popup = ActivePopup::None;
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                assert_eq!(cmd, SlashCommand::Plan);
+                assert_eq!(args, "investigate this");
+                assert!(text_elements.is_empty());
+            }
+            other => panic!("expected inline /plan command, got {other:?}"),
+        }
+        composer.record_pending_slash_command_history();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "/plan investigate this");
     }
 
     #[test]

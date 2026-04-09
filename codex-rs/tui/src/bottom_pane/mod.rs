@@ -280,6 +280,14 @@ impl BottomPane {
         self.composer.take_recent_submission_mention_bindings()
     }
 
+    pub(crate) fn discard_pending_slash_command_history(&mut self) {
+        self.composer.discard_pending_slash_command_history();
+    }
+
+    pub(crate) fn record_pending_slash_command_history(&mut self) {
+        self.composer.record_pending_slash_command_history();
+    }
+
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
