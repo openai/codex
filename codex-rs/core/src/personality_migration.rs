@@ -28,7 +28,12 @@ pub async fn maybe_migrate_personality(
     codex_home: &Path,
     config_toml: &ConfigToml,
 ) -> io::Result<PersonalityMigrationStatus> {
-    maybe_migrate_personality_with_config_path(codex_home, config_toml, None).await
+    maybe_migrate_personality_with_config_path(
+        codex_home,
+        config_toml,
+        /*user_config_path*/ None,
+    )
+    .await
 }
 
 pub async fn maybe_migrate_personality_with_config_path(
