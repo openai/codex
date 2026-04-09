@@ -55,12 +55,9 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 "msg-guardian",
                 &serde_json::json!({
                     "risk_level": "low",
-                    "risk_score": 5,
+                    "user_authorization": "high",
+                    "outcome": "allow",
                     "rationale": "The request only widens permissions for a benign local echo command.",
-                    "evidence": [{
-                        "message": "The planned command is an `echo hi` smoke test.",
-                        "why": "This is low-risk and does not attempt destructive or exfiltrating behavior.",
-                    }],
                 })
                 .to_string(),
             ),

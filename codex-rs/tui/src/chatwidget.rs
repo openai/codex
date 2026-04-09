@@ -6736,7 +6736,6 @@ impl ChatWidget {
                     GuardianAssessmentStatus::Aborted
                 }
             },
-            risk_score: review.risk_score,
             risk_level: review.risk_level.map(|risk_level| match risk_level {
                 codex_app_server_protocol::GuardianRiskLevel::Low => {
                     codex_protocol::protocol::GuardianRiskLevel::Low
@@ -6746,6 +6745,25 @@ impl ChatWidget {
                 }
                 codex_app_server_protocol::GuardianRiskLevel::High => {
                     codex_protocol::protocol::GuardianRiskLevel::High
+                }
+                codex_app_server_protocol::GuardianRiskLevel::Critical => {
+                    codex_protocol::protocol::GuardianRiskLevel::Critical
+                }
+            }),
+            user_authorization: review.user_authorization.map(|user_authorization| {
+                match user_authorization {
+                    codex_app_server_protocol::GuardianUserAuthorization::Unknown => {
+                        codex_protocol::protocol::GuardianUserAuthorization::Unknown
+                    }
+                    codex_app_server_protocol::GuardianUserAuthorization::Low => {
+                        codex_protocol::protocol::GuardianUserAuthorization::Low
+                    }
+                    codex_app_server_protocol::GuardianUserAuthorization::Medium => {
+                        codex_protocol::protocol::GuardianUserAuthorization::Medium
+                    }
+                    codex_app_server_protocol::GuardianUserAuthorization::High => {
+                        codex_protocol::protocol::GuardianUserAuthorization::High
+                    }
                 }
             }),
             rationale: review.rationale,

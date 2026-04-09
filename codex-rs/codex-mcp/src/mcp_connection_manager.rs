@@ -25,6 +25,7 @@ use crate::mcp::McpConfig;
 use crate::mcp::ToolPluginProvenance;
 use crate::mcp::configured_mcp_servers;
 use crate::mcp::effective_mcp_servers;
+use crate::mcp::mcp_permission_prompt_is_auto_approved;
 use crate::mcp::tool_plugin_provenance;
 pub(crate) use crate::mcp_tool_names::qualify_tools;
 use anyhow::Context;
@@ -199,17 +200,31 @@ fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
     }
 }
 
+fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> bool {
+    match elicitation {
+        CreateElicitationRequestParams::FormElicitationParams {
+            requested_schema, ..
+        } => {
+            // Auto-accept confirm/approval elicitations without schema requirements.
+            requested_schema.properties.is_empty()
+        }
+        CreateElicitationRequestParams::UrlElicitationParams { .. } => false,
+    }
+}
+
 #[derive(Clone)]
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     approval_policy: Arc<StdMutex<AskForApproval>>,
+    sandbox_policy: Arc<StdMutex<SandboxPolicy>>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval) -> Self {
+    fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
+            sandbox_policy: Arc::new(StdMutex::new(sandbox_policy)),
         }
     }
 
@@ -231,16 +246,33 @@ impl ElicitationRequestManager {
     fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
+        let sandbox_policy = self.sandbox_policy.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
+            let sandbox_policy = sandbox_policy.clone();
             async move {
-                if approval_policy
+                let approval_policy = approval_policy
                     .lock()
-                    .is_ok_and(|policy| elicitation_is_rejected_by_policy(*policy))
+                    .map(|policy| *policy)
+                    .unwrap_or(AskForApproval::Never);
+                let sandbox_policy = sandbox_policy
+                    .lock()
+                    .map(|policy| policy.clone())
+                    .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
+                if mcp_permission_prompt_is_auto_approved(approval_policy, &sandbox_policy)
+                    && can_auto_accept_elicitation(&elicitation)
                 {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Accept,
+                        content: Some(serde_json::json!({})),
+                        meta: None,
+                    });
+                }
+
+                if elicitation_is_rejected_by_policy(approval_policy) {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Decline,
                         content: None,
@@ -560,11 +592,17 @@ impl McpConnectionManager {
         tool_plugin_provenance(config)
     }
 
-    pub fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
+    pub fn new_uninitialized(
+        approval_policy: &Constrained<AskForApproval>,
+        sandbox_policy: &Constrained<SandboxPolicy>,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
-            elicitation_requests: ElicitationRequestManager::new(approval_policy.value()),
+            elicitation_requests: ElicitationRequestManager::new(
+                approval_policy.value(),
+                sandbox_policy.get().clone(),
+            ),
         }
     }
 
@@ -579,6 +617,12 @@ impl McpConnectionManager {
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
+        }
+    }
+
+    pub fn set_sandbox_policy(&self, sandbox_policy: &SandboxPolicy) {
+        if let Ok(mut policy) = self.elicitation_requests.sandbox_policy.lock() {
+            *policy = sandbox_policy.clone();
         }
     }
 
@@ -599,7 +643,10 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            initial_sandbox_state.sandbox_policy.clone(),
+        );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let mcp_servers = mcp_servers.clone();

@@ -1,7 +1,9 @@
 use super::*;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
+use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
+use rmcp::model::NumberOrString;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -92,6 +94,70 @@ fn elicitation_granular_policy_respects_never_and_config() {
             mcp_elicitations: false,
         }
     )));
+}
+
+#[tokio::test]
+async fn full_access_auto_accepts_elicitation_with_empty_form_schema() {
+    let manager =
+        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+    let (tx_event, _rx_event) = async_channel::bounded(1);
+    let sender = manager.make_sender("server".to_string(), tx_event);
+
+    let response = sender(
+        NumberOrString::Number(1),
+        CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "Confirm?".to_string(),
+            requested_schema: rmcp::model::ElicitationSchema::builder()
+                .build()
+                .expect("schema should build"),
+        },
+    )
+    .await
+    .expect("elicitation should auto accept");
+
+    assert_eq!(
+        response,
+        ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: Some(serde_json::json!({})),
+            meta: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn full_access_does_not_auto_accept_elicitation_with_requested_fields() {
+    let manager =
+        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+    let (tx_event, _rx_event) = async_channel::bounded(1);
+    let sender = manager.make_sender("server".to_string(), tx_event);
+
+    let response = sender(
+        NumberOrString::Number(1),
+        CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "What should I say?".to_string(),
+            requested_schema: rmcp::model::ElicitationSchema::builder()
+                .required_property(
+                    "message",
+                    rmcp::model::PrimitiveSchema::String(rmcp::model::StringSchema::new()),
+                )
+                .build()
+                .expect("schema should build"),
+        },
+    )
+    .await
+    .expect("elicitation should auto decline");
+
+    assert_eq!(
+        response,
+        ElicitationResponse {
+            action: ElicitationAction::Decline,
+            content: None,
+            meta: None,
+        }
+    );
 }
 
 #[test]
@@ -479,7 +545,8 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
@@ -504,7 +571,8 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
@@ -526,7 +594,8 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
@@ -557,7 +626,8 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
     .boxed()
     .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),

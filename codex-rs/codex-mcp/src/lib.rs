@@ -26,6 +26,7 @@ pub use mcp::configured_mcp_servers;
 pub use mcp::discover_supported_scopes;
 pub use mcp::effective_mcp_servers;
 pub use mcp::group_tools_by_server;
+pub use mcp::mcp_permission_prompt_is_auto_approved;
 pub use mcp::oauth_login_support;
 pub use mcp::qualified_mcp_tool_name_prefix;
 pub use mcp::resolve_oauth_scopes;

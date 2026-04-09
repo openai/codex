@@ -1978,6 +1978,7 @@ impl Session {
             // setup is straightforward enough and performs well.
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
                 &config.permissions.approval_policy,
+                &config.permissions.sandbox_policy,
             ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
@@ -2000,6 +2001,7 @@ impl Session {
             session_telemetry,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            guardian_rejection_rationales: Mutex::new(HashMap::new()),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager: Arc::clone(&mcp_manager),
@@ -2555,11 +2557,12 @@ impl Session {
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .set_approval_policy(&session_configuration.approval_policy);
+        {
+            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
+            mcp_connection_manager
+                .set_sandbox_policy(per_turn_config.permissions.sandbox_policy.get());
+        }
 
         if sandbox_policy_changed {
             self.refresh_managed_network_proxy_for_current_sandbox_policy()
