@@ -34,6 +34,10 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// dispatcher.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
+/// Like [`CODEX_CORE_APPLY_PATCH_ARG1`], but argv[2] is a UTF-8 file path
+/// containing the patch body instead of the patch body itself.
+pub const CODEX_CORE_APPLY_PATCH_FILE_ARG1: &str = "--codex-run-as-apply-patch-file";
+
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]
