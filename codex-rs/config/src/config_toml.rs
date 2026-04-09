@@ -448,9 +448,10 @@ pub enum RealtimeWsMode {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeTransport {
-    #[default]
+    #[cfg_attr(target_os = "macos", default)]
     #[serde(rename = "webrtc")]
     WebRtc,
+    #[cfg_attr(not(target_os = "macos"), default)]
     Websocket,
 }
 
