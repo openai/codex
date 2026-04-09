@@ -319,15 +319,14 @@ WHERE id = ?
         let now = Utc::now().timestamp();
         let result = sqlx::query(
             r#"
-UPDATE agent_job_items
-SET
-    status = ?,
-    assigned_thread_id = NULL,
-    attempt_count = attempt_count + 1,
-    updated_at = ?,
-    last_error = NULL
-WHERE job_id = ? AND item_id = ? AND status = ?
-            "#,
+	UPDATE agent_job_items
+	SET
+	    status = ?,
+	    assigned_thread_id = NULL,
+	    updated_at = ?,
+	    last_error = NULL
+	WHERE job_id = ? AND item_id = ? AND status = ?
+	            "#,
         )
         .bind(AgentJobItemStatus::Running.as_str())
         .bind(now)
@@ -407,10 +406,10 @@ WHERE job_id = ? AND item_id = ? AND status = ?
         let now = Utc::now().timestamp();
         let result = sqlx::query(
             r#"
-UPDATE agent_job_items
-SET assigned_thread_id = ?, updated_at = ?
-WHERE job_id = ? AND item_id = ? AND status = ?
-            "#,
+	UPDATE agent_job_items
+	SET assigned_thread_id = ?, attempt_count = attempt_count + 1, updated_at = ?
+	WHERE job_id = ? AND item_id = ? AND status = ?
+	            "#,
         )
         .bind(thread_id)
         .bind(now)
@@ -679,6 +678,62 @@ mod tests {
         assert_eq!(item.status, AgentJobItemStatus::Failed);
         assert_eq!(item.result_json, None);
         assert_eq!(item.last_error, Some("missing report".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_agent_job_item_thread_increments_attempt_count_after_claim() -> anyhow::Result<()>
+    {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string()).await?;
+        let job_id = "job-1".to_string();
+        let item_id = "item-1".to_string();
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: job_id.clone(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: item_id.clone(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path":"file-1"}),
+                }],
+            )
+            .await?;
+        runtime.mark_agent_job_running(job_id.as_str()).await?;
+
+        let claimed = runtime
+            .mark_agent_job_item_running(job_id.as_str(), item_id.as_str())
+            .await?;
+        assert!(claimed);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.attempt_count, 0);
+        assert_eq!(item.assigned_thread_id, None);
+
+        let assigned = runtime
+            .set_agent_job_item_thread(job_id.as_str(), item_id.as_str(), "thread-1")
+            .await?;
+        assert!(assigned);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.attempt_count, 1);
+        assert_eq!(item.assigned_thread_id, Some("thread-1".to_string()));
         Ok(())
     }
 }
