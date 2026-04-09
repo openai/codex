@@ -555,6 +555,7 @@ pub(crate) async fn build_realtime_session_config(
     voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
+    let provider = sess.provider().await;
     let prompt = prepare_realtime_backend_prompt(
         prompt,
         config.experimental_realtime_ws_backend_prompt.clone(),
@@ -573,8 +574,12 @@ pub(crate) async fn build_realtime_session_config(
         (false, true) => prompt,
         (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
+    let provider_pins_model = provider
+        .query_params
+        .as_ref()
+        .is_some_and(|query_params| query_params.contains_key("model"));
     let model = config.experimental_realtime_ws_model.clone().or_else(|| {
-        (config.realtime.version == RealtimeWsVersion::V2)
+        (config.realtime.version == RealtimeWsVersion::V2 && !provider_pins_model)
             .then(|| DEFAULT_REALTIME_MODEL.to_string())
     });
     let event_parser = match config.realtime.version {
