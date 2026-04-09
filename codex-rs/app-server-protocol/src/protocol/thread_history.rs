@@ -53,7 +53,6 @@ use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use std::collections::HashMap;
 use tracing::warn;
-use uuid::Uuid;
 
 #[cfg(test)]
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
@@ -65,7 +64,22 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 /// When available, this uses `TurnContext.turn_id` as the canonical turn id so
 /// resumed/rebuilt thread history preserves the original turn identifiers.
 pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
-    let mut builder = ThreadHistoryBuilder::new();
+    let mut builder = ThreadHistoryBuilder::for_replay(/*thread_id*/ None);
+    for item in items {
+        builder.handle_rollout_item(item);
+    }
+    builder.finish()
+}
+
+/// Replay persisted rollout items for a known thread.
+///
+/// Passing the thread id explicitly keeps deterministic legacy fallback ids stable
+/// even if the rollout is missing `session_meta`.
+pub fn build_turns_from_rollout_items_for_thread(
+    thread_id: &str,
+    items: &[RolloutItem],
+) -> Vec<Turn> {
+    let mut builder = ThreadHistoryBuilder::for_replay(Some(thread_id.to_owned()));
     for item in items {
         builder.handle_rollout_item(item);
     }
@@ -75,7 +89,7 @@ pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
-    persisted_thread_id: Option<String>,
+    thread_id_seed: Option<String>,
     pending_implicit_turn_id: Option<String>,
     next_synthetic_turn_index: usize,
     next_item_index: i64,
@@ -91,10 +105,22 @@ impl Default for ThreadHistoryBuilder {
 
 impl ThreadHistoryBuilder {
     pub fn new() -> Self {
+        Self::for_replay(/*thread_id*/ None)
+    }
+
+    pub fn for_replay(thread_id: Option<String>) -> Self {
+        Self::with_thread_id_seed(thread_id)
+    }
+
+    pub fn for_live(thread_id: String) -> Self {
+        Self::with_thread_id_seed(Some(thread_id))
+    }
+
+    fn with_thread_id_seed(thread_id_seed: Option<String>) -> Self {
         Self {
             turns: Vec::new(),
             current_turn: None,
-            persisted_thread_id: None,
+            thread_id_seed,
             pending_implicit_turn_id: None,
             next_synthetic_turn_index: 0,
             next_item_index: 1,
@@ -104,7 +130,12 @@ impl ThreadHistoryBuilder {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new();
+        self.turns.clear();
+        self.current_turn = None;
+        self.pending_implicit_turn_id = None;
+        self.next_item_index = 1;
+        self.current_rollout_index = 0;
+        self.next_rollout_index = 0;
     }
 
     pub fn finish(mut self) -> Vec<Turn> {
@@ -219,7 +250,18 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_session_meta(&mut self, payload: &SessionMetaLine) {
-        self.persisted_thread_id = Some(payload.meta.id.to_string());
+        let session_thread_id = payload.meta.id.to_string();
+        match self.thread_id_seed.as_deref() {
+            Some(thread_id_seed) if thread_id_seed != session_thread_id => {
+                warn!(
+                    thread_id_seed,
+                    session_meta_thread_id = session_thread_id.as_str(),
+                    "thread history builder saw mismatched session_meta thread id"
+                );
+            }
+            Some(_) => {}
+            None => self.thread_id_seed = Some(session_thread_id),
+        }
     }
 
     fn handle_turn_context(&mut self, payload: &TurnContextItem) {
@@ -1052,6 +1094,8 @@ impl ThreadHistoryBuilder {
     }
 
     fn take_next_implicit_turn_id(&mut self) -> String {
+        // Newer legacy-history entries persist a turn_context before the events that need an
+        // implicit turn. Prefer that real ID over synthesizing one.
         if let Some(turn_id) = self.pending_implicit_turn_id.take() {
             return turn_id;
         }
@@ -1062,24 +1106,13 @@ impl ThreadHistoryBuilder {
     }
 
     fn synthetic_turn_id(&self, synthetic_turn_index: usize) -> String {
-        let replay_seed = match self.persisted_thread_id.as_deref() {
-            Some(thread_id) => format!("{thread_id}:{synthetic_turn_index}"),
-            None => format!("legacy:{synthetic_turn_index}"),
-        };
-        let hash_bytes = |offset_basis: u64| {
-            let mut hash = offset_basis;
-            for byte in replay_seed.as_bytes() {
-                hash ^= u64::from(*byte);
-                hash = hash.wrapping_mul(0x100000001b3);
-            }
-            hash.to_be_bytes()
-        };
-        let mut bytes = [0_u8; 16];
-        bytes[..8].copy_from_slice(&hash_bytes(0xcbf29ce484222325));
-        bytes[8..].copy_from_slice(&hash_bytes(0x84222325cbf29ce4));
-        bytes[6] = (bytes[6] & 0x0f) | 0x80;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        Uuid::from_bytes(bytes).to_string()
+        // Old rollout entries may have renderable items but no persisted TurnStarted or
+        // turn_context ID. Seed the fallback from the known thread id when we have one; otherwise
+        // fall back to a per-history counter without inventing a misleading placeholder id.
+        match self.thread_id_seed.as_deref() {
+            Some(thread_id) => format!("codex-legacy-turn:{thread_id}:{synthetic_turn_index}"),
+            None => format!("codex-legacy-turn:{synthetic_turn_index}"),
+        }
     }
 
     fn upsert_item_in_turn_id(&mut self, turn_id: &str, item: ThreadItem) {
@@ -1310,7 +1343,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use std::time::Duration;
-    use uuid::Uuid;
 
     fn build_session_meta_line(thread_id: ThreadId) -> SessionMetaLine {
         SessionMetaLine {
@@ -1398,7 +1430,7 @@ mod tests {
         assert_eq!(turns.len(), 2);
 
         let first = &turns[0];
-        assert!(Uuid::parse_str(&first.id).is_ok());
+        assert_eq!(first.id, "codex-legacy-turn:0");
         assert_eq!(first.status, TurnStatus::Completed);
         assert_eq!(first.items.len(), 3);
         assert_eq!(
@@ -1435,8 +1467,7 @@ mod tests {
         );
 
         let second = &turns[1];
-        assert!(Uuid::parse_str(&second.id).is_ok());
-        assert_ne!(first.id, second.id);
+        assert_eq!(second.id, "codex-legacy-turn:1");
         assert_eq!(second.items.len(), 2);
         assert_eq!(
             second.items[0],
@@ -1515,6 +1546,64 @@ mod tests {
 
         assert_eq!(first_replay, second_replay);
         assert_ne!(first_replay[0].id, first_replay[1].id);
+    }
+
+    #[test]
+    fn caller_seeded_thread_id_is_used_for_legacy_implicit_turns() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "seeded".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "reply".into(),
+                phase: None,
+                memory_citation: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items_for_thread("thread-seed", &items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].id, "codex-legacy-turn:thread-seed:0");
+    }
+
+    #[test]
+    fn reset_preserves_live_thread_id_seed_and_synthetic_counter() {
+        let mut builder = ThreadHistoryBuilder::for_live("thread-seed".into());
+        builder.handle_event(&EventMsg::UserMessage(UserMessageEvent {
+            message: "first".into(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        }));
+
+        let first_turn_id = builder
+            .active_turn_snapshot()
+            .expect("active turn snapshot")
+            .id;
+        assert_eq!(first_turn_id, "codex-legacy-turn:thread-seed:0");
+
+        builder.handle_event(&EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: first_turn_id,
+            last_agent_message: None,
+        }));
+        assert!(!builder.has_active_turn());
+
+        builder.reset();
+        builder.handle_event(&EventMsg::UserMessage(UserMessageEvent {
+            message: "second".into(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        }));
+
+        let second_turn_id = builder
+            .active_turn_snapshot()
+            .expect("active turn snapshot")
+            .id;
+        assert_eq!(second_turn_id, "codex-legacy-turn:thread-seed:1");
     }
 
     #[test]
@@ -1855,8 +1944,8 @@ mod tests {
             .collect::<Vec<_>>();
         let turns = build_turns_from_rollout_items(&items);
         assert_eq!(turns.len(), 2);
-        assert!(Uuid::parse_str(&turns[0].id).is_ok());
-        assert!(Uuid::parse_str(&turns[1].id).is_ok());
+        assert_eq!(turns[0].id, "codex-legacy-turn:0");
+        assert_eq!(turns[1].id, "codex-legacy-turn:2");
         assert_ne!(turns[0].id, turns[1].id);
         assert_eq!(turns[0].status, TurnStatus::Completed);
         assert_eq!(turns[1].status, TurnStatus::Completed);

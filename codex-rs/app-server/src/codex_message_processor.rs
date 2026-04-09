@@ -174,7 +174,7 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
-use codex_app_server_protocol::build_turns_from_rollout_items;
+use codex_app_server_protocol::build_turns_from_rollout_items_for_thread;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -3507,7 +3507,8 @@ impl CodexMessageProcessor {
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_rollout_items_from_rollout(rollout_path).await {
                 Ok(items) => {
-                    thread.turns = build_turns_from_rollout_items(&items);
+                    thread.turns =
+                        build_turns_from_rollout_items_for_thread(thread.id.as_str(), &items);
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     self.send_invalid_request_error(
@@ -7096,7 +7097,7 @@ impl CodexMessageProcessor {
             if thread_state.listener_matches(&conversation) {
                 return;
             }
-            thread_state.set_listener(cancel_tx, &conversation)
+            thread_state.set_listener(cancel_tx, &conversation, &conversation_id)
         };
         let ListenerTaskContext {
             outgoing,
@@ -7689,7 +7690,7 @@ async fn populate_thread_turns(
         ThreadTurnSource::RolloutPath(rollout_path) => {
             read_rollout_items_from_rollout(rollout_path)
                 .await
-                .map(|items| build_turns_from_rollout_items(&items))
+                .map(|items| build_turns_from_rollout_items_for_thread(thread.id.as_str(), &items))
                 .map_err(|err| {
                     format!(
                         "failed to load rollout `{}` for thread {}: {err}",
@@ -7698,7 +7699,9 @@ async fn populate_thread_turns(
                     )
                 })?
         }
-        ThreadTurnSource::HistoryItems(items) => build_turns_from_rollout_items(items),
+        ThreadTurnSource::HistoryItems(items) => {
+            build_turns_from_rollout_items_for_thread(thread.id.as_str(), items)
+        }
     };
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());

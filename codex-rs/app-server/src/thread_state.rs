@@ -74,6 +74,7 @@ impl ThreadState {
         &mut self,
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
+        conversation_id: &ThreadId,
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
@@ -81,6 +82,7 @@ impl ThreadState {
         self.listener_generation = self.listener_generation.wrapping_add(1);
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         self.listener_command_tx = Some(listener_command_tx);
+        self.current_turn_history = ThreadHistoryBuilder::for_live(conversation_id.to_string());
         self.listener_thread = Some(Arc::downgrade(conversation));
         (listener_command_rx, self.listener_generation)
     }
@@ -90,7 +92,7 @@ impl ThreadState {
             let _ = cancel_tx.send(());
         }
         self.listener_command_tx = None;
-        self.current_turn_history.reset();
+        self.current_turn_history = ThreadHistoryBuilder::new();
         self.listener_thread = None;
     }
 

@@ -102,7 +102,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::build_turns_from_rollout_items;
+use codex_app_server_protocol::build_turns_from_rollout_items_for_thread;
 use codex_app_server_protocol::convert_patch_changes;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
@@ -1807,7 +1807,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                         let mut thread = summary_to_thread(summary);
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
-                                thread.turns = build_turns_from_rollout_items(&items);
+                                thread.turns = build_turns_from_rollout_items_for_thread(
+                                    thread.id.as_str(),
+                                    &items,
+                                );
                                 thread.status = thread_watch_manager
                                     .loaded_status_for_thread(&thread.id)
                                     .await;
