@@ -7,6 +7,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 
+use crate::remembered_context::REMEMBERED_CONTEXT_FRAGMENT;
+
 pub(crate) const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
 pub(crate) const USER_SHELL_COMMAND_CLOSE_TAG: &str = "</user_shell_command>";
 pub(crate) const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
@@ -39,6 +41,7 @@ const CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentDefinition] = &[
     USER_SHELL_COMMAND_FRAGMENT,
     TURN_ABORTED_FRAGMENT,
     SUBAGENT_NOTIFICATION_FRAGMENT,
+    REMEMBERED_CONTEXT_FRAGMENT,
 ];
 
 fn is_standard_contextual_user_text(text: &str) -> bool {
@@ -59,7 +62,9 @@ pub(crate) fn is_memory_excluded_contextual_user_fragment(content_item: &Content
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
-    AGENTS_MD_FRAGMENT.matches_text(text) || SKILL_FRAGMENT.matches_text(text)
+    AGENTS_MD_FRAGMENT.matches_text(text)
+        || SKILL_FRAGMENT.matches_text(text)
+        || REMEMBERED_CONTEXT_FRAGMENT.matches_text(text)
 }
 
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {

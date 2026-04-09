@@ -167,6 +167,15 @@ impl CodexThread {
         }
     }
 
+    /// Records one model-visible item without emitting turn lifecycle events or starting a turn.
+    pub async fn record_response_item_without_turn(&self, item: ResponseItem) {
+        let turn_context = self.codex.session.new_default_turn().await;
+        self.codex
+            .session
+            .record_conversation_items_silently(turn_context.as_ref(), &[item])
+            .await;
+    }
+
     /// Append a prebuilt message to the thread history without treating it as a user turn.
     ///
     /// If the thread already has an active turn, the message is queued as pending input for that

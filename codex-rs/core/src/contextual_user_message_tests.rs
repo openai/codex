@@ -52,6 +52,10 @@ fn classifies_memory_excluded_fragments() {
             "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
             false,
         ),
+        (
+            "<remembered_context>\nprevious thread context\n</remembered_context>",
+            true,
+        ),
     ];
 
     for (text, expected) in cases {
@@ -63,6 +67,13 @@ fn classifies_memory_excluded_fragments() {
             "{text}",
         );
     }
+}
+
+#[test]
+fn detects_remembered_context_fragment() {
+    assert!(is_contextual_user_fragment(&ContentItem::InputText {
+        text: "<remembered_context>\nprevious thread context\n</remembered_context>".to_string(),
+    }));
 }
 
 #[test]

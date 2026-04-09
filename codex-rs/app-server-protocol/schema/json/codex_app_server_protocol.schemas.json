@@ -609,6 +609,30 @@
             },
             "method": {
               "enum": [
+                "thread/remember"
+              ],
+              "title": "Thread/rememberRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRememberParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/rememberRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/list"
               ],
               "title": "Skills/listRequestMethod",
@@ -14038,6 +14062,46 @@
           "threadId"
         ],
         "title": "ThreadRealtimeTranscriptUpdatedNotification",
+        "type": "object"
+      },
+      "ThreadRememberParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "sourceThreadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceThreadIds",
+          "threadId"
+        ],
+        "title": "ThreadRememberParams",
+        "type": "object"
+      },
+      "ThreadRememberResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "contextPreview": {
+            "type": "string"
+          },
+          "rememberedThreadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "contextPreview",
+          "rememberedThreadIds"
+        ],
+        "title": "ThreadRememberResponse",
         "type": "object"
       },
       "ThreadResumeParams": {
