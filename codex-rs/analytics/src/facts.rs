@@ -67,16 +67,30 @@ pub struct SubAgentThreadStartedInput {
 #[serde(rename_all = "snake_case")]
 pub enum CompactionTrigger {
     Manual,
-    AutoPreTurn,
-    AutoMidTurn,
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReason {
+    UserRequested,
+    TokenLimit,
     ModelDownshift,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CompactionMode {
-    Local,
-    Remote,
+pub enum CompactionImplementation {
+    Responses,
+    ResponsesCompact,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionPhase {
+    StandaloneTurn,
+    PreTurn,
+    MidTurn,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -92,7 +106,9 @@ pub struct CodexCompactionEvent {
     pub thread_id: String,
     pub turn_id: String,
     pub trigger: CompactionTrigger,
-    pub mode: CompactionMode,
+    pub reason: CompactionReason,
+    pub implementation: CompactionImplementation,
+    pub phase: CompactionPhase,
     pub status: CompactionStatus,
     pub error: Option<String>,
     pub active_context_tokens_before: i64,

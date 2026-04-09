@@ -20,7 +20,9 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
-use crate::facts::CompactionMode;
+use crate::facts::CompactionImplementation;
+use crate::facts::CompactionPhase;
+use crate::facts::CompactionReason;
 use crate::facts::CompactionStatus;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
@@ -266,8 +268,10 @@ fn compaction_event_serializes_expected_shape() {
         event_params: crate::events::codex_compaction_event_params(CodexCompactionEvent {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-            trigger: CompactionTrigger::AutoMidTurn,
-            mode: CompactionMode::Remote,
+            trigger: CompactionTrigger::Auto,
+            reason: CompactionReason::TokenLimit,
+            implementation: CompactionImplementation::ResponsesCompact,
+            phase: CompactionPhase::MidTurn,
             status: CompactionStatus::Completed,
             error: None,
             active_context_tokens_before: 120_000,
@@ -287,8 +291,10 @@ fn compaction_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
-                "trigger": "auto_mid_turn",
-                "mode": "remote",
+                "trigger": "auto",
+                "reason": "token_limit",
+                "implementation": "responses_compact",
+                "phase": "mid_turn",
                 "status": "completed",
                 "error": null,
                 "active_context_tokens_before": 120000,
@@ -508,7 +514,9 @@ async fn compaction_event_ingests_custom_fact() {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-compact".to_string(),
                     trigger: CompactionTrigger::Manual,
-                    mode: CompactionMode::Local,
+                    reason: CompactionReason::UserRequested,
+                    implementation: CompactionImplementation::Responses,
+                    phase: CompactionPhase::StandaloneTurn,
                     status: CompactionStatus::Failed,
                     error: Some("context limit exceeded".to_string()),
                     active_context_tokens_before: 131_000,
@@ -528,7 +536,9 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
     assert_eq!(payload[0]["event_params"]["turn_id"], "turn-compact");
     assert_eq!(payload[0]["event_params"]["trigger"], "manual");
-    assert_eq!(payload[0]["event_params"]["mode"], "local");
+    assert_eq!(payload[0]["event_params"]["reason"], "user_requested");
+    assert_eq!(payload[0]["event_params"]["implementation"], "responses");
+    assert_eq!(payload[0]["event_params"]["phase"], "standalone_turn");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
 }
 

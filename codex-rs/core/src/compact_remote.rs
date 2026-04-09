@@ -13,7 +13,9 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::context_manager::is_codex_generated_item;
-use codex_analytics::CompactionMode;
+use codex_analytics::CompactionImplementation;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -33,9 +35,18 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
-    trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection, trigger).await?;
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        initial_context_injection,
+        CompactionTrigger::Auto,
+        reason,
+        phase,
+    )
+    .await?;
     Ok(())
 }
 
@@ -56,6 +67,8 @@ pub(crate) async fn run_remote_compact_task(
         &turn_context,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
+        CompactionReason::UserRequested,
+        CompactionPhase::StandaloneTurn,
     )
     .await
 }
@@ -65,12 +78,16 @@ async fn run_remote_compact_task_inner(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
         trigger,
-        CompactionMode::Remote,
+        reason,
+        CompactionImplementation::ResponsesCompact,
+        phase,
     )
     .await;
     let result =

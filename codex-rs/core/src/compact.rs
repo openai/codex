@@ -13,7 +13,9 @@ use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
-use codex_analytics::CompactionMode;
+use codex_analytics::CompactionImplementation;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
 use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionTrigger;
 use codex_features::Feature;
@@ -63,7 +65,8 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
-    trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -77,7 +80,9 @@ pub(crate) async fn run_inline_auto_compact_task(
         turn_context,
         input,
         initial_context_injection,
-        trigger,
+        CompactionTrigger::Auto,
+        reason,
+        phase,
     )
     .await?;
     Ok(())
@@ -101,6 +106,8 @@ pub(crate) async fn run_compact_task(
         input,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
+        CompactionReason::UserRequested,
+        CompactionPhase::StandaloneTurn,
     )
     .await
 }
@@ -111,12 +118,16 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
         trigger,
-        CompactionMode::Local,
+        reason,
+        CompactionImplementation::Responses,
+        phase,
     )
     .await;
     let result = run_compact_task_inner_impl(
@@ -286,7 +297,9 @@ pub(crate) struct CompactionAnalyticsAttempt {
     thread_id: String,
     turn_id: String,
     trigger: CompactionTrigger,
-    mode: CompactionMode,
+    reason: CompactionReason,
+    implementation: CompactionImplementation,
+    phase: CompactionPhase,
     active_context_tokens_before: i64,
     started_at: u64,
     start_instant: Instant,
@@ -297,7 +310,9 @@ impl CompactionAnalyticsAttempt {
         sess: &Session,
         turn_context: &TurnContext,
         trigger: CompactionTrigger,
-        mode: CompactionMode,
+        reason: CompactionReason,
+        implementation: CompactionImplementation,
+        phase: CompactionPhase,
     ) -> Self {
         let enabled = sess.enabled(Feature::GeneralAnalytics);
         let active_context_tokens_before = if enabled {
@@ -310,7 +325,9 @@ impl CompactionAnalyticsAttempt {
             thread_id: sess.conversation_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             trigger,
-            mode,
+            reason,
+            implementation,
+            phase,
             active_context_tokens_before,
             started_at: now_unix_seconds(),
             start_instant: Instant::now(),
@@ -333,7 +350,9 @@ impl CompactionAnalyticsAttempt {
                 thread_id: self.thread_id,
                 turn_id: self.turn_id,
                 trigger: self.trigger,
-                mode: self.mode,
+                reason: self.reason,
+                implementation: self.implementation,
+                phase: self.phase,
                 status,
                 error,
                 active_context_tokens_before: self.active_context_tokens_before,
