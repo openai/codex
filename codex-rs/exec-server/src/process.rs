@@ -7,6 +7,7 @@ use crate::ExecServerError;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::ResolveExecApprovalResponse;
 use crate::protocol::WriteResponse;
 
 pub struct StartedExecProcess {
@@ -29,6 +30,12 @@ pub trait ExecProcess: Send + Sync {
     async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError>;
 
     async fn terminate(&self) -> Result<(), ExecServerError>;
+
+    async fn resolve_exec_approval(
+        &self,
+        approval_id: String,
+        decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
+    ) -> Result<ResolveExecApprovalResponse, ExecServerError>;
 }
 
 #[async_trait]

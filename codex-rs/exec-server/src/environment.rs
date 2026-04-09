@@ -291,6 +291,7 @@ mod tests {
                 env: Default::default(),
                 tty: false,
                 arg0: None,
+                startup_exec_approval: None,
             })
             .await
             .expect("start process");
