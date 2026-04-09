@@ -432,6 +432,7 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
             session_id: started.session_id.clone(),
             event_parser: RealtimeEventParser::RealtimeV2,
             session_mode: RealtimeSessionMode::Conversational,
+            voice: RealtimeVoice::Marin,
         })?
     });
     assert_eq!(connections[1][0].body_json(), expected_session_update);
@@ -515,6 +516,7 @@ async fn conversation_start_v1_without_model_override_preserves_provider_default
             session_id: started.session_id.clone(),
             event_parser: RealtimeEventParser::V1,
             session_mode: RealtimeSessionMode::Conversational,
+            voice: RealtimeVoice::Cove,
         })?
     });
     assert_eq!(connections[1][0].body_json(), expected_session_update);
@@ -601,6 +603,7 @@ async fn conversation_start_v2_with_provider_model_preserves_provider_default() 
             session_id: started.session_id.clone(),
             event_parser: RealtimeEventParser::RealtimeV2,
             session_mode: RealtimeSessionMode::Conversational,
+            voice: RealtimeVoice::Marin,
         })?
     });
     assert_eq!(connections[1][0].body_json(), expected_session_update);
@@ -684,6 +687,7 @@ async fn conversation_start_v2_with_base_url_model_preserves_provider_default() 
             session_id: started.session_id.clone(),
             event_parser: RealtimeEventParser::RealtimeV2,
             session_mode: RealtimeSessionMode::Conversational,
+            voice: RealtimeVoice::Marin,
         })?
     });
     assert_eq!(connections[1][0].body_json(), expected_session_update);
@@ -913,6 +917,7 @@ async fn conversation_webrtc_start_defaults_to_gpt_realtime_1_5() -> Result<()> 
         session_id: Some("ignored".to_string()),
         event_parser: RealtimeEventParser::RealtimeV2,
         session_mode: RealtimeSessionMode::Conversational,
+        voice: RealtimeVoice::Marin,
     })?;
     session
         .as_object_mut()

@@ -647,9 +647,7 @@ fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> 
         voice.wire_name()
     )))
 }
-fn realtime_base_url_pins_model(base_url: &str) -> bool {
-    Url::parse(base_url).is_ok_and(|url| url.query_pairs().any(|(key, _)| key == "model"))
-}
+
 async fn handle_start_inner(
     sess: &Arc<Session>,
     sub_id: &str,
