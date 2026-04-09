@@ -222,6 +222,7 @@ pub(super) async fn make_chatwidget_manual(
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
+        interrupt_requested_for_turn: false,
         mcp_startup_expected_servers: None,
         mcp_startup_ignore_updates_until_next_start: false,
         mcp_startup_allow_terminal_only_next_round: false,

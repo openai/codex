@@ -182,6 +182,8 @@ pub enum Feature {
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
+    /// Speculatively re-render table holdback tail with uncommitted source.
+    StreamTableLiveTailReflow,
     /// Legacy rollout flag for Responses API WebSocket transport experiments.
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
@@ -895,6 +897,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         } else {
             Stage::UnderDevelopment
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::StreamTableLiveTailReflow,
+        key: "stream_table_live_tail_reflow",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

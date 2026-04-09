@@ -65,6 +65,12 @@ impl RealtimeAudioDeviceKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsolidationScrollbackReflow {
+    IfResizeReflowRan,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
@@ -287,6 +293,32 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
+    /// the transcript with a single `AgentMarkdownCell` that stores the raw
+    /// markdown source and re-renders from it on resize.
+    ///
+    /// Emitted by `ChatWidget::flush_answer_stream_with_separator` after stream
+    /// finalization. The `App` handler walks backward through `transcript_cells`
+    /// to find the `AgentMessageCell` run and splices in the consolidated cell.
+    /// The `cwd` keeps local file-link display stable across the final re-render.
+    /// `scrollback_reflow` lets table-tail finalization force the already-emitted
+    /// terminal scrollback to be rebuilt from the consolidated source-backed cell.
+    /// `deferred_history_cell` lets callers add the final stream tail to the
+    /// transcript without first writing its provisional render to scrollback.
+    ConsolidateAgentMessage {
+        source: String,
+        cwd: PathBuf,
+        scrollback_reflow: ConsolidationScrollbackReflow,
+        deferred_history_cell: Option<Box<dyn HistoryCell>>,
+    },
+
+    /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
+    /// end of the transcript with a single source-backed `ProposedPlanCell`.
+    ///
+    /// Emitted by `ChatWidget::on_plan_item_completed` after plan stream
+    /// finalization.
+    ConsolidateProposedPlan(String),
 
     /// Apply rollback semantics to local transcript cells.
     ///
