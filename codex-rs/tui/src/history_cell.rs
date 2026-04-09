@@ -64,6 +64,11 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookOutputEntry;
+use codex_protocol::protocol::HookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -1752,6 +1757,269 @@ fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
+}
+
+#[derive(Debug)]
+pub(crate) struct HookCell {
+    runs: Vec<HookRunCell>,
+    animations_enabled: bool,
+}
+
+const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(300);
+
+#[derive(Debug)]
+struct HookRunCell {
+    id: String,
+    event_name: HookEventName,
+    status_message: Option<String>,
+    start_time: Option<Instant>,
+    completed: Option<CompletedHookRun>,
+    quiet_removal_deadline: Option<Instant>,
+}
+
+#[derive(Debug)]
+struct CompletedHookRun {
+    status: HookRunStatus,
+    entries: Vec<HookOutputEntry>,
+}
+
+impl HookCell {
+    pub(crate) fn new(run: HookRunSummary, animations_enabled: bool) -> Self {
+        let mut cell = Self {
+            runs: Vec::new(),
+            animations_enabled,
+        };
+        cell.start_run(run);
+        cell
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.runs.iter().any(|run| run.completed.is_none())
+    }
+
+    pub(crate) fn should_flush(&self) -> bool {
+        !self.is_active() && !self.is_empty()
+    }
+
+    pub(crate) fn start_run(&mut self, run: HookRunSummary) {
+        if let Some(existing) = self.runs.iter_mut().find(|existing| existing.id == run.id) {
+            existing.event_name = run.event_name;
+            existing.status_message = run.status_message;
+            existing.start_time = Some(Instant::now());
+            existing.completed = None;
+            existing.quiet_removal_deadline = None;
+            return;
+        }
+        self.runs.push(HookRunCell {
+            id: run.id,
+            event_name: run.event_name,
+            status_message: run.status_message,
+            start_time: Some(Instant::now()),
+            completed: None,
+            quiet_removal_deadline: None,
+        });
+    }
+
+    /// Completes a run and returns whether the run was already present in this cell.
+    pub(crate) fn complete_run(&mut self, run: HookRunSummary) -> bool {
+        let Some(index) = self.runs.iter().position(|existing| existing.id == run.id) else {
+            return false;
+        };
+        if hook_run_is_quiet_success(&run) {
+            if let Some(deadline) = self.runs[index].quiet_removal_deadline_after_complete() {
+                self.runs[index].quiet_removal_deadline = Some(deadline);
+            } else {
+                self.runs.remove(index);
+            }
+            return true;
+        }
+        let existing = &mut self.runs[index];
+        existing.event_name = run.event_name;
+        existing.status_message = run.status_message;
+        existing.start_time = None;
+        existing.completed = Some(CompletedHookRun {
+            status: run.status,
+            entries: run.entries,
+        });
+        existing.quiet_removal_deadline = None;
+        true
+    }
+
+    pub(crate) fn add_completed_run(&mut self, run: HookRunSummary) {
+        if hook_run_is_quiet_success(&run) {
+            return;
+        }
+        self.runs.push(HookRunCell {
+            id: run.id,
+            event_name: run.event_name,
+            status_message: run.status_message,
+            start_time: None,
+            completed: Some(CompletedHookRun {
+                status: run.status,
+                entries: run.entries,
+            }),
+            quiet_removal_deadline: None,
+        });
+    }
+
+    pub(crate) fn prune_expired_quiet_runs(&mut self, now: Instant) -> bool {
+        let old_len = self.runs.len();
+        self.runs.retain(|run| {
+            run.quiet_removal_deadline
+                .map(|deadline| now < deadline)
+                .unwrap_or(true)
+        });
+        self.runs.len() != old_len
+    }
+
+    pub(crate) fn next_quiet_removal_deadline(&self) -> Option<Instant> {
+        self.runs
+            .iter()
+            .filter_map(|run| run.quiet_removal_deadline)
+            .min()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_quiet_runs_now_for_test(&mut self) {
+        for run in &mut self.runs {
+            if run.quiet_removal_deadline.is_some() {
+                run.quiet_removal_deadline = Some(Instant::now());
+            }
+        }
+    }
+
+    fn display_lines_inner(&self) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for run in &self.runs {
+            if !lines.is_empty() {
+                lines.push("".into());
+            }
+            run.push_display_lines(&mut lines, self.animations_enabled);
+        }
+        lines
+    }
+}
+
+impl HistoryCell for HookCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.display_lines_inner()
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.display_lines(width)
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        let elapsed = self
+            .runs
+            .iter()
+            .find_map(|run| run.completed.is_none().then_some(run.start_time).flatten())?
+            .elapsed();
+        Some(elapsed.as_millis() as u64 / 600)
+    }
+}
+
+impl Renderable for HookCell {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let lines = self.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        paragraph.render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        HistoryCell::desired_height(self, width)
+    }
+}
+
+impl HookRunCell {
+    fn quiet_removal_deadline_after_complete(&self) -> Option<Instant> {
+        let start_time = self.start_time?;
+        let minimum_deadline = start_time + QUIET_HOOK_MIN_VISIBLE;
+        (Instant::now() < minimum_deadline).then_some(minimum_deadline)
+    }
+
+    fn push_display_lines(&self, lines: &mut Vec<Line<'static>>, animations_enabled: bool) {
+        let label = hook_event_label(self.event_name);
+        match &self.completed {
+            Some(completed) => {
+                let status = format!("{:?}", completed.status).to_lowercase();
+                let bullet = match completed.status {
+                    HookRunStatus::Completed => "•".green().bold(),
+                    HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => {
+                        "•".red().bold()
+                    }
+                    HookRunStatus::Running => "•".into(),
+                };
+                lines.push(
+                    vec![
+                        bullet,
+                        " ".into(),
+                        format!("{label} hook ({status})").into(),
+                    ]
+                    .into(),
+                );
+                for entry in &completed.entries {
+                    lines
+                        .push(format!("  {}{}", hook_output_prefix(entry.kind), entry.text).into());
+                }
+            }
+            None => {
+                let mut header = vec![
+                    spinner(self.start_time, animations_enabled),
+                    " ".into(),
+                    format!("Running {label} hook").bold(),
+                ];
+                if let Some(status_message) = &self.status_message
+                    && !status_message.is_empty()
+                {
+                    header.push(": ".into());
+                    header.push(status_message.clone().dim());
+                }
+                lines.push(header.into());
+            }
+        }
+    }
+}
+
+pub(crate) fn new_active_hook_cell(run: HookRunSummary, animations_enabled: bool) -> HookCell {
+    HookCell::new(run, animations_enabled)
+}
+
+pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: bool) -> HookCell {
+    let mut cell = HookCell {
+        runs: Vec::new(),
+        animations_enabled,
+    };
+    cell.add_completed_run(run);
+    cell
+}
+
+fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
+    run.status == HookRunStatus::Completed && run.entries.is_empty()
+}
+
+fn hook_output_prefix(kind: HookOutputEntryKind) -> &'static str {
+    match kind {
+        HookOutputEntryKind::Warning => "warning: ",
+        HookOutputEntryKind::Stop => "stop: ",
+        HookOutputEntryKind::Feedback => "feedback: ",
+        HookOutputEntryKind::Context => "hook context: ",
+        HookOutputEntryKind::Error => "error: ",
+    }
+}
+
+fn hook_event_label(event_name: HookEventName) -> &'static str {
+    match event_name {
+        HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::SessionStart => "SessionStart",
+        HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::Stop => "Stop",
+    }
 }
 
 #[derive(Debug)]

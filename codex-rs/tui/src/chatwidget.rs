@@ -330,6 +330,7 @@ use crate::history_cell;
 #[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HookCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
@@ -832,6 +833,8 @@ pub(crate) struct ChatWidget {
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
+    // Active hook runs render in a dedicated live cell so they can run alongside tools.
+    active_hook_cell: Option<HookCell>,
     // Semantic status used for terminal-title status rendering.
     terminal_title_status_kind: TerminalTitleStatusKind,
     // Previous status header to restore after a transient stream retry.
@@ -2293,6 +2296,7 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.retry_status_header = None;
+        self.active_hook_cell = None;
         self.pending_status_indicator_restore = false;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
@@ -3946,34 +3950,90 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
-        let label = hook_event_label(event.run.event_name);
-        let mut message = format!("Running {label} hook");
-        if let Some(status_message) = event.run.status_message
-            && !status_message.is_empty()
-        {
-            message.push_str(": ");
-            message.push_str(&status_message);
+        self.flush_answer_stream_with_separator();
+        match self.active_hook_cell.as_mut() {
+            Some(cell) => {
+                cell.start_run(event.run);
+                self.bump_active_cell_revision();
+            }
+            None => {
+                self.active_hook_cell = Some(history_cell::new_active_hook_cell(
+                    event.run,
+                    self.config.animations,
+                ));
+                self.bump_active_cell_revision();
+            }
         }
-        self.add_to_history(history_cell::new_info_event(message, /*hint*/ None));
         self.request_redraw();
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
-        let status = format!("{:?}", event.run.status).to_lowercase();
-        let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
-        let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
-        for entry in event.run.entries {
-            let prefix = match entry.kind {
-                codex_protocol::protocol::HookOutputEntryKind::Warning => "warning: ",
-                codex_protocol::protocol::HookOutputEntryKind::Stop => "stop: ",
-                codex_protocol::protocol::HookOutputEntryKind::Feedback => "feedback: ",
-                codex_protocol::protocol::HookOutputEntryKind::Context => "hook context: ",
-                codex_protocol::protocol::HookOutputEntryKind::Error => "error: ",
-            };
-            lines.push(format!("  {prefix}{}", entry.text).into());
+        let completed = event.run;
+        let completed_existing_run = self
+            .active_hook_cell
+            .as_mut()
+            .map(|cell| cell.complete_run(completed.clone()))
+            .unwrap_or(false);
+        if completed_existing_run {
+            self.bump_active_cell_revision();
+        } else {
+            match self.active_hook_cell.as_mut() {
+                Some(cell) => {
+                    cell.add_completed_run(completed);
+                    self.bump_active_cell_revision();
+                }
+                None => {
+                    let cell =
+                        history_cell::new_completed_hook_cell(completed, self.config.animations);
+                    if !cell.is_empty() {
+                        self.active_hook_cell = Some(cell);
+                        self.bump_active_cell_revision();
+                    }
+                }
+            }
         }
-        self.add_to_history(PlainHistoryCell::new(lines));
+        self.finish_active_hook_cell_if_idle();
         self.request_redraw();
+    }
+
+    fn finish_active_hook_cell_if_idle(&mut self) {
+        let Some(cell) = self.active_hook_cell.as_ref() else {
+            return;
+        };
+        if cell.is_empty() {
+            self.active_hook_cell = None;
+            self.bump_active_cell_revision();
+            return;
+        }
+        if cell.should_flush()
+            && let Some(cell) = self.active_hook_cell.take()
+        {
+            self.needs_final_message_separator = true;
+            self.app_event_tx
+                .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        }
+    }
+
+    fn prune_expired_quiet_hook_runs(&mut self) {
+        let Some(cell) = self.active_hook_cell.as_mut() else {
+            return;
+        };
+        if cell.prune_expired_quiet_runs(Instant::now()) {
+            self.bump_active_cell_revision();
+        }
+        self.finish_active_hook_cell_if_idle();
+    }
+
+    fn schedule_quiet_hook_removal_if_needed(&self) {
+        let Some(deadline) = self
+            .active_hook_cell
+            .as_ref()
+            .and_then(HookCell::next_quiet_removal_deadline)
+        else {
+            return;
+        };
+        let delay = deadline.saturating_duration_since(Instant::now());
+        self.frame_requester.schedule_frame_in(delay);
     }
 
     #[cfg(test)]
@@ -4023,6 +4083,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn pre_draw_tick(&mut self) {
+        self.prune_expired_quiet_hook_runs();
+        self.schedule_quiet_hook_removal_if_needed();
         self.bottom_pane.pre_draw_tick();
         if self.should_animate_terminal_title_spinner() {
             self.refresh_terminal_title();
@@ -4670,6 +4732,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            active_hook_cell: None,
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
@@ -10810,11 +10873,21 @@ impl ChatWidget {
     /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
     /// the main viewport updates.
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
-        let cell = self.active_cell.as_ref()?;
+        let cell = self.active_cell.as_ref();
+        let hook_cell = self.active_hook_cell.as_ref();
+        if cell.is_none() && hook_cell.is_none() {
+            return None;
+        }
         Some(ActiveCellTranscriptKey {
             revision: self.active_cell_revision,
-            is_stream_continuation: cell.is_stream_continuation(),
-            animation_tick: cell.transcript_animation_tick(),
+            is_stream_continuation: cell
+                .map(|cell| cell.is_stream_continuation())
+                .unwrap_or(false),
+            animation_tick: cell
+                .and_then(|cell| cell.transcript_animation_tick())
+                .or_else(|| {
+                    hook_cell.and_then(super::history_cell::HistoryCell::transcript_animation_tick)
+                }),
         })
     }
 
@@ -10825,8 +10898,16 @@ impl ChatWidget {
     /// should pass the same width the overlay uses; using a different width will cause wrapping
     /// mismatches between the main viewport and the transcript overlay.
     pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
-        let cell = self.active_cell.as_ref()?;
-        let lines = cell.transcript_lines(width);
+        let mut lines = Vec::new();
+        if let Some(cell) = self.active_cell.as_ref() {
+            lines.extend(cell.transcript_lines(width));
+        }
+        if let Some(hook_cell) = self.active_hook_cell.as_ref() {
+            if !lines.is_empty() {
+                lines.push("".into());
+            }
+            lines.extend(hook_cell.transcript_lines(width));
+        }
         (!lines.is_empty()).then_some(lines)
     }
 
@@ -10852,8 +10933,15 @@ impl ChatWidget {
             )),
             None => RenderableItem::Owned(Box::new(())),
         };
+        let active_hook_cell_renderable = match &self.active_hook_cell {
+            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(
+                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+            )),
+            None => RenderableItem::Owned(Box::new(())),
+        };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        flex.push(/*flex*/ 0, active_hook_cell_renderable);
         flex.push(
             /*flex*/ 0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(
@@ -11080,16 +11168,6 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
-}
-
-fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
-    match event_name {
-        codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
-        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
-        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
-        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
-        codex_protocol::protocol::HookEventName::Stop => "Stop",
-    }
 }
 
 #[cfg(test)]

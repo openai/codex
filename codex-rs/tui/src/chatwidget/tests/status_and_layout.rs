@@ -1389,6 +1389,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
         "user_prompt_submit_app_server_hook_notifications_render_snapshot",
         combined
     );
+    assert!(!chat.bottom_pane.status_indicator_visible());
 }
 
 #[tokio::test]
@@ -1414,6 +1415,208 @@ async fn post_tool_use_hook_events_render_snapshot() {
 }
 
 #[tokio::test]
+async fn completed_hook_with_no_entries_stays_out_of_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "hook-1".into(),
+        msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
+            turn_id: None,
+            run: codex_protocol::protocol::HookRunSummary {
+                id: "post-tool-use:0:/tmp/hooks.json".to_string(),
+                event_name: codex_protocol::protocol::HookEventName::PostToolUse,
+                handler_type: codex_protocol::protocol::HookHandlerType::Command,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+                scope: codex_protocol::protocol::HookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: codex_protocol::protocol::HookRunStatus::Running,
+                status_message: None,
+                started_at: 1,
+                completed_at: None,
+                duration_ms: None,
+                entries: Vec::new(),
+            },
+        }),
+    });
+    assert!(drain_insert_history(&mut rx).is_empty());
+    let running_snapshot = hook_live_and_history_snapshot(&chat, "running", "");
+
+    chat.handle_codex_event(Event {
+        id: "hook-1".into(),
+        msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
+            turn_id: None,
+            run: codex_protocol::protocol::HookRunSummary {
+                id: "post-tool-use:0:/tmp/hooks.json".to_string(),
+                event_name: codex_protocol::protocol::HookEventName::PostToolUse,
+                handler_type: codex_protocol::protocol::HookHandlerType::Command,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+                scope: codex_protocol::protocol::HookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: codex_protocol::protocol::HookRunStatus::Completed,
+                status_message: None,
+                started_at: 1,
+                completed_at: Some(2),
+                duration_ms: Some(1),
+                entries: Vec::new(),
+            },
+        }),
+    });
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    let completed_lingering_snapshot =
+        hook_live_and_history_snapshot(&chat, "completed lingering", "");
+    expire_quiet_hook_linger(&mut chat);
+    let completed_snapshot = hook_live_and_history_snapshot(&chat, "completed after linger", "");
+    assert_chatwidget_snapshot!(
+        "hook_live_running_then_quiet_completed_snapshot",
+        format!("{running_snapshot}\n\n{completed_lingering_snapshot}\n\n{completed_snapshot}")
+    );
+}
+
+#[tokio::test]
+async fn blocked_and_failed_hooks_render_feedback_and_errors() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(hook_completed_event(
+        "pre-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        codex_protocol::protocol::HookRunStatus::Blocked,
+        vec![codex_protocol::protocol::HookOutputEntry {
+            kind: codex_protocol::protocol::HookOutputEntryKind::Feedback,
+            text: "run tests before touching the fixture".to_string(),
+        }],
+    ));
+    chat.handle_codex_event(hook_completed_event(
+        "post-tool-use:1:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        codex_protocol::protocol::HookRunStatus::Failed,
+        vec![codex_protocol::protocol::HookOutputEntry {
+            kind: codex_protocol::protocol::HookOutputEntryKind::Error,
+            text: "hook exited with code 7".to_string(),
+        }],
+    ));
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!("hook_blocked_failed_feedback_history_snapshot", rendered);
+    assert!(
+        rendered.contains(
+            "PreToolUse hook (blocked)\n  feedback: run tests before touching the fixture"
+        ),
+        "expected blocked hook feedback: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("PostToolUse hook (failed)\n  error: hook exited with code 7"),
+        "expected failed hook error: {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_status_header("Thinking".to_string());
+    chat.bottom_pane.ensure_status_indicator();
+
+    chat.handle_codex_event(hook_started_event(
+        "pre-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        Some("checking command policy"),
+    ));
+    assert_eq!(chat.current_status.header, "Thinking");
+    let first_running_snapshot = hook_live_and_history_snapshot(&chat, "pre running", "");
+
+    chat.handle_codex_event(hook_started_event(
+        "post-tool-use:1:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        Some("checking output policy"),
+    ));
+    assert_eq!(chat.current_status.header, "Thinking");
+    let second_running_snapshot = hook_live_and_history_snapshot(&chat, "post running", "");
+
+    chat.handle_codex_event(hook_completed_event(
+        "pre-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        codex_protocol::protocol::HookRunStatus::Completed,
+        Vec::new(),
+    ));
+    assert_eq!(chat.current_status.header, "Thinking");
+    let older_completed_snapshot =
+        hook_live_and_history_snapshot(&chat, "pre completed lingering", "");
+    expire_quiet_hook_linger(&mut chat);
+    let older_completed_expired_snapshot =
+        hook_live_and_history_snapshot(&chat, "pre completed after linger", "");
+
+    chat.handle_codex_event(hook_completed_event(
+        "post-tool-use:1:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        codex_protocol::protocol::HookRunStatus::Completed,
+        Vec::new(),
+    ));
+    assert_eq!(chat.current_status.header, "Thinking");
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert!(drain_insert_history(&mut rx).is_empty());
+    let all_completed_lingering_snapshot =
+        hook_live_and_history_snapshot(&chat, "all completed lingering", "");
+    expire_quiet_hook_linger(&mut chat);
+    let all_completed_snapshot = hook_live_and_history_snapshot(&chat, "all completed", "");
+    assert_chatwidget_snapshot!(
+        "overlapping_hook_live_cell_snapshot",
+        format!(
+            "{first_running_snapshot}\n\n{second_running_snapshot}\n\n{older_completed_snapshot}\n\n{older_completed_expired_snapshot}\n\n{all_completed_lingering_snapshot}\n\n{all_completed_snapshot}"
+        )
+    );
+}
+
+#[tokio::test]
+async fn running_hook_does_not_displace_active_exec_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let begin = begin_exec(&mut chat, "call-1", "echo done");
+    let exec_running = active_blob(&chat);
+
+    chat.handle_codex_event(hook_started_event(
+        "post-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        Some("checking output policy"),
+    ));
+    let exec_and_hook_running = format!(
+        "active exec:\n{}active hooks:\n{}",
+        active_blob(&chat),
+        active_hook_blob(&chat)
+    );
+
+    end_exec(&mut chat, begin, "done", "", /*exit_code*/ 0);
+    let history_after_exec = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let hook_running_after_exec = active_hook_blob(&chat);
+
+    chat.handle_codex_event(hook_completed_event(
+        "post-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        codex_protocol::protocol::HookRunStatus::Completed,
+        Vec::new(),
+    ));
+    assert!(drain_insert_history(&mut rx).is_empty());
+    let quiet_hook_completed_lingering = active_hook_blob(&chat);
+    expire_quiet_hook_linger(&mut chat);
+    let quiet_hook_completed = active_hook_blob(&chat);
+
+    assert_chatwidget_snapshot!(
+        "hook_runs_while_exec_active_snapshot",
+        format!(
+            "exec running:\n{exec_running}\nexec and hook running:\n{exec_and_hook_running}\nhistory after exec:\n{history_after_exec}\nhook running after exec:\n{hook_running_after_exec}\nquiet hook completed lingering:\n{quiet_hook_completed_lingering}\nquiet hook completed:\n{quiet_hook_completed}"
+        )
+    );
+}
+
+#[tokio::test]
 async fn session_start_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
         codex_protocol::protocol::HookEventName::SessionStart,
@@ -1422,6 +1625,77 @@ async fn session_start_hook_events_render_snapshot() {
         "session_start_hook_events_render_snapshot",
     )
     .await;
+}
+
+fn hook_started_event(
+    id: &str,
+    event_name: codex_protocol::protocol::HookEventName,
+    status_message: Option<&str>,
+) -> Event {
+    Event {
+        id: id.to_string(),
+        msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
+            turn_id: None,
+            run: hook_run_summary(
+                id,
+                event_name,
+                codex_protocol::protocol::HookRunStatus::Running,
+                status_message,
+                Vec::new(),
+            ),
+        }),
+    }
+}
+
+fn hook_completed_event(
+    id: &str,
+    event_name: codex_protocol::protocol::HookEventName,
+    status: codex_protocol::protocol::HookRunStatus,
+    entries: Vec<codex_protocol::protocol::HookOutputEntry>,
+) -> Event {
+    Event {
+        id: id.to_string(),
+        msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
+            turn_id: None,
+            run: hook_run_summary(id, event_name, status, None, entries),
+        }),
+    }
+}
+
+fn hook_run_summary(
+    id: &str,
+    event_name: codex_protocol::protocol::HookEventName,
+    status: codex_protocol::protocol::HookRunStatus,
+    status_message: Option<&str>,
+    entries: Vec<codex_protocol::protocol::HookOutputEntry>,
+) -> codex_protocol::protocol::HookRunSummary {
+    codex_protocol::protocol::HookRunSummary {
+        id: id.to_string(),
+        event_name,
+        handler_type: codex_protocol::protocol::HookHandlerType::Command,
+        execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+        scope: codex_protocol::protocol::HookScope::Turn,
+        source_path: PathBuf::from("/tmp/hooks.json"),
+        display_order: 0,
+        status,
+        status_message: status_message.map(str::to_string),
+        started_at: 1,
+        completed_at: (status != codex_protocol::protocol::HookRunStatus::Running).then_some(2),
+        duration_ms: (status != codex_protocol::protocol::HookRunStatus::Running).then_some(1),
+        entries,
+    }
+}
+
+fn hook_live_and_history_snapshot(chat: &ChatWidget, phase: &str, history: &str) -> String {
+    let history = if history.is_empty() {
+        "<empty>"
+    } else {
+        history
+    };
+    format!(
+        "{phase}\nlive hooks:\n{}history:\n{history}",
+        active_hook_blob(chat),
+    )
 }
 
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
