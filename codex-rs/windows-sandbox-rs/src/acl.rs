@@ -4,10 +4,12 @@ use anyhow::Result;
 use std::ffi::c_void;
 use std::path::Path;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::AclSizeInformation;
 use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
@@ -21,6 +23,7 @@ use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::EqualSid;
 use windows_sys::Win32::Security::GetAce;
 use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::MapGenericMask;
 use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
 use windows_sys::Win32::Security::ACE_HEADER;
@@ -28,6 +31,8 @@ use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::GENERIC_MAPPING;
+use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::SID_NAME_USE;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
@@ -327,7 +332,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
                 if !p_sd.is_null() {
                     LocalFree(p_sd as HLOCAL);
                 }
-                return Err(anyhow!("SetNamedSecurityInfoW failed: {code3}"));
+                return Err(set_named_security_info_error(path, code3));
             }
         } else {
             if !p_sd.is_null() {
@@ -340,6 +345,95 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
         LocalFree(p_sd as HLOCAL);
     }
     Ok(added)
+}
+
+fn set_named_security_info_error(path: &Path, code: u32) -> anyhow::Error {
+    let mut message = format!(
+        "SetNamedSecurityInfoW failed: {code} while updating DACL for {}",
+        path.display()
+    );
+    let owner = unsafe { path_owner_account(path) };
+    if let Some(owner) = owner.as_deref() {
+        message.push_str(&format!(" (owner: {owner})"));
+    }
+    if owner
+        .as_deref()
+        .is_some_and(|owner| owner.contains("CodexSandbox"))
+    {
+        message.push_str(
+            "; this path is owned by a Codex sandbox helper account. Repair workspace ownership from an Administrator shell (for example: takeown /F <workspace> /R /D Y; icacls <workspace> /setowner <your-user> /T /C), then retry.",
+        );
+    }
+    anyhow!(message)
+}
+
+unsafe fn path_owner_account(path: &Path) -> Option<String> {
+    let mut owner: *mut c_void = std::ptr::null_mut();
+    let mut sd: *mut c_void = std::ptr::null_mut();
+    let code = GetNamedSecurityInfoW(
+        to_wide(path).as_ptr(),
+        1,
+        OWNER_SECURITY_INFORMATION,
+        &mut owner,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        &mut sd,
+    );
+    if code != ERROR_SUCCESS {
+        return None;
+    }
+
+    let account = account_name_from_sid(owner);
+    if !sd.is_null() {
+        LocalFree(sd as HLOCAL);
+    }
+    account
+}
+
+unsafe fn account_name_from_sid(sid: *mut c_void) -> Option<String> {
+    if sid.is_null() {
+        return None;
+    }
+
+    let mut name_len: u32 = 0;
+    let mut domain_len: u32 = 0;
+    let mut use_type: SID_NAME_USE = 0;
+    let ok = LookupAccountSidW(
+        std::ptr::null(),
+        sid,
+        std::ptr::null_mut(),
+        &mut name_len,
+        std::ptr::null_mut(),
+        &mut domain_len,
+        &mut use_type,
+    );
+    if ok == 0 && GetLastError() != ERROR_INSUFFICIENT_BUFFER {
+        return None;
+    }
+
+    let mut name = vec![0u16; name_len as usize];
+    let mut domain = vec![0u16; domain_len as usize];
+    let ok = LookupAccountSidW(
+        std::ptr::null(),
+        sid,
+        name.as_mut_ptr(),
+        &mut name_len,
+        domain.as_mut_ptr(),
+        &mut domain_len,
+        &mut use_type,
+    );
+    if ok == 0 {
+        return None;
+    }
+
+    let name = String::from_utf16_lossy(&name[..name_len as usize]);
+    let domain = String::from_utf16_lossy(&domain[..domain_len as usize]);
+    if domain.is_empty() {
+        Some(name)
+    } else {
+        Some(format!("{domain}\\{name}"))
+    }
 }
 
 /// Ensure all provided SIDs have an allow ACE with the requested mask on the path.
