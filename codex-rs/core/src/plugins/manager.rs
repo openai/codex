@@ -1270,7 +1270,16 @@ pub fn record_installed_marketplace_root(
 fn installed_marketplace_roots(codex_home: &Path) -> Vec<AbsolutePathBuf> {
     let registry_path = marketplace_registry_path(codex_home);
     if registry_path.is_file() {
-        return installed_marketplace_roots_from_registry(&registry_path);
+        match installed_marketplace_roots_from_registry(&registry_path) {
+            Ok(roots) => return roots,
+            Err(err) => {
+                warn!(
+                    path = %registry_path.display(),
+                    error = %err,
+                    "failed to read installed marketplace registry; falling back to installed marketplace directory scan"
+                );
+            }
+        }
     }
 
     let install_root = marketplace_install_root(codex_home);
@@ -1296,18 +1305,10 @@ fn marketplace_registry_path(codex_home: &Path) -> PathBuf {
     codex_home.join(".tmp").join(KNOWN_MARKETPLACES_FILE)
 }
 
-fn installed_marketplace_roots_from_registry(registry_path: &Path) -> Vec<AbsolutePathBuf> {
-    let registry = match read_marketplace_registry(registry_path) {
-        Ok(registry) => registry,
-        Err(err) => {
-            warn!(
-                path = %registry_path.display(),
-                error = %err,
-                "failed to read installed marketplace registry"
-            );
-            return Vec::new();
-        }
-    };
+fn installed_marketplace_roots_from_registry(
+    registry_path: &Path,
+) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    let registry = read_marketplace_registry(registry_path)?;
 
     let mut roots = registry
         .marketplaces
@@ -1322,7 +1323,7 @@ fn installed_marketplace_roots_from_registry(registry_path: &Path) -> Vec<Absolu
         })
         .collect::<Vec<_>>();
     roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
-    roots
+    Ok(roots)
 }
 
 fn read_marketplace_registry(path: &Path) -> std::io::Result<KnownMarketplacesRegistry> {

@@ -448,31 +448,14 @@ pub(super) fn replace_marketplace_root(staged_root: &Path, destination: &Path) -
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-
-    let backup = if destination.exists() {
-        let parent = destination
-            .parent()
-            .context("marketplace destination has no parent")?;
-        let staging_root = marketplace_staging_root(parent);
-        fs::create_dir_all(&staging_root)?;
-        let backup = tempfile::Builder::new()
-            .prefix("marketplace-backup-")
-            .tempdir_in(&staging_root)?;
-        let backup_root = backup.path().join("previous");
-        fs::rename(destination, &backup_root)?;
-        Some((backup, backup_root))
-    } else {
-        None
-    };
-
-    if let Err(err) = fs::rename(staged_root, destination) {
-        if let Some((_, backup_root)) = backup {
-            let _ = fs::rename(backup_root, destination);
-        }
-        return Err(err.into());
+    if destination.exists() {
+        bail!(
+            "marketplace destination already exists: {}",
+            destination.display()
+        );
     }
 
-    Ok(())
+    fs::rename(staged_root, destination).map_err(Into::into)
 }
 
 pub(super) fn marketplace_staging_root(install_root: &Path) -> PathBuf {
@@ -552,6 +535,7 @@ impl MarketplaceSource {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn github_shorthand_parses_ref_suffix() {
@@ -622,6 +606,33 @@ mod tests {
                 ref_name: None,
                 source_id: "git:https://github.com/owner/repo.git".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn replace_marketplace_root_rejects_existing_destination() {
+        let temp_dir = TempDir::new().unwrap();
+        let staged_root = temp_dir.path().join("staged");
+        let destination = temp_dir.path().join("destination");
+        fs::create_dir_all(&staged_root).unwrap();
+        fs::write(staged_root.join("marker.txt"), "staged").unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("marker.txt"), "installed").unwrap();
+
+        let err = replace_marketplace_root(&staged_root, &destination).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("marketplace destination already exists"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            fs::read_to_string(staged_root.join("marker.txt")).unwrap(),
+            "staged"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("marker.txt")).unwrap(),
+            "installed"
         );
     }
 }
