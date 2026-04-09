@@ -970,6 +970,10 @@ impl ChatComposer {
         self.textarea.is_vim_enabled()
     }
 
+    pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        self.textarea.should_handle_vim_insert_escape(key_event)
+    }
+
     fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
         self.textarea.vim_mode_label().map(|label| match label {
             "Normal" => "Vim: Normal".magenta(),
@@ -2921,6 +2925,9 @@ impl ChatComposer {
         }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
+        }
+        if self.should_handle_vim_insert_escape(key_event) {
+            return self.handle_input_basic(key_event);
         }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {
@@ -5036,6 +5043,44 @@ mod tests {
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
+        assert!(!composer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn empty_vim_insert_escape_enters_normal_without_esc_hint() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_vim_enabled(true);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+
+        assert!(composer.is_empty());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert!(composer.is_empty());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
         assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert!(!composer.esc_backtrack_hint);
     }

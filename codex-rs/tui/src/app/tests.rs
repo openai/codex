@@ -4825,6 +4825,29 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
 }
 
 #[tokio::test]
+async fn edit_previous_shortcut_does_not_steal_empty_vim_insert_escape() {
+    let mut app = make_test_app().await;
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    assert!(app.chat_widget.composer_is_empty());
+    assert!(app.should_route_edit_previous_message(esc));
+
+    app.chat_widget.toggle_vim_mode_and_notify();
+    assert!(app.should_route_edit_previous_message(esc));
+
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(!app.should_route_edit_previous_message(esc));
+
+    app.chat_widget.handle_key_event(esc);
+
+    assert!(!app.backtrack.primed);
+    assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(app.should_route_edit_previous_message(esc));
+}
+
+#[tokio::test]
 async fn session_summary_skips_when_no_usage_or_resume_hint() {
     assert!(
         session_summary(

@@ -153,7 +153,7 @@ impl App {
             return;
         }
 
-        if self.keymap.chat.edit_previous_message.is_pressed(key_event) {
+        if self.should_route_edit_previous_message(key_event) {
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)
@@ -225,5 +225,10 @@ impl App {
 
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
+    }
+
+    pub(super) fn should_route_edit_previous_message(&self, key_event: KeyEvent) -> bool {
+        self.keymap.chat.edit_previous_message.is_pressed(key_event)
+            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 }

@@ -963,6 +963,10 @@ impl BottomPane {
         self.composer.is_vim_enabled()
     }
 
+    pub(crate) fn composer_should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        self.composer.should_handle_vim_insert_escape(key_event)
+    }
+
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
     }
