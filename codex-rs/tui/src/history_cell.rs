@@ -2220,7 +2220,7 @@ fn hook_completed_bullet(completed: &CompletedHookRun) -> Span<'static> {
                 .iter()
                 .any(|entry| entry.kind == HookOutputEntryKind::Warning)
             {
-                "•".yellow().bold()
+                "•".bold()
             } else {
                 "•".green().bold()
             }
@@ -3311,7 +3311,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_hook_with_warning_uses_warning_bullet() {
+    fn completed_hook_with_warning_uses_default_bold_bullet() {
         let completed = CompletedHookRun {
             status: HookRunStatus::Completed,
             entries: vec![HookOutputEntry {
@@ -3323,7 +3323,7 @@ mod tests {
         let bullet = hook_completed_bullet(&completed);
 
         assert_eq!(bullet.content.as_ref(), "•");
-        assert_eq!(bullet.style.fg, Some(Color::Yellow));
+        assert_eq!(bullet.style.fg, None);
         assert!(bullet.style.add_modifier.contains(Modifier::BOLD));
     }
 

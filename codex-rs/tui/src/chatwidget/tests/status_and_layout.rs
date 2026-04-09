@@ -1803,7 +1803,9 @@ fn hook_completed_event(
         id: id.to_string(),
         msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
             turn_id: None,
-            run: hook_run_summary(id, event_name, status, None, entries),
+            run: hook_run_summary(
+                id, event_name, status, /*status_message*/ None, entries,
+            ),
         }),
     }
 }
