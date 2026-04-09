@@ -457,7 +457,7 @@ pub enum RealtimeTransport {
 pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 pub use codex_protocol::protocol::RealtimeVoice;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
     pub version: RealtimeWsVersion,
@@ -465,6 +465,17 @@ pub struct RealtimeConfig {
     pub session_type: RealtimeWsMode,
     pub transport: RealtimeTransport,
     pub voice: Option<RealtimeVoice>,
+}
+
+impl Default for RealtimeConfig {
+    fn default() -> Self {
+        Self {
+            version: RealtimeWsVersion::V2,
+            session_type: RealtimeWsMode::default(),
+            transport: RealtimeTransport::default(),
+            voice: None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

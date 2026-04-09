@@ -361,6 +361,65 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![vec![vec![]]]).await;
+    let realtime_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        config.experimental_realtime_ws_startup_context = Some(String::new());
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+
+    assert!(
+        realtime_server
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .await
+    );
+
+    let session_update = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    let body = session_update.body_json();
+    assert_eq!(
+        json!({
+            "startedVersion": started.version,
+            "handshakeUri": realtime_server.single_handshake().uri(),
+            "voice": body["session"]["audio"]["output"]["voice"],
+            "instructions": body["session"]["instructions"],
+        }),
+        json!({
+            "startedVersion": RealtimeConversationVersion::V2,
+            "handshakeUri": "/v1/realtime?model=gpt-realtime-1.5",
+            "voice": "marin",
+            "instructions": "backend prompt",
+        })
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -393,6 +452,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
         config.experimental_realtime_ws_startup_context = Some("startup context".to_string());
         config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.realtime.version = RealtimeWsVersion::V1;
     });
     let test = builder.build(&server).await?;
 
@@ -718,6 +778,7 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
     let server = start_websocket_server(vec![]).await;
     let mut builder = test_codex().with_config(|config| {
         config.experimental_realtime_ws_base_url = Some("http://127.0.0.1:1".to_string());
+        config.realtime.version = RealtimeWsVersion::V1;
     });
     let test = builder.build_with_websocket_server(&server).await?;
 
@@ -908,6 +969,7 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_websocket_server(&startup_server).await?;
@@ -1279,6 +1341,7 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
             config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
             config.experimental_realtime_ws_startup_context =
                 Some("custom startup context".to_string());
@@ -1342,6 +1405,7 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
             config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
             config.experimental_realtime_ws_startup_context = Some(String::new());
         }
@@ -1404,6 +1468,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_websocket_server(&startup_server).await?;
@@ -1466,6 +1531,7 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_websocket_server(&startup_server).await?;
@@ -1519,6 +1585,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_websocket_server(&startup_server).await?;
@@ -1607,6 +1674,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build(&api_server).await?;
@@ -1735,6 +1803,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_streaming_server(&api_server).await?;
@@ -1878,6 +1947,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build(&api_server).await?;
@@ -1974,6 +2044,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build(&api_server).await?;
@@ -2068,6 +2139,7 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build(&api_server).await?;
@@ -2169,6 +2241,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build(&api_server).await?;
@@ -2283,6 +2356,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_streaming_server(&api_server).await?;
@@ -2427,6 +2501,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_streaming_server(&api_server).await?;
@@ -2555,6 +2630,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_streaming_server(&api_server).await?;
@@ -2698,6 +2774,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
         }
     });
     let test = builder.build_with_streaming_server(&api_server).await?;

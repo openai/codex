@@ -6483,6 +6483,35 @@ experimental_realtime_ws_model = "realtime-test-model"
 }
 
 #[test]
+fn realtime_config_partial_table_uses_realtime_defaults() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[realtime]
+voice = "marin"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.realtime,
+        RealtimeConfig {
+            version: RealtimeWsVersion::V2,
+            session_type: RealtimeWsMode::Conversational,
+            transport: RealtimeTransport::Websocket,
+            voice: Some(RealtimeVoice::Marin),
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn realtime_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"

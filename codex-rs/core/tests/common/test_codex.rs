@@ -13,6 +13,7 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_config::config_toml::RealtimeWsVersion;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -453,6 +454,7 @@ impl TestCodexBuilder {
             config.model_provider.base_url = Some(base_url_clone);
             config.model_provider.supports_websockets = true;
             config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
+            config.realtime.version = RealtimeWsVersion::V1;
         }));
         let test_env = TestEnv::local().await?;
         Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
