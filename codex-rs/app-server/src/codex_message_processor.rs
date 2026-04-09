@@ -1,4 +1,5 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
 use crate::config_api::apply_runtime_feature_enablement;
@@ -7435,15 +7436,26 @@ impl CodexMessageProcessor {
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
                             .await;
-                        if let EventMsg::RawResponseItem(_) = &event.msg && !raw_events_enabled {
-                            continue;
-                        }
-
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                             outgoing_for_task.clone(),
                             subscribed_connection_ids,
                             conversation_id,
                         );
+
+                        if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
+                            && !raw_events_enabled
+                        {
+                            maybe_emit_hook_prompt_item_completed(
+                                api_version,
+                                conversation_id,
+                                &event.id,
+                                &raw_response_item_event.item,
+                                &thread_outgoing,
+                            )
+                            .await;
+                            continue;
+                        }
+
                         apply_bespoke_event_handling(
                             event.clone(),
                             conversation_id,

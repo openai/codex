@@ -2059,7 +2059,7 @@ async fn maybe_emit_raw_response_item_completed(
         .await;
 }
 
-async fn maybe_emit_hook_prompt_item_completed(
+pub(crate) async fn maybe_emit_hook_prompt_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
     turn_id: &str,
