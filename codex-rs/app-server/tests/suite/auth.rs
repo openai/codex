@@ -24,7 +24,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn create_config_toml_custom_provider(
     codex_home: &Path,
