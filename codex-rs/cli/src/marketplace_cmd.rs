@@ -39,8 +39,12 @@ struct AddMarketplaceArgs {
     #[arg(long = "ref", value_name = "REF")]
     ref_name: Option<String>,
 
-    /// Sparse-checkout paths to use while cloning git sources.
-    #[arg(long = "sparse", value_name = "PATH", num_args = 1..)]
+    /// Sparse-checkout path to use while cloning git sources. Repeat to include multiple paths.
+    #[arg(
+        long = "sparse",
+        value_name = "PATH",
+        action = clap::ArgAction::Append
+    )]
     sparse_paths: Vec<String>,
 }
 
@@ -606,6 +610,36 @@ mod tests {
                 ref_name: None,
                 source_id: "git:https://github.com/owner/repo.git".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn sparse_paths_parse_before_or_after_source() {
+        let sparse_before_source =
+            AddMarketplaceArgs::try_parse_from(["add", "--sparse", "plugins/foo", "owner/repo"])
+                .unwrap();
+        assert_eq!(sparse_before_source.source, "owner/repo");
+        assert_eq!(sparse_before_source.sparse_paths, vec!["plugins/foo"]);
+
+        let sparse_after_source =
+            AddMarketplaceArgs::try_parse_from(["add", "owner/repo", "--sparse", "plugins/foo"])
+                .unwrap();
+        assert_eq!(sparse_after_source.source, "owner/repo");
+        assert_eq!(sparse_after_source.sparse_paths, vec!["plugins/foo"]);
+
+        let repeated_sparse = AddMarketplaceArgs::try_parse_from([
+            "add",
+            "--sparse",
+            "plugins/foo",
+            "--sparse",
+            "skills/bar",
+            "owner/repo",
+        ])
+        .unwrap();
+        assert_eq!(repeated_sparse.source, "owner/repo");
+        assert_eq!(
+            repeated_sparse.sparse_paths,
+            vec!["plugins/foo", "skills/bar"]
         );
     }
 
