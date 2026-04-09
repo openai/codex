@@ -267,6 +267,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
+use crate::initial_context::InitialContextInclusions;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
@@ -417,6 +418,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) initial_context_inclusions: InitialContextInclusions,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -469,6 +471,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            initial_context_inclusions,
             auth_manager,
             models_manager,
             environment_manager,
@@ -636,6 +639,7 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
+            initial_context_inclusions,
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -1138,6 +1142,13 @@ pub(crate) struct SessionConfiguration {
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
+
+    /// Session-scoped policy for which startup context blocks are model-visible.
+    ///
+    /// This is chosen at spawn time. It is intentionally separate from the
+    /// loaded user config so internally spawned subagents can have narrower
+    /// startup prompts without mutating config.toml-derived settings.
+    initial_context_inclusions: InitialContextInclusions,
 
     /// When to escalate for approval for execution
     approval_policy: Constrained<AskForApproval>,
@@ -3703,7 +3714,7 @@ impl Session {
             previous_turn_settings,
             collaboration_mode,
             base_instructions,
-            session_source,
+            initial_context,
         ) = {
             let state = self.state.lock().await;
             (
@@ -3711,18 +3722,19 @@ impl Session {
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
-                state.session_configuration.session_source.clone(),
+                state.session_configuration.initial_context_inclusions,
             )
         };
-        if let Some(model_switch_message) =
-            crate::context_manager::updates::build_model_instructions_update_item(
-                previous_turn_settings.as_ref(),
-                turn_context,
-            )
+        if initial_context.model_update
+            && let Some(model_switch_message) =
+                crate::context_manager::updates::build_model_instructions_update_item(
+                    previous_turn_settings.as_ref(),
+                    turn_context,
+                )
         {
             developer_sections.push(model_switch_message.into_text());
         }
-        if turn_context.config.include_permissions_instructions {
+        if initial_context.permissions && turn_context.config.include_permissions_instructions {
             developer_sections.push(
                 DeveloperInstructions::from_policy(
                     turn_context.sandbox_policy.get(),
@@ -3740,17 +3752,17 @@ impl Session {
                 .into_text(),
             );
         }
-        let separate_guardian_developer_message =
-            crate::guardian::is_guardian_reviewer_source(&session_source);
-        // Keep the guardian policy prompt out of the aggregated developer bundle so it
-        // stays isolated as its own top-level developer message for guardian subagents.
-        if !separate_guardian_developer_message
+        // Some internally spawned subagents keep their role policy separate from the
+        // aggregated developer bundle so their top-level instructions are easy to audit.
+        if initial_context.developer_instructions
+            && !initial_context.separate_developer_instructions
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
         {
             developer_sections.push(developer_instructions.to_string());
         }
         // Add developer instructions for memories.
-        if turn_context.features.enabled(Feature::MemoryTool)
+        if initial_context.memory
+            && turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
             && let Some(memory_prompt) =
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
@@ -3758,19 +3770,24 @@ impl Session {
             developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if let Some(collab_instructions) =
-            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
+        if initial_context.collaboration
+            && let Some(collab_instructions) =
+                DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
             developer_sections.push(collab_instructions.into_text());
         }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
-            reference_context_item.as_ref(),
-            previous_turn_settings.as_ref(),
-            turn_context,
-        ) {
+        if initial_context.realtime
+            && let Some(realtime_update) =
+                crate::context_manager::updates::build_initial_realtime_item(
+                    reference_context_item.as_ref(),
+                    previous_turn_settings.as_ref(),
+                    turn_context,
+                )
+        {
             developer_sections.push(realtime_update.into_text());
         }
-        if self.features.enabled(Feature::Personality)
+        if initial_context.personality
+            && self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
         {
             let model_info = turn_context.model_info.clone();
@@ -3789,7 +3806,10 @@ impl Session {
                 );
             }
         }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+        if initial_context.apps
+            && turn_context.config.include_apps_instructions
+            && turn_context.apps_enabled()
+        {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
@@ -3801,29 +3821,37 @@ impl Session {
                 developer_sections.push(apps_section);
             }
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
+        if initial_context.skills {
+            let implicit_skills = turn_context
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation();
+            if let Some(skills_section) = render_skills_section(&implicit_skills) {
+                developer_sections.push(skills_section);
+            }
         }
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config);
-        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
-        {
-            developer_sections.push(plugin_section);
+        if initial_context.plugins {
+            let loaded_plugins = self
+                .services
+                .plugins_manager
+                .plugins_for_config(&turn_context.config);
+            if let Some(plugin_section) =
+                render_plugins_section(loaded_plugins.capability_summaries())
+            {
+                developer_sections.push(plugin_section);
+            }
         }
-        if turn_context.features.enabled(Feature::CodexGitCommit)
+        if initial_context.commit
+            && turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
             )
         {
             developer_sections.push(commit_message_instruction);
         }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+        if initial_context.user_instructions
+            && let Some(user_instructions) = turn_context.user_instructions.as_deref()
+        {
             contextual_user_sections.push(
                 UserInstructions {
                     text: user_instructions.to_string(),
@@ -3832,7 +3860,7 @@ impl Session {
                 .serialize_to_text(),
             );
         }
-        if turn_context.config.include_environment_context {
+        if initial_context.environment_context && turn_context.config.include_environment_context {
             let subagents = self
                 .services
                 .agent_control
@@ -3856,9 +3884,9 @@ impl Session {
         {
             items.push(contextual_user_message);
         }
-        // Emit the guardian policy prompt as a separate developer item so the guardian
-        // subagent sees a distinct, easy-to-audit instruction block.
-        if separate_guardian_developer_message
+        // Emit selected role policy as a separate developer item.
+        if initial_context.developer_instructions
+            && initial_context.separate_developer_instructions
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && let Some(guardian_developer_message) =
                 crate::context_manager::updates::build_developer_update_item(vec![

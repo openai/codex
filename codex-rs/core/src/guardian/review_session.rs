@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,18 +24,20 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::agent::SubAgentConfigBuilder;
+use crate::agent::SubAgentExtensionInheritance;
+use crate::agent::SubAgentPromptInheritance;
+use crate::agent::SubAgentPromptSelection;
 use crate::codex::Codex;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
-use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
+use crate::initial_context::InitialContextInclusions;
 use crate::rollout::recorder::RolloutRecorder;
-use codex_config::types::McpServerConfig;
-use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
@@ -45,6 +46,11 @@ use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const GUARDIAN_BASE_INSTRUCTIONS: &str = concat!(
+    "You are Codex Guardian, a focused approval-review agent. ",
+    "Follow the guardian developer policy. ",
+    "Return only the required final JSON."
+);
 const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
     "Use prior reviews as context, not binding precedent. ",
     "Follow the Workspace Policy. ",
@@ -111,19 +117,7 @@ struct GuardianReviewSessionReuseKey {
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
     permissions: Permissions,
     developer_instructions: Option<String>,
-    base_instructions: Option<String>,
-    user_instructions: Option<String>,
-    compact_prompt: Option<String>,
-    cwd: PathBuf,
-    mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    main_execve_wrapper_exe: Option<PathBuf>,
-    js_repl_node_path: Option<PathBuf>,
-    js_repl_node_module_dirs: Vec<PathBuf>,
-    zsh_path: Option<PathBuf>,
-    features: ManagedFeatures,
-    include_apply_patch_tool: bool,
-    use_experimental_unified_exec_tool: bool,
 }
 
 impl GuardianReviewSessionReuseKey {
@@ -138,19 +132,7 @@ impl GuardianReviewSessionReuseKey {
             model_reasoning_summary: spawn_config.model_reasoning_summary,
             permissions: spawn_config.permissions.clone(),
             developer_instructions: spawn_config.developer_instructions.clone(),
-            base_instructions: spawn_config.base_instructions.clone(),
-            user_instructions: spawn_config.user_instructions.clone(),
-            compact_prompt: spawn_config.compact_prompt.clone(),
-            cwd: spawn_config.cwd.to_path_buf(),
-            mcp_servers: spawn_config.mcp_servers.clone(),
             codex_linux_sandbox_exe: spawn_config.codex_linux_sandbox_exe.clone(),
-            main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
-            js_repl_node_path: spawn_config.js_repl_node_path.clone(),
-            js_repl_node_module_dirs: spawn_config.js_repl_node_module_dirs.clone(),
-            zsh_path: spawn_config.zsh_path.clone(),
-            features: spawn_config.features.clone(),
-            include_apply_patch_tool: spawn_config.include_apply_patch_tool,
-            use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
         }
     }
 }
@@ -467,6 +449,7 @@ async fn spawn_guardian_review_session(
     let has_prior_review = initial_history.is_some();
     let codex = run_codex_thread_interactive(
         spawn_config,
+        guardian_review_initial_context_inclusions(),
         params.parent_session.services.auth_manager.clone(),
         params.parent_session.services.models_manager.clone(),
         Arc::clone(&params.parent_session),
@@ -640,9 +623,17 @@ pub(crate) fn build_guardian_review_session_config(
     active_model: &str,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> anyhow::Result<Config> {
-    let mut guardian_config = parent_config.clone();
+    let mut guardian_config = SubAgentConfigBuilder::from_parent_config(parent_config)
+        .prompt_inheritance(SubAgentPromptInheritance::Select(
+            guardian_review_prompt_selection(),
+        ))
+        .extension_inheritance(SubAgentExtensionInheritance::None)?
+        .build();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
+    guardian_config.personality = None;
+    guardian_config.base_instructions = Some(GUARDIAN_BASE_INSTRUCTIONS.to_string());
+    guardian_config.user_instructions = None;
     guardian_config.developer_instructions = Some(
         parent_config
             .guardian_policy_config
@@ -650,6 +641,13 @@ pub(crate) fn build_guardian_review_session_config(
             .map(guardian_policy_prompt_with_config)
             .unwrap_or_else(guardian_policy_prompt),
     );
+    guardian_config.compact_prompt = None;
+    guardian_config.include_permissions_instructions = false;
+    guardian_config.include_apps_instructions = false;
+    guardian_config.include_environment_context = true;
+    guardian_config.include_apply_patch_tool = false;
+    guardian_config.use_experimental_unified_exec_tool = false;
+    guardian_config.permissions.allow_login_shell = false;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
@@ -668,26 +666,33 @@ pub(crate) fn build_guardian_review_session_config(
             &SandboxPolicy::new_read_only_policy(),
         )?);
     }
-    for feature in [
-        Feature::SpawnCsv,
-        Feature::Collab,
-        Feature::WebSearchRequest,
-        Feature::WebSearchCached,
-    ] {
-        guardian_config.features.disable(feature).map_err(|err| {
-            anyhow::anyhow!(
-                "guardian review session could not disable `features.{}`: {err}",
-                feature.key()
-            )
-        })?;
-        if guardian_config.features.enabled(feature) {
-            anyhow::bail!(
-                "guardian review session requires `features.{}` to be disabled",
-                feature.key()
-            );
-        }
-    }
     Ok(guardian_config)
+}
+
+pub(crate) fn guardian_review_initial_context_inclusions() -> InitialContextInclusions {
+    guardian_review_prompt_selection().initial_context_inclusions()
+}
+
+const fn guardian_review_prompt_selection() -> SubAgentPromptSelection {
+    SubAgentPromptSelection {
+        model_update: false,
+        base_instructions: false,
+        user_instructions: false,
+        project_docs: true,
+        developer_instructions: true,
+        separate_developer_instructions: true,
+        compact_prompt: false,
+        permissions: false,
+        memory: false,
+        collaboration: false,
+        realtime: false,
+        personality: false,
+        apps: false,
+        skills: false,
+        plugins: false,
+        commit: false,
+        environment_context: true,
+    }
 }
 
 async fn run_before_review_deadline<T>(
@@ -774,6 +779,36 @@ mod tests {
         assert_eq!(
             cached_reuse_key,
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
+        );
+    }
+
+    #[test]
+    fn guardian_review_session_cwd_change_does_not_invalidate_cached_session() {
+        let mut parent_config = crate::config::test_config();
+        let cached_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("cached guardian config");
+        let cached_reuse_key =
+            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
+
+        parent_config.cwd =
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path("/tmp/guardian-cwd")
+                .expect("absolute cwd");
+        let next_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("next guardian config");
+
+        assert_eq!(
+            cached_reuse_key,
+            GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config)
         );
     }
 

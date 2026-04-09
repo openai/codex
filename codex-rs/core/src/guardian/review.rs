@@ -365,7 +365,7 @@ pub(super) async fn run_guardian_review_session(
             model: guardian_model,
             reasoning_effort: guardian_reasoning_effort,
             reasoning_summary: turn.reasoning_summary,
-            personality: turn.personality,
+            personality: None,
             external_cancel,
         })
         .await

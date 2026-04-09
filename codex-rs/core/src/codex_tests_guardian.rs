@@ -7,6 +7,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
+use crate::initial_context::InitialContextInclusions;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -244,6 +245,11 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     {
         let mut state = session.state.lock().await;
         state.session_configuration.session_source = guardian_source.clone();
+        state.session_configuration.initial_context_inclusions = InitialContextInclusions {
+            developer_instructions: true,
+            separate_developer_instructions: true,
+            ..InitialContextInclusions::none()
+        };
     }
     turn_context.session_source = guardian_source;
     turn_context.developer_instructions = Some(guardian_policy.clone());
@@ -290,8 +296,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
             .iter()
             .any(|message| message.contains("stale developer message"))
     );
-    assert!(developer_messages.len() >= 2);
-    assert_eq!(developer_messages.last(), Some(&guardian_policy));
+    assert_eq!(developer_messages, vec![guardian_policy]);
 }
 
 #[tokio::test]
@@ -435,6 +440,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
+        initial_context_inclusions: InitialContextInclusions::full(),
         auth_manager,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
