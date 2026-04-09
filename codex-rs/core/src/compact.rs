@@ -17,6 +17,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionStatus;
+use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
@@ -353,6 +354,7 @@ impl CompactionAnalyticsAttempt {
                 reason: self.reason,
                 implementation: self.implementation,
                 phase: self.phase,
+                strategy: CompactionStrategy::Memento,
                 status,
                 error,
                 active_context_tokens_before: self.active_context_tokens_before,

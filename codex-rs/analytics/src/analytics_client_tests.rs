@@ -24,6 +24,7 @@ use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
 use crate::facts::CompactionStatus;
+use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::InvocationType;
@@ -272,6 +273,7 @@ fn compaction_event_serializes_expected_shape() {
             reason: CompactionReason::TokenLimit,
             implementation: CompactionImplementation::ResponsesCompact,
             phase: CompactionPhase::MidTurn,
+            strategy: CompactionStrategy::Memento,
             status: CompactionStatus::Completed,
             error: None,
             active_context_tokens_before: 120_000,
@@ -295,6 +297,7 @@ fn compaction_event_serializes_expected_shape() {
                 "reason": "token_limit",
                 "implementation": "responses_compact",
                 "phase": "mid_turn",
+                "strategy": "memento",
                 "status": "completed",
                 "error": null,
                 "active_context_tokens_before": 120000,
@@ -517,6 +520,7 @@ async fn compaction_event_ingests_custom_fact() {
                     reason: CompactionReason::UserRequested,
                     implementation: CompactionImplementation::Responses,
                     phase: CompactionPhase::StandaloneTurn,
+                    strategy: CompactionStrategy::Memento,
                     status: CompactionStatus::Failed,
                     error: Some("context limit exceeded".to_string()),
                     active_context_tokens_before: 131_000,
@@ -539,6 +543,7 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["reason"], "user_requested");
     assert_eq!(payload[0]["event_params"]["implementation"], "responses");
     assert_eq!(payload[0]["event_params"]["phase"], "standalone_turn");
+    assert_eq!(payload[0]["event_params"]["strategy"], "memento");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
 }
 

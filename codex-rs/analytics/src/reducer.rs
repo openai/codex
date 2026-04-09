@@ -268,7 +268,7 @@ impl AnalyticsReducer {
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
                 event_params: ThreadInitializedEventParams {
-                    thread_id: thread_id.clone(),
+                    thread_id,
                     app_server_client: connection_state.app_server_client.clone(),
                     runtime: connection_state.runtime.clone(),
                     model,

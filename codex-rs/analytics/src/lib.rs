@@ -11,6 +11,7 @@ pub use facts::CompactionImplementation;
 pub use facts::CompactionPhase;
 pub use facts::CompactionReason;
 pub use facts::CompactionStatus;
+pub use facts::CompactionStrategy;
 pub use facts::CompactionTrigger;
 pub use facts::InvocationType;
 pub use facts::SkillInvocation;

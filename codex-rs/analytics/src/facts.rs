@@ -95,6 +95,13 @@ pub enum CompactionPhase {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum CompactionStrategy {
+    Memento,
+    PrefixCompaction,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompactionStatus {
     Completed,
     Failed,
@@ -109,6 +116,7 @@ pub struct CodexCompactionEvent {
     pub reason: CompactionReason,
     pub implementation: CompactionImplementation,
     pub phase: CompactionPhase,
+    pub strategy: CompactionStrategy,
     pub status: CompactionStatus,
     pub error: Option<String>,
     pub active_context_tokens_before: i64,
