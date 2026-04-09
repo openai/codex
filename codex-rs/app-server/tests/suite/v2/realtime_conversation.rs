@@ -1709,7 +1709,7 @@ fn assert_call_create_multipart(
 }
 
 fn v1_session_create_json() -> &'static str {
-    r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"cove"}},"type":"quicksilver","instructions":"backend prompt\n\nstartup context"}"#
+    r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"cove"}},"type":"quicksilver","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context"}"#
 }
 
 fn create_config_toml(
