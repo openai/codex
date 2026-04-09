@@ -33,6 +33,7 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::render_skills_section;
+use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills_load_input_from_config;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -1097,15 +1098,22 @@ fn local_time_context() -> (String, String) {
 
 async fn thread_title_from_state_db(
     state_db: Option<&state_db::StateDbHandle>,
+    codex_home: &Path,
     conversation_id: ThreadId,
 ) -> Option<String> {
-    let metadata = state_db?.get_thread(conversation_id).await.ok().flatten()?;
-    let title = metadata.title.trim();
-    if title.is_empty() || metadata.first_user_message.as_deref() == Some(title) {
-        None
-    } else {
-        Some(title.to_string())
+    if let Some(metadata) = state_db
+        && let Some(metadata) = metadata.get_thread(conversation_id).await.ok().flatten()
+    {
+        let title = metadata.title.trim();
+        if !title.is_empty() && metadata.first_user_message.as_deref().map(str::trim) != Some(title)
+        {
+            return Some(title.to_string());
+        }
     }
+    find_thread_name_by_id(codex_home, &conversation_id)
+        .await
+        .ok()
+        .flatten()
 }
 
 #[derive(Clone)]
@@ -1893,12 +1901,13 @@ impl Session {
             default_shell.shell_snapshot = rx;
             tx
         };
-        let thread_name = thread_title_from_state_db(state_db_ctx.as_ref(), conversation_id)
-            .instrument(info_span!(
-                "session_init.thread_name_lookup",
-                otel.name = "session_init.thread_name_lookup",
-            ))
-            .await;
+        let thread_name =
+            thread_title_from_state_db(state_db_ctx.as_ref(), &config.codex_home, conversation_id)
+                .instrument(info_span!(
+                    "session_init.thread_name_lookup",
+                    otel.name = "session_init.thread_name_lookup",
+                ))
+                .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();

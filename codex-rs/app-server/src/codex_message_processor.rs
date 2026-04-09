@@ -214,6 +214,8 @@ use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::find_archived_thread_path_by_id_str;
+use codex_core::find_thread_name_by_id;
+use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
@@ -8672,25 +8674,38 @@ async fn read_summary_from_state_db_context_by_thread_id(
 }
 
 async fn title_from_state_db(config: &Config, thread_id: ThreadId) -> Option<String> {
-    let state_db_ctx = open_state_db_for_direct_thread_lookup(config).await?;
-    let metadata = state_db_ctx.get_thread(thread_id).await.ok().flatten()?;
-    non_empty_title(&metadata)
+    if let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await
+        && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
+        && let Some(title) = distinct_title(&metadata)
+    {
+        return Some(title);
+    }
+    find_thread_name_by_id(&config.codex_home, &thread_id)
+        .await
+        .ok()
+        .flatten()
 }
 
 async fn thread_titles_by_ids(
     config: &Config,
     thread_ids: &HashSet<ThreadId>,
 ) -> HashMap<ThreadId, String> {
-    let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await else {
-        return HashMap::new();
-    };
     let mut names = HashMap::with_capacity(thread_ids.len());
-    for &thread_id in thread_ids {
-        let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
-            continue;
-        };
-        if let Some(title) = non_empty_title(&metadata) {
-            names.insert(thread_id, title);
+    if let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await {
+        for &thread_id in thread_ids {
+            let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
+                continue;
+            };
+            if let Some(title) = distinct_title(&metadata) {
+                names.insert(thread_id, title);
+            }
+        }
+    }
+    if names.len() < thread_ids.len()
+        && let Ok(legacy_names) = find_thread_names_by_ids(&config.codex_home, thread_ids).await
+    {
+        for (thread_id, title) in legacy_names {
+            names.entry(thread_id).or_insert(title);
         }
     }
     names
@@ -8705,6 +8720,15 @@ async fn open_state_db_for_direct_thread_lookup(config: &Config) -> Option<State
 fn non_empty_title(metadata: &ThreadMetadata) -> Option<String> {
     let title = metadata.title.trim();
     (!title.is_empty()).then(|| title.to_string())
+}
+
+fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
+    let title = non_empty_title(metadata)?;
+    if metadata.first_user_message.as_deref().map(str::trim) == Some(title.as_str()) {
+        None
+    } else {
+        Some(title)
+    }
 }
 
 fn set_thread_name_from_title(thread: &mut Thread, title: String) {

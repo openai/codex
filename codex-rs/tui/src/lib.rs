@@ -33,6 +33,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
+use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
@@ -492,6 +493,7 @@ fn session_target_from_app_server_thread(
 
 async fn lookup_session_target_by_name_with_app_server(
     app_server: &mut AppServerSession,
+    codex_home: &Path,
     name: &str,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let mut cursor = None;
@@ -516,14 +518,32 @@ async fn lookup_session_target_by_name_with_app_server(
             return Ok(session_target_from_app_server_thread(thread));
         }
         if response.next_cursor.is_none() {
-            return Ok(None);
+            if app_server.is_remote() {
+                return Ok(None);
+            }
+            return lookup_session_target_by_legacy_name(codex_home, name).await;
         }
         cursor = response.next_cursor;
     }
 }
 
+async fn lookup_session_target_by_legacy_name(
+    codex_home: &Path,
+    name: &str,
+) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
+    let Some(path) = find_thread_path_by_name_str(codex_home, name).await? else {
+        return Ok(None);
+    };
+    let session_meta = read_session_meta_line(&path).await?;
+    Ok(Some(resume_picker::SessionTarget {
+        path: Some(path),
+        thread_id: session_meta.meta.id,
+    }))
+}
+
 async fn lookup_session_target_with_app_server(
     app_server: &mut AppServerSession,
+    codex_home: &Path,
     id_or_name: &str,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     if Uuid::parse_str(id_or_name).is_ok() {
@@ -554,7 +574,7 @@ async fn lookup_session_target_with_app_server(
         };
     }
 
-    lookup_session_target_by_name_with_app_server(app_server, id_or_name).await
+    lookup_session_target_by_name_with_app_server(app_server, codex_home, id_or_name).await
 }
 
 async fn lookup_latest_session_target_with_app_server(
@@ -1160,7 +1180,13 @@ async fn run_ratatui_app(
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+            match lookup_session_target_with_app_server(
+                startup_app_server,
+                config.codex_home.as_path(),
+                id_str,
+            )
+            .await?
+            {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
                     shutdown_app_server_if_present(app_server.take()).await;
@@ -1221,7 +1247,13 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+        match lookup_session_target_with_app_server(
+            startup_app_server,
+            config.codex_home.as_path(),
+            id_str,
+        )
+        .await?
+        {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
                 shutdown_app_server_if_present(app_server.take()).await;
@@ -2041,9 +2073,65 @@ mod tests {
             AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
                 start_test_embedded_app_server(config).await?,
             ));
-        let target =
-            lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session").await?;
+        let target = lookup_session_target_by_name_with_app_server(
+            &mut app_server,
+            temp_dir.path(),
+            "saved-session",
+        )
+        .await?;
         let target = target.expect("name lookup should find the saved thread");
+        assert_eq!(target.path, Some(rollout_path));
+        assert_eq!(target.thread_id, thread_id);
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lookup_session_target_by_name_falls_back_to_legacy_index() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let thread_id = ThreadId::new();
+        let rollout_path = temp_dir
+            .path()
+            .join("sessions/2025/02/01")
+            .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
+        std::fs::create_dir_all(rollout_path.parent().expect("rollout parent"))?;
+        let session_meta = SessionMeta {
+            id: thread_id,
+            timestamp: "2025-02-01T10:00:00Z".to_string(),
+            model_provider: Some(config.model_provider_id.clone()),
+            ..SessionMeta::default()
+        };
+        let line = RolloutLine {
+            timestamp: session_meta.timestamp.clone(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }),
+        };
+        std::fs::write(
+            &rollout_path,
+            format!("{}\n", serde_json::to_string(&line)?),
+        )?;
+        std::fs::write(
+            temp_dir.path().join("session_index.jsonl"),
+            format!(
+                "{{\"id\":\"{thread_id}\",\"thread_name\":\"hello\",\"updated_at\":\"2025-02-02T10:00:00Z\"}}\n"
+            ),
+        )?;
+
+        let mut app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config).await?,
+            ));
+        let target = lookup_session_target_by_name_with_app_server(
+            &mut app_server,
+            temp_dir.path(),
+            "hello",
+        )
+        .await?;
+        let target = target.expect("legacy name lookup should find the saved thread");
         assert_eq!(target.path, Some(rollout_path));
         assert_eq!(target.thread_id, thread_id);
 
