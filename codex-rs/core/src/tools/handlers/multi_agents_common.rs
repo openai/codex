@@ -1,4 +1,7 @@
 use crate::agent::AgentStatus;
+use crate::agent::SubAgentConfigBuilder;
+use crate::agent::SubAgentExtensionInheritance;
+use crate::agent::SubAgentPromptInheritance;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -221,17 +224,16 @@ pub(crate) fn build_agent_resume_config(
 }
 
 fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
-    let base_config = turn.config.clone();
-    let mut config = (*base_config).clone();
-    config.model = Some(turn.model_info.slug.clone());
-    config.model_provider = turn.provider.clone();
-    config.model_reasoning_effort = turn.reasoning_effort;
-    config.model_reasoning_summary = Some(turn.reasoning_summary);
-    config.developer_instructions = turn.developer_instructions.clone();
-    config.compact_prompt = turn.compact_prompt.clone();
-    apply_spawn_agent_runtime_overrides(&mut config, turn)?;
-
-    Ok(config)
+    let builder = SubAgentConfigBuilder::from_parent_turn(turn).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("spawn config is invalid: {err}"))
+    })?;
+    let builder = builder
+        .prompt_inheritance(SubAgentPromptInheritance::InheritParent)
+        .extension_inheritance(SubAgentExtensionInheritance::InheritParent)
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("spawn config is invalid: {err}"))
+        })?;
+    Ok(builder.build())
 }
 
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.
@@ -242,26 +244,8 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     config: &mut Config,
     turn: &TurnContext,
 ) -> Result<(), FunctionCallError> {
-    config
-        .permissions
-        .approval_policy
-        .set(turn.approval_policy.value())
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("approval_policy is invalid: {err}"))
-        })?;
-    config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
-    config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    config.cwd = turn.cwd.clone();
-    config
-        .permissions
-        .sandbox_policy
-        .set(turn.sandbox_policy.get().clone())
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
-        })?;
-    config.permissions.file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
-    config.permissions.network_sandbox_policy = turn.network_sandbox_policy;
-    Ok(())
+    SubAgentConfigBuilder::apply_turn_runtime_to_config(config, turn)
+        .map_err(|err| FunctionCallError::RespondToModel(format!("spawn config is invalid: {err}")))
 }
 
 pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {

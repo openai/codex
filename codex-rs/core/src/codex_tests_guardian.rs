@@ -247,6 +247,13 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     }
     turn_context.session_source = guardian_source;
     turn_context.developer_instructions = Some(guardian_policy.clone());
+    let mut config = (*turn_context.config).clone();
+    config.initial_context_inclusions = crate::config::InitialContextInclusions {
+        developer_instructions: true,
+        separate_developer_instructions: true,
+        ..crate::config::InitialContextInclusions::none()
+    };
+    turn_context.config = Arc::new(config);
 
     let refreshed = crate::compact_remote::process_compacted_history(
         &session,
@@ -290,8 +297,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
             .iter()
             .any(|message| message.contains("stale developer message"))
     );
-    assert!(developer_messages.len() >= 2);
-    assert_eq!(developer_messages.last(), Some(&guardian_policy));
+    assert_eq!(developer_messages, vec![guardian_policy]);
 }
 
 #[tokio::test]

@@ -24,16 +24,20 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::agent::SubAgentConfigBuilder;
+use crate::agent::SubAgentExtensionInheritance;
+use crate::agent::SubAgentPromptInheritance;
+use crate::agent::SubAgentPromptSelection;
 use crate::codex::Codex;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::InitialContextInclusions;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::rollout::recorder::RolloutRecorder;
-use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
@@ -47,32 +51,6 @@ const GUARDIAN_BASE_INSTRUCTIONS: &str = concat!(
     "Follow the guardian developer policy. ",
     "Return only the required final JSON."
 );
-const GUARDIAN_DISABLED_FEATURES: &[Feature] = &[
-    Feature::SpawnCsv,
-    Feature::MultiAgentV2,
-    Feature::Collab,
-    Feature::WebSearchRequest,
-    Feature::WebSearchCached,
-    Feature::CodeModeOnly,
-    Feature::CodeMode,
-    Feature::JsReplToolsOnly,
-    Feature::JsRepl,
-    Feature::MemoryTool,
-    Feature::ChildAgentsMd,
-    Feature::Apps,
-    Feature::ToolSearch,
-    Feature::ToolSuggest,
-    Feature::Plugins,
-    Feature::ImageGeneration,
-    Feature::RequestPermissionsTool,
-    Feature::ExecPermissionApprovals,
-    Feature::RequestRule,
-    Feature::ShellSnapshot,
-    Feature::ShellZshFork,
-    Feature::UnifiedExec,
-    Feature::ApplyPatchFreeform,
-    Feature::CodexGitCommit,
-];
 const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
     "Use prior reviews as context, not binding precedent. ",
     "Follow the Workspace Policy. ",
@@ -644,7 +622,44 @@ pub(crate) fn build_guardian_review_session_config(
     active_model: &str,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> anyhow::Result<Config> {
-    let mut guardian_config = parent_config.clone();
+    let mut guardian_config = SubAgentConfigBuilder::from_parent_config(parent_config)
+        .prompt_inheritance(SubAgentPromptInheritance::Select(SubAgentPromptSelection {
+            model_update: false,
+            base_instructions: false,
+            user_instructions: false,
+            project_docs: true,
+            developer_instructions: true,
+            separate_developer_instructions: true,
+            compact_prompt: false,
+            permissions: false,
+            memory: false,
+            collaboration: false,
+            realtime: false,
+            personality: false,
+            apps: false,
+            skills: false,
+            plugins: false,
+            commit: false,
+            environment_context: true,
+        }))
+        .extension_inheritance(SubAgentExtensionInheritance::None)?
+        .initial_context_inclusions(InitialContextInclusions {
+            model_update: false,
+            permissions: false,
+            developer_instructions: true,
+            separate_developer_instructions: true,
+            memory: false,
+            collaboration: false,
+            realtime: false,
+            personality: false,
+            apps: false,
+            skills: false,
+            plugins: false,
+            commit: false,
+            user_instructions: true,
+            environment_context: true,
+        })
+        .build();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.personality = None;
@@ -660,13 +675,7 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.compact_prompt = None;
     guardian_config.include_permissions_instructions = false;
     guardian_config.include_apps_instructions = false;
-    guardian_config.include_environment_context = false;
-    guardian_config.project_doc_max_bytes = 0;
-    guardian_config.mcp_servers = Constrained::allow_only(Default::default());
-    guardian_config.js_repl_node_path = None;
-    guardian_config.js_repl_node_module_dirs = Vec::new();
-    guardian_config.zsh_path = None;
-    guardian_config.main_execve_wrapper_exe = None;
+    guardian_config.include_environment_context = true;
     guardian_config.include_apply_patch_tool = false;
     guardian_config.use_experimental_unified_exec_tool = false;
     guardian_config.permissions.allow_login_shell = false;
@@ -688,26 +697,7 @@ pub(crate) fn build_guardian_review_session_config(
             &SandboxPolicy::new_read_only_policy(),
         )?);
     }
-    disable_guardian_feature_set(&mut guardian_config)?;
     Ok(guardian_config)
-}
-
-fn disable_guardian_feature_set(guardian_config: &mut Config) -> anyhow::Result<()> {
-    for &feature in GUARDIAN_DISABLED_FEATURES {
-        guardian_config.features.disable(feature).map_err(|err| {
-            anyhow::anyhow!(
-                "guardian review session could not disable `features.{}`: {err}",
-                feature.key()
-            )
-        })?;
-        if guardian_config.features.enabled(feature) {
-            anyhow::bail!(
-                "guardian review session requires `features.{}` to be disabled",
-                feature.key()
-            );
-        }
-    }
-    Ok(())
 }
 
 async fn run_before_review_deadline<T>(

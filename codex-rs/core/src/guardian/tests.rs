@@ -4,6 +4,7 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::Constrained;
+use crate::config::InitialContextInclusions;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
@@ -560,6 +561,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 
     let (mut session, mut turn) = crate::codex::make_session_and_context().await;
     let temp_cwd = TempDir::new()?;
+    std::fs::write(
+        temp_cwd.path().join("AGENTS.md"),
+        "GUARDIAN_REPO_AGENTS_SHOULD_BE_VISIBLE",
+    )?;
     let mut config = (*turn.config).clone();
     config.cwd = temp_cwd.abs();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
@@ -624,14 +629,24 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         "PARENT_BASE_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE",
         "PARENT_USER_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE",
         "PARENT_DEVELOPER_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE",
-        "<environment_context>",
         "<permissions instructions>",
+        "<apps_instructions>",
+        "<skills_instructions>",
+        "<plugins_instructions>",
     ] {
         assert!(
             !request_body_text.contains(omitted_parent_text),
             "guardian review request should omit inherited parent text: {omitted_parent_text}"
         );
     }
+    assert!(
+        request_body_text.contains("GUARDIAN_REPO_AGENTS_SHOULD_BE_VISIBLE"),
+        "guardian review request should include repo AGENTS.md project docs"
+    );
+    assert!(
+        request_body_text.contains("<environment_context>"),
+        "guardian review request should include existing environment context"
+    );
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
     settings.set_prepend_module_to_snapshot(false);
@@ -1192,8 +1207,27 @@ fn guardian_review_session_config_strips_parent_prompt_and_tooling_surface() {
     assert_eq!(guardian_config.compact_prompt, None);
     assert!(!guardian_config.include_permissions_instructions);
     assert!(!guardian_config.include_apps_instructions);
-    assert!(!guardian_config.include_environment_context);
-    assert_eq!(guardian_config.project_doc_max_bytes, 0);
+    assert!(guardian_config.include_environment_context);
+    assert_eq!(guardian_config.project_doc_max_bytes, 4096);
+    assert_eq!(
+        guardian_config.initial_context_inclusions,
+        InitialContextInclusions {
+            model_update: false,
+            permissions: false,
+            developer_instructions: true,
+            separate_developer_instructions: true,
+            memory: false,
+            collaboration: false,
+            realtime: false,
+            personality: false,
+            apps: false,
+            skills: false,
+            plugins: false,
+            commit: false,
+            user_instructions: true,
+            environment_context: true,
+        }
+    );
     assert!(guardian_config.mcp_servers.is_empty());
     assert_eq!(guardian_config.js_repl_node_path, None);
     assert_eq!(
@@ -1211,7 +1245,9 @@ fn guardian_review_session_config_strips_parent_prompt_and_tooling_surface() {
         Feature::MemoryTool,
         Feature::Collab,
         Feature::SpawnCsv,
+        Feature::ChildAgentsMd,
         Feature::ApplyPatchFreeform,
+        Feature::CodexGitCommit,
     ] {
         assert!(!guardian_config.features.enabled(disabled_feature));
     }
@@ -1283,9 +1319,10 @@ fn guardian_review_session_config_rejects_pinned_collab_feature() {
     )
     .expect_err("guardian config should fail when collab is pinned on");
 
+    let err = err.to_string();
     assert!(
-        err.to_string()
-            .contains("guardian review session requires `features.multi_agent` to be disabled")
+        err.contains("`features.multi_agent`"),
+        "error should name the pinned feature: {err}"
     );
 }
 
