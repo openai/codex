@@ -123,6 +123,39 @@ fn env_overlay_for_exec_server(
         .collect()
 }
 
+fn exec_server_env_for_request(
+    request: &ExecRequest,
+) -> (
+    Option<codex_exec_server::ExecEnvPolicy>,
+    HashMap<String, String>,
+) {
+    if let Some(exec_server_env_config) = &request.exec_server_env_config {
+        (
+            Some(exec_server_env_config.policy.clone()),
+            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env),
+        )
+    } else {
+        (None, request.env.clone())
+    }
+}
+
+fn exec_server_params_for_request(
+    process_id: i32,
+    request: &ExecRequest,
+    tty: bool,
+) -> codex_exec_server::ExecParams {
+    let (env_policy, env) = exec_server_env_for_request(request);
+    codex_exec_server::ExecParams {
+        process_id: exec_server_process_id(process_id).into(),
+        argv: request.command.clone(),
+        cwd: request.cwd.to_path_buf(),
+        env_policy,
+        env,
+        tty,
+        arg0: request.arg0.clone(),
+    }
+}
+
 /// Borrowed process state prepared for a `write_stdin` or poll operation.
 struct PreparedProcessHandles {
     process: Arc<UnifiedExecProcess>,
@@ -621,48 +654,27 @@ impl UnifiedExecProcessManager {
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        let inherited_fds = spawn_lifecycle.inherited_fds();
+        if inherited_fds.is_empty() {
+            let started = environment
+                .get_exec_backend()
+                .start(exec_server_params_for_request(process_id, request, tty))
+                .await
+                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+            spawn_lifecycle.after_spawn();
+            return UnifiedExecProcess::from_exec_server_started(started, request.sandbox).await;
+        }
+
+        if environment.is_remote() {
+            return Err(UnifiedExecError::create_process(
+                "remote exec-server does not support inherited file descriptors".to_string(),
+            ));
+        }
+
         let (program, args) = request
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let inherited_fds = spawn_lifecycle.inherited_fds();
-
-        if environment.is_remote() {
-            if !inherited_fds.is_empty() {
-                return Err(UnifiedExecError::create_process(
-                    "remote exec-server does not support inherited file descriptors".to_string(),
-                ));
-            }
-
-            let (env, env_policy) =
-                if let Some(exec_server_env_config) = &request.exec_server_env_config {
-                    (
-                        env_overlay_for_exec_server(
-                            &request.env,
-                            &exec_server_env_config.local_policy_env,
-                        ),
-                        Some(exec_server_env_config.policy.clone()),
-                    )
-                } else {
-                    (request.env.clone(), None)
-                };
-
-            let started = environment
-                .get_exec_backend()
-                .start(codex_exec_server::ExecParams {
-                    process_id: exec_server_process_id(process_id).into(),
-                    argv: request.command.clone(),
-                    cwd: request.cwd.to_path_buf(),
-                    env_policy,
-                    env,
-                    tty,
-                    arg0: request.arg0.clone(),
-                })
-                .await
-                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            return UnifiedExecProcess::from_remote_started(started, request.sandbox).await;
-        }
-
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,

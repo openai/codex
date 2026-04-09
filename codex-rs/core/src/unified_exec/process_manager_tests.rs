@@ -66,6 +66,61 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
 }
 
 #[test]
+fn exec_server_params_use_env_policy_overlay_contract() {
+    let request = ExecRequest {
+        command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
+        cwd: std::env::current_dir()
+            .expect("current dir")
+            .try_into()
+            .expect("absolute path"),
+        env: HashMap::from([
+            ("HOME".to_string(), "/client-home".to_string()),
+            ("PATH".to_string(), "/sandbox-path".to_string()),
+            ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+        ]),
+        exec_server_env_config: Some(ExecServerEnvConfig {
+            policy: codex_exec_server::ExecEnvPolicy {
+                inherit: codex_config::types::ShellEnvironmentPolicyInherit::Core,
+                ignore_default_excludes: false,
+                exclude: Vec::new(),
+                r#set: HashMap::new(),
+                include_only: Vec::new(),
+            },
+            local_policy_env: HashMap::from([
+                ("HOME".to_string(), "/client-home".to_string()),
+                ("PATH".to_string(), "/client-path".to_string()),
+            ]),
+        }),
+        network: None,
+        expiration: crate::exec::ExecExpiration::DefaultTimeout,
+        capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
+        sandbox: codex_sandboxing::SandboxType::None,
+        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        file_system_sandbox_policy: codex_protocol::permissions::FileSystemSandboxPolicy::from(
+            &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        ),
+        network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+        windows_restricted_token_filesystem_overlay: None,
+        arg0: None,
+    };
+
+    let params =
+        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+
+    assert_eq!(params.process_id.as_str(), "123");
+    assert!(params.env_policy.is_some());
+    assert_eq!(
+        params.env,
+        HashMap::from([
+            ("PATH".to_string(), "/sandbox-path".to_string()),
+            ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+        ])
+    );
+}
+
+#[test]
 fn exec_server_process_id_matches_unified_exec_process_id() {
     assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
 }
