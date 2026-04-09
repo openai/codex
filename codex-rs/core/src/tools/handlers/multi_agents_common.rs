@@ -201,11 +201,12 @@ pub(crate) fn parse_collab_input(
 /// skipping this helper and cloning stale config state directly can send the child agent out with
 /// the wrong provider or runtime policy.
 pub(crate) fn build_agent_spawn_config(
-    base_instructions: &BaseInstructions,
+    base_instructions: Option<&BaseInstructions>,
     turn: &TurnContext,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    config.base_instructions = Some(base_instructions.text.clone());
+    config.base_instructions =
+        Some(base_instructions.map(|base_instructions| base_instructions.text.clone()));
     Ok(config)
 }
 

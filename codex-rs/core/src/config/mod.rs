@@ -248,7 +248,7 @@ pub struct Config {
     pub user_instructions_path: Option<PathBuf>,
 
     /// Base instructions override.
-    pub base_instructions: Option<String>,
+    pub base_instructions: Option<Option<String>>,
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
@@ -258,6 +258,10 @@ pub struct Config {
     /// `# Policy Configuration` section rather than replacing the whole
     /// guardian developer prompt.
     pub guardian_policy_config: Option<String>,
+
+    /// Explicit developer instructions override, preserving `null` as distinct
+    /// from a missing override.
+    pub developer_instructions_override: Option<Option<String>>,
 
     /// Whether to inject the `<permissions instructions>` developer block.
     pub include_permissions_instructions: bool,
@@ -711,7 +715,7 @@ impl Config {
             model_context_window: self.model_context_window,
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
             tool_output_token_limit: self.tool_output_token_limit,
-            base_instructions: self.base_instructions.clone(),
+            base_instructions: self.base_instructions.clone().flatten(),
             personality_enabled: self.features.enabled(Feature::Personality),
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
             model_catalog: self.model_catalog.clone(),
@@ -1224,8 +1228,8 @@ pub struct ConfigOverrides {
     pub js_repl_node_path: Option<PathBuf>,
     pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
     pub zsh_path: Option<PathBuf>,
-    pub base_instructions: Option<String>,
-    pub developer_instructions: Option<String>,
+    pub base_instructions: Option<Option<String>>,
+    pub developer_instructions: Option<Option<String>>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
@@ -1824,8 +1828,10 @@ impl Config {
             .or(cfg.model_instructions_file.as_ref());
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
-        let base_instructions = base_instructions.or(file_base_instructions);
-        let developer_instructions = developer_instructions.or(cfg.developer_instructions);
+        let base_instructions = base_instructions.or_else(|| file_base_instructions.map(Some));
+        let developer_instructions_override = developer_instructions.clone();
+        let developer_instructions =
+            developer_instructions.unwrap_or_else(|| cfg.developer_instructions.clone());
         let include_permissions_instructions = config_profile
             .include_permissions_instructions
             .or(cfg.include_permissions_instructions)
@@ -2008,6 +2014,7 @@ impl Config {
             base_instructions,
             personality,
             developer_instructions,
+            developer_instructions_override,
             compact_prompt,
             commit_attribution,
             include_permissions_instructions,
