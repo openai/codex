@@ -3155,116 +3155,286 @@
     },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,
-      "description": "Vim normal-mode keybindings for modal editing inside text areas.",
+      "description": "Vim normal-mode keybindings for modal editing inside text areas.\n\nActions that use uppercase letters (like `A` for append-line-end) should be specified as `shift-a` in config; the runtime matcher handles cross-terminal shift-reporting differences automatically.",
       "properties": {
         "append_after_cursor": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode after cursor (`a`)."
         },
         "append_line_end": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at end of line (`A`)."
         },
         "cancel_operator": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel a pending operator and return to normal mode."
         },
         "delete_char": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete character under cursor (`x`)."
         },
         "delete_to_line_end": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete from cursor to end of line (`D`)."
         },
         "enter_insert": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at cursor (`i`)."
         },
         "insert_line_start": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at first non-blank of line (`I`)."
         },
         "move_down": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor down (`j`)."
         },
         "move_left": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor left (`h`)."
         },
         "move_line_end": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of line (`$`)."
         },
         "move_line_start": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of line (`0`)."
         },
         "move_right": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor right (`l`)."
         },
         "move_up": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor up (`k`)."
         },
         "move_word_backward": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of previous word (`b`)."
         },
         "move_word_end": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of current/next word (`e`)."
         },
         "move_word_forward": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of next word (`w`)."
         },
         "open_line_above": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open a new line above and enter insert mode (`O`)."
         },
         "open_line_below": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open a new line below and enter insert mode (`o`)."
         },
         "paste_after": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Paste after cursor (`p`)."
         },
         "start_delete_operator": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Begin delete operator; next key selects motion (`d`)."
         },
         "start_yank_operator": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Begin yank operator; next key selects motion (`y`)."
         },
         "yank_line": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Yank the entire line (`Y`)."
         }
       },
       "type": "object"
     },
     "TuiVimOperatorKeymap": {
       "additionalProperties": false,
-      "description": "Vim operator-pending keybindings for modal editing inside text areas.",
+      "description": "Vim operator-pending keybindings for modal editing inside text areas.\n\nThis context is active only while waiting for a motion after `d` or `y`. Repeating the operator key (`dd`, `yy`) targets the entire line. Pressing `Esc` cancels the pending operator and returns to normal mode without modifying text.",
       "properties": {
         "cancel": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel the pending operator and return to normal mode."
         },
         "delete_line": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat delete operator to delete the whole line (`dd`)."
         },
         "motion_down": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: down one line (`j`)."
         },
         "motion_left": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: left (`h`)."
         },
         "motion_line_end": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to end of line (`$`)."
         },
         "motion_line_start": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of line (`0`)."
         },
         "motion_right": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: right (`l`)."
         },
         "motion_up": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: up one line (`k`)."
         },
         "motion_word_backward": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of previous word (`b`)."
         },
         "motion_word_end": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to end of current/next word (`e`)."
         },
         "motion_word_forward": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of next word (`w`)."
         },
         "yank_line": {
-          "$ref": "#/definitions/KeybindingsSpec"
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat yank operator to yank the whole line (`yy`)."
         }
       },
       "type": "object"
