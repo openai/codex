@@ -38,4 +38,5 @@ pub use mcp_connection_manager::McpConnectionManager;
 pub use mcp_connection_manager::SandboxState;
 pub use mcp_connection_manager::ToolInfo;
 pub use mcp_connection_manager::codex_apps_tools_cache_key;
+pub use mcp_connection_manager::declared_openai_file_input_param_names;
 pub use mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;

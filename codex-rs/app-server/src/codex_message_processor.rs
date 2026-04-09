@@ -199,6 +199,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
+use codex_core::append_thread_name;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -288,11 +289,13 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
@@ -2674,11 +2677,11 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let thread_exists =
+        let rollout_path =
             match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
             {
-                Ok(Some(_)) => true,
-                Ok(None) => false,
+                Ok(Some(path)) => Some(path),
+                Ok(None) => None,
                 Err(err) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -2689,19 +2692,39 @@ impl CodexMessageProcessor {
                 }
             };
 
-        if !thread_exists {
+        let Some(rollout_path) = rollout_path else {
             self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
                 .await;
             return;
-        }
+        };
 
-        if let Err(err) =
-            codex_core::append_thread_name(&self.config.codex_home, thread_id, &name).await
-        {
+        let msg = EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+            thread_id,
+            thread_name: Some(name.clone()),
+        });
+        let item = RolloutItem::EventMsg(msg);
+        if let Err(err) = append_rollout_item_to_path(rollout_path.as_path(), &item).await {
             self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
                 .await;
             return;
         }
+        if let Err(err) = append_thread_name(&self.config.codex_home, thread_id, &name).await {
+            self.send_internal_error(request_id, format!("failed to index thread name: {err}"))
+                .await;
+            return;
+        }
+
+        let state_db_ctx = open_state_db_for_direct_thread_lookup(&self.config).await;
+        reconcile_rollout(
+            state_db_ctx.as_deref(),
+            rollout_path.as_path(),
+            self.config.model_provider_id.as_str(),
+            /*builder*/ None,
+            &[],
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
 
         self.outgoing
             .send_response(request_id, ThreadSetNameResponse {})
@@ -3445,13 +3468,7 @@ impl CodexMessageProcessor {
             threads.push((conversation_id, thread));
         }
 
-        let names = match find_thread_names_by_ids(&self.config.codex_home, &thread_ids).await {
-            Ok(names) => names,
-            Err(err) => {
-                warn!("Failed to read thread names: {err}");
-                HashMap::new()
-            }
-        };
+        let names = thread_titles_by_ids(&self.config, &thread_ids).await;
 
         let statuses = self
             .thread_watch_manager
@@ -3461,7 +3478,9 @@ impl CodexMessageProcessor {
         let data = threads
             .into_iter()
             .map(|(conversation_id, mut thread)| {
-                thread.name = names.get(&conversation_id).cloned();
+                if let Some(title) = names.get(&conversation_id).cloned() {
+                    set_thread_name_from_title(&mut thread, title);
+                }
                 if let Some(status) = statuses.get(&thread.id) {
                     thread.status = status.clone();
                 }
@@ -4265,13 +4284,8 @@ impl CodexMessageProcessor {
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        match find_thread_name_by_id(&self.config.codex_home, &thread_id).await {
-            Ok(name) => {
-                thread.name = name;
-            }
-            Err(err) => {
-                warn!("Failed to read thread name for {thread_id}: {err}");
-            }
+        if let Some(title) = title_from_state_db(&self.config, thread_id).await {
+            set_thread_name_from_title(thread, title);
         }
     }
 
@@ -8029,7 +8043,7 @@ async fn handle_thread_listener_command(
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
-    codex_home: &Path,
+    _codex_home: &Path,
     thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
@@ -8086,11 +8100,6 @@ async fn handle_pending_thread_resume_request(
         thread_status,
         has_live_in_progress_turn,
     );
-
-    match find_thread_name_by_id(codex_home, &conversation_id).await {
-        Ok(thread_name) => thread.name = thread_name,
-        Err(err) => warn!("Failed to read thread name for {conversation_id}: {err}"),
-    }
 
     let ThreadConfigSnapshot {
         model,
@@ -8653,7 +8662,7 @@ async fn read_summary_from_state_db_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = get_state_db(config).await;
+    let state_db_ctx = open_state_db_for_direct_thread_lookup(config).await;
     read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
 }
 
@@ -8668,6 +8677,71 @@ async fn read_summary_from_state_db_context_by_thread_id(
         Ok(None) | Err(_) => return None,
     };
     Some(summary_from_thread_metadata(&metadata))
+}
+
+async fn title_from_state_db(config: &Config, thread_id: ThreadId) -> Option<String> {
+    if let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await
+        && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
+        && let Some(title) = distinct_title(&metadata)
+    {
+        return Some(title);
+    }
+    find_thread_name_by_id(&config.codex_home, &thread_id)
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn thread_titles_by_ids(
+    config: &Config,
+    thread_ids: &HashSet<ThreadId>,
+) -> HashMap<ThreadId, String> {
+    let mut names = HashMap::with_capacity(thread_ids.len());
+    if let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await {
+        for &thread_id in thread_ids {
+            let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
+                continue;
+            };
+            if let Some(title) = distinct_title(&metadata) {
+                names.insert(thread_id, title);
+            }
+        }
+    }
+    if names.len() < thread_ids.len()
+        && let Ok(legacy_names) = find_thread_names_by_ids(&config.codex_home, thread_ids).await
+    {
+        for (thread_id, title) in legacy_names {
+            names.entry(thread_id).or_insert(title);
+        }
+    }
+    names
+}
+
+async fn open_state_db_for_direct_thread_lookup(config: &Config) -> Option<StateDbHandle> {
+    StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+        .await
+        .ok()
+}
+
+fn non_empty_title(metadata: &ThreadMetadata) -> Option<String> {
+    let title = metadata.title.trim();
+    (!title.is_empty()).then(|| title.to_string())
+}
+
+fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
+    let title = non_empty_title(metadata)?;
+    if metadata.first_user_message.as_deref().map(str::trim) == Some(title.as_str()) {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+fn set_thread_name_from_title(thread: &mut Thread, title: String) {
+    if title.trim().is_empty() || thread.preview.trim() == title.trim() {
+        return;
+    }
+    thread.name = Some(title);
 }
 
 async fn summary_from_thread_list_item(
@@ -8967,6 +9041,14 @@ async fn load_thread_summary_for_rollout(
         );
     } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
         merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
+    }
+    let title = if let Some(metadata) = persisted_metadata {
+        non_empty_title(metadata)
+    } else {
+        title_from_state_db(config, thread_id).await
+    };
+    if let Some(title) = title {
+        set_thread_name_from_title(&mut thread, title);
     }
     Ok(thread)
 }

@@ -74,6 +74,8 @@ use rmcp::model::Tool;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value as JsonValue;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::sync::Mutex;
@@ -195,6 +197,89 @@ pub struct ToolInfo {
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
     pub connector_description: Option<String>,
+}
+
+const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
+
+pub fn declared_openai_file_input_param_names(
+    meta: Option<&Map<String, JsonValue>>,
+) -> Vec<String> {
+    let Some(meta) = meta else {
+        return Vec::new();
+    };
+
+    meta.get(META_OPENAI_FILE_PARAMS)
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(JsonValue::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Returns the model-visible view of a tool while preserving the raw metadata
+/// used by execution. Keep cache entries raw and call this at manager return
+/// boundaries.
+fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
+    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
+    if file_params.is_empty() {
+        return tool.clone();
+    }
+
+    let mut tool = tool.clone();
+    let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
+    mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
+    if let JsonValue::Object(input_schema) = input_schema {
+        tool.input_schema = Arc::new(input_schema);
+    }
+    tool
+}
+
+fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
+    let Some(properties) = input_schema
+        .as_object_mut()
+        .and_then(|schema| schema.get_mut("properties"))
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return;
+    };
+
+    for field_name in file_params {
+        let Some(property_schema) = properties.get_mut(field_name) else {
+            continue;
+        };
+        mask_input_property_schema(property_schema);
+    }
+}
+
+fn mask_input_property_schema(schema: &mut JsonValue) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+
+    let mut description = object
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
+    if description.is_empty() {
+        description = guidance.to_string();
+    } else if !description.contains(guidance) {
+        description = format!("{description} {guidance}");
+    }
+
+    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
+        || object.get("items").is_some();
+    object.clear();
+    object.insert("description".to_string(), JsonValue::String(description));
+    if is_array {
+        object.insert("type".to_string(), JsonValue::String("array".to_string()));
+        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
+    } else {
+        object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -534,6 +619,10 @@ impl AsyncManagedClient {
         let annotate_tools = |tools: Vec<ToolInfo>| {
             let mut tools = tools;
             for tool in &mut tools {
+                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                }
+
                 let plugin_names = match tool.connector_id.as_deref() {
                     Some(connector_id) => self
                         .tool_plugin_provenance
@@ -914,10 +1003,13 @@ impl McpConnectionManager {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        Ok(qualify_tools(filter_tools(
-            tools,
-            &managed_client.tool_filter,
-        )))
+        let tools = filter_tools(tools, &managed_client.tool_filter)
+            .into_iter()
+            .map(|mut tool| {
+                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                tool
+            });
+        Ok(qualify_tools(tools))
     }
 
     /// Returns a single map that contains all resources. Each key is the
@@ -1419,6 +1511,12 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
+    let server_supports_sandbox_state_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
+        .is_some();
     let list_start = Instant::now();
     let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(
@@ -1448,12 +1546,6 @@ async fn start_server_task(
     }
     let tools = filter_tools(tools, &tool_filter);
 
-    let server_supports_sandbox_state_capability = initialize_result
-        .capabilities
-        .experimental
-        .as_ref()
-        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
-        .is_some();
     let managed = ManagedClient {
         client: Arc::clone(&client),
         tools,
