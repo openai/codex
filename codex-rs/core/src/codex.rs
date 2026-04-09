@@ -24,6 +24,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
+use crate::inherited_thread_state::InheritedThreadState;
 use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
@@ -436,6 +437,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) inherited_thread_state: InheritedThreadState,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
@@ -490,6 +492,7 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            inherited_thread_state,
             parent_trace: _,
             analytics_events_client,
         } = args;
@@ -682,6 +685,7 @@ impl Codex {
             skills_watcher,
             agent_control,
             environment,
+            inherited_thread_state,
             analytics_events_client,
         )
         .await
@@ -1627,6 +1631,7 @@ impl Session {
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
+        inherited_thread_state: InheritedThreadState,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -1669,6 +1674,7 @@ impl Session {
                 ),
             ),
         };
+        let prompt_cache_key_override = inherited_thread_state.prompt_cache_key();
         let window_generation = match &initial_history {
             InitialHistory::Resumed(resumed_history) => u64::try_from(
                 resumed_history
@@ -2057,6 +2063,7 @@ impl Session {
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
                 installation_id,
+                prompt_cache_key_override,
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
@@ -2242,6 +2249,10 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    pub(crate) fn prompt_cache_key(&self) -> ThreadId {
+        self.services.model_client.prompt_cache_key()
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
