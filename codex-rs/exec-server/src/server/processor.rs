@@ -208,7 +208,7 @@ mod tests {
 
         send_request(
             &mut first_writer,
-            1,
+            /*id*/ 1,
             INITIALIZE_METHOD,
             &InitializeParams {
                 client_name: "exec-server-test".to_string(),
@@ -216,22 +216,23 @@ mod tests {
             },
         )
         .await;
-        let initialize_response: InitializeResponse = read_response(&mut first_lines, 1).await;
+        let initialize_response: InitializeResponse =
+            read_response(&mut first_lines, /*expected_id*/ 1).await;
         send_notification(&mut first_writer, INITIALIZED_METHOD, &()).await;
 
         let process_id = ProcessId::from("proc-long-poll");
         send_request(
             &mut first_writer,
-            2,
+            /*id*/ 2,
             EXEC_METHOD,
             &exec_params(process_id.clone()),
         )
         .await;
-        let _: ExecResponse = read_response(&mut first_lines, 2).await;
+        let _: ExecResponse = read_response(&mut first_lines, /*expected_id*/ 2).await;
 
         send_request(
             &mut first_writer,
-            3,
+            /*id*/ 3,
             EXEC_READ_METHOD,
             &ReadParams {
                 process_id: process_id.clone(),
@@ -248,7 +249,7 @@ mod tests {
             spawn_test_connection(Arc::clone(&registry), "second");
         send_request(
             &mut second_writer,
-            1,
+            /*id*/ 1,
             INITIALIZE_METHOD,
             &InitializeParams {
                 client_name: "exec-server-test".to_string(),
@@ -258,7 +259,7 @@ mod tests {
         .await;
         let second_initialize_response = timeout(
             Duration::from_secs(1),
-            read_response::<InitializeResponse>(&mut second_lines, 1),
+            read_response::<InitializeResponse>(&mut second_lines, /*expected_id*/ 1),
         )
         .await
         .expect("resume initialize should not wait for the old read to finish");
@@ -274,12 +275,12 @@ mod tests {
 
         send_request(
             &mut second_writer,
-            2,
+            /*id*/ 2,
             EXEC_TERMINATE_METHOD,
             &TerminateParams { process_id },
         )
         .await;
-        let _: TerminateResponse = read_response(&mut second_lines, 2).await;
+        let _: TerminateResponse = read_response(&mut second_lines, /*expected_id*/ 2).await;
 
         drop(second_writer);
         drop(second_lines);
