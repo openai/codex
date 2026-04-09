@@ -2098,6 +2098,7 @@ impl Config {
                     version: realtime.version.unwrap_or_default(),
                     session_type: realtime.session_type.unwrap_or_default(),
                     transport: realtime.transport.unwrap_or_default(),
+                    voice: realtime.voice,
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,

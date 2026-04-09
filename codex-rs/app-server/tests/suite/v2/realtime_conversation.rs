@@ -21,6 +21,8 @@ use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
+use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
+use codex_app_server_protocol::ThreadRealtimeListVoicesResponse;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
@@ -37,6 +39,8 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketRequest;
@@ -294,11 +298,12 @@ impl RealtimeE2eHarness {
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 thread_id: self.thread_id.clone(),
-                prompt: "backend prompt".to_string(),
+                prompt: Some(Some("backend prompt".to_string())),
                 session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
                     sdp: offer_sdp.to_string(),
                 }),
+                voice: None,
             })
             .await?;
         let start_response: JSONRPCResponse = timeout(
@@ -516,6 +521,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             prompt: None,
             session_id: None,
             transport: None,
+            voice: Some(RealtimeVoice::Cedar),
         })
         .await?;
     let start_response: JSONRPCResponse = timeout(
@@ -538,6 +544,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(
         startup_context_request.body_json()["type"].as_str(),
         Some("session.update")
+    );
+    assert_eq!(
+        startup_context_request.body_json()["session"]["audio"]["output"]["voice"],
+        "cedar"
     );
     let startup_context_instructions =
         startup_context_request.body_json()["session"]["instructions"]
@@ -684,6 +694,66 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 }
 
 #[tokio::test]
+async fn realtime_list_voices_returns_supported_names() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        "http://127.0.0.1:1",
+        "ws://127.0.0.1:1",
+        /*realtime_enabled*/ true,
+        StartupContextConfig::Generated,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    mcp.initialize().await?;
+
+    let request_id = mcp
+        .send_thread_realtime_list_voices_request(ThreadRealtimeListVoicesParams {})
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ThreadRealtimeListVoicesResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        ThreadRealtimeListVoicesResponse {
+            voices: RealtimeVoicesList {
+                v1: vec![
+                    RealtimeVoice::Juniper,
+                    RealtimeVoice::Maple,
+                    RealtimeVoice::Spruce,
+                    RealtimeVoice::Ember,
+                    RealtimeVoice::Vale,
+                    RealtimeVoice::Breeze,
+                    RealtimeVoice::Arbor,
+                    RealtimeVoice::Sol,
+                    RealtimeVoice::Cove,
+                ],
+                v2: vec![
+                    RealtimeVoice::Alloy,
+                    RealtimeVoice::Ash,
+                    RealtimeVoice::Ballad,
+                    RealtimeVoice::Coral,
+                    RealtimeVoice::Echo,
+                    RealtimeVoice::Sage,
+                    RealtimeVoice::Shimmer,
+                    RealtimeVoice::Verse,
+                    RealtimeVoice::Marin,
+                    RealtimeVoice::Cedar,
+                ],
+                default_v1: RealtimeVoice::Cove,
+                default_v2: RealtimeVoice::Marin,
+            },
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -726,6 +796,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         })
         .await?;
     let start_response: JSONRPCResponse = timeout(
@@ -823,6 +894,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            voice: None,
         })
         .await?;
     let start_response: JSONRPCResponse = timeout(
@@ -1383,6 +1455,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            voice: None,
         })
         .await?;
     let start_response: JSONRPCResponse = timeout(
@@ -1438,6 +1511,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         })
         .await?;
     let error = timeout(
@@ -1578,7 +1652,7 @@ fn assert_v1_session_update(request: &Value) -> Result<()> {
     );
     assert_eq!(
         request["session"]["audio"]["output"]["voice"].as_str(),
-        Some("fathom")
+        Some("cove")
     );
     assert_eq!(request["session"]["tools"], Value::Null);
     Ok(())
@@ -1635,7 +1709,7 @@ fn assert_call_create_multipart(
 }
 
 fn v1_session_create_json() -> &'static str {
-    r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"fathom"}},"type":"quicksilver","instructions":"backend prompt\n\nstartup context"}"#
+    r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"cove"}},"type":"quicksilver","instructions":"backend prompt\n\nstartup context"}"#
 }
 
 fn create_config_toml(

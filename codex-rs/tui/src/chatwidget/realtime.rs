@@ -263,6 +263,7 @@ impl ChatWidget {
                 prompt: None,
                 session_id: None,
                 transport,
+                voice: self.config.realtime.voice,
             },
         ));
     }

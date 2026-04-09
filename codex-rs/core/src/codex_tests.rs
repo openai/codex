@@ -75,6 +75,9 @@ use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
+use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::Submission;
@@ -4585,6 +4588,51 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
     assert!(
         session.reference_context_item().await.is_none(),
         "standalone shell tasks should not mutate previous context"
+    );
+}
+
+#[tokio::test]
+async fn realtime_conversation_list_voices_emits_builtin_list() {
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+
+    handlers::realtime_conversation_list_voices(&session, "sub-id".to_string()).await;
+
+    let event = rx.recv().await.expect("event");
+    let voices = match event.msg {
+        EventMsg::RealtimeConversationListVoicesResponse(
+            RealtimeConversationListVoicesResponseEvent { voices },
+        ) => voices,
+        msg => panic!("expected list voices response, got {msg:?}"),
+    };
+    assert_eq!(
+        voices,
+        RealtimeVoicesList {
+            v1: vec![
+                RealtimeVoice::Juniper,
+                RealtimeVoice::Maple,
+                RealtimeVoice::Spruce,
+                RealtimeVoice::Ember,
+                RealtimeVoice::Vale,
+                RealtimeVoice::Breeze,
+                RealtimeVoice::Arbor,
+                RealtimeVoice::Sol,
+                RealtimeVoice::Cove,
+            ],
+            v2: vec![
+                RealtimeVoice::Alloy,
+                RealtimeVoice::Ash,
+                RealtimeVoice::Ballad,
+                RealtimeVoice::Coral,
+                RealtimeVoice::Echo,
+                RealtimeVoice::Sage,
+                RealtimeVoice::Shimmer,
+                RealtimeVoice::Verse,
+                RealtimeVoice::Marin,
+                RealtimeVoice::Cedar,
+            ],
+            default_v1: RealtimeVoice::Cove,
+            default_v2: RealtimeVoice::Marin,
+        },
     );
 }
 

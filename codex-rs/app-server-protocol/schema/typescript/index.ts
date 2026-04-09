@@ -49,6 +49,8 @@ export type { ParsedCommand } from "./ParsedCommand";
 export type { Personality } from "./Personality";
 export type { PlanType } from "./PlanType";
 export type { RealtimeConversationVersion } from "./RealtimeConversationVersion";
+export type { RealtimeVoice } from "./RealtimeVoice";
+export type { RealtimeVoicesList } from "./RealtimeVoicesList";
 export type { ReasoningEffort } from "./ReasoningEffort";
 export type { ReasoningItemContent } from "./ReasoningItemContent";
 export type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSummary";

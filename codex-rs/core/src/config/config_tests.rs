@@ -53,6 +53,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::RealtimeVoice;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -6489,6 +6490,7 @@ fn realtime_loads_from_config_toml() -> std::io::Result<()> {
 version = "v2"
 type = "transcription"
 transport = "webrtc"
+voice = "cedar"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -6499,6 +6501,7 @@ transport = "webrtc"
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
+            voice: Some(RealtimeVoice::Cedar),
         })
     );
 
@@ -6515,6 +6518,7 @@ transport = "webrtc"
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
+            voice: Some(RealtimeVoice::Cedar),
         }
     );
     Ok(())

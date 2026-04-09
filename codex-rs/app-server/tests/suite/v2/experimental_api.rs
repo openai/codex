@@ -77,6 +77,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             prompt: Some(Some("hello".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         })
         .await?;
     let error = timeout(
@@ -114,6 +115,7 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            voice: None,
         })
         .await?;
     let error = timeout(

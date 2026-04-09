@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
+use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
@@ -16,6 +17,7 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
@@ -243,6 +245,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -298,6 +301,10 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
+    );
+    assert_eq!(
+        connection[0].body_json()["session"]["audio"]["output"]["voice"],
+        "cove"
     );
     let initial_instructions = websocket_request_instructions(&connection[0])
         .expect("initial session update instructions");
@@ -396,6 +403,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
             transport: Some(ConversationStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            voice: None,
         }))
         .await?;
 
@@ -439,7 +447,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"fathom"}},"type":"quicksilver","model":"realtime-test-model","instructions":"backend prompt\n\nstartup context"}"#;
+    let session = r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"cove"}},"type":"quicksilver","model":"realtime-test-model","instructions":"backend prompt\n\nstartup context"}"#;
     assert_eq!(
         body,
         format!(
@@ -530,6 +538,7 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -590,6 +599,7 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -674,6 +684,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -715,6 +726,7 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -804,6 +816,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
             prompt: Some(Some("old".to_string())),
             session_id: Some("conv_old".to_string()),
             transport: None,
+            voice: None,
         }))
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
@@ -821,6 +834,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
             prompt: Some(Some("new".to_string())),
             session_id: Some("conv_new".to_string()),
             transport: None,
+            voice: None,
         }))
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
@@ -908,6 +922,7 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -964,6 +979,7 @@ async fn conversation_uses_default_realtime_backend_prompt() -> Result<()> {
             prompt: None,
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1028,6 +1044,7 @@ async fn conversation_uses_empty_instructions_for_null_or_empty_prompt() -> Resu
                 prompt,
                 session_id: None,
                 transport: None,
+                voice: None,
             }))
             .await?;
 
@@ -1062,6 +1079,141 @@ async fn conversation_uses_empty_instructions_for_null_or_empty_prompt() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_uses_explicit_start_voice() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_voice", "instructions": "backend prompt" }
+        })]],
+    ])
+    .await;
+    let test = test_codex().build_with_websocket_server(&server).await?;
+    assert!(
+        server
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: Some(RealtimeVoice::Breeze),
+        }))
+        .await?;
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_voice");
+
+    let connections = server.connections();
+    assert_eq!(
+        connections[1][0].body_json()["session"]["audio"]["output"]["voice"],
+        "breeze"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_uses_configured_realtime_voice() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_config_voice", "instructions": "backend prompt" }
+        })]],
+    ])
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.realtime.voice = Some(RealtimeVoice::Cove);
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+    assert!(
+        server
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_config_voice");
+
+    let connections = server.connections();
+    assert_eq!(
+        connections[1][0].body_json()["session"]["audio"]["output"]["voice"],
+        "cove"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![vec![]]).await;
+    let mut builder = test_codex().with_config(|config| {
+        config.realtime.version = RealtimeWsVersion::V2;
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+    assert!(
+        server
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: Some(RealtimeVoice::Cove),
+        }))
+        .await?;
+
+    let error = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(error.contains("realtime voice `cove` is not supported for v2"));
+
+    assert_eq!(server.connections().len(), 1);
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1089,6 +1241,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
             prompt: Some(Some("prompt from op".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1152,6 +1305,7 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
             prompt: Some(Some("prompt from op".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1213,6 +1367,7 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
             prompt: Some(Some("prompt from op".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1267,6 +1422,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1321,6 +1477,7 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1373,6 +1530,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1458,6 +1616,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1585,6 +1744,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1727,6 +1887,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1822,6 +1983,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -1915,6 +2077,7 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -2015,6 +2178,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -2128,6 +2292,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -2271,6 +2436,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -2398,6 +2564,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -2540,6 +2707,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         }))
         .await?;
 

@@ -7034,7 +7034,8 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::DynamicToolCallResponse(_) => {}
+            | EventMsg::DynamicToolCallResponse(_)
+            | EventMsg::RealtimeConversationListVoicesResponse(_) => {}
             EventMsg::HookStarted(event) => self.on_hook_started(event),
             EventMsg::HookCompleted(event) => self.on_hook_completed(event),
             EventMsg::RealtimeConversationStarted(ev) => {

@@ -72,6 +72,8 @@ use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -3866,6 +3868,8 @@ pub struct ThreadRealtimeStartParams {
     pub session_id: Option<String>,
     #[ts(optional = nullable)]
     pub transport: Option<ThreadRealtimeStartTransport>,
+    #[ts(optional = nullable)]
+    pub voice: Option<RealtimeVoice>,
 }
 
 /// EXPERIMENTAL - transport used by thread realtime.
@@ -3930,6 +3934,20 @@ pub struct ThreadRealtimeStopParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStopResponse {}
+
+/// EXPERIMENTAL - list voices supported by thread realtime.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeListVoicesParams {}
+
+/// EXPERIMENTAL - response for listing supported realtime voices.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeListVoicesResponse {
+    pub voices: RealtimeVoicesList,
+}
 
 /// EXPERIMENTAL - emitted when thread realtime startup is accepted.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
