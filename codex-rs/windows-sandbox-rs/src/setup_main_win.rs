@@ -767,10 +767,14 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             continue;
         }
 
-        // Deny ACEs attach to filesystem objects; if the read-only carveout does not
-        // exist during setup, the sandbox could otherwise create it later under a
-        // writable parent and bypass the carveout. Materialize missing carveouts as
-        // directories so the deny-write ACL is present before the command starts.
+        // These are explicit read-only carveouts from the transformed sandbox policy, not
+        // optional workspace sentinels such as `.codex` or `.agents` (those are protected
+        // best-effort below and still skip missing directories).
+        //
+        // Deny ACEs attach to filesystem objects; if a policy carveout does not exist during
+        // setup, the sandbox could otherwise create it later under a writable parent and
+        // bypass the carveout. Materialize missing carveouts as directories so the deny-write
+        // ACL is present before the command starts.
         if !path.exists() {
             std::fs::create_dir_all(path)
                 .with_context(|| format!("failed to create deny-write path {}", path.display()))?;
