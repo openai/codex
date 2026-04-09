@@ -2204,16 +2204,16 @@ impl Session {
         self.services.state_db.clone()
     }
 
-    /// Ensure rollout file writes are durably flushed.
-    pub(crate) async fn flush_rollout(&self) {
+    /// Flush rollout writes and return the final durability-barrier result.
+    pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
         };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.flush().await
-        {
-            warn!("failed to flush rollout recorder: {e}");
+        if let Some(recorder) = recorder {
+            recorder.flush().await
+        } else {
+            Ok(())
         }
     }
 
@@ -2359,7 +2359,7 @@ impl Session {
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
                 if !is_subagent {
-                    self.flush_rollout().await;
+                    let _ = self.flush_rollout().await;
                 }
             }
             InitialHistory::Forked(rollout_items) => {
@@ -2383,7 +2383,7 @@ impl Session {
 
                 // Flush after seeding history and any persisted rollout copy.
                 if !is_subagent {
-                    self.flush_rollout().await;
+                    let _ = self.flush_rollout().await;
                 }
             }
         }
@@ -5516,7 +5516,17 @@ mod handlers {
             .collect::<Vec<_>>();
         sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
             .await;
-        sess.flush_rollout().await;
+        if let Err(err) = sess.flush_rollout().await {
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("failed to flush rollout for rollback replay: {err}"),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                }),
+            })
+            .await;
+            return;
+        }
         sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
             .await;
         sess.recompute_token_usage(turn_context.as_ref()).await;

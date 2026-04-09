@@ -564,7 +564,7 @@ async fn append_guardian_followup_reminder(review_session: &GuardianReviewSessio
 async fn load_rollout_items_for_fork(
     session: &Session,
 ) -> anyhow::Result<Option<Vec<RolloutItem>>> {
-    session.flush_rollout().await;
+    session.flush_rollout().await?;
     let Some(rollout_path) = session.current_rollout_path().await else {
         return Ok(None);
     };

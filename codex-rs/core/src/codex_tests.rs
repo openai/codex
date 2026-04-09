@@ -1337,7 +1337,11 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     // Forking reads the persisted rollout JSONL, so force the completed source turn to disk
     // before snapshotting from it.
     initial.codex.ensure_rollout_materialized().await;
-    initial.codex.flush_rollout().await;
+    initial
+        .codex
+        .flush_rollout()
+        .await
+        .expect("source rollout should flush before fork");
 
     let mut fork_config = initial.config.clone();
     fork_config.permissions.approval_policy =
@@ -2376,7 +2380,10 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
         *rollout = Some(recorder);
     }
     session.ensure_rollout_materialized().await;
-    session.flush_rollout().await;
+    session
+        .flush_rollout()
+        .await
+        .expect("attached rollout should flush");
     rollout_path
 }
 
@@ -4438,7 +4445,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
             .expect("serialize expected context item")
     );
     session.ensure_rollout_materialized().await;
-    session.flush_rollout().await;
+    session.flush_rollout().await.expect("rollout should flush");
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
         .await
@@ -4540,7 +4547,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
     session.ensure_rollout_materialized().await;
-    session.flush_rollout().await;
+    session.flush_rollout().await.expect("rollout should flush");
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
         .await
