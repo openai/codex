@@ -1676,7 +1676,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
 }
 
 #[tokio::test]
-async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
+async fn never_policy_approves_mcp_tool_calls_for_all_approval_modes() {
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -1711,7 +1711,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
         .expect("test setup should allow updating approval policy");
     turn_context
         .sandbox_policy
-        .set(SandboxPolicy::DangerFullAccess)
+        .set(SandboxPolicy::new_workspace_write_policy())
         .expect("test setup should allow updating sandbox policy");
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
