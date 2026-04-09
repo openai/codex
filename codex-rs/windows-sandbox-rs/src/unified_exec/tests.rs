@@ -1,9 +1,9 @@
 #![cfg(target_os = "windows")]
 
 use super::spawn_windows_sandbox_session_legacy;
+use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
-use crate::ipc_framed::Message;
 use crate::run_windows_sandbox_capture;
 use codex_utils_pty::ProcessDriver;
 use pretty_assertions::assert_eq;
