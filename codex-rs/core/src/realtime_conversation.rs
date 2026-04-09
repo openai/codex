@@ -619,6 +619,10 @@ fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
     }
 }
 
+fn realtime_base_url_pins_model(base_url: &str) -> bool {
+    Url::parse(base_url).is_ok_and(|url| url.query_pairs().any(|(key, _)| key == "model"))
+}
+
 fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
     let voices = RealtimeVoicesList::builtin();
     let allowed = match version {

@@ -395,7 +395,7 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
         }))
@@ -478,7 +478,7 @@ async fn conversation_start_v1_without_model_override_preserves_provider_default
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
         }))
@@ -564,7 +564,7 @@ async fn conversation_start_v2_with_provider_model_preserves_provider_default() 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
         }))
@@ -647,7 +647,7 @@ async fn conversation_start_v2_with_base_url_model_preserves_provider_default() 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
         }))
@@ -881,7 +881,7 @@ async fn conversation_webrtc_start_defaults_to_gpt_realtime_1_5() -> Result<()> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ConversationStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
