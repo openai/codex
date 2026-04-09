@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use toml::Table;
 
+mod feature_configs;
 mod legacy;
+pub use feature_configs::MultiAgentV2ConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -138,8 +140,6 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
-    /// Hide spawn_agent agent/model override fields from the model-visible tool schema.
-    DebugHideSpawnAgentMetadata,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -398,7 +398,7 @@ impl Features {
             .apply(&mut features);
 
             if let Some(feature_entries) = source.features {
-                features.apply_map(&feature_entries.entries);
+                features.apply_toml(feature_entries);
             }
         }
 
@@ -492,8 +492,61 @@ pub fn is_known_feature_key(key: &str) -> bool {
 /// Deserializable features table for TOML.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
-    pub entries: BTreeMap<String, bool>,
+    entries: BTreeMap<String, bool>,
+}
+
+impl Features {
+    fn apply_toml(&mut self, features: &FeaturesToml) {
+        let entries = features.entries();
+        self.apply_map(&entries);
+    }
+}
+
+impl FeaturesToml {
+    pub fn entries(&self) -> BTreeMap<String, bool> {
+        let mut entries = self.entries.clone();
+        if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
+        }
+        entries
+    }
+}
+
+impl From<BTreeMap<String, bool>> for FeaturesToml {
+    fn from(entries: BTreeMap<String, bool>) -> Self {
+        Self {
+            entries,
+            ..Default::default()
+        }
+    }
+}
+
+// To be used for features that need more configuration than just enabled/disabled and
+// require a custom config struct under `[features]`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum FeatureToml<T> {
+    Enabled(bool),
+    Config(T),
+}
+
+impl<T: FeatureConfig> FeatureToml<T> {
+    pub fn enabled(&self) -> Option<bool> {
+        match self {
+            Self::Enabled(enabled) => Some(*enabled),
+            Self::Config(config) => config.enabled(),
+        }
+    }
+}
+
+// A trait to be implemented by custom feature config structs when defining a feature that needs more configuration than
+// just enabled/disabled.
+pub trait FeatureConfig {
+    fn enabled(&self) -> Option<bool>;
 }
 
 /// Single, easy-to-read registry of all feature definitions.
@@ -705,12 +758,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MultiAgentV2,
         key: "multi_agent_v2",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::DebugHideSpawnAgentMetadata,
-        key: "debug_hide_spawn_agent_metadata",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -43,6 +43,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+pub use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use serde::de::DeserializeOwned;
@@ -268,6 +269,8 @@ pub struct InProcessClientStartArgs {
     pub cloud_requirements: CloudRequirementsLoader,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
+    /// Environment manager used by core execution and filesystem operations.
+    pub environment_manager: Arc<EnvironmentManager>,
     /// Startup warnings emitted after initialize succeeds.
     pub config_warnings: Vec<ConfigWarningNotification>,
     /// Session source recorded in app-server thread metadata.
@@ -317,6 +320,7 @@ impl InProcessClientStartArgs {
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
             feedback: self.feedback,
+            environment_manager: self.environment_manager,
             config_warnings: self.config_warnings,
             session_source: self.session_source,
             enable_codex_api_key_env: self.enable_codex_api_key_env,
@@ -893,6 +897,7 @@ mod tests {
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
+            environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
@@ -1891,8 +1896,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_start_args_leave_manager_bootstrap_to_app_server() {
+    async fn runtime_start_args_forward_environment_manager() {
         let config = Arc::new(build_test_config().await);
+        let environment_manager = Arc::new(EnvironmentManager::new(Some(
+            "ws://127.0.0.1:8765".to_string(),
+        )));
 
         let runtime_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
@@ -1901,6 +1909,7 @@ mod tests {
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
+            environment_manager: environment_manager.clone(),
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,
             enable_codex_api_key_env: false,
@@ -1913,6 +1922,11 @@ mod tests {
         .into_runtime_start_args();
 
         assert_eq!(runtime_args.config, config);
+        assert!(Arc::ptr_eq(
+            &runtime_args.environment_manager,
+            &environment_manager
+        ));
+        assert!(runtime_args.environment_manager.is_remote());
     }
 
     #[tokio::test]

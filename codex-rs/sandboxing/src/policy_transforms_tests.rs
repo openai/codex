@@ -52,8 +52,7 @@ fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
     let blocked = AbsolutePathBuf::resolve_path_against_base(
         "blocked",
         std::env::current_dir().expect("current dir"),
-    )
-    .expect("blocked path");
+    );
     let policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -315,8 +314,8 @@ fn merge_file_system_policy_with_additional_permissions_preserves_unreadable_roo
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let allowed_path = cwd.join("allowed").expect("allowed path");
-    let denied_path = cwd.join("denied").expect("denied path");
+    let allowed_path = cwd.join("allowed");
+    let denied_path = cwd.join("denied");
     let merged_policy = merge_file_system_policy_with_additional_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -359,7 +358,7 @@ fn effective_file_system_sandbox_policy_returns_base_policy_without_additional_p
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let denied_path = cwd.join("denied").expect("denied path");
+    let denied_path = cwd.join("denied");
     let base_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -386,8 +385,8 @@ fn effective_file_system_sandbox_policy_merges_additional_write_roots() {
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let allowed_path = cwd.join("allowed").expect("allowed path");
-    let denied_path = cwd.join("denied").expect("denied path");
+    let allowed_path = cwd.join("allowed");
+    let denied_path = cwd.join("denied");
     let base_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {

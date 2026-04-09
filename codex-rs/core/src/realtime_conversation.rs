@@ -1,5 +1,7 @@
+use crate::client::ModelClient;
 use crate::codex::Session;
 use crate::realtime_context::build_realtime_startup_context;
+use crate::realtime_prompt::prepare_realtime_backend_prompt;
 use async_channel::Receiver;
 use async_channel::Sender;
 use async_channel::TrySendError;
@@ -27,14 +29,18 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationSdpEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
@@ -55,6 +61,7 @@ const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
+const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 const ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 
@@ -139,6 +146,20 @@ struct ConversationState {
     realtime_active: Arc<AtomicBool>,
 }
 
+struct RealtimeStart {
+    api_provider: ApiProvider,
+    extra_headers: Option<HeaderMap>,
+    session_config: RealtimeSessionConfig,
+    model_client: ModelClient,
+    sdp: Option<String>,
+}
+
+struct RealtimeStartOutput {
+    realtime_active: Arc<AtomicBool>,
+    events_rx: Receiver<RealtimeEvent>,
+    sdp: Option<String>,
+}
+
 #[allow(dead_code)]
 impl RealtimeConversationManager {
     pub(crate) fn new() -> Self {
@@ -154,12 +175,7 @@ impl RealtimeConversationManager {
             .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
     }
 
-    pub(crate) async fn start(
-        &self,
-        api_provider: ApiProvider,
-        extra_headers: Option<HeaderMap>,
-        session_config: RealtimeSessionConfig,
-    ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
+    async fn start(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.take()
@@ -167,20 +183,53 @@ impl RealtimeConversationManager {
         if let Some(state) = previous_state {
             stop_conversation_state(state, RealtimeFanoutTaskStop::Abort).await;
         }
+
+        self.start_inner(start).await
+    }
+
+    async fn start_inner(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
+        let RealtimeStart {
+            api_provider,
+            extra_headers,
+            session_config,
+            model_client,
+            sdp,
+        } = start;
         let session_kind = match session_config.event_parser {
             RealtimeEventParser::V1 => RealtimeSessionKind::V1,
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
 
         let client = RealtimeWebsocketClient::new(api_provider);
-        let connection = client
-            .connect(
-                session_config,
-                extra_headers.unwrap_or_default(),
-                default_headers(),
-            )
-            .await
-            .map_err(map_api_error)?;
+        let (connection, sdp) = if let Some(sdp) = sdp {
+            let call = model_client
+                .create_realtime_call_with_headers(
+                    sdp,
+                    session_config.clone(),
+                    extra_headers.unwrap_or_default(),
+                )
+                .await?;
+            let connection = client
+                .connect_webrtc_sideband(
+                    session_config,
+                    &call.call_id,
+                    call.sideband_headers,
+                    default_headers(),
+                )
+                .await
+                .map_err(map_api_error)?;
+            (connection, Some(call.sdp))
+        } else {
+            let connection = client
+                .connect(
+                    session_config,
+                    extra_headers.unwrap_or_default(),
+                    default_headers(),
+                )
+                .await
+                .map_err(map_api_error)?;
+            (connection, None)
+        };
 
         let writer = connection.writer();
         let events = connection.events();
@@ -216,7 +265,11 @@ impl RealtimeConversationManager {
             fanout_task: None,
             realtime_active: Arc::clone(&realtime_active),
         });
-        Ok((events_rx, realtime_active))
+        Ok(RealtimeStartOutput {
+            realtime_active,
+            events_rx,
+            sdp,
+        })
     }
 
     pub(crate) async fn register_fanout_task(
@@ -447,6 +500,7 @@ struct PreparedRealtimeConversationStart {
     requested_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
+    transport: ConversationStartTransport,
 }
 
 async fn prepare_realtime_start(
@@ -460,16 +514,51 @@ async fn prepare_realtime_start(
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let auth = auth_manager.auth().await;
-    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     let config = sess.get_config().await;
+    let transport = params
+        .transport
+        .unwrap_or(ConversationStartTransport::Websocket);
+    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }
-    let prompt = config
-        .experimental_realtime_ws_backend_prompt
-        .clone()
-        .unwrap_or(params.prompt);
+    let version = config.realtime.version;
+    let session_config =
+        build_realtime_session_config(sess, params.prompt, params.session_id, params.voice).await?;
+    let requested_session_id = session_config.session_id.clone();
+    let extra_headers = match transport {
+        ConversationStartTransport::Websocket => {
+            let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
+            realtime_request_headers(
+                requested_session_id.as_deref(),
+                Some(realtime_api_key.as_str()),
+            )?
+        }
+        ConversationStartTransport::Webrtc { .. } => {
+            realtime_request_headers(requested_session_id.as_deref(), /*api_key*/ None)?
+        }
+    };
+    Ok(PreparedRealtimeConversationStart {
+        api_provider,
+        extra_headers,
+        requested_session_id,
+        version,
+        session_config,
+        transport,
+    })
+}
+
+pub(crate) async fn build_realtime_session_config(
+    sess: &Arc<Session>,
+    prompt: Option<Option<String>>,
+    session_id: Option<String>,
+    voice: Option<RealtimeVoice>,
+) -> CodexResult<RealtimeSessionConfig> {
+    let config = sess.get_config().await;
+    let prompt = prepare_realtime_backend_prompt(
+        prompt,
+        config.experimental_realtime_ws_backend_prompt.clone(),
+    );
     let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
         Some(startup_context) => startup_context,
         None => {
@@ -478,14 +567,19 @@ async fn prepare_realtime_start(
                 .unwrap_or_default()
         }
     };
-    let prompt = if startup_context.is_empty() {
-        prompt
-    } else {
-        format!("{prompt}\n\n{startup_context}")
+    let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => startup_context,
+        (false, true) => prompt,
+        (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
-    let model = config.experimental_realtime_ws_model.clone();
-    let version = config.realtime.version;
-    let event_parser = match version {
+    let model = Some(
+        config
+            .experimental_realtime_ws_model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_REALTIME_MODEL.to_string()),
+    );
+    let event_parser = match config.realtime.version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
@@ -493,23 +587,51 @@ async fn prepare_realtime_start(
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
-    let requested_session_id = params.session_id.or(Some(sess.conversation_id.to_string()));
-    let session_config = RealtimeSessionConfig {
+    let voice = voice
+        .or(config.realtime.voice)
+        .unwrap_or_else(|| default_realtime_voice(config.realtime.version));
+    validate_realtime_voice(config.realtime.version, voice)?;
+    Ok(RealtimeSessionConfig {
         instructions: prompt,
         model,
-        session_id: requested_session_id.clone(),
+        session_id: Some(session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
         event_parser,
         session_mode,
-    };
-    let extra_headers =
-        realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
-    Ok(PreparedRealtimeConversationStart {
-        api_provider,
-        extra_headers,
-        requested_session_id,
-        version,
-        session_config,
+        voice,
     })
+}
+
+fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
+    let voices = RealtimeVoicesList::builtin();
+    match version {
+        RealtimeWsVersion::V1 => voices.default_v1,
+        RealtimeWsVersion::V2 => voices.default_v2,
+    }
+}
+
+fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
+    let voices = RealtimeVoicesList::builtin();
+    let allowed = match version {
+        RealtimeWsVersion::V1 => &voices.v1,
+        RealtimeWsVersion::V2 => &voices.v2,
+    };
+    if allowed.contains(&voice) {
+        return Ok(());
+    }
+
+    let version = match version {
+        RealtimeWsVersion::V1 => "v1",
+        RealtimeWsVersion::V2 => "v2",
+    };
+    let allowed = allowed
+        .iter()
+        .map(|voice| voice.wire_name())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(CodexErr::InvalidRequest(format!(
+        "realtime voice `{}` is not supported for {version}; supported voices: {allowed}",
+        voice.wire_name()
+    )))
 }
 
 async fn handle_start_inner(
@@ -523,12 +645,21 @@ async fn handle_start_inner(
         requested_session_id,
         version,
         session_config,
+        transport,
     } = prepared_start;
     info!("starting realtime conversation");
-    let (events_rx, realtime_active) = sess
-        .conversation
-        .start(api_provider, extra_headers, session_config)
-        .await?;
+    let sdp = match transport {
+        ConversationStartTransport::Websocket => None,
+        ConversationStartTransport::Webrtc { sdp } => Some(sdp),
+    };
+    let start = RealtimeStart {
+        api_provider,
+        extra_headers,
+        session_config,
+        model_client: sess.services.model_client.clone(),
+        sdp,
+    };
+    let start_output = sess.conversation.start(start).await?;
 
     info!("realtime conversation started");
 
@@ -540,6 +671,19 @@ async fn handle_start_inner(
         }),
     })
     .await;
+
+    let RealtimeStartOutput {
+        realtime_active,
+        events_rx,
+        sdp,
+    } = start_output;
+    if let Some(sdp) = sdp {
+        sess.send_event_raw(Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::RealtimeConversationSdp(RealtimeConversationSdpEvent { sdp }),
+        })
+        .await;
+    }
 
     let sess_clone = Arc::clone(sess);
     let sub_id = sub_id.to_string();
@@ -660,7 +804,7 @@ fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> C
 
 fn realtime_request_headers(
     session_id: Option<&str>,
-    api_key: &str,
+    api_key: Option<&str>,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
@@ -670,10 +814,12 @@ fn realtime_request_headers(
         headers.insert("x-session-id", session_id);
     }
 
-    let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
-        CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
-    })?;
-    headers.insert(AUTHORIZATION, auth_value);
+    if let Some(api_key) = api_key {
+        let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
+            CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
+        })?;
+        headers.insert(AUTHORIZATION, auth_value);
+    }
 
     Ok(Some(headers))
 }

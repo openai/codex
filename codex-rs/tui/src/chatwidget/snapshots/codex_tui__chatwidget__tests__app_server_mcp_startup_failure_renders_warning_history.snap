@@ -1,15 +1,11 @@
 ---
-source: tui/src/chatwidget/tests.rs
-assertion_line: 11761
-expression: term.backend().vt100().screen().contents()
+source: tui/src/chatwidget/tests/mcp_startup.rs
+expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
-
-
-
 ⚠ MCP client for `alpha` failed to start: handshake failed
 ⚠ MCP startup incomplete (failed: alpha)
 
 
 › Ask Codex to do anything
 
-  gpt-5.3-codex default · 100% left · /tmp/project
+  gpt-5.3-codex default · /tmp/project

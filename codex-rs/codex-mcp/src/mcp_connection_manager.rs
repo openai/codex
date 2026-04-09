@@ -25,6 +25,7 @@ use crate::mcp::McpConfig;
 use crate::mcp::ToolPluginProvenance;
 use crate::mcp::configured_mcp_servers;
 use crate::mcp::effective_mcp_servers;
+use crate::mcp::mcp_permission_prompt_is_auto_approved;
 use crate::mcp::sanitize_responses_api_tool_name;
 use crate::mcp::tool_plugin_provenance;
 use anyhow::Context;
@@ -186,6 +187,8 @@ pub struct ToolInfo {
     pub server_name: String,
     pub tool_name: String,
     pub tool_namespace: String,
+    #[serde(default)]
+    pub server_instructions: Option<String>,
     pub tool: Tool,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
@@ -241,17 +244,31 @@ fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
     }
 }
 
+fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> bool {
+    match elicitation {
+        CreateElicitationRequestParams::FormElicitationParams {
+            requested_schema, ..
+        } => {
+            // Auto-accept confirm/approval elicitations without schema requirements.
+            requested_schema.properties.is_empty()
+        }
+        CreateElicitationRequestParams::UrlElicitationParams { .. } => false,
+    }
+}
+
 #[derive(Clone)]
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     approval_policy: Arc<StdMutex<AskForApproval>>,
+    sandbox_policy: Arc<StdMutex<SandboxPolicy>>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval) -> Self {
+    fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
+            sandbox_policy: Arc::new(StdMutex::new(sandbox_policy)),
         }
     }
 
@@ -273,16 +290,33 @@ impl ElicitationRequestManager {
     fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
+        let sandbox_policy = self.sandbox_policy.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
+            let sandbox_policy = sandbox_policy.clone();
             async move {
-                if approval_policy
+                let approval_policy = approval_policy
                     .lock()
-                    .is_ok_and(|policy| elicitation_is_rejected_by_policy(*policy))
+                    .map(|policy| *policy)
+                    .unwrap_or(AskForApproval::Never);
+                let sandbox_policy = sandbox_policy
+                    .lock()
+                    .map(|policy| policy.clone())
+                    .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
+                if mcp_permission_prompt_is_auto_approved(approval_policy, &sandbox_policy)
+                    && can_auto_accept_elicitation(&elicitation)
                 {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Accept,
+                        content: Some(serde_json::json!({})),
+                        meta: None,
+                    });
+                }
+
+                if elicitation_is_rejected_by_policy(approval_policy) {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Decline,
                         content: None,
@@ -356,6 +390,7 @@ struct ManagedClient {
     tools: Vec<ToolInfo>,
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
+    server_instructions: Option<String>,
     server_supports_sandbox_state_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
@@ -601,11 +636,17 @@ impl McpConnectionManager {
         tool_plugin_provenance(config)
     }
 
-    pub fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
+    pub fn new_uninitialized(
+        approval_policy: &Constrained<AskForApproval>,
+        sandbox_policy: &Constrained<SandboxPolicy>,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
-            elicitation_requests: ElicitationRequestManager::new(approval_policy.value()),
+            elicitation_requests: ElicitationRequestManager::new(
+                approval_policy.value(),
+                sandbox_policy.get().clone(),
+            ),
         }
     }
 
@@ -620,6 +661,12 @@ impl McpConnectionManager {
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
+        }
+    }
+
+    pub fn set_sandbox_policy(&self, sandbox_policy: &SandboxPolicy) {
+        if let Ok(mut policy) = self.elicitation_requests.sandbox_policy.lock() {
+            *policy = sandbox_policy.clone();
         }
     }
 
@@ -640,7 +687,10 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            initial_sandbox_state.sandbox_policy.clone(),
+        );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let mcp_servers = mcp_servers.clone();
@@ -842,6 +892,7 @@ impl McpConnectionManager {
             CODEX_APPS_MCP_SERVER_NAME,
             &managed_client.client,
             managed_client.tool_timeout,
+            managed_client.server_instructions.as_deref(),
         )
         .await
         .with_context(|| {
@@ -1315,19 +1366,15 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
-fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCapability> {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-        // indicates this should be an empty object.
-        Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: None,
-            }),
-            url: None,
-        })
-    } else {
-        None
-    }
+fn elicitation_capability_for_server(_server_name: &str) -> Option<ElicitationCapability> {
+    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+    // indicates this should be an empty object.
+    Some(ElicitationCapability {
+        form: Some(FormElicitationCapability {
+            schema_validation: None,
+        }),
+        url: None,
+    })
 }
 
 async fn start_server_task(
@@ -1374,9 +1421,14 @@ async fn start_server_task(
 
     let list_start = Instant::now();
     let fetch_start = Instant::now();
-    let tools = list_tools_for_client_uncached(&server_name, &client, startup_timeout)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+    let tools = list_tools_for_client_uncached(
+        &server_name,
+        &client,
+        startup_timeout,
+        initialize_result.instructions.as_deref(),
+    )
+    .await
+    .map_err(StartupOutcomeError::from)?;
     emit_duration(
         MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
         fetch_start.elapsed(),
@@ -1407,6 +1459,7 @@ async fn start_server_task(
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
+        server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_capability,
         codex_apps_tools_cache_context,
     };
@@ -1587,6 +1640,7 @@ async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
+    server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
     let resp = client
         .list_tools_with_connector_ids(/*params*/ None, timeout)
@@ -1617,6 +1671,7 @@ async fn list_tools_for_client_uncached(
                 server_name: server_name.to_owned(),
                 tool_name,
                 tool_namespace,
+                server_instructions: server_instructions.map(str::to_string),
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,

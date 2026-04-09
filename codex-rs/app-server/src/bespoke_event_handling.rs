@@ -80,6 +80,7 @@ use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
@@ -354,6 +355,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_server_notification(ServerNotification::ThreadRealtimeStarted(
                         notification,
                     ))
+                    .await;
+            }
+        }
+        EventMsg::RealtimeConversationSdp(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadRealtimeSdpNotification {
+                    thread_id: conversation_id.to_string(),
+                    sdp: event.sdp,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadRealtimeSdp(notification))
                     .await;
             }
         }
@@ -1343,7 +1355,6 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let message = ev.message.clone();
             let codex_error_info = ev.codex_error_info.clone();
-
             // If this error belongs to an in-flight `thread/rollback` request, fail that request
             // (and clear pending state) so subsequent rollbacks are unblocked.
             //
@@ -2843,6 +2854,7 @@ async fn construct_mcp_tool_call_end_notification(
             Some(McpToolCallResult {
                 content: value.content.clone(),
                 structured_content: value.structured_content.clone(),
+                meta: value.meta.clone(),
             }),
             None,
         ),
@@ -2968,16 +2980,16 @@ mod tests {
         turn_id: &str,
         status: GuardianAssessmentStatus,
     ) -> GuardianAssessmentEvent {
-        let (risk_score, risk_level, rationale) = match status {
+        let (risk_level, user_authorization, rationale) = match status {
             GuardianAssessmentStatus::InProgress => (None, None, None),
             GuardianAssessmentStatus::Approved => (
-                Some(12),
                 Some(codex_protocol::protocol::GuardianRiskLevel::Low),
+                Some(codex_protocol::protocol::GuardianUserAuthorization::High),
                 Some("looks safe".to_string()),
             ),
             GuardianAssessmentStatus::Denied => (
-                Some(88),
                 Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 Some("too risky".to_string()),
             ),
             GuardianAssessmentStatus::Aborted => (None, None, None),
@@ -2986,8 +2998,8 @@ mod tests {
             id: id.to_string(),
             turn_id: turn_id.to_string(),
             status,
-            risk_score,
             risk_level,
+            user_authorization,
             rationale,
             action: serde_json::from_value(json!({
                 "type": "command",
@@ -3046,8 +3058,8 @@ mod tests {
                 id: "item-1".to_string(),
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: action.clone(),
             },
@@ -3062,8 +3074,8 @@ mod tests {
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
                 );
-                assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.user_authorization, None);
                 assert_eq!(payload.review.rationale, None);
                 assert_eq!(payload.action, action.into());
             }
@@ -3086,8 +3098,8 @@ mod tests {
                 id: "item-2".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
-                risk_score: Some(91),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
                 action: action.clone(),
             },
@@ -3099,10 +3111,13 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
-                assert_eq!(payload.review.risk_score, Some(91));
                 assert_eq!(
                     payload.review.risk_level,
                     Some(codex_app_server_protocol::GuardianRiskLevel::High)
+                );
+                assert_eq!(
+                    payload.review.user_authorization,
+                    Some(codex_app_server_protocol::GuardianUserAuthorization::Low)
                 );
                 assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
                 assert_eq!(payload.action, action.into());
@@ -3127,8 +3142,8 @@ mod tests {
                 id: "item-3".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: action.clone(),
             },
@@ -3140,8 +3155,8 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-3");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
-                assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.user_authorization, None);
                 assert_eq!(payload.review.rationale, None);
                 assert_eq!(payload.action, action.into());
             }
@@ -4233,7 +4248,9 @@ mod tests {
             content: content.clone(),
             is_error: Some(false),
             structured_content: None,
-            meta: None,
+            meta: Some(serde_json::json!({
+                "ui/resourceUri": "ui://widget/list-resources.html"
+            })),
         };
 
         let end_event = McpToolCallEndEvent {
@@ -4268,6 +4285,9 @@ mod tests {
                 result: Some(McpToolCallResult {
                     content,
                     structured_content: None,
+                    meta: Some(serde_json::json!({
+                        "ui/resourceUri": "ui://widget/list-resources.html"
+                    })),
                 }),
                 error: None,
                 duration_ms: Some(0),

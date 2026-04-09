@@ -81,8 +81,7 @@ pub enum RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
-        base_instructions: Option<BaseInstructions>,
-        developer_instructions: Option<Option<String>>,
+        base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         event_persistence_mode: EventPersistenceMode,
     },
@@ -95,7 +94,7 @@ pub enum RolloutRecorderParams {
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
     Persist {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
@@ -111,8 +110,7 @@ impl RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
-        base_instructions: Option<BaseInstructions>,
-        developer_instructions: Option<Option<String>>,
+        base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         event_persistence_mode: EventPersistenceMode,
     ) -> Self {
@@ -121,7 +119,6 @@ impl RolloutRecorderParams {
             forked_from_id,
             source,
             base_instructions,
-            developer_instructions,
             dynamic_tools,
             event_persistence_mode,
         }
@@ -383,7 +380,6 @@ impl RolloutRecorder {
                     forked_from_id,
                     source,
                     base_instructions,
-                    developer_instructions,
                     dynamic_tools,
                     event_persistence_mode,
                 } => {
@@ -413,7 +409,6 @@ impl RolloutRecorder {
                         source,
                         model_provider: Some(config.model_provider_id().to_string()),
                         base_instructions: Some(base_instructions),
-                        developer_instructions,
                         dynamic_tools: if dynamic_tools.is_empty() {
                             None
                         } else {
@@ -519,7 +514,7 @@ impl RolloutRecorder {
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout persist: {e}")))?;
         rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))
+            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))?
     }
 
     /// Flush all queued writes and wait until they are committed by the writer task.
@@ -815,11 +810,13 @@ async fn rollout_writer(
                     .await;
 
                     if let Err(err) = result {
-                        let _ = ack.send(());
-                        return Err(err);
+                        let kind = err.kind();
+                        let message = err.to_string();
+                        let _ = ack.send(Err(IoError::new(kind, message.clone())));
+                        return Err(IoError::new(kind, message));
                     }
                 }
-                let _ = ack.send(());
+                let _ = ack.send(Ok(()));
             }
             RolloutCmd::Flush { ack } => {
                 // Deferred fresh threads may not have an initialized file yet.

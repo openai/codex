@@ -35,16 +35,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
         let Some(folder) = layer.config_folder() else {
             continue;
         };
-        let source_path = match folder.join("hooks.json") {
-            Ok(source_path) => source_path,
-            Err(err) => {
-                warnings.push(format!(
-                    "failed to resolve hooks config path from {}: {err}",
-                    folder.display()
-                ));
-                continue;
-            }
-        };
+        let source_path = folder.join("hooks.json");
         if !source_path.as_path().is_file() {
             continue;
         }

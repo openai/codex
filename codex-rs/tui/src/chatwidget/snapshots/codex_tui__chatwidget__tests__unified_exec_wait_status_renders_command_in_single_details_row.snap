@@ -1,6 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
-expression: rendered
+source: tui/src/chatwidget/tests/exec_flow.rs
+expression: normalize_snapshot_paths(rendered)
 ---
 • Waiting for background terminal (0s • esc to …
   └ cargo test -p codex-core -- --exact…
@@ -8,4 +8,4 @@ expression: rendered
 
 › Ask Codex to do anything
 
-  gpt-5.3-codex default · 100% left · /tmp/proj…
+  gpt-5.3-codex default · /tmp/project

@@ -54,6 +54,7 @@ use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
 use codex_protocol::protocol::GuardianRiskLevel as CoreGuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization as CoreGuardianUserAuthorization;
 use codex_protocol::protocol::HookEventName as CoreHookEventName;
 use codex_protocol::protocol::HookExecutionMode as CoreHookExecutionMode;
 use codex_protocol::protocol::HookHandlerType as CoreHookHandlerType;
@@ -71,6 +72,8 @@ use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -1791,6 +1794,8 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }
@@ -2349,17 +2354,17 @@ pub struct FsCopyResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsWatchParams {
+    /// Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
+    pub watch_id: String,
     /// Absolute file or directory path to watch.
     pub path: AbsolutePathBuf,
 }
 
-/// Created watch handle returned by `fs/watch`.
+/// Successful response for `fs/watch`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsWatchResponse {
-    /// Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
-    pub watch_id: String,
     /// Canonicalized path associated with the watch.
     pub path: AbsolutePathBuf,
 }
@@ -2369,7 +2374,7 @@ pub struct FsWatchResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsUnwatchParams {
-    /// Watch identifier returned by `fs/watch`.
+    /// Watch identifier previously provided to `fs/watch`.
     pub watch_id: String,
 }
 
@@ -2384,7 +2389,7 @@ pub struct FsUnwatchResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsChangedNotification {
-    /// Watch identifier returned by `fs/watch`.
+    /// Watch identifier previously provided to `fs/watch`.
     pub watch_id: String,
     /// File or directory paths associated with this event.
     pub changed_paths: Vec<AbsolutePathBuf>,
@@ -2603,22 +2608,10 @@ pub struct ThreadStartParams {
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
     pub service_name: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<Option<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
+    pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<Option<String>>,
+    pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
@@ -2733,22 +2726,10 @@ pub struct ThreadResumeParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<Option<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
+    pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<Option<String>>,
+    pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// If true, persist additional rollout EventMsg variants required to
@@ -2822,22 +2803,10 @@ pub struct ThreadForkParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
     #[ts(optional = nullable)]
-    pub base_instructions: Option<Option<String>>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
+    pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
-    pub developer_instructions: Option<Option<String>>,
+    pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// If true, persist additional rollout EventMsg variants required to
@@ -3887,9 +3856,33 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
-    pub prompt: String,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub prompt: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub session_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub transport: Option<ThreadRealtimeStartTransport>,
+    #[ts(optional = nullable)]
+    pub voice: Option<RealtimeVoice>,
+}
+
+/// EXPERIMENTAL - transport used by thread realtime.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/", tag = "type")]
+pub enum ThreadRealtimeStartTransport {
+    Websocket,
+    Webrtc {
+        /// SDP offer generated by a WebRTC RTCPeerConnection after configuring audio and the
+        /// realtime events data channel.
+        sdp: String,
+    },
 }
 
 /// EXPERIMENTAL - response for starting thread realtime.
@@ -3942,6 +3935,20 @@ pub struct ThreadRealtimeStopParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStopResponse {}
 
+/// EXPERIMENTAL - list voices supported by thread realtime.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeListVoicesParams {}
+
+/// EXPERIMENTAL - response for listing supported realtime voices.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeListVoicesResponse {
+    pub voices: RealtimeVoicesList,
+}
+
 /// EXPERIMENTAL - emitted when thread realtime startup is accepted.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -3979,6 +3986,15 @@ pub struct ThreadRealtimeTranscriptUpdatedNotification {
 pub struct ThreadRealtimeOutputAudioDeltaNotification {
     pub thread_id: String,
     pub audio: ThreadRealtimeAudioChunk,
+}
+
+/// EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeSdpNotification {
+    pub thread_id: String,
+    pub sdp: String,
 }
 
 /// EXPERIMENTAL - emitted when thread realtime encounters an error.
@@ -4506,6 +4522,7 @@ pub enum GuardianRiskLevel {
     Low,
     Medium,
     High,
+    Critical,
 }
 
 impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
@@ -4514,6 +4531,29 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
             CoreGuardianRiskLevel::Low => Self::Low,
             CoreGuardianRiskLevel::Medium => Self::Medium,
             CoreGuardianRiskLevel::High => Self::High,
+            CoreGuardianRiskLevel::Critical => Self::Critical,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Authorization level assigned by guardian approval review.
+pub enum GuardianUserAuthorization {
+    Unknown,
+    Low,
+    Medium,
+    High,
+}
+
+impl From<CoreGuardianUserAuthorization> for GuardianUserAuthorization {
+    fn from(value: CoreGuardianUserAuthorization) -> Self {
+        match value {
+            CoreGuardianUserAuthorization::Unknown => Self::Unknown,
+            CoreGuardianUserAuthorization::Low => Self::Low,
+            CoreGuardianUserAuthorization::Medium => Self::Medium,
+            CoreGuardianUserAuthorization::High => Self::High,
         }
     }
 }
@@ -4526,9 +4566,8 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
 #[ts(export_to = "v2/")]
 pub struct GuardianApprovalReview {
     pub status: GuardianApprovalReviewStatus,
-    #[ts(type = "number | null")]
-    pub risk_score: Option<u8>,
     pub risk_level: Option<GuardianRiskLevel>,
+    pub user_authorization: Option<GuardianUserAuthorization>,
     pub rationale: Option<String>,
 }
 
@@ -5048,6 +5087,9 @@ pub struct McpToolCallResult {
     // representations). Using `JsonValue` keeps the payload wire-shaped and easy to export.
     pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
+    #[serde(rename = "_meta")]
+    #[ts(rename = "_meta")]
+    pub meta: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7796,8 +7838,8 @@ mod tests {
     fn automatic_approval_review_deserializes_aborted_status() {
         let review: GuardianApprovalReview = serde_json::from_value(json!({
             "status": "aborted",
-            "riskScore": null,
             "riskLevel": null,
+            "userAuthorization": null,
             "rationale": null
         }))
         .expect("aborted automatic review should deserialize");
@@ -7805,8 +7847,8 @@ mod tests {
             review,
             GuardianApprovalReview {
                 status: GuardianApprovalReviewStatus::Aborted,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
             }
         );
@@ -8359,35 +8401,6 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
-    }
-
-    #[test]
-    fn thread_start_params_preserve_explicit_null_instructions() {
-        let params: ThreadStartParams = serde_json::from_value(json!({
-            "baseInstructions": null,
-            "developerInstructions": null,
-        }))
-        .expect("params should deserialize");
-        assert_eq!(params.base_instructions, Some(None));
-        assert_eq!(params.developer_instructions, Some(None));
-
-        let serialized = serde_json::to_value(&params).expect("params should serialize");
-        assert_eq!(
-            serialized.get("baseInstructions"),
-            Some(&serde_json::Value::Null)
-        );
-        assert_eq!(
-            serialized.get("developerInstructions"),
-            Some(&serde_json::Value::Null)
-        );
-
-        let serialized_without_override =
-            serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
-        assert_eq!(serialized_without_override.get("baseInstructions"), None);
-        assert_eq!(
-            serialized_without_override.get("developerInstructions"),
-            None
-        );
     }
 
     #[test]

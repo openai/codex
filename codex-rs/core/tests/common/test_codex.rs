@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::io::ErrorKind;
 use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -30,6 +32,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -451,6 +454,7 @@ impl TestCodexBuilder {
             config.model_provider.base_url = Some(base_url_clone);
             config.model_provider.supports_websockets = true;
             config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
+            config.realtime.version = RealtimeWsVersion::V1;
         }));
         let test_env = TestEnv::local().await?;
         Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
@@ -796,6 +800,12 @@ impl TestCodexHarness {
         Ok(Self { server, test })
     }
 
+    pub async fn with_remote_aware_builder(mut builder: TestCodexBuilder) -> Result<Self> {
+        let server = start_mock_server().await;
+        let test = builder.build_remote_aware(&server).await?;
+        Ok(Self { server, test })
+    }
+
     pub fn server(&self) -> &MockServer {
         &self.server
     }
@@ -805,11 +815,75 @@ impl TestCodexHarness {
     }
 
     pub fn cwd(&self) -> &Path {
-        self.test.cwd_path()
+        self.test.config.cwd.as_path()
     }
 
     pub fn path(&self, rel: impl AsRef<Path>) -> PathBuf {
-        self.test.workspace_path(rel)
+        self.path_abs(rel).into_path_buf()
+    }
+
+    pub fn path_abs(&self, rel: impl AsRef<Path>) -> AbsolutePathBuf {
+        self.test.config.cwd.join(rel)
+    }
+
+    pub async fn write_file(
+        &self,
+        rel: impl AsRef<Path>,
+        contents: impl AsRef<[u8]>,
+    ) -> Result<()> {
+        let abs_path = self.path_abs(rel);
+        if let Some(parent) = abs_path.parent() {
+            self.test
+                .fs()
+                .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+                .await?;
+        }
+        self.test
+            .fs()
+            .write_file(&abs_path, contents.as_ref().to_vec())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
+        Ok(self.test.fs().read_file_text(&self.path_abs(rel)).await?)
+    }
+
+    pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
+        self.test
+            .fs()
+            .create_directory(
+                &self.path_abs(rel),
+                CreateDirectoryOptions { recursive: true },
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn path_exists(&self, rel: impl AsRef<Path>) -> Result<bool> {
+        self.abs_path_exists(&self.path_abs(rel)).await
+    }
+
+    pub async fn remove_abs_path(&self, path: &AbsolutePathBuf) -> Result<()> {
+        self.test
+            .fs()
+            .remove(
+                path,
+                RemoveOptions {
+                    recursive: false,
+                    force: true,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn abs_path_exists(&self, path: &AbsolutePathBuf) -> Result<bool> {
+        match self.test.fs().get_metadata(path).await {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub async fn submit(&self, prompt: &str) -> Result<()> {

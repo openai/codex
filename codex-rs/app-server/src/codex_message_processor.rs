@@ -144,8 +144,11 @@ use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
+use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
+use codex_app_server_protocol::ThreadRealtimeListVoicesResponse;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
+use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -269,6 +272,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -277,6 +281,7 @@ use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
@@ -835,6 +840,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRealtimeStop { request_id, params } => {
                 self.thread_realtime_stop(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadRealtimeListVoices { request_id, params } => {
+                self.thread_realtime_list_voices(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ReviewStart { request_id, params } => {
@@ -1827,7 +1836,7 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let cwd = cwd.unwrap_or_else(|| self.config.cwd.to_path_buf());
+        let cwd = cwd.map_or_else(|| self.config.cwd.clone(), |cwd| self.config.cwd.join(cwd));
         let mut env = create_env(
             &self.config.permissions.shell_environment_policy,
             /*thread_id*/ None,
@@ -2473,8 +2482,8 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        base_instructions: Option<Option<String>>,
-        developer_instructions: Option<Option<String>>,
+        base_instructions: Option<String>,
+        developer_instructions: Option<String>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
         ConfigOverrides {
@@ -4363,13 +4372,6 @@ impl CodexMessageProcessor {
             developer_instructions,
             /*personality*/ None,
         );
-        if typesafe_overrides.base_instructions.is_none()
-            && let Ok(history) = RolloutRecorder::get_rollout_history(&rollout_path).await
-            && let Some(base_instructions) = history.get_base_instructions()
-        {
-            typesafe_overrides.base_instructions =
-                Some(base_instructions.map(|base_instructions| base_instructions.text));
-        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
@@ -6858,6 +6860,15 @@ impl CodexMessageProcessor {
                 Op::RealtimeConversationStart(ConversationStartParams {
                     prompt: params.prompt,
                     session_id: params.session_id,
+                    transport: params.transport.map(|transport| match transport {
+                        ThreadRealtimeStartTransport::Websocket => {
+                            ConversationStartTransport::Websocket
+                        }
+                        ThreadRealtimeStartTransport::Webrtc { sdp } => {
+                            ConversationStartTransport::Webrtc { sdp }
+                        }
+                    }),
+                    voice: params.voice,
                 }),
             )
             .await;
@@ -6982,6 +6993,21 @@ impl CodexMessageProcessor {
                 .await;
             }
         }
+    }
+
+    async fn thread_realtime_list_voices(
+        &mut self,
+        request_id: ConnectionRequestId,
+        _params: ThreadRealtimeListVoicesParams,
+    ) {
+        self.outgoing
+            .send_response(
+                request_id,
+                ThreadRealtimeListVoicesResponse {
+                    voices: RealtimeVoicesList::builtin(),
+                },
+            )
+            .await;
     }
 
     fn build_review_turn(turn_id: String, display_text: &str) -> Turn {
@@ -9130,6 +9156,24 @@ mod tests {
             description: "test".to_string(),
             // Missing `type` is common; core sanitizes these to a supported schema.
             input_schema: json!({"properties": {}}),
+            defer_loading: false,
+        }];
+        validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_accepts_nullable_field_schema() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "my_tool".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": ["string", "null"]}
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
             defer_loading: false,
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
