@@ -697,7 +697,10 @@ impl UnifiedExecProcessManager {
         cwd: AbsolutePathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let local_policy_env = create_env(&context.turn.shell_environment_policy, None);
+        let local_policy_env = create_env(
+            &context.turn.shell_environment_policy,
+            /*thread_id*/ None,
+        );
         let mut env = local_policy_env.clone();
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),
