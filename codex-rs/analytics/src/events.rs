@@ -37,7 +37,6 @@ pub(crate) enum TrackEventRequest {
     ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
-    #[allow(dead_code)]
     ToolCall(CodexToolCallEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
@@ -103,7 +102,6 @@ pub(crate) struct ThreadInitializedEvent {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolKind {
     Shell,
     UnifiedExec,
@@ -115,37 +113,46 @@ pub(crate) enum ToolKind {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolCallFinalReviewOutcome {
     NotNeeded,
+    #[allow(dead_code)]
     GuardianApproved,
+    #[allow(dead_code)]
     GuardianDenied,
+    #[allow(dead_code)]
     GuardianAborted,
+    #[allow(dead_code)]
     UserApproved,
+    #[allow(dead_code)]
     UserApprovedForSession,
+    #[allow(dead_code)]
     UserDenied,
+    #[allow(dead_code)]
     UserAborted,
+    #[allow(dead_code)]
     ConfigAllowed,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolCallTerminalStatus {
     Completed,
     Failed,
     Rejected,
+    #[allow(dead_code)]
     Interrupted,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolCallFailureKind {
     ToolError,
     ApprovalDenied,
+    #[allow(dead_code)]
     ApprovalAborted,
+    #[allow(dead_code)]
     SandboxDenied,
+    #[allow(dead_code)]
     PolicyForbidden,
 }
 
