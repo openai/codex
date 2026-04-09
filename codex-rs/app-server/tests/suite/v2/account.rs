@@ -145,6 +145,32 @@ async fn mock_accounts_check_role(server: &MockServer, account_id: &str, role: &
         .await;
 }
 
+async fn mock_slow_accounts_check_role(
+    server: &MockServer,
+    account_id: &str,
+    role: &str,
+    delay: Duration,
+) {
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/check/v4-2023-04-27"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(delay)
+                .set_body_json(json!({
+                    "accounts": {
+                        account_id: {
+                            "account": {
+                                "account_user_role": role,
+                            }
+                        }
+                    },
+                    "account_ordering": [account_id],
+                })),
+        )
+        .mount(server)
+        .await;
+}
+
 async fn mock_device_code_token_success(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/api/accounts/deviceauth/token"))
@@ -287,6 +313,18 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     };
     assert_eq!(payload.auth_mode, Some(AuthMode::ChatgptAuthTokens));
     assert_eq!(payload.plan_type, Some(AccountPlanType::Pro));
+    assert_eq!(payload.workspace_role, None);
+    assert_eq!(payload.is_workspace_owner, None);
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountUpdated(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
     assert_eq!(payload.workspace_role, Some(WorkspaceRole::StandardUser));
     assert_eq!(payload.is_workspace_owner, Some(false));
 
@@ -308,8 +346,8 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
                 email: "embedded@example.com".to_string(),
                 plan_type: AccountPlanType::Pro,
             }),
-            workspace_role: Some(WorkspaceRole::StandardUser),
-            is_workspace_owner: Some(false),
+            workspace_role: None,
+            is_workspace_owner: None,
             requires_openai_auth: true,
         }
     );
@@ -1628,7 +1666,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
 }
 
 #[tokio::test]
-async fn get_account_with_chatgpt_fetches_workspace_role_from_accounts_check() -> Result<()> {
+async fn get_account_with_chatgpt_emits_workspace_role_from_accounts_check() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;
     create_config_toml(
@@ -1670,11 +1708,23 @@ async fn get_account_with_chatgpt_fetches_workspace_role_from_accounts_check() -
             email: "user@example.com".to_string(),
             plan_type: AccountPlanType::Pro,
         }),
-        workspace_role: Some(WorkspaceRole::AccountOwner),
-        is_workspace_owner: Some(true),
+        workspace_role: None,
+        is_workspace_owner: None,
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountUpdated(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    assert_eq!(payload.workspace_role, Some(WorkspaceRole::AccountOwner));
+    assert_eq!(payload.is_workspace_owner, Some(true));
     Ok(())
 }
 
@@ -1727,6 +1777,67 @@ async fn get_account_with_chatgpt_does_not_guess_workspace_role_from_other_accou
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_chatgpt_does_not_wait_for_accounts_check() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            chatgpt_base_url: Some(format!("{}/backend-api", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    mock_slow_accounts_check_role(
+        &mock_server,
+        "org-embedded",
+        "standard-user",
+        Duration::from_secs(2),
+    )
+    .await;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt")
+            .account_id("org-embedded")
+            .email("user@example.com")
+            .plan_type("pro")
+            .chatgpt_account_id("org-embedded")
+            .is_org_owner(/*is_org_owner*/ true),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: "user@example.com".to_string(),
+                plan_type: AccountPlanType::Pro,
+            }),
+            workspace_role: None,
+            is_workspace_owner: Some(true),
+            requires_openai_auth: true,
+        }
+    );
+
     Ok(())
 }
 

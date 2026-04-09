@@ -204,6 +204,73 @@ async fn usage_limit_error_opens_workspace_owner_prompt_after_rate_limits_refres
 }
 
 #[tokio::test]
+async fn usage_limit_error_opens_workspace_owner_prompt_after_async_workspace_role() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.update_account_state(
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
+        /*is_workspace_owner*/ None,
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+
+    chat.handle_codex_event(Event {
+        id: "usage-limit".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "The usage limit has been reached".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::RefreshRateLimits { .. })),
+        "expected usage-limit errors to request a refresh when rate limits are missing; events: {events:?}"
+    );
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: None,
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        !popup.contains("Request more credits from your workspace owner?"),
+        "expected no prompt before the async workspace role update, got: {popup}"
+    );
+
+    chat.update_account_state(
+        /*status_account_display*/ None,
+        Some(AppServerWorkspaceRole::StandardUser),
+        /*is_workspace_owner*/ None,
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Request more credits from your workspace owner?"),
+        "expected workspace-owner prompt after async workspace role, got: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::NotifyWorkspaceOwner));
+}
+
+#[tokio::test]
 async fn notify_workspace_owner_success_adds_confirmation_message() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.start_notify_workspace_owner();

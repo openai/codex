@@ -509,6 +509,76 @@ fn workspace_role_to_v2(role: CoreWorkspaceRole) -> WorkspaceRole {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AuthIdentity {
+    auth_mode: AuthMode,
+    account_id: Option<String>,
+    account_email: Option<String>,
+    chatgpt_user_id: Option<String>,
+}
+
+fn auth_identity(auth: &CodexAuth) -> AuthIdentity {
+    AuthIdentity {
+        auth_mode: auth.api_auth_mode(),
+        account_id: auth.get_account_id(),
+        account_email: auth.get_account_email(),
+        chatgpt_user_id: auth.get_chatgpt_user_id(),
+    }
+}
+
+fn cached_workspace_role_and_owner_for_auth(
+    auth: Option<&CodexAuth>,
+) -> (Option<WorkspaceRole>, Option<bool>) {
+    (None, auth.and_then(CodexAuth::is_workspace_owner))
+}
+
+fn account_updated_notification_for_auth(
+    auth: Option<&CodexAuth>,
+    workspace_role: Option<WorkspaceRole>,
+    is_workspace_owner: Option<bool>,
+) -> AccountUpdatedNotification {
+    AccountUpdatedNotification {
+        auth_mode: auth.map(CodexAuth::api_auth_mode),
+        plan_type: auth.and_then(CodexAuth::account_plan_type),
+        workspace_role,
+        is_workspace_owner,
+    }
+}
+
+fn spawn_live_workspace_role_update_for_auth(
+    outgoing: Arc<OutgoingMessageSender>,
+    auth_manager: Arc<AuthManager>,
+    chatgpt_base_url: String,
+    auth: Option<CodexAuth>,
+) {
+    let Some(auth) = auth.filter(CodexAuth::is_chatgpt_auth) else {
+        return;
+    };
+    let expected_identity = auth_identity(&auth);
+
+    tokio::spawn(async move {
+        let (workspace_role, is_workspace_owner) =
+            resolve_workspace_role_and_owner_for_auth(&chatgpt_base_url, Some(&auth)).await;
+        let Some(workspace_role) = workspace_role else {
+            return;
+        };
+
+        let current_auth = auth_manager.auth_cached();
+        if current_auth.as_ref().map(auth_identity) != Some(expected_identity) {
+            return;
+        }
+
+        let payload = account_updated_notification_for_auth(
+            current_auth.as_ref(),
+            Some(workspace_role),
+            is_workspace_owner,
+        );
+        outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(payload))
+            .await;
+    });
+}
+
 impl CodexMessageProcessor {
     pub(crate) fn handle_config_mutation(&self) {
         self.clear_plugin_related_caches();
@@ -519,23 +589,20 @@ impl CodexMessageProcessor {
         self.thread_manager.skills_manager().clear_cache();
     }
 
-    async fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
+    fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         let (workspace_role, is_workspace_owner) =
-            self.resolve_workspace_role_and_owner(auth.as_ref()).await;
-        AccountUpdatedNotification {
-            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-            workspace_role,
-            is_workspace_owner,
-        }
+            cached_workspace_role_and_owner_for_auth(auth.as_ref());
+        account_updated_notification_for_auth(auth.as_ref(), workspace_role, is_workspace_owner)
     }
 
-    async fn resolve_workspace_role_and_owner(
-        &self,
-        auth: Option<&CodexAuth>,
-    ) -> (Option<WorkspaceRole>, Option<bool>) {
-        resolve_workspace_role_and_owner_for_auth(&self.config.chatgpt_base_url, auth).await
+    fn spawn_live_workspace_role_update(&self, auth: Option<CodexAuth>) {
+        spawn_live_workspace_role_update_for_auth(
+            self.outgoing.clone(),
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            auth,
+        );
     }
 
     async fn load_thread(
@@ -1139,9 +1206,10 @@ impl CodexMessageProcessor {
 
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(
-                        self.current_account_updated_notification().await,
+                        self.current_account_updated_notification(),
                     ))
                     .await;
+                self.spawn_live_workspace_role_update(self.auth_manager.auth_cached());
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -1271,25 +1339,27 @@ impl CodexMessageProcessor {
                             )
                             .await;
 
-                            // Notify clients with the actual current auth mode.
+                            // Notify clients with the actual current auth mode immediately; the
+                            // live workspace role is fetched below without delaying this update.
                             let auth = auth_manager.auth_cached();
                             let (workspace_role, is_workspace_owner) =
-                                resolve_workspace_role_and_owner_for_auth(
-                                    &chatgpt_base_url,
-                                    auth.as_ref(),
-                                )
-                                .await;
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                                cached_workspace_role_and_owner_for_auth(auth.as_ref());
+                            let payload_v2 = account_updated_notification_for_auth(
+                                auth.as_ref(),
                                 workspace_role,
                                 is_workspace_owner,
-                            };
+                            );
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
                                     payload_v2,
                                 ))
                                 .await;
+                            spawn_live_workspace_role_update_for_auth(
+                                outgoing_clone.clone(),
+                                auth_manager.clone(),
+                                chatgpt_base_url.clone(),
+                                auth,
+                            );
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -1395,22 +1465,23 @@ impl CodexMessageProcessor {
 
                             let auth = auth_manager.auth_cached();
                             let (workspace_role, is_workspace_owner) =
-                                resolve_workspace_role_and_owner_for_auth(
-                                    &chatgpt_base_url,
-                                    auth.as_ref(),
-                                )
-                                .await;
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                                cached_workspace_role_and_owner_for_auth(auth.as_ref());
+                            let payload_v2 = account_updated_notification_for_auth(
+                                auth.as_ref(),
                                 workspace_role,
                                 is_workspace_owner,
-                            };
+                            );
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
                                     payload_v2,
                                 ))
                                 .await;
+                            spawn_live_workspace_role_update_for_auth(
+                                outgoing_clone.clone(),
+                                auth_manager.clone(),
+                                chatgpt_base_url.clone(),
+                                auth,
+                            );
                         }
 
                         let mut guard = active_login.lock().await;
@@ -1556,9 +1627,10 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification().await,
+                self.current_account_updated_notification(),
             ))
             .await;
+        self.spawn_live_workspace_role_update(self.auth_manager.auth_cached());
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
@@ -1733,7 +1805,7 @@ impl CodexMessageProcessor {
             None => None,
         };
         let (workspace_role, is_workspace_owner) =
-            self.resolve_workspace_role_and_owner(auth.as_ref()).await;
+            cached_workspace_role_and_owner_for_auth(auth.as_ref());
 
         let response = GetAccountResponse {
             account,
@@ -1742,6 +1814,7 @@ impl CodexMessageProcessor {
             requires_openai_auth,
         };
         self.outgoing.send_response(request_id, response).await;
+        self.spawn_live_workspace_role_update(auth);
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {

@@ -9722,7 +9722,6 @@ impl ChatWidget {
     fn missing_usage_based_workspace_rate_limit_snapshot(&self) -> bool {
         self.should_prefetch_rate_limits()
             && self.plan_type.is_some()
-            && self.current_is_workspace_owner().is_some()
             && !self.rate_limit_snapshots_by_limit_id.contains_key("codex")
     }
 
@@ -9738,10 +9737,15 @@ impl ChatWidget {
             return true;
         }
 
-        self.plan_type
-            .filter(|plan_type| is_usage_based_workspace_plan(*plan_type))
-            .is_some()
-            && self.current_is_workspace_owner() == Some(false)
+        let is_workspace_owner = self.current_is_workspace_owner();
+        if !self.plan_type.is_some_and(is_usage_based_workspace_plan)
+            || is_workspace_owner == Some(true)
+        {
+            return false;
+        }
+
+        let block_kind = self.usage_based_workspace_block_kind();
+        block_kind != Some(UsageBasedWorkspaceBlockKind::SpendCapReached)
     }
 
     fn maybe_show_pending_workspace_owner_notification_prompt(&mut self) {
@@ -9765,6 +9769,12 @@ impl ChatWidget {
                 self.pending_workspace_owner_notification_prompt = false;
             }
             None => {
+                if self.usage_based_workspace_block_kind()
+                    == Some(UsageBasedWorkspaceBlockKind::CreditsDepleted)
+                    && self.current_is_workspace_owner().is_none()
+                {
+                    return;
+                }
                 if !self.missing_usage_based_workspace_rate_limit_snapshot() {
                     self.pending_workspace_owner_notification_prompt = false;
                 }

@@ -1366,14 +1366,14 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 
 ### Authentication modes
 
-Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, the current `workspaceRole` when live account metadata can be fetched, and the derived `isWorkspaceOwner` flag. The same account state can be read from `account/read`.
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, the current `workspaceRole` when live account metadata can be fetched, and the derived `isWorkspaceOwner` flag. The same cached account state can be read from `account/read`.
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.
 
 ### API Overview
 
-- `account/read` — fetch current account info; optionally refresh tokens.
+- `account/read` — fetch cached current account info; optionally refresh tokens. ChatGPT workspace role is refreshed in the background and delivered by `account/updated` so this request does not wait for live account metadata.
 - `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
@@ -1398,14 +1398,15 @@ Response examples:
 { "id": 1, "result": { "account": null, "workspaceRole": null, "isWorkspaceOwner": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
 { "id": 1, "result": { "account": null, "workspaceRole": null, "isWorkspaceOwner": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
 { "id": 1, "result": { "account": { "type": "apiKey" }, "workspaceRole": null, "isWorkspaceOwner": null, "requiresOpenaiAuth": true } }
-{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "workspaceRole": "account-admin", "isWorkspaceOwner": true, "requiresOpenaiAuth": true } }
+{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "workspaceRole": null, "isWorkspaceOwner": true, "requiresOpenaiAuth": true } }
+{ "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "pro", "workspaceRole": "account-admin", "isWorkspaceOwner": true } } // emitted when live workspace metadata arrives
 ```
 
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
-- `workspaceRole` is a nullable live account role from ChatGPT account metadata: `account-owner`, `account-admin`, or `standard-user`.
+- `workspaceRole` is a nullable live account role from ChatGPT account metadata: `account-owner`, `account-admin`, or `standard-user`. It is normally delivered asynchronously in `account/updated`; clients should treat `null` from `account/read` as "not known yet".
 - `isWorkspaceOwner` is a nullable convenience flag. When `workspaceRole` is available, owners and admins map to `true` and standard users map to `false`; otherwise the server may fall back to the managed-account token's workspace-owner claim.
 
 ### 2) Log in with an API key
