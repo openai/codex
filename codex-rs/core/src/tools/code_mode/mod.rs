@@ -258,14 +258,12 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         .await
         .list_all_tools()
         .await;
-    let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&mcp_tools);
 
     ToolRouter::from_config(
         &nested_tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
-            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
-            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
+            mcp_tools: Some(mcp_tools),
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
         },

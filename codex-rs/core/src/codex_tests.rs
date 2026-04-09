@@ -309,7 +309,6 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
-            tool_namespaces: None,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
@@ -5270,13 +5269,11 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .await
     };
     let deferred_mcp_tools = Some(tools.clone());
-    let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&tools);
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
-            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
-            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
+            mcp_tools: Some(tools),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

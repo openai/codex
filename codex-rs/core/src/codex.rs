@@ -6861,19 +6861,13 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         &turn_context.tools_config,
     );
-    let mcp_tool_router_inputs = has_mcp_servers
-        .then(|| crate::tools::router::map_mcp_tool_infos(&mcp_tool_exposure.direct_tools));
+    let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
             deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
-            mcp_tools: mcp_tool_router_inputs
-                .as_ref()
-                .map(|inputs| inputs.mcp_tools.clone()),
-            tool_namespaces: mcp_tool_router_inputs
-                .as_ref()
-                .map(|inputs| inputs.tool_namespaces.clone()),
+            mcp_tools: direct_mcp_tools,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

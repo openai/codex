@@ -29,11 +29,36 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
     }
 }
 
+struct McpToolPlanInputs {
+    mcp_tools: HashMap<String, rmcp::model::Tool>,
+    tool_namespaces: HashMap<String, ToolNamespace>,
+}
+
+fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs {
+    McpToolPlanInputs {
+        mcp_tools: mcp_tools
+            .iter()
+            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
+            .collect(),
+        tool_namespaces: mcp_tools
+            .iter()
+            .map(|(name, tool)| {
+                (
+                    name.clone(),
+                    ToolNamespace {
+                        name: tool.callable_namespace.clone(),
+                        description: tool.server_instructions.clone(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
     deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
-    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -69,6 +94,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 
     let mut builder = ToolRegistryBuilder::new();
+    let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
             .values()
@@ -86,9 +112,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let plan = build_tool_registry_plan(
         config,
         ToolRegistryPlanParams {
-            mcp_tools: mcp_tools.as_ref(),
+            mcp_tools: mcp_tool_plan_inputs
+                .as_ref()
+                .map(|inputs| &inputs.mcp_tools),
             deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
-            tool_namespaces: tool_namespaces.as_ref(),
+            tool_namespaces: mcp_tool_plan_inputs
+                .as_ref()
+                .map(|inputs| &inputs.tool_namespaces),
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,
