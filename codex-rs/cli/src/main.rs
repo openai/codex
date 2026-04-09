@@ -153,6 +153,9 @@ enum Subcommand {
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
 
+    /// [EXPERIMENTAL] Run the standalone exec-server binary.
+    ExecServer(ExecServerCommand),
+
     /// Inspect feature flags.
     Features(FeaturesCli),
 }
@@ -377,6 +380,17 @@ struct AppServerCommand {
 
     #[command(flatten)]
     auth: codex_app_server::AppServerWebsocketAuthArgs,
+}
+
+#[derive(Debug, Parser)]
+struct ExecServerCommand {
+    /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default).
+    #[arg(
+        long = "listen",
+        value_name = "URL",
+        default_value = "ws://127.0.0.1:0"
+    )]
+    listen: String,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -998,6 +1012,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
+        Some(Subcommand::ExecServer(cmd)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "exec-server",
+            )?;
+            run_exec_server_command(cmd).await?;
+        }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
                 reject_remote_mode_for_subcommand(
@@ -1067,6 +1089,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_exec_server_command(cmd: ExecServerCommand) -> anyhow::Result<()> {
+    codex_exec_server::run_main_with_listen_url(&cmd.listen)
+        .await
+        .map_err(anyhow::Error::from_boxed)
 }
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {

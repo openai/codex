@@ -6,8 +6,6 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_login::default_client::is_first_party_originator;
 use codex_login::default_client::originator;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
@@ -23,6 +21,7 @@ use crate::codex::TurnContext;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::skills::model::SkillToolDependency;
 use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
@@ -232,7 +231,10 @@ async fn should_install_mcp_dependencies(
     missing: &HashMap<String, McpServerConfig>,
     cancellation_token: &CancellationToken,
 ) -> bool {
-    if is_full_access_mode(turn_context) {
+    if mcp_permission_prompt_is_auto_approved(
+        turn_context.approval_policy.value(),
+        turn_context.sandbox_policy.get(),
+    ) {
         return true;
     }
 
@@ -317,14 +319,6 @@ fn format_missing_mcp_dependencies(missing: &HashMap<String, McpServerConfig>) -
     let mut names = missing.keys().cloned().collect::<Vec<_>>();
     names.sort();
     names.join(", ")
-}
-
-fn is_full_access_mode(turn_context: &TurnContext) -> bool {
-    matches!(turn_context.approval_policy.value(), AskForApproval::Never)
-        && matches!(
-            turn_context.sandbox_policy.get(),
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        )
 }
 
 fn canonical_mcp_key(transport: &str, identifier: &str, fallback: &str) -> String {

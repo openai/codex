@@ -677,7 +677,7 @@ allowed_approval_policies = ["on-request"]
                 rules: None,
                 enforce_residency: None,
                 network: None,
-                guardian_developer_instructions: None,
+                guardian_policy_config: None,
             }))
         }),
     )
@@ -729,7 +729,7 @@ allowed_approval_policies = ["on-request"]
             rules: None,
             enforce_residency: None,
             network: None,
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -770,7 +770,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         rules: None,
         enforce_residency: None,
         network: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });

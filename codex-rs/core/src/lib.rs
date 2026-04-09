@@ -13,6 +13,7 @@ mod client_common;
 pub(crate) mod codex;
 mod realtime_context;
 mod realtime_conversation;
+mod realtime_prompt;
 pub use codex::SteerInputError;
 mod codex_thread;
 mod compact_remote;

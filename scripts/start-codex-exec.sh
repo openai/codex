@@ -28,6 +28,7 @@ remote_exec_server_start_timeout_seconds="${CODEX_REMOTE_EXEC_SERVER_START_TIMEO
 remote_exec_server_pid=''
 remote_exec_server_log_path=''
 remote_exec_server_pid_path=''
+remote_repo_root=''
 
 cleanup() {
   local exit_code=$?
@@ -119,6 +120,7 @@ while (( SECONDS < deadline )); do
     if [[ "${listen_url}" == ws://* ]]; then
       printf 'remote_exec_server_pid=%s\n' "${remote_exec_server_pid}"
       printf 'remote_exec_server_log_path=%s\n' "${remote_exec_server_log_path}"
+      printf 'remote_repo_root=%s\n' "${remote_repo_root}"
       printf 'listen_url=%s\n' "${listen_url}"
       exit 0
     fi
@@ -148,13 +150,16 @@ while IFS='=' read -r key value; do
     remote_exec_server_log_path)
       remote_exec_server_log_path="${value}"
       ;;
+    remote_repo_root)
+      remote_repo_root="${value}"
+      ;;
     listen_url)
       listen_url="${value}"
       ;;
   esac
 done <<< "${remote_start_output}"
 
-if [[ -z "${remote_exec_server_pid}" || -z "${listen_url}" ]]; then
+if [[ -z "${remote_exec_server_pid}" || -z "${listen_url}" || -z "${remote_repo_root}" ]]; then
   echo "failed to parse remote exec server startup output" >&2
   exit 1
 fi
@@ -169,7 +174,9 @@ echo "Remote exec server: ${listen_url}"
 echo "Remote exec server log: ${remote_exec_server_log_path}"
 echo "Press Ctrl-C to stop the SSH tunnel and remote exec server."
 echo "Start codex via: "
-echo "  CODEX_EXEC_SERVER_URL=ws://127.0.0.1:${local_exec_server_port} codex -C /tmp"
+printf '  CODEX_EXEC_SERVER_URL=ws://127.0.0.1:%s codex -C %q\n' \
+  "${local_exec_server_port}" \
+  "${remote_repo_root}"
 
 ssh \
   -nNT \
