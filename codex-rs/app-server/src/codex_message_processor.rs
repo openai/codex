@@ -725,7 +725,7 @@ impl CodexMessageProcessor {
     }
 
     pub async fn process_request(
-        &mut self,
+        &self,
         connection_id: ConnectionId,
         request: ClientRequest,
         app_server_client_name: Option<String>,
@@ -1039,7 +1039,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_v2(&mut self, request_id: ConnectionRequestId, params: LoginAccountParams) {
+    async fn login_v2(&self, request_id: ConnectionRequestId, params: LoginAccountParams) {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
                 self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
@@ -1077,7 +1077,7 @@ impl CodexMessageProcessor {
     }
 
     async fn login_api_key_common(
-        &mut self,
+        &self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         if self.auth_manager.is_external_chatgpt_auth_active() {
@@ -1120,11 +1120,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_api_key_v2(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: LoginApiKeyParams,
-    ) {
+    async fn login_api_key_v2(&self, request_id: ConnectionRequestId, params: LoginApiKeyParams) {
         match self.login_api_key_common(&params).await {
             Ok(()) => {
                 let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
@@ -1207,7 +1203,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_chatgpt_v2(&mut self, request_id: ConnectionRequestId) {
+    async fn login_chatgpt_v2(&self, request_id: ConnectionRequestId) {
         match self.login_chatgpt_common().await {
             Ok(opts) => match run_login_server(opts) {
                 Ok(server) => {
@@ -1324,7 +1320,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_chatgpt_device_code_v2(&mut self, request_id: ConnectionRequestId) {
+    async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
         match self.login_chatgpt_common().await {
             Ok(opts) => match request_device_code(&opts).await {
                 Ok(device_code) => {
@@ -1435,7 +1431,7 @@ impl CodexMessageProcessor {
     }
 
     async fn cancel_login_chatgpt_common(
-        &mut self,
+        &self,
         login_id: Uuid,
     ) -> std::result::Result<(), CancelLoginError> {
         let mut guard = self.active_login.lock().await;
@@ -1450,7 +1446,7 @@ impl CodexMessageProcessor {
     }
 
     async fn cancel_login_v2(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: CancelLoginAccountParams,
     ) {
@@ -1476,7 +1472,7 @@ impl CodexMessageProcessor {
     }
 
     async fn login_chatgpt_auth_tokens(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         access_token: String,
         chatgpt_account_id: String,
@@ -1565,7 +1561,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn logout_common(&mut self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+    async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -1590,7 +1586,7 @@ impl CodexMessageProcessor {
             .map(CodexAuth::api_auth_mode))
     }
 
-    async fn logout_v2(&mut self, request_id: ConnectionRequestId) {
+    async fn logout_v2(&self, request_id: ConnectionRequestId) {
         match self.logout_common().await {
             Ok(current_auth_method) => {
                 self.outgoing
@@ -2608,11 +2604,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_archive(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: ThreadArchiveParams,
-    ) {
+    async fn thread_archive(&self, request_id: ConnectionRequestId, params: ThreadArchiveParams) {
         // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
@@ -3137,7 +3129,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_unarchive(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: ThreadUnarchiveParams,
     ) {
@@ -3325,11 +3317,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_rollback(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: ThreadRollbackParams,
-    ) {
+    async fn thread_rollback(&self, request_id: ConnectionRequestId, params: ThreadRollbackParams) {
         let ThreadRollbackParams {
             thread_id,
             num_turns,
@@ -3684,7 +3672,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn thread_read(&mut self, request_id: ConnectionRequestId, params: ThreadReadParams) {
+    async fn thread_read(&self, request_id: ConnectionRequestId, params: ThreadReadParams) {
         let ThreadReadParams {
             thread_id,
             include_turns,
@@ -3848,7 +3836,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
         self.command_exec_manager
             .connection_closed(connection_id)
             .await;
@@ -3863,7 +3851,7 @@ impl CodexMessageProcessor {
 
     /// Best-effort: ensure initialized connections are subscribed to this thread.
     pub(crate) async fn try_attach_thread_listener(
-        &mut self,
+        &self,
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
@@ -3890,7 +3878,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
+    async fn thread_resume(&self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -4124,7 +4112,7 @@ impl CodexMessageProcessor {
     }
 
     async fn resume_running_thread(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: &ThreadResumeParams,
     ) -> bool {
@@ -4423,7 +4411,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_fork(&mut self, request_id: ConnectionRequestId, params: ThreadForkParams) {
+    async fn thread_fork(&self, request_id: ConnectionRequestId, params: ThreadForkParams) {
         let ThreadForkParams {
             thread_id,
             path,
@@ -5586,7 +5574,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn finalize_thread_teardown(&mut self, thread_id: ThreadId) {
+    async fn finalize_thread_teardown(&self, thread_id: ThreadId) {
         self.pending_thread_unloads.lock().await.remove(&thread_id);
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
@@ -5600,7 +5588,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_unsubscribe(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: ThreadUnsubscribeParams,
     ) {
@@ -5711,7 +5699,7 @@ impl CodexMessageProcessor {
     }
 
     async fn archive_thread_common(
-        &mut self,
+        &self,
         thread_id: ThreadId,
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
@@ -6800,6 +6788,7 @@ impl CodexMessageProcessor {
                 Op::UserInput {
                     items: mapped_items,
                     final_output_json_schema: params.output_schema,
+                    responsesapi_client_metadata: params.responsesapi_client_metadata,
                 },
             )
             .await;
@@ -6880,7 +6869,11 @@ impl CodexMessageProcessor {
             .collect();
 
         match thread
-            .steer_input(mapped_items, Some(&params.expected_turn_id))
+            .steer_input(
+                mapped_items,
+                Some(&params.expected_turn_id),
+                params.responsesapi_client_metadata,
+            )
             .await
         {
             Ok(turn_id) => {
@@ -6946,7 +6939,7 @@ impl CodexMessageProcessor {
     }
 
     async fn prepare_realtime_conversation_thread(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         thread_id: &str,
     ) -> Option<(ThreadId, Arc<CodexThread>)> {
@@ -6990,7 +6983,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_realtime_start(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: ThreadRealtimeStartParams,
     ) {
@@ -7038,7 +7031,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_realtime_append_audio(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: ThreadRealtimeAppendAudioParams,
     ) {
@@ -7076,7 +7069,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_realtime_append_text(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: ThreadRealtimeAppendTextParams,
     ) {
@@ -7112,7 +7105,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_realtime_stop(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: ThreadRealtimeStopParams,
     ) {
@@ -7144,7 +7137,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_realtime_list_voices(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         _params: ThreadRealtimeListVoicesParams,
     ) {
@@ -7230,7 +7223,7 @@ impl CodexMessageProcessor {
     }
 
     async fn start_detached_review(
-        &mut self,
+        &self,
         request_id: &ConnectionRequestId,
         parent_thread_id: ThreadId,
         parent_thread: Arc<CodexThread>,
@@ -7348,7 +7341,7 @@ impl CodexMessageProcessor {
         Ok(())
     }
 
-    async fn review_start(&mut self, request_id: ConnectionRequestId, params: ReviewStartParams) {
+    async fn review_start(&self, request_id: ConnectionRequestId, params: ReviewStartParams) {
         let ReviewStartParams {
             thread_id,
             target,
@@ -7403,11 +7396,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn turn_interrupt(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: TurnInterruptParams,
-    ) {
+    async fn turn_interrupt(&self, request_id: ConnectionRequestId, params: TurnInterruptParams) {
         let TurnInterruptParams { thread_id, turn_id } = params;
         self.outgoing
             .record_request_turn_id(&request_id, &turn_id)
@@ -7676,7 +7665,7 @@ impl CodexMessageProcessor {
     }
 
     async fn fuzzy_file_search(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: FuzzyFileSearchParams,
     ) {
@@ -7720,7 +7709,7 @@ impl CodexMessageProcessor {
     }
 
     async fn fuzzy_file_search_session_start(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionStartParams,
     ) {
@@ -7757,7 +7746,7 @@ impl CodexMessageProcessor {
     }
 
     async fn fuzzy_file_search_session_update(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionUpdateParams,
     ) {
@@ -7787,7 +7776,7 @@ impl CodexMessageProcessor {
     }
 
     async fn fuzzy_file_search_session_stop(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionStopParams,
     ) {
@@ -7987,7 +7976,7 @@ impl CodexMessageProcessor {
     }
 
     async fn windows_sandbox_setup_start(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: WindowsSandboxSetupStartParams,
     ) {

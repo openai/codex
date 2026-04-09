@@ -381,6 +381,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -657,6 +660,7 @@ impl From<Vec<UserInput>> for Op {
         Op::UserInput {
             items: value,
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         }
     }
 }
@@ -4729,6 +4733,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4746,6 +4751,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             }
         );
 
@@ -4765,6 +4771,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4776,6 +4783,33 @@ mod tests {
                 "final_output_json_schema": schema,
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: None,
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "fiber_run_id".to_string(),
+                "fiber-123".to_string(),
+            )])),
+        };
+
+        let json_op = serde_json::to_value(&op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "responsesapi_client_metadata": {
+                    "fiber_run_id": "fiber-123",
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Op>(json_op)?, op);
 
         Ok(())
     }

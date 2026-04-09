@@ -763,8 +763,11 @@ impl Codex {
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
-        self.session.steer_input(input, expected_turn_id).await
+        self.session
+            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .await
     }
 
     pub(crate) async fn set_app_server_client_info(
@@ -2264,6 +2267,7 @@ impl Session {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             },
         )
         .await;
@@ -4136,6 +4140,7 @@ impl Session {
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
@@ -4172,6 +4177,15 @@ impl Session {
                 });
             }
             None => return Err(SteerInputError::NoActiveTurn(input)),
+        }
+
+        if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
+            && let Some((_, active_task)) = active_turn.tasks.first()
+        {
+            active_task
+                .turn_context
+                .turn_metadata_state
+                .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
@@ -4990,7 +5004,7 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let (items, updates) = match op {
+        let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -5031,17 +5045,20 @@ mod handlers {
                         app_server_client_name: None,
                         app_server_client_version: None,
                     },
+                    None,
                 )
             }
             Op::UserInput {
                 items,
                 final_output_json_schema,
+                responsesapi_client_metadata,
             } => (
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
                     ..Default::default()
                 },
+                responsesapi_client_metadata,
             ),
             _ => unreachable!(),
         };
@@ -5053,11 +5070,20 @@ mod handlers {
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         match sess
-            .steer_input(items.clone(), /*expected_turn_id*/ None)
+            .steer_input(
+                items.clone(),
+                /*expected_turn_id*/ None,
+                responsesapi_client_metadata.clone(),
+            )
             .await
         {
             Ok(_) => current_context.session_telemetry.user_prompt(&items),
             Err(SteerInputError::NoActiveTurn(items)) => {
+                if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
+                    current_context
+                        .turn_metadata_state
+                        .set_responsesapi_client_metadata(responsesapi_client_metadata);
+                }
                 current_context.session_telemetry.user_prompt(&items);
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
