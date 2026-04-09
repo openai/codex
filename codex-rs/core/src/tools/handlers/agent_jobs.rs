@@ -177,6 +177,8 @@ impl JobProgressEmitter {
     }
 }
 
+#[path = "agent_jobs_slots.rs"]
+mod slots;
 #[path = "agent_jobs_startup.rs"]
 mod startup;
 
@@ -482,12 +484,13 @@ mod report_agent_job_result {
             ));
         }
         let db = required_state_db(&session)?;
-        let reporting_thread_id = session.conversation_id.to_string();
+        let reporting_thread_id = session.conversation_id;
+        let reporting_thread_id_str = reporting_thread_id.to_string();
         let accepted = db
             .report_agent_job_item_result(
                 args.job_id.as_str(),
                 args.item_id.as_str(),
-                reporting_thread_id.as_str(),
+                reporting_thread_id_str.as_str(),
                 &args.result,
             )
             .await
@@ -503,6 +506,19 @@ mod report_agent_job_result {
             let _ = db
                 .mark_agent_job_cancelled(args.job_id.as_str(), message)
                 .await;
+        }
+        if accepted {
+            let agent_control = session.services.agent_control.clone();
+            tracing::debug!(
+                job_id = args.job_id,
+                item_id = args.item_id,
+                thread_id = %reporting_thread_id,
+                "agent job accepted worker result; scheduling worker shutdown"
+            );
+            tokio::spawn(async move {
+                tokio::task::yield_now().await;
+                let _ = agent_control.shutdown_live_agent(reporting_thread_id).await;
+            });
         }
         let content =
             serde_json::to_string(&ReportAgentJobResultToolResult { accepted }).map_err(|err| {
@@ -627,6 +643,30 @@ async fn run_agent_job_loop(
             progressed = true;
         }
 
+        let scheduler_progress = db.get_agent_job_progress(job_id.as_str()).await?;
+        if slots::reclaim_inactive_active_items(
+            session.clone(),
+            db.clone(),
+            job_id.as_str(),
+            &mut active_items,
+            scheduler_progress.running_items,
+        )
+        .await?
+        {
+            progressed = true;
+        }
+
+        if !cancel_requested && db.is_agent_job_cancelled(job_id.as_str()).await? {
+            cancel_requested = true;
+            progressed = true;
+            let _ = session
+                .notify_background_event(
+                    &turn,
+                    format!("agent job {job_id} cancellation requested; stopping new workers"),
+                )
+                .await;
+        }
+
         if !cancel_requested
             && active_items.len() + starting_items.len() < options.max_concurrency
             && startup::launch_pending_items(
@@ -635,7 +675,10 @@ async fn run_agent_job_loop(
                 &job,
                 job_id.as_str(),
                 &options,
-                active_items.len(),
+                startup::SchedulerOccupancy {
+                    active_items: active_items.len(),
+                    db_running_items: scheduler_progress.running_items,
+                },
                 &mut starting_items,
             )
             .await?

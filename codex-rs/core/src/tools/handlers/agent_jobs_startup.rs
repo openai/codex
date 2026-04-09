@@ -27,6 +27,12 @@ pub(super) struct StartupTasks {
     launching_items: HashMap<TaskId, LaunchingJobItem>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SchedulerOccupancy {
+    pub(super) active_items: usize,
+    pub(super) db_running_items: usize,
+}
+
 impl StartupTasks {
     pub(super) fn len(&self) -> usize {
         self.starting_items.len()
@@ -62,12 +68,12 @@ pub(super) async fn launch_pending_items(
     job: &codex_state::AgentJob,
     job_id: &str,
     options: &JobRunnerOptions,
-    active_items_len: usize,
+    occupancy: SchedulerOccupancy,
     startup_tasks: &mut StartupTasks,
 ) -> anyhow::Result<bool> {
     let slots = options
         .max_concurrency
-        .saturating_sub(active_items_len + startup_tasks.len());
+        .saturating_sub(occupancy.active_items + startup_tasks.len());
     if slots == 0 {
         return Ok(false);
     }
@@ -136,7 +142,8 @@ pub(super) async fn launch_pending_items(
         tracing::info!(
             job_id,
             launched,
-            active_items = active_items_len,
+            db_running_items = occupancy.db_running_items,
+            active_items = occupancy.active_items,
             starting_items = startup_tasks.len(),
             target_concurrency = options.max_concurrency,
             "agent job queued worker startups"
