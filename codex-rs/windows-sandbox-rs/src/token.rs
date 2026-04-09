@@ -312,7 +312,22 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities)
+    create_token_with_caps_from(base_token, psid_capabilities, &[])
+}
+
+/// Create a restricted token, and include extra SIDs in the token's default DACL.
+///
+/// The extra SIDs are not added to the token for access checks; they only keep objects created by
+/// sandboxed children manageable by their expected owner (for example, the interactive user).
+///
+/// # Safety
+/// Caller must close the returned token handle; all SID pointers must be valid for this call.
+pub unsafe fn create_workspace_write_token_with_caps_and_default_dacl_sids_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+    default_dacl_extra_sids: &[*mut c_void],
+) -> Result<HANDLE> {
+    create_token_with_caps_from(base_token, psid_capabilities, default_dacl_extra_sids)
 }
 
 /// Create a restricted token that includes all provided capability SIDs.
@@ -323,12 +338,13 @@ pub unsafe fn create_readonly_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities)
+    create_token_with_caps_from(base_token, psid_capabilities, &[])
 }
 
 unsafe fn create_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
+    default_dacl_extra_sids: &[*mut c_void],
 ) -> Result<HANDLE> {
     if psid_capabilities.is_empty() {
         return Err(anyhow!("no capability SIDs provided"));
@@ -372,6 +388,7 @@ unsafe fn create_token_with_caps_from(
     dacl_sids.push(psid_logon);
     dacl_sids.push(psid_everyone);
     dacl_sids.extend_from_slice(psid_capabilities);
+    dacl_sids.extend_from_slice(default_dacl_extra_sids);
     set_default_dacl(new_token, &dacl_sids)?;
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;

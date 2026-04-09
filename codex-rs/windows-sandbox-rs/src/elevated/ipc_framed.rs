@@ -58,6 +58,8 @@ pub struct SpawnRequest {
     pub codex_home: PathBuf,
     pub real_codex_home: PathBuf,
     pub cap_sids: Vec<String>,
+    #[serde(default)]
+    pub real_user_sid: Option<String>,
     pub timeout_ms: Option<u64>,
     pub tty: bool,
     #[serde(default)]

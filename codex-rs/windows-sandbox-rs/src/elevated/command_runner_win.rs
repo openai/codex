@@ -27,7 +27,7 @@ use codex_windows_sandbox::StdinMode;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::create_readonly_token_with_caps_from;
-use codex_windows_sandbox::create_workspace_write_token_with_caps_from;
+use codex_windows_sandbox::create_workspace_write_token_with_caps_and_default_dacl_sids_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
 use codex_windows_sandbox::get_current_token_for_restriction;
@@ -208,8 +208,16 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     if cap_psids.is_empty() {
         anyhow::bail!("runner: empty capability SID list");
     }
+    let mut real_user_psid: Option<*mut c_void> = None;
+    if let Some(real_user_sid) = &req.real_user_sid {
+        let Some(psid) = (unsafe { convert_string_sid_to_sid(real_user_sid) }) else {
+            anyhow::bail!("ConvertStringSidToSidW failed for real user SID");
+        };
+        real_user_psid = Some(psid);
+    }
 
     let base = unsafe { get_current_token_for_restriction()? };
+    let default_dacl_extra_sids: Vec<*mut c_void> = real_user_psid.iter().copied().collect();
     let token_res: Result<(HANDLE, *mut c_void)> = unsafe {
         match &policy {
             SandboxPolicy::ReadOnly { .. } => {
@@ -217,8 +225,12 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
                     .map(|h_token| (h_token, cap_psids[0]))
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
-                create_workspace_write_token_with_caps_from(base, &cap_psids)
-                    .map(|h_token| (h_token, cap_psids[0]))
+                create_workspace_write_token_with_caps_and_default_dacl_sids_from(
+                    base,
+                    &cap_psids,
+                    &default_dacl_extra_sids,
+                )
+                .map(|h_token| (h_token, cap_psids[0]))
             }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!()
@@ -236,6 +248,11 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             if !psid.is_null() {
                 LocalFree(psid as HLOCAL);
             }
+        }
+        if let Some(psid) = real_user_psid
+            && !psid.is_null()
+        {
+            LocalFree(psid as HLOCAL);
         }
     }
 

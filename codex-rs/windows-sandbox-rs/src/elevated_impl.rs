@@ -220,6 +220,29 @@ mod windows_impl {
         }
     }
 
+    fn resolve_real_user_sid_for_runner(log_dir: Option<&Path>) -> Option<String> {
+        let real_user = match std::env::var("USERNAME") {
+            Ok(username) => username,
+            Err(err) => {
+                log_note(
+                    &format!("runner launch: USERNAME unavailable: {err}"),
+                    log_dir,
+                );
+                return None;
+            }
+        };
+        match resolve_sid(&real_user).and_then(|sid| string_from_sid_bytes(&sid)) {
+            Ok(sid) => Some(sid),
+            Err(err) => {
+                log_note(
+                    &format!("runner launch: resolve SID for real user {real_user} failed: {err}"),
+                    log_dir,
+                );
+                None
+            }
+        }
+    }
+
     /// Launches the command runner under the sandbox user and captures its output.
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
@@ -416,6 +439,7 @@ mod windows_impl {
                         codex_home: sandbox_base.clone(),
                         real_codex_home: codex_home.to_path_buf(),
                         cap_sids,
+                        real_user_sid: resolve_real_user_sid_for_runner(logs_base_dir),
                         timeout_ms,
                         tty: false,
                         stdin_open: false,
