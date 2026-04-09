@@ -34,12 +34,14 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
+use codex_config::types::TuiNotificationSettings;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -355,8 +357,7 @@ fn config_toml_deserializes_model_availability_nux() {
     assert_eq!(
         cfg.tui.expect("tui config should deserialize"),
         Tui {
-            notifications: Notifications::default(),
-            notification_method: NotificationMethod::default(),
+            notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
             alternate_screen: AltScreenMode::default(),
@@ -1052,8 +1053,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
     assert_eq!(
         tui,
         Tui {
-            notifications: Notifications::Enabled(true),
-            notification_method: NotificationMethod::Auto,
+            notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
             alternate_screen: AltScreenMode::Auto,
@@ -4583,7 +4583,6 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -4730,7 +4729,6 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         check_for_update_on_startup: true,
         disable_paste_burst: false,
         tui_notifications: Default::default(),
-        tui_notification_method: Default::default(),
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -4875,7 +4873,6 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         check_for_update_on_startup: true,
         disable_paste_burst: false,
         tui_notifications: Default::default(),
-        tui_notification_method: Default::default(),
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -5006,7 +5003,6 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         check_for_update_on_startup: true,
         disable_paste_burst: false,
         tui_notifications: Default::default(),
-        tui_notification_method: Default::default(),
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -6588,10 +6584,8 @@ speaker = "Desk Speakers"
 
 #[derive(Deserialize, Debug, PartialEq)]
 struct TuiTomlTest {
-    #[serde(default)]
-    notifications: Notifications,
-    #[serde(default)]
-    notification_method: NotificationMethod,
+    #[serde(default, flatten)]
+    notifications: TuiNotificationSettings,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -6606,7 +6600,10 @@ fn test_tui_notifications_true() {
             notifications = true
         "#;
     let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
-    assert_matches!(parsed.tui.notifications, Notifications::Enabled(true));
+    assert_matches!(
+        parsed.tui.notifications.notifications,
+        Notifications::Enabled(true)
+    );
 }
 
 #[test]
@@ -6617,7 +6614,7 @@ fn test_tui_notifications_custom_array() {
         "#;
     let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=[\"foo\"]");
     assert_matches!(
-        parsed.tui.notifications,
+        parsed.tui.notifications.notifications,
         Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
     );
 }
@@ -6630,5 +6627,48 @@ fn test_tui_notification_method() {
         "#;
     let parsed: RootTomlTest =
         toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
-    assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+    assert_eq!(parsed.tui.notifications.method, NotificationMethod::Bel);
+}
+
+#[test]
+fn test_tui_notification_condition_defaults_to_unfocused() {
+    let toml = r#"
+            [tui]
+        "#;
+    let parsed: RootTomlTest =
+        toml::from_str(toml).expect("deserialize default notification condition");
+    assert_eq!(
+        parsed.tui.notifications.condition,
+        NotificationCondition::Unfocused
+    );
+}
+
+#[test]
+fn test_tui_notification_condition_always() {
+    let toml = r#"
+            [tui]
+            notification_condition = "always"
+        "#;
+    let parsed: RootTomlTest =
+        toml::from_str(toml).expect("deserialize notification_condition=\"always\"");
+    assert_eq!(
+        parsed.tui.notifications.condition,
+        NotificationCondition::Always
+    );
+}
+
+#[test]
+fn test_tui_notification_condition_rejects_unknown_value() {
+    let toml = r#"
+            [tui]
+            notification_condition = "background"
+        "#;
+    let err = toml::from_str::<RootTomlTest>(toml).expect_err("reject unknown condition");
+    let err = err.to_string();
+    assert!(
+        err.contains("unknown variant `background`")
+            && err.contains("unfocused")
+            && err.contains("always"),
+        "unexpected error: {err}"
+    );
 }
