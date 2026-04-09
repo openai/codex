@@ -34,7 +34,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
     let server = create_mock_responses_server_sequence(vec![]).await;
     create_config_toml(&codex_home, &server.uri())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -98,7 +98,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
         .await;
     create_config_toml(&codex_home, &server.uri())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -202,7 +202,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
         .await;
     create_config_toml(&codex_home, &server.uri())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
