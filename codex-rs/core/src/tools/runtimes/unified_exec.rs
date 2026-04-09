@@ -46,6 +46,7 @@ use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Request payload used by the unified-exec runtime after approvals and
@@ -55,6 +56,7 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub process_id: i32,
     pub cwd: PathBuf,
+    pub sandbox_cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
@@ -92,10 +94,11 @@ struct RemoteManagedNetworkLaunch {
 
 fn build_remote_exec_sandbox_config(
     attempt: &SandboxAttempt<'_>,
+    sandbox_cwd: &Path,
     additional_permissions: Option<PermissionProfile>,
 ) -> SandboxLaunchConfig {
     if matches!(attempt.sandbox, codex_sandboxing::SandboxType::None) {
-        return SandboxLaunchConfig::no_sandbox(attempt.sandbox_cwd.to_path_buf());
+        return SandboxLaunchConfig::no_sandbox(sandbox_cwd.to_path_buf());
     }
 
     SandboxLaunchConfig {
@@ -103,7 +106,7 @@ fn build_remote_exec_sandbox_config(
         policy: attempt.policy.clone(),
         file_system_policy: attempt.file_system_policy.clone(),
         network_policy: attempt.network_policy,
-        sandbox_policy_cwd: attempt.sandbox_cwd.to_path_buf(),
+        sandbox_policy_cwd: sandbox_cwd.to_path_buf(),
         additional_permissions,
         enforce_managed_network: attempt.enforce_managed_network,
         windows_sandbox_level: attempt.windows_sandbox_level,
@@ -316,6 +319,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 arg0: None,
                 sandbox: build_remote_exec_sandbox_config(
                     attempt,
+                    req.sandbox_cwd.as_path(),
                     req.additional_permissions.clone(),
                 ),
                 managed_network,

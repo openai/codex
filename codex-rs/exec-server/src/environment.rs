@@ -1,3 +1,5 @@
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::OnceCell;
@@ -95,22 +97,25 @@ impl EnvironmentManager {
 pub struct Environment {
     exec_server_url: Option<String>,
     remote_exec_server_client: Option<ExecServerClient>,
+    cwd: PathBuf,
     exec_backend: Arc<dyn ExecBackend>,
 }
 
 impl Default for Environment {
     fn default() -> Self {
         let local_process = LocalProcess::default();
-        if let Err(err) = local_process.initialize() {
-            panic!("default local process initialization should succeed: {err:?}");
-        }
+        local_process
+            .initialize()
+            .expect("default local process initialization should succeed");
         if let Err(err) = local_process.initialized() {
             panic!("default local process should accept initialized notification: {err}");
         }
+        let cwd = std::env::current_dir().expect("default local cwd should be readable");
 
         Self {
             exec_server_url: None,
             remote_exec_server_client: None,
+            cwd,
             exec_backend: Arc::new(local_process),
         }
     }
@@ -148,8 +153,13 @@ impl Environment {
             None
         };
 
-        let exec_backend: Arc<dyn ExecBackend> = match remote_exec_server_client.clone() {
-            Some(client) => Arc::new(RemoteProcess::new(client)),
+        let (cwd, exec_backend): (PathBuf, Arc<dyn ExecBackend>) = match remote_exec_server_client
+            .clone()
+        {
+            Some(client) => (
+                client.cwd().to_path_buf(),
+                Arc::new(RemoteProcess::new(client)),
+            ),
             None if exec_server_url.is_some() => {
                 return Err(ExecServerError::Protocol(
                     "remote mode should have an exec-server client".to_string(),
@@ -163,13 +173,17 @@ impl Environment {
                 local_process
                     .initialized()
                     .map_err(ExecServerError::Protocol)?;
-                Arc::new(local_process)
+                let cwd = std::env::current_dir().map_err(|err| {
+                    ExecServerError::Protocol(format!("failed to read current directory: {err}"))
+                })?;
+                (cwd, Arc::new(local_process) as Arc<dyn ExecBackend>)
             }
         };
 
         Ok(Self {
             exec_server_url,
             remote_exec_server_client,
+            cwd,
             exec_backend,
         })
     }
@@ -185,6 +199,10 @@ impl Environment {
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
+    }
+
+    pub fn cwd(&self) -> &Path {
+        self.cwd.as_path()
     }
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
@@ -220,6 +238,10 @@ mod tests {
 
         assert_eq!(environment.exec_server_url(), None);
         assert!(environment.remote_exec_server_client.is_none());
+        assert_eq!(
+            environment.cwd(),
+            std::env::current_dir().expect("read current dir").as_path()
+        );
     }
 
     #[test]

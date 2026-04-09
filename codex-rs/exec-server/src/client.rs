@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -118,6 +120,7 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
+    cwd: PathBuf,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -181,30 +184,6 @@ impl ExecServerClient {
             args.into(),
         )
         .await
-    }
-
-    pub async fn initialize(
-        &self,
-        options: ExecServerClientConnectOptions,
-    ) -> Result<InitializeResponse, ExecServerError> {
-        let ExecServerClientConnectOptions {
-            client_name,
-            initialize_timeout,
-        } = options;
-
-        timeout(initialize_timeout, async {
-            let response = self
-                .inner
-                .client
-                .call(INITIALIZE_METHOD, &InitializeParams { client_name })
-                .await?;
-            self.notify_initialized().await?;
-            Ok(response)
-        })
-        .await
-        .map_err(|_| ExecServerError::InitializeTimedOut {
-            timeout: initialize_timeout,
-        })?
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
@@ -350,11 +329,34 @@ impl ExecServerClient {
         self.inner.remove_session(process_id).await;
     }
 
+    pub fn cwd(&self) -> &Path {
+        self.inner.cwd.as_path()
+    }
+
     async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
         let (rpc_client, mut events_rx) = RpcClient::new(connection);
+        let ExecServerClientConnectOptions {
+            client_name,
+            initialize_timeout,
+        } = options;
+        let initialize_response = timeout(initialize_timeout, async {
+            let response: InitializeResponse = rpc_client
+                .call(INITIALIZE_METHOD, &InitializeParams { client_name })
+                .await?;
+            rpc_client
+                .notify(INITIALIZED_METHOD, &serde_json::json!({}))
+                .await
+                .map_err(ExecServerError::Json)?;
+            Ok::<InitializeResponse, ExecServerError>(response)
+        })
+        .await
+        .map_err(|_| ExecServerError::InitializeTimedOut {
+            timeout: initialize_timeout,
+        })??;
+
         let inner = Arc::new_cyclic(|weak| {
             let weak = weak.clone();
             let reader_task = tokio::spawn(async move {
@@ -388,21 +390,11 @@ impl ExecServerClient {
                 client: rpc_client,
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
+                cwd: initialize_response.cwd,
                 reader_task,
             }
         });
-
-        let client = Self { inner };
-        client.initialize(options).await?;
-        Ok(client)
-    }
-
-    async fn notify_initialized(&self) -> Result<(), ExecServerError> {
-        self.inner
-            .client
-            .notify(INITIALIZED_METHOD, &serde_json::json!({}))
-            .await
-            .map_err(ExecServerError::Json)
+        Ok(Self { inner })
     }
 }
 
@@ -632,6 +624,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCResponse;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWrite;
     use tokio::io::AsyncWriteExt;
@@ -693,8 +686,10 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
-                    result: serde_json::to_value(InitializeResponse {})
-                        .expect("initialize response should serialize"),
+                    result: serde_json::to_value(InitializeResponse {
+                        cwd: PathBuf::from("/server/default"),
+                    })
+                    .expect("initialize response should serialize"),
                 }),
             )
             .await;
@@ -721,6 +716,7 @@ mod tests {
         )
         .await
         .expect("client should connect");
+        assert_eq!(client.cwd(), PathBuf::from("/server/default"));
 
         let noisy_process_id = ProcessId::from("noisy");
         let quiet_process_id = ProcessId::from("quiet");

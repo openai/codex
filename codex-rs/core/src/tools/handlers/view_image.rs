@@ -87,8 +87,8 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let abs_path =
-            AbsolutePathBuf::try_from(turn.resolve_path(Some(args.path))).map_err(|error| {
+        let abs_path = AbsolutePathBuf::try_from(turn.resolve_environment_path(Some(args.path)))
+            .map_err(|error| {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
         let Some(environment) = turn.environment.as_ref() else {

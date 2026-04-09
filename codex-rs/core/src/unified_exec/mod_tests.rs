@@ -622,3 +622,84 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_context_resolves_environment_paths_from_remote_environment_cwd() -> anyhow::Result<()>
+{
+    skip_if_sandbox!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let remote_test_env = remote_test_env().await?;
+    let (_, mut turn) = make_session_and_context().await;
+    let thread_cwd = turn.cwd.to_path_buf();
+    turn.environment = Some(Arc::new(remote_test_env.environment().clone()));
+
+    let environment_cwd = turn.environment_cwd().to_path_buf();
+    assert_ne!(
+        environment_cwd, thread_cwd,
+        "remote environment cwd should be a useful regression sentinel"
+    );
+    assert_eq!(environment_cwd, remote_test_env.environment().cwd());
+    assert_eq!(
+        turn.resolve_environment_path(Some("relative-workdir".to_string())),
+        environment_cwd.join("relative-workdir")
+    );
+    assert_eq!(
+        turn.resolve_path(Some("relative-workdir".to_string())),
+        thread_cwd.join("relative-workdir")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_exec_command_uses_remote_environment_cwd_by_default() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let remote_test_env = remote_test_env().await?;
+    let (session, mut turn) = make_session_and_context().await;
+    turn.environment = Some(Arc::new(remote_test_env.environment().clone()));
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let manager = &session.services.unified_exec_manager;
+    let context = UnifiedExecContext::new(Arc::clone(&session), Arc::clone(&turn), "call".into());
+    let process_id = manager.allocate_process_id().await;
+    let output = manager
+        .exec_command(
+            ExecCommandRequest {
+                command: vec![
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    "printf 'PWD=%s\\n' \"$PWD\"".to_string(),
+                ],
+                process_id,
+                yield_time_ms: 2_500,
+                max_output_tokens: None,
+                workdir: None,
+                network: None,
+                tty: false,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                additional_permissions_preapproved: false,
+                justification: None,
+                prefix_rule: None,
+            },
+            &context,
+        )
+        .await?;
+
+    assert_eq!(
+        output.truncated_output(),
+        format!("PWD={}\n", turn.environment_cwd().display())
+    );
+    assert_eq!(output.exit_code, Some(0));
+    assert_eq!(output.process_id, None);
+
+    Ok(())
+}

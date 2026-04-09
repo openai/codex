@@ -42,7 +42,9 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
     )));
     assert_eq!(
         handler.initialize().expect("initialize"),
-        InitializeResponse {}
+        InitializeResponse {
+            cwd: std::env::current_dir().expect("cwd")
+        }
     );
     handler.initialized().expect("initialized");
     handler

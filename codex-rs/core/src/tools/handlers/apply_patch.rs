@@ -113,7 +113,7 @@ async fn effective_patch_permissions(
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
         crate::sandboxing::SandboxPermissions::UseDefault,
-        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &turn.cwd),
+        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &action.cwd),
     )
     .await;
 
@@ -168,7 +168,13 @@ impl ToolHandler for ApplyPatchHandler {
 
         // Re-parse and verify the patch so we can compute changes and approval.
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
-        let cwd = turn.cwd.clone();
+        let cwd = AbsolutePathBuf::try_from(turn.resolve_environment_path(/*path*/ None)).map_err(
+            |err| {
+                FunctionCallError::RespondToModel(format!(
+                    "apply_patch verification failed: failed to resolve cwd: {err}"
+                ))
+            },
+        )?;
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         let Some(environment) = turn.environment.as_ref() else {
             return Err(FunctionCallError::RespondToModel(

@@ -162,10 +162,11 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+        let sandbox_cwd = context.turn.environment_cwd().to_path_buf();
         let cwd = request
             .workdir
             .clone()
-            .unwrap_or_else(|| context.turn.cwd.to_path_buf());
+            .unwrap_or_else(|| sandbox_cwd.clone());
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
@@ -691,10 +692,12 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
+        let sandbox_cwd = context.turn.environment_cwd().to_path_buf();
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             process_id: request.process_id,
             cwd,
+            sandbox_cwd,
             env,
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
             network: request.network.clone(),

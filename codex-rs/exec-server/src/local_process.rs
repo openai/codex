@@ -38,7 +38,6 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
-use crate::protocol::InitializeResponse;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -198,13 +197,13 @@ impl LocalProcess {
         }
     }
 
-    pub(crate) fn initialize(&self) -> Result<InitializeResponse, JSONRPCErrorError> {
+    pub(crate) fn initialize(&self) -> Result<(), JSONRPCErrorError> {
         if self.inner.initialize_requested.swap(true, Ordering::SeqCst) {
             return Err(invalid_request(
                 "initialize may only be sent once per connection".to_string(),
             ));
         }
-        Ok(InitializeResponse {})
+        Ok(())
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {

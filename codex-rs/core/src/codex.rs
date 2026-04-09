@@ -1032,6 +1032,20 @@ impl TurnContext {
             .map_or_else(|| self.cwd.to_path_buf(), |p| self.cwd.as_path().join(p))
     }
 
+    pub(crate) fn environment_cwd(&self) -> &Path {
+        self.environment
+            .as_ref()
+            .map_or(self.cwd.as_path(), |environment| environment.cwd())
+    }
+
+    pub(crate) fn resolve_environment_path(&self, path: Option<String>) -> PathBuf {
+        let base = self.environment_cwd();
+        path.as_ref().map(PathBuf::from).map_or_else(
+            || base.to_path_buf(),
+            |path| crate::util::resolve_path(base, &path),
+        )
+    }
+
     pub(crate) fn compact_prompt(&self) -> &str {
         self.compact_prompt
             .as_deref()
