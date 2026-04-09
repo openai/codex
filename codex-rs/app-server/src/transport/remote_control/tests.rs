@@ -107,7 +107,7 @@ async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime>
 
 fn remote_control_url_for_listener(listener: &TcpListener) -> String {
     format!(
-        "http://127.0.0.1:{}/backend-api/",
+        "http://localhost:{}/backend-api/",
         listener
             .local_addr()
             .expect("listener should have a local addr")
