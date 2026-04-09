@@ -485,6 +485,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
             cursor: None,
             limit: Some(10),
             sort_key: None,
+            sort_direction: None,
             model_providers: None,
             source_kinds: None,
             archived: None,

@@ -310,6 +310,7 @@ export type { ThreadSetNameParams } from "./ThreadSetNameParams";
 export type { ThreadSetNameResponse } from "./ThreadSetNameResponse";
 export type { ThreadShellCommandParams } from "./ThreadShellCommandParams";
 export type { ThreadShellCommandResponse } from "./ThreadShellCommandResponse";
+export type { ThreadSortDirection } from "./ThreadSortDirection";
 export type { ThreadSortKey } from "./ThreadSortKey";
 export type { ThreadSourceKind } from "./ThreadSourceKind";
 export type { ThreadStartParams } from "./ThreadStartParams";

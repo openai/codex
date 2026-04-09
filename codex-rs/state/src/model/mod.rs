@@ -28,6 +28,7 @@ pub use memories::Stage1StartupClaimParams;
 pub use thread_metadata::Anchor;
 pub use thread_metadata::BackfillStats;
 pub use thread_metadata::ExtractionOutcome;
+pub use thread_metadata::SortDirection;
 pub use thread_metadata::SortKey;
 pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;

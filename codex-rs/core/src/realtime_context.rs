@@ -4,6 +4,7 @@ use crate::event_mapping::is_contextual_user_message_content;
 use chrono::Utc;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
+use codex_state::SortDirection;
 use codex_state::SortKey;
 use codex_state::ThreadMetadata;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -126,6 +127,7 @@ async fn load_recent_threads(sess: &Session) -> Vec<ThreadMetadata> {
             MAX_RECENT_THREADS,
             /*anchor*/ None,
             SortKey::UpdatedAt,
+            SortDirection::Desc,
             &[],
             /*model_providers*/ None,
             /*archived_only*/ false,

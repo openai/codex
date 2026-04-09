@@ -1,4 +1,5 @@
 use super::*;
+use crate::SortDirection;
 use codex_protocol::protocol::SessionSource;
 
 impl StateRuntime {
@@ -393,6 +394,7 @@ FROM threads
         page_size: usize,
         anchor: Option<&crate::Anchor>,
         sort_key: crate::SortKey,
+        sort_direction: crate::SortDirection,
         allowed_sources: &[String],
         model_providers: Option<&[String]>,
         archived_only: bool,
@@ -435,9 +437,10 @@ FROM threads
             model_providers,
             anchor,
             sort_key,
+            sort_direction,
             search_term,
         );
-        push_thread_order_and_limit(&mut builder, sort_key, limit);
+        push_thread_order_and_limit(&mut builder, sort_key, sort_direction, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut items = rows
@@ -478,9 +481,10 @@ FROM threads
             model_providers,
             anchor,
             sort_key,
+            SortDirection::Desc,
             /*search_term*/ None,
         );
-        push_thread_order_and_limit(&mut builder, sort_key, limit);
+        push_thread_order_and_limit(&mut builder, sort_key, SortDirection::Desc, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
@@ -948,6 +952,7 @@ pub(super) fn push_thread_filters<'a>(
     model_providers: Option<&'a [String]>,
     anchor: Option<&crate::Anchor>,
     sort_key: SortKey,
+    sort_direction: SortDirection,
     search_term: Option<&'a str>,
 ) {
     builder.push(" WHERE 1 = 1");
@@ -986,15 +991,23 @@ pub(super) fn push_thread_filters<'a>(
             SortKey::CreatedAt => "created_at",
             SortKey::UpdatedAt => "updated_at",
         };
+        let operator = match sort_direction {
+            SortDirection::Asc => ">",
+            SortDirection::Desc => "<",
+        };
         builder.push(" AND (");
         builder.push(column);
-        builder.push(" < ");
+        builder.push(" ");
+        builder.push(operator);
+        builder.push(" ");
         builder.push_bind(anchor_ts);
         builder.push(" OR (");
         builder.push(column);
         builder.push(" = ");
         builder.push_bind(anchor_ts);
-        builder.push(" AND id < ");
+        builder.push(" AND id ");
+        builder.push(operator);
+        builder.push(" ");
         builder.push_bind(anchor.id.to_string());
         builder.push("))");
     }
@@ -1003,15 +1016,23 @@ pub(super) fn push_thread_filters<'a>(
 pub(super) fn push_thread_order_and_limit(
     builder: &mut QueryBuilder<'_, Sqlite>,
     sort_key: SortKey,
+    sort_direction: SortDirection,
     limit: usize,
 ) {
     let order_column = match sort_key {
         SortKey::CreatedAt => "created_at",
         SortKey::UpdatedAt => "updated_at",
     };
+    let order_direction = match sort_direction {
+        SortDirection::Asc => "ASC",
+        SortDirection::Desc => "DESC",
+    };
     builder.push(" ORDER BY ");
     builder.push(order_column);
-    builder.push(" DESC, id DESC");
+    builder.push(" ");
+    builder.push(order_direction);
+    builder.push(", id ");
+    builder.push(order_direction);
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
 }
@@ -1019,6 +1040,7 @@ pub(super) fn push_thread_order_and_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Anchor;
     use crate::DirectionalThreadSpawnEdgeStatus;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
@@ -1029,6 +1051,7 @@ mod tests {
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn upsert_thread_keeps_creation_memory_mode_for_existing_rows() {
@@ -1066,6 +1089,84 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn list_threads_updated_after_returns_oldest_changes_first() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let older_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let same_second_lower_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread id");
+        let same_second_higher_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000003").expect("valid thread id");
+        let older_updated_at =
+            DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("valid older timestamp");
+        let newer_updated_at =
+            DateTime::<Utc>::from_timestamp(1_700_000_200, 0).expect("valid newer timestamp");
+
+        for (thread_id, updated_at) in [
+            (older_id, older_updated_at),
+            (same_second_higher_id, newer_updated_at),
+            (same_second_lower_id, newer_updated_at),
+        ] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            metadata.updated_at = updated_at;
+            metadata.first_user_message = Some("hello".to_string());
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("thread insert should succeed");
+        }
+
+        let anchor = Anchor {
+            ts: older_updated_at,
+            id: Uuid::parse_str(&older_id.to_string()).expect("valid uuid"),
+        };
+        let page = runtime
+            .list_threads(
+                1,
+                Some(&anchor),
+                SortKey::UpdatedAt,
+                SortDirection::Asc,
+                &[],
+                Some(&["test-provider".to_string()]),
+                false,
+                None,
+            )
+            .await
+            .expect("list should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![same_second_lower_id]);
+        assert_eq!(
+            page.next_anchor,
+            Some(Anchor {
+                ts: newer_updated_at,
+                id: Uuid::parse_str(&same_second_lower_id.to_string()).expect("valid uuid"),
+            })
+        );
+
+        let page = runtime
+            .list_threads(
+                1,
+                page.next_anchor.as_ref(),
+                SortKey::UpdatedAt,
+                SortDirection::Asc,
+                &[],
+                Some(&["test-provider".to_string()]),
+                false,
+                None,
+            )
+            .await
+            .expect("second page should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![same_second_higher_id]);
+        assert_eq!(page.next_anchor, None);
     }
 
     #[tokio::test]

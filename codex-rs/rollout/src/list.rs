@@ -113,6 +113,12 @@ pub enum ThreadSortKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadSortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadListLayout {
     NestedByDate,
     Flat,
@@ -135,6 +141,10 @@ pub struct Cursor {
 impl Cursor {
     fn new(ts: OffsetDateTime, id: Uuid) -> Self {
         Self { ts, id }
+    }
+
+    pub(crate) fn parts(&self) -> (OffsetDateTime, Uuid) {
+        (self.ts, self.id)
     }
 }
 

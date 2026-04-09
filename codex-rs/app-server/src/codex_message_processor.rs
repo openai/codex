@@ -161,6 +161,7 @@ use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
+use codex_app_server_protocol::ThreadSortDirection;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -3422,6 +3423,7 @@ impl CodexMessageProcessor {
             cursor,
             limit,
             sort_key,
+            sort_direction,
             model_providers,
             source_kinds,
             archived,
@@ -3444,11 +3446,12 @@ impl CodexMessageProcessor {
             ThreadSortKey::CreatedAt => CoreThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => CoreThreadSortKey::UpdatedAt,
         };
-        let (summaries, next_cursor) = match self
+        let list_result = self
             .list_threads_common(
                 requested_page_size,
                 cursor,
                 core_sort_key,
+                sort_direction.unwrap_or(ThreadSortDirection::Desc),
                 ThreadListFilters {
                     model_providers,
                     source_kinds,
@@ -3457,8 +3460,8 @@ impl CodexMessageProcessor {
                     search_term,
                 },
             )
-            .await
-        {
+            .await;
+        let (summaries, next_cursor) = match list_result {
             Ok(r) => r,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4679,6 +4682,7 @@ impl CodexMessageProcessor {
         requested_page_size: usize,
         cursor: Option<String>,
         sort_key: CoreThreadSortKey,
+        sort_direction: ThreadSortDirection,
         filters: ThreadListFilters,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
         let ThreadListFilters {
@@ -4717,6 +4721,10 @@ impl CodexMessageProcessor {
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
         let state_db_ctx = get_state_db(&self.config).await;
+        let core_sort_direction = match sort_direction {
+            ThreadSortDirection::Asc => codex_core::ThreadSortDirection::Asc,
+            ThreadSortDirection::Desc => codex_core::ThreadSortDirection::Desc,
+        };
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -4726,37 +4734,35 @@ impl CodexMessageProcessor {
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
+                    core_sort_direction,
                     allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                     search_term.as_deref(),
                 )
                 .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to list threads: {err}"),
-                    data: None,
-                })?
             } else {
                 RolloutRecorder::list_threads(
                     &self.config,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
+                    core_sort_direction,
                     allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                     search_term.as_deref(),
                 )
                 .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to list threads: {err}"),
-                    data: None,
-                })?
-            };
+            }
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to list threads: {err}"),
+                data: None,
+            })?;
 
-            let mut filtered = Vec::with_capacity(page.items.len());
+            let next_cursor_value = page.next_cursor.clone();
+            let mut candidate_summaries = Vec::with_capacity(page.items.len());
             for it in page.items {
                 let Some(summary) = summary_from_thread_list_item(
                     it,
@@ -4767,6 +4773,11 @@ impl CodexMessageProcessor {
                 else {
                     continue;
                 };
+                candidate_summaries.push(summary);
+            }
+
+            let mut filtered = Vec::with_capacity(candidate_summaries.len());
+            for summary in candidate_summaries {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
@@ -4784,7 +4795,6 @@ impl CodexMessageProcessor {
             remaining = requested_page_size.saturating_sub(items.len());
 
             // Encode RolloutCursor into the JSON-RPC string form returned to clients.
-            let next_cursor_value = page.next_cursor.clone();
             next_cursor = next_cursor_value
                 .as_ref()
                 .and_then(|cursor| serde_json::to_value(cursor).ok())

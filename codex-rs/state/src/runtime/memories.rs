@@ -1,6 +1,7 @@
 use super::threads::push_thread_filters;
 use super::threads::push_thread_order_and_limit;
 use super::*;
+use crate::SortDirection;
 use crate::model::Phase2InputSelection;
 use crate::model::Phase2JobClaimOutcome;
 use crate::model::Stage1JobClaim;
@@ -203,6 +204,7 @@ LEFT JOIN jobs
             /*model_providers*/ None,
             /*anchor*/ None,
             SortKey::UpdatedAt,
+            SortDirection::Desc,
             /*search_term*/ None,
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
@@ -215,7 +217,12 @@ LEFT JOIN jobs
         builder.push(" AND updated_at <= ").push_bind(idle_cutoff);
         builder.push(" AND COALESCE(stage1_outputs.source_updated_at, -1) < updated_at");
         builder.push(" AND COALESCE(jobs.last_success_watermark, -1) < updated_at");
-        push_thread_order_and_limit(&mut builder, SortKey::UpdatedAt, scan_limit);
+        push_thread_order_and_limit(
+            &mut builder,
+            SortKey::UpdatedAt,
+            SortDirection::Desc,
+            scan_limit,
+        );
 
         let items = builder
             .build()
