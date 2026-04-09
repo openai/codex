@@ -1,11 +1,20 @@
 use crate::JsonSchema;
 use serde_json::Value as JsonValue;
 
+/// Where a tool definition originated before it was normalized into the shared
+/// `ToolDefinition` shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolOrigin {
+    /// A built-in Codex tool defined directly in Rust, such as `exec_command`,
+    /// `view_image`, `update_plan`, or the agent/collaboration tools.
     #[default]
     Native,
+    /// A tool discovered from an MCP server and converted through the MCP tool
+    /// pipeline. These tools may advertise an MCP `outputSchema`, which code
+    /// mode uses to render shared `mcp_result<T>` aliases.
     Mcp,
+    /// A runtime-provided non-MCP tool definition, such as a `DynamicToolSpec`
+    /// supplied externally rather than compiled into the binary.
     Dynamic,
 }
 

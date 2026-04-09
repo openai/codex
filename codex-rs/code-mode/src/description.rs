@@ -389,16 +389,46 @@ fn extract_mcp_structured_content_schema(output_schema: &JsonValue) -> Option<&J
     )
 }
 
+const MCP_TYPESCRIPT_PREAMBLE: &str = r#"type mcp_annotations = {
+  audience?: Array<"user" | "assistant">;
+  priority?: number;
+  lastModified?: string;
+};
+type mcp_resource =
+  | {
+      uri: string;
+      mimeType?: string;
+      text: string;
+      annotations?: mcp_annotations;
+    }
+  | {
+      uri: string;
+      mimeType?: string;
+      blob: string;
+      annotations?: mcp_annotations;
+    };
+type mcp_output =
+  | { type: "text"; text: string; annotations?: mcp_annotations }
+  | { type: "image"; data: string; mimeType: string; annotations?: mcp_annotations }
+  | { type: "audio"; data: string; mimeType: string; annotations?: mcp_annotations }
+  | {
+      type: "resource_link";
+      uri: string;
+      name: string;
+      description?: string;
+      mimeType?: string;
+      annotations?: mcp_annotations;
+    }
+  | { type: "resource"; resource: mcp_resource };
+type mcp_result<TStructured = unknown> = {
+  _meta?: unknown;
+  content: Array<mcp_output>;
+  isError?: boolean;
+  structuredContent?: TStructured;
+};"#;
+
 fn render_mcp_typescript_preamble() -> &'static str {
-    concat!(
-        "type mcp_output = { [key: string]: unknown; };\n",
-        "type mcp_result<TStructured = unknown> = {\n",
-        "  _meta?: unknown;\n",
-        "  content: Array<mcp_output>;\n",
-        "  isError?: boolean;\n",
-        "  structuredContent?: TStructured;\n",
-        "};"
-    )
+    MCP_TYPESCRIPT_PREAMBLE
 }
 
 fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
@@ -763,8 +793,10 @@ mod tests {
             &BTreeMap::new(),
             /*code_mode_only*/ true,
         );
-        assert!(description.contains("### `foo`
-bar"));
+        assert!(description.contains(
+            "### `foo`
+bar"
+        ));
     }
 
     #[test]
