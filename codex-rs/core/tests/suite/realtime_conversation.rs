@@ -507,23 +507,17 @@ async fn conversation_start_v1_without_model_override_preserves_provider_default
         realtime_server.handshakes()[1].uri(),
         "/v1/realtime?intent=quicksilver"
     );
-    assert_eq!(
-        connections[1][0].body_json(),
-        json!({
-            "type": "session.update",
-            "session": {
-                "id": started.session_id,
-                "type": "quicksilver",
-                "instructions": "backend prompt",
-                "audio": {
-                    "input": {
-                        "format": {"type": "audio/pcm", "rate": 24000}
-                    },
-                    "output": {"voice": "fathom"}
-                }
-            }
-        })
-    );
+    let expected_session_update = json!({
+        "type": "session.update",
+        "session": session_update_session_json(RealtimeSessionConfig {
+            instructions: "backend prompt".to_string(),
+            model: None,
+            session_id: started.session_id.clone(),
+            event_parser: RealtimeEventParser::V1,
+            session_mode: RealtimeSessionMode::Conversational,
+        })?
+    });
+    assert_eq!(connections[1][0].body_json(), expected_session_update);
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
     let _closed = wait_for_event_match(&test.codex, |msg| match msg {
