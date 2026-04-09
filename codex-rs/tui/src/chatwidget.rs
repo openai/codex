@@ -4026,6 +4026,16 @@ impl ChatWidget {
     }
 
     fn schedule_hook_timer_if_needed(&self) {
+        if self.config.animations
+            && self
+                .active_hook_cell
+                .as_ref()
+                .is_some_and(HookCell::has_visible_running_run)
+        {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(50));
+        }
+
         let Some(deadline) = self
             .active_hook_cell
             .as_ref()

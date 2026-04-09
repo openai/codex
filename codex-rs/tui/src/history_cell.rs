@@ -25,6 +25,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::shimmer::shimmer_spans;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 #[cfg(test)]
@@ -1808,6 +1809,12 @@ impl HookCell {
         !self.is_active() && !self.is_empty()
     }
 
+    pub(crate) fn has_visible_running_run(&self) -> bool {
+        self.runs
+            .iter()
+            .any(|run| run.completed.is_none() && run.running_visible)
+    }
+
     pub(crate) fn start_run(&mut self, run: HookRunSummary) {
         if let Some(existing) = self.runs.iter_mut().find(|existing| existing.id == run.id) {
             existing.event_name = run.event_name;
@@ -2013,11 +2020,13 @@ impl HookRunCell {
                 }
             }
             None => {
-                let mut header = vec![
-                    spinner(self.start_time, animations_enabled),
-                    " ".into(),
-                    format!("Running {label} hook").bold(),
-                ];
+                let header_text = format!("Running {label} hook");
+                let mut header = vec![spinner(self.start_time, animations_enabled), " ".into()];
+                if animations_enabled {
+                    header.extend(shimmer_spans(&header_text));
+                } else {
+                    header.push(header_text.bold());
+                }
                 if let Some(status_message) = &self.status_message
                     && !status_message.is_empty()
                 {
