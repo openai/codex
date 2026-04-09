@@ -137,6 +137,7 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
                 text_elements: Vec::new(),
             }],
             /*expected_turn_id*/ None,
+            /*responsesapi_client_metadata*/ None,
         )
         .await
         .unwrap_or_else(|err| panic!("steer user input: {err:?}"));
