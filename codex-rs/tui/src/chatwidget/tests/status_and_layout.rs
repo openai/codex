@@ -1517,7 +1517,7 @@ async fn blocked_and_failed_hooks_render_feedback_and_errors() {
 }
 
 #[tokio::test]
-async fn completed_hook_with_output_keeps_running_visible_for_floor() {
+async fn completed_hook_with_output_flushes_immediately() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_codex_event(hook_started_event(
@@ -1537,31 +1537,20 @@ async fn completed_hook_with_output_keeps_running_visible_for_floor() {
             text: "command blocked by policy".to_string(),
         }],
     ));
-    let completed_deferred_snapshot =
-        hook_live_and_history_snapshot(&chat, "completed deferred", "");
-    assert!(
-        drain_insert_history(&mut rx).is_empty(),
-        "completed hook should stay live until the running row has met its visible floor"
-    );
-
-    reveal_completed_hooks(&mut chat);
     let history = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    let completed_revealed_snapshot =
-        hook_live_and_history_snapshot(&chat, "completed revealed", &history);
+    let completed_snapshot = hook_live_and_history_snapshot(&chat, "completed", &history);
 
     assert_chatwidget_snapshot!(
-        "completed_hook_with_output_keeps_running_visible_for_floor_snapshot",
-        format!(
-            "{running_snapshot}\n\n{completed_deferred_snapshot}\n\n{completed_revealed_snapshot}"
-        )
+        "completed_hook_with_output_flushes_immediately_snapshot",
+        format!("{running_snapshot}\n\n{completed_snapshot}")
     );
 }
 
 #[tokio::test]
-async fn completed_hook_with_output_flushes_at_next_turn_boundary() {
+async fn completed_hook_output_precedes_following_assistant_message() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_codex_event(hook_started_event(
@@ -1580,31 +1569,78 @@ async fn completed_hook_with_output_flushes_at_next_turn_boundary() {
             text: "command blocked by policy".to_string(),
         }],
     ));
-    assert!(
-        drain_insert_history(&mut rx).is_empty(),
-        "completed hook should still be deferred before the next turn starts"
-    );
 
-    chat.handle_codex_event(Event {
-        id: "turn-start".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-2".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    complete_assistant_message(
+        &mut chat,
+        "msg-after-hook",
+        "The hook feedback was applied.",
+        None,
+    );
 
     let history = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!(
-        "completed_hook_with_output_flushes_at_next_turn_boundary_snapshot",
+        "completed_hook_output_precedes_following_assistant_message_snapshot",
         format!(
             "active hooks:\n{}history:\n{history}",
             active_hook_blob(&chat)
         )
+    );
+    let hook_index = history
+        .find("PreToolUse hook (blocked)")
+        .expect("hook feedback should be in history");
+    let assistant_index = history
+        .find("The hook feedback was applied.")
+        .expect("assistant message should be in history");
+    assert!(
+        hook_index < assistant_index,
+        "hook output should precede later assistant text: {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn completed_same_id_hook_output_survives_restart() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let hook_id = "stop:0:/tmp/hooks.json";
+
+    chat.handle_codex_event(hook_started_event(
+        hook_id,
+        codex_protocol::protocol::HookEventName::Stop,
+        Some("checking stop condition"),
+    ));
+    reveal_running_hooks(&mut chat);
+    chat.handle_codex_event(hook_completed_event(
+        hook_id,
+        codex_protocol::protocol::HookEventName::Stop,
+        codex_protocol::protocol::HookRunStatus::Stopped,
+        vec![codex_protocol::protocol::HookOutputEntry {
+            kind: codex_protocol::protocol::HookOutputEntryKind::Stop,
+            text: "continue with more context".to_string(),
+        }],
+    ));
+    chat.handle_codex_event(hook_started_event(
+        hook_id,
+        codex_protocol::protocol::HookEventName::Stop,
+        Some("checking stop condition"),
+    ));
+    reveal_running_hooks(&mut chat);
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "completed_same_id_hook_output_survives_restart_snapshot",
+        format!(
+            "active hooks:\n{}history:\n{history}",
+            active_hook_blob(&chat)
+        )
+    );
+    assert!(
+        history.contains("Stop hook (stopped)\n  stop: continue with more context"),
+        "first hook output should not be overwritten: {history:?}"
     );
 }
 

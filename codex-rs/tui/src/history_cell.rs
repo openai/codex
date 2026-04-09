@@ -1767,7 +1767,7 @@ pub(crate) struct HookCell {
 }
 
 const HOOK_RUN_REVEAL_DELAY: Duration = Duration::from_millis(300);
-const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(1000);
+const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(600);
 
 #[derive(Debug)]
 struct HookRunCell {
@@ -1778,7 +1778,6 @@ struct HookRunCell {
     reveal_deadline: Instant,
     running_visible: bool,
     completed: Option<CompletedHookRun>,
-    completed_reveal_deadline: Option<Instant>,
     quiet_removal_deadline: Option<Instant>,
 }
 
@@ -1822,14 +1821,21 @@ impl HookCell {
         !self.is_active() && !self.is_empty()
     }
 
-    pub(crate) fn prepare_for_turn_boundary_flush(&mut self) {
-        for run in &mut self.runs {
-            if run.completed.is_some() {
-                run.completed_reveal_deadline = None;
-                run.quiet_removal_deadline = None;
+    pub(crate) fn take_completed_persistent_runs(&mut self) -> Option<Self> {
+        let mut completed = Vec::new();
+        let mut remaining = Vec::new();
+        for run in self.runs.drain(..) {
+            if run.has_persistent_output() {
+                completed.push(run);
+            } else {
+                remaining.push(run);
             }
         }
-        self.runs.retain(HookRunCell::has_persistent_output);
+        self.runs = remaining;
+        (!completed.is_empty()).then_some(Self {
+            runs: completed,
+            animations_enabled: self.animations_enabled,
+        })
     }
 
     pub(crate) fn has_visible_running_run(&self) -> bool {
@@ -1847,7 +1853,6 @@ impl HookCell {
             existing.reveal_deadline = now + HOOK_RUN_REVEAL_DELAY;
             existing.running_visible = false;
             existing.completed = None;
-            existing.completed_reveal_deadline = None;
             existing.quiet_removal_deadline = None;
             return;
         }
@@ -1860,7 +1865,6 @@ impl HookCell {
             reveal_deadline: now + HOOK_RUN_REVEAL_DELAY,
             running_visible: false,
             completed: None,
-            completed_reveal_deadline: None,
             quiet_removal_deadline: None,
         });
     }
@@ -1871,7 +1875,7 @@ impl HookCell {
             return false;
         };
         if hook_run_is_quiet_success(&run) {
-            if let Some(deadline) = self.runs[index].quiet_removal_deadline_after_complete() {
+            if let Some(deadline) = self.runs[index].quiet_removal_deadline_after_quiet_success() {
                 self.runs[index].quiet_removal_deadline = Some(deadline);
             } else {
                 self.runs.remove(index);
@@ -1886,8 +1890,6 @@ impl HookCell {
             status: run.status,
             entries: run.entries,
         });
-        existing.completed_reveal_deadline = existing.completed_reveal_deadline_after_complete();
-        existing.quiet_removal_deadline = None;
         true
     }
 
@@ -1906,7 +1908,6 @@ impl HookCell {
                 status: run.status,
                 entries: run.entries,
             }),
-            completed_reveal_deadline: None,
             quiet_removal_deadline: None,
         });
     }
@@ -1915,8 +1916,7 @@ impl HookCell {
         let old_len = self.runs.len();
         self.runs.retain(|run| {
             run.quiet_removal_deadline
-                .map(|deadline| now < deadline)
-                .unwrap_or(true)
+                .is_none_or(|deadline| now < deadline)
         });
         self.runs.len() != old_len
     }
@@ -1928,10 +1928,6 @@ impl HookCell {
                 run.running_visible = true;
                 changed = true;
             }
-            if run.should_reveal_completed(now) {
-                run.completed_reveal_deadline = None;
-                changed = true;
-            }
         }
         changed
     }
@@ -1940,12 +1936,10 @@ impl HookCell {
         self.runs
             .iter()
             .filter_map(|run| {
-                run.quiet_removal_deadline
-                    .or(run.completed_reveal_deadline)
-                    .or_else(|| {
-                        run.should_wait_to_reveal_running()
-                            .then_some(run.reveal_deadline)
-                    })
+                run.quiet_removal_deadline.or_else(|| {
+                    run.should_wait_to_reveal_running()
+                        .then_some(run.reveal_deadline)
+                })
             })
             .min()
     }
@@ -1955,15 +1949,6 @@ impl HookCell {
         for run in &mut self.runs {
             if run.quiet_removal_deadline.is_some() {
                 run.quiet_removal_deadline = Some(Instant::now());
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn reveal_completed_runs_now_for_test(&mut self) {
-        for run in &mut self.runs {
-            if run.completed_reveal_deadline.is_some() {
-                run.completed_reveal_deadline = Some(Instant::now());
             }
         }
     }
@@ -2046,7 +2031,7 @@ impl Renderable for HookCell {
 }
 
 impl HookRunCell {
-    fn quiet_removal_deadline_after_complete(&self) -> Option<Instant> {
+    fn quiet_removal_deadline_after_quiet_success(&self) -> Option<Instant> {
         if !self.running_visible {
             return None;
         }
@@ -2054,20 +2039,8 @@ impl HookRunCell {
         (Instant::now() < minimum_deadline).then_some(minimum_deadline)
     }
 
-    fn completed_reveal_deadline_after_complete(&self) -> Option<Instant> {
-        if !self.running_visible {
-            return None;
-        }
-        let minimum_deadline = self.minimum_running_deadline();
-        (Instant::now() < minimum_deadline).then_some(minimum_deadline)
-    }
-
-    fn minimum_running_deadline(&self) -> Instant {
-        self.reveal_deadline + QUIET_HOOK_MIN_VISIBLE
-    }
-
     fn is_active(&self) -> bool {
-        self.completed.is_none() || self.completed_reveal_deadline.is_some()
+        self.completed.is_none() || self.quiet_removal_deadline.is_some()
     }
 
     fn should_wait_to_reveal_running(&self) -> bool {
@@ -2078,14 +2051,8 @@ impl HookRunCell {
         self.should_wait_to_reveal_running() && now >= self.reveal_deadline
     }
 
-    fn should_reveal_completed(&self, now: Instant) -> bool {
-        self.completed_reveal_deadline
-            .map(|deadline| now >= deadline)
-            .unwrap_or(false)
-    }
-
     fn should_display_running(&self) -> bool {
-        self.completed.is_none() || self.completed_reveal_deadline.is_some()
+        self.completed.is_none()
     }
 
     fn running_group_key(&self) -> Option<RunningHookGroupKey> {

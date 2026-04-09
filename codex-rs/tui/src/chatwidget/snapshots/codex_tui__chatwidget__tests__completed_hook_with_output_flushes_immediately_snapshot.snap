@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-expression: "format!(\"{running_snapshot}\\n\\n{completed_deferred_snapshot}\\n\\n{completed_revealed_snapshot}\")"
+expression: "format!(\"{running_snapshot}\\n\\n{completed_snapshot}\")"
 ---
 running
 live hooks:
@@ -8,13 +8,7 @@ live hooks:
 history:
 <empty>
 
-completed deferred
-live hooks:
-• Running PreToolUse hook
-history:
-<empty>
-
-completed revealed
+completed
 live hooks:
 <empty>
 history:

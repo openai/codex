@@ -7,3 +7,5 @@ active hooks:
 history:
 • PreToolUse hook (blocked)
   feedback: command blocked by policy
+
+• The hook feedback was applied.

@@ -2296,7 +2296,9 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.retry_status_header = None;
-        self.flush_active_hook_cell_for_new_turn();
+        if self.active_hook_cell.take().is_some() {
+            self.bump_active_cell_revision();
+        }
         self.pending_status_indicator_restore = false;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
@@ -3951,6 +3953,7 @@ impl ChatWidget {
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
         self.flush_answer_stream_with_separator();
+        self.flush_completed_hook_output();
         match self.active_hook_cell.as_mut() {
             Some(cell) => {
                 cell.start_run(event.run);
@@ -3992,8 +3995,30 @@ impl ChatWidget {
                 }
             }
         }
+        self.flush_completed_hook_output();
         self.finish_active_hook_cell_if_idle();
         self.request_redraw();
+    }
+
+    fn flush_completed_hook_output(&mut self) {
+        let Some(completed_cell) = self
+            .active_hook_cell
+            .as_mut()
+            .and_then(HookCell::take_completed_persistent_runs)
+        else {
+            return;
+        };
+        let active_cell_is_empty = self
+            .active_hook_cell
+            .as_ref()
+            .is_some_and(HookCell::is_empty);
+        if active_cell_is_empty {
+            self.active_hook_cell = None;
+        }
+        self.bump_active_cell_revision();
+        self.needs_final_message_separator = true;
+        self.app_event_tx
+            .send(AppEvent::InsertHistoryCell(Box::new(completed_cell)));
     }
 
     fn finish_active_hook_cell_if_idle(&mut self) {
@@ -4015,20 +4040,7 @@ impl ChatWidget {
         }
     }
 
-    fn flush_active_hook_cell_for_new_turn(&mut self) {
-        let Some(mut cell) = self.active_hook_cell.take() else {
-            return;
-        };
-        cell.prepare_for_turn_boundary_flush();
-        self.bump_active_cell_revision();
-        if !cell.is_empty() {
-            self.needs_final_message_separator = true;
-            self.app_event_tx
-                .send(AppEvent::InsertHistoryCell(Box::new(cell)));
-        }
-    }
-
-    fn prune_expired_quiet_hook_runs(&mut self) {
+    fn update_due_hook_visibility(&mut self) {
         let Some(cell) = self.active_hook_cell.as_mut() else {
             return;
         };
@@ -4108,7 +4120,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn pre_draw_tick(&mut self) {
-        self.prune_expired_quiet_hook_runs();
+        self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
         if self.should_animate_terminal_title_spinner() {
