@@ -13,6 +13,7 @@ use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
+use codex_windows_sandbox::ensure_allow_mask_aces;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
@@ -65,6 +66,8 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const WRITE_DAC_ACCESS: u32 = 0x0004_0000;
+const WRITE_OWNER_ACCESS: u32 = 0x0008_0000;
 
 mod read_acl_mutex;
 mod sandbox_users;
@@ -554,6 +557,13 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             format!("convert sandbox users group SID to PSID failed: {err}"),
         ))
     })?;
+    let real_user_sid = resolve_sid(&payload.real_user)?;
+    let real_user_psid = sid_bytes_to_psid(&real_user_sid).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSidResolveFailed,
+            format!("convert real user SID to PSID failed: {err}"),
+        ))
+    })?;
 
     let caps = load_or_create_cap_sids(&payload.codex_home).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -638,8 +648,10 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let cap_sid_str = caps.workspace;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
+    let real_user_sid_str = string_from_sid_bytes(&real_user_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+    let real_user_maintenance_mask = write_mask | WRITE_DAC_ACCESS | WRITE_OWNER_ACCESS;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
 
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
@@ -671,9 +683,15 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         for (label, psid) in [
             ("sandbox_group", sandbox_group_psid),
             (cap_label, cap_psid_for_root),
+            ("real_user", real_user_psid),
         ] {
+            let desired_mask = if label == "real_user" {
+                real_user_maintenance_mask
+            } else {
+                write_mask
+            };
             let has =
-                match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
+                match path_mask_allows(root, &[psid], desired_mask, /*require_all_bits*/ true) {
                     Ok(h) => h,
                     Err(e) => {
                         refresh_errors.push(format!(
@@ -700,7 +718,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             log_line(
                 log,
                 &format!(
-                    "granting write ACE to {} for sandbox group and capability SID",
+                    "granting write ACE to {} for sandbox group, capability SID, and real user",
                     root.display()
                 ),
             )?;
@@ -717,6 +735,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             } else {
                 vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
             };
+            let real_user_sid_str = real_user_sid_str.clone();
             let tx = tx.clone();
             scope.spawn(move || {
                 // Convert SID strings to psids locally in this thread.
@@ -730,7 +749,21 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                let res = (|| {
+                    unsafe {
+                        ensure_allow_write_aces(&root, &psids)?;
+                    }
+                    let real_user_psid =
+                        unsafe { convert_string_sid_to_sid(&real_user_sid_str) }
+                            .ok_or_else(|| anyhow::anyhow!("convert real user SID failed"))?;
+                    let real_user_res = unsafe {
+                        ensure_allow_mask_aces(&root, &[real_user_psid], real_user_maintenance_mask)
+                    };
+                    unsafe {
+                        LocalFree(real_user_psid as HLOCAL);
+                    }
+                    real_user_res
+                })();
 
                 for psid in psids {
                     unsafe {
@@ -882,6 +915,9 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     unsafe {
         if !sandbox_group_psid.is_null() {
             LocalFree(sandbox_group_psid as HLOCAL);
+        }
+        if !real_user_psid.is_null() {
+            LocalFree(real_user_psid as HLOCAL);
         }
         if !cap_psid.is_null() {
             LocalFree(cap_psid as HLOCAL);
