@@ -107,7 +107,7 @@ async fn fetch_current_workspace_role_for_auth(
     chatgpt_base_url: &str,
     auth: &CodexAuth,
 ) -> Option<WorkspaceRole> {
-    if !auth.is_chatgpt_auth() || auth.get_account_id().is_none() {
+    if !auth.is_chatgpt_auth() {
         return None;
     }
 

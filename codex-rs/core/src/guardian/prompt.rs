@@ -103,7 +103,6 @@ pub(crate) async fn build_guardian_prompt_items(
     push_text("Planned action JSON:\n".to_string());
     push_text(format!("{planned_action_json}\n"));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
-    push_text("You may use read-only tool checks to gather any additional context you need to make a high-confidence determination.\n\nYour final message must be strict JSON with this exact schema:\n{\n  \"risk_level\": \"low\" | \"medium\" | \"high\",\n  \"risk_score\": 0-100,\n  \"rationale\": string,\n  \"evidence\": [{\"message\": string, \"why\": string}]\n}\n".to_string());
     Ok(items)
 }
 
@@ -408,30 +407,21 @@ pub(crate) fn guardian_output_schema() -> Value {
         "properties": {
             "risk_level": {
                 "type": "string",
-                "enum": ["low", "medium", "high"]
+                "enum": ["low", "medium", "high", "critical"]
             },
-            "risk_score": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
+            "user_authorization": {
+                "type": "string",
+                "enum": ["unknown", "low", "medium", "high"]
+            },
+            "outcome": {
+                "type": "string",
+                "enum": ["allow", "deny"]
             },
             "rationale": {
                 "type": "string"
-            },
-            "evidence": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "message": { "type": "string" },
-                        "why": { "type": "string" }
-                    },
-                    "required": ["message", "why"]
-                }
             }
         },
-        "required": ["risk_level", "risk_score", "rationale", "evidence"]
+        "required": ["risk_level", "user_authorization", "outcome", "rationale"]
     })
 }
 
@@ -440,10 +430,10 @@ pub(crate) fn guardian_output_schema() -> Value {
 fn guardian_output_contract_prompt() -> &'static str {
     r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON with this exact schema:
 {
-  "risk_level": "low" | "medium" | "high",
-  "risk_score": 0-100,
-  "rationale": string,
-  "evidence": [{"message": string, "why": string}]
+  "risk_level": "low" | "medium" | "high" | "critical",
+  "user_authorization": "unknown" | "low" | "medium" | "high",
+  "outcome": "allow" | "deny",
+  "rationale": string
 }"#
 }
 
@@ -453,11 +443,15 @@ fn guardian_output_contract_prompt() -> &'static str {
 /// changes directly without diffing through code. The output contract is
 /// appended from code so it stays near `guardian_output_schema()`.
 ///
-/// Keep `policy.md` aligned with any OpenAI-specific guardian override deployed
-/// via workspace-managed `requirements.toml` policies. General/default guardian
-/// instruction changes should be mirrored there unless the divergence is
-/// intentionally OpenAI-specific.
+/// The template is intentionally separated from the default tenant policy
+/// configuration so workspace-managed overrides can keep the configurable
+/// section narrower than the full policy.
 pub(crate) fn guardian_policy_prompt() -> String {
-    let prompt = include_str!("policy.md").trim_end();
+    guardian_policy_prompt_with_config(include_str!("policy.md"))
+}
+
+pub(crate) fn guardian_policy_prompt_with_config(tenant_policy_config: &str) -> String {
+    let template = include_str!("policy_template.md").trim_end();
+    let prompt = template.replace("{tenant_policy_config}", tenant_policy_config.trim());
     format!("{prompt}\n\n{}\n", guardian_output_contract_prompt())
 }

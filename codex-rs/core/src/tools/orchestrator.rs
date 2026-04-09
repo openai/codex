@@ -6,7 +6,7 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
-use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::guardian_rejection_message;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -149,7 +149,8 @@ impl ToolOrchestrator {
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
                         let reason = if routes_approval_to_guardian(turn_ctx) {
-                            GUARDIAN_REJECTION_MESSAGE.to_string()
+                            guardian_rejection_message(tool_ctx.session.as_ref(), &tool_ctx.call_id)
+                                .await
                         } else {
                             "rejected by user".to_string()
                         };
@@ -302,7 +303,11 @@ impl ToolOrchestrator {
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
                             let reason = if routes_approval_to_guardian(turn_ctx) {
-                                GUARDIAN_REJECTION_MESSAGE.to_string()
+                                guardian_rejection_message(
+                                    tool_ctx.session.as_ref(),
+                                    &tool_ctx.call_id,
+                                )
+                                .await
                             } else {
                                 "rejected by user".to_string()
                             };

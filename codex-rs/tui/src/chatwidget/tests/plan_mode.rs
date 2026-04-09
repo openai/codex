@@ -287,7 +287,8 @@ fn user_input_requested_notification_uses_dedicated_type_name() {
 #[tokio::test]
 async fn open_plan_implementation_prompt_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.config.tui_notifications = Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
+    chat.config.tui_notifications.notifications =
+        Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
 
     chat.open_plan_implementation_prompt();
 
@@ -300,7 +301,8 @@ async fn open_plan_implementation_prompt_sets_pending_notification() {
 #[tokio::test]
 async fn open_plan_reasoning_scope_prompt_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.config.tui_notifications = Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
+    chat.config.tui_notifications.notifications =
+        Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
 
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
@@ -363,7 +365,8 @@ async fn user_input_notification_overrides_pending_agent_turn_complete_notificat
 #[tokio::test]
 async fn handle_request_user_input_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.config.tui_notifications = Notifications::Custom(vec!["user-input-requested".to_string()]);
+    chat.config.tui_notifications.notifications =
+        Notifications::Custom(vec!["user-input-requested".to_string()]);
 
     chat.handle_request_user_input_now(RequestUserInputEvent {
         call_id: "call-1".to_string(),

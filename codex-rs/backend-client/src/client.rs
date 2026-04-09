@@ -301,10 +301,6 @@ impl Client {
         if self.path_style != PathStyle::ChatGptApi {
             return Ok(None);
         }
-        let Some(current_account_id) = self.chatgpt_account_id.as_deref() else {
-            return Ok(None);
-        };
-
         let url = format!(
             "{}/accounts/check/{ACCOUNTS_CHECK_V4_VERSION}",
             self.base_url
@@ -316,7 +312,7 @@ impl Client {
             .timeout(BACKEND_REQUEST_TIMEOUT);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: AccountsCheckV4Response = self.decode_json(&url, &ct, &body)?;
-        Ok(payload.current_workspace_role(Some(current_account_id)))
+        Ok(payload.current_workspace_role(self.chatgpt_account_id.as_deref()))
     }
 
     pub async fn list_tasks(

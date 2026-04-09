@@ -10,12 +10,12 @@ use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::NoiseReductionType;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
+use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionAudio;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputFormat;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionFunctionTool;
 use crate::endpoint::realtime_websocket::protocol::SessionNoiseReduction;
 use crate::endpoint::realtime_websocket::protocol::SessionToolType;
@@ -59,6 +59,7 @@ pub(super) fn conversation_handoff_append_message(
 pub(super) fn session_update_session(
     instructions: String,
     session_mode: RealtimeSessionMode,
+    voice: RealtimeVoice,
 ) -> SessionUpdateSession {
     match session_mode {
         RealtimeSessionMode::Conversational => SessionUpdateSession {
@@ -87,7 +88,7 @@ pub(super) fn session_update_session(
                         r#type: AudioFormatType::AudioPcm,
                         rate: REALTIME_AUDIO_SAMPLE_RATE,
                     }),
-                    voice: SessionAudioVoice::Marin,
+                    voice,
                 }),
             },
             tools: Some(vec![SessionFunctionTool {
