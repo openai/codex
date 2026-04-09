@@ -12,6 +12,13 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCopyParams;
+use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsGetMetadataParams;
+use crate::protocol::FsReadDirectoryParams;
+use crate::protocol::FsReadFileParams;
+use crate::protocol::FsRemoveParams;
+use crate::protocol::FsWriteFileParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -20,13 +27,6 @@ use crate::protocol::TerminateParams;
 use crate::protocol::WriteParams;
 use crate::rpc::RpcRouter;
 use crate::server::ExecServerHandler;
-use codex_app_server_protocol::FsCopyParams;
-use codex_app_server_protocol::FsCreateDirectoryParams;
-use codex_app_server_protocol::FsGetMetadataParams;
-use codex_app_server_protocol::FsReadDirectoryParams;
-use codex_app_server_protocol::FsReadFileParams;
-use codex_app_server_protocol::FsRemoveParams;
-use codex_app_server_protocol::FsWriteFileParams;
 
 pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     let mut router = RpcRouter::new();

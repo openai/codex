@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -134,6 +136,106 @@ pub struct TerminateParams {
 pub struct TerminateResponse {
     pub running: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadFileParams {
+    pub path: AbsolutePathBuf,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadFileResponse {
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWriteFileParams {
+    pub path: AbsolutePathBuf,
+    pub data_base64: String,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWriteFileResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCreateDirectoryParams {
+    pub path: AbsolutePathBuf,
+    pub recursive: Option<bool>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCreateDirectoryResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataParams {
+    pub path: AbsolutePathBuf,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataResponse {
+    pub is_directory: bool,
+    pub is_file: bool,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadDirectoryParams {
+    pub path: AbsolutePathBuf,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadDirectoryEntry {
+    pub file_name: String,
+    pub is_directory: bool,
+    pub is_file: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadDirectoryResponse {
+    pub entries: Vec<FsReadDirectoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRemoveParams {
+    pub path: AbsolutePathBuf,
+    pub recursive: Option<bool>,
+    pub force: Option<bool>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRemoveResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCopyParams {
+    pub source_path: AbsolutePathBuf,
+    pub destination_path: AbsolutePathBuf,
+    pub recursive: bool,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCopyResponse {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

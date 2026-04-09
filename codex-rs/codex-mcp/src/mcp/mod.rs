@@ -82,6 +82,19 @@ pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
     ))
 }
 
+/// Returns true when MCP permission prompts should resolve as approved instead
+/// of being shown to the user.
+pub fn mcp_permission_prompt_is_auto_approved(
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+) -> bool {
+    approval_policy == AskForApproval::Never
+        && matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        )
+}
+
 /// MCP runtime settings derived from `codex_core::config::Config`.
 ///
 /// This struct should contain only long-lived configuration values that the

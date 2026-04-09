@@ -96,6 +96,7 @@ use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -979,6 +980,7 @@ pub(crate) struct App {
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
+    environment_manager: Arc<EnvironmentManager>,
     remote_app_server_url: Option<String>,
     remote_app_server_auth_token: Option<String>,
     /// Set when the user confirms an update; propagated on exit.
@@ -3595,13 +3597,17 @@ impl App {
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
+        environment_manager: Arc<EnvironmentManager>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
-        tui.set_notification_method(config.tui_notification_method);
+        tui.set_notification_settings(
+            config.tui_notifications.method,
+            config.tui_notifications.condition,
+        );
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
@@ -3807,6 +3813,7 @@ impl App {
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
+            environment_manager,
             remote_app_server_url,
             remote_app_server_auth_token,
             pending_update_action: None,
@@ -4068,6 +4075,7 @@ impl App {
                         },
                         None => crate::AppServerTarget::Embedded,
                     },
+                    self.environment_manager.clone(),
                 )
                 .await
                 {
@@ -4140,7 +4148,10 @@ impl App {
                             Ok(resumed) => {
                                 self.shutdown_current_thread(app_server).await;
                                 self.config = resume_config;
-                                tui.set_notification_method(self.config.tui_notification_method);
+                                tui.set_notification_settings(
+                                    self.config.tui_notifications.method,
+                                    self.config.tui_notifications.condition,
+                                );
                                 self.file_search
                                     .update_search_dir(self.config.cwd.to_path_buf());
                                 match self
@@ -9199,6 +9210,7 @@ guardian_approval = true
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
+            environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             remote_app_server_url: None,
             remote_app_server_auth_token: None,
             pending_update_action: None,
@@ -9253,6 +9265,9 @@ guardian_approval = true
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
+                environment_manager: Arc::new(EnvironmentManager::new(
+                    /*exec_server_url*/ None,
+                )),
                 remote_app_server_url: None,
                 remote_app_server_auth_token: None,
                 pending_update_action: None,

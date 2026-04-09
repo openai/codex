@@ -1505,6 +1505,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-core",
+ "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
  "futures",
@@ -1675,6 +1676,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-exec",
+ "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
  "codex-login",
@@ -1993,6 +1995,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which 8.0.0",
+ "whoami",
  "windows-sys 0.52.0",
  "wiremock",
  "zip 2.4.2",
@@ -2094,6 +2097,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "codex-app-server-protocol",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
@@ -11761,6 +11765,7 @@ checksum = "5d4a4db5077702ca3015d3d02d74974948aba2ad9e12ab7df718ee64ccd7e97d"
 dependencies = [
  "libredox",
  "wasite",
+ "web-sys",
 ]
 
 [[package]]
