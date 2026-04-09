@@ -1077,7 +1077,11 @@ impl JsReplManager {
                     .windows_sandbox_private_desktop,
             })
             .map(|request| {
-                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+                    request,
+                    options,
+                    turn.cwd.clone(),
+                )
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 

@@ -67,6 +67,7 @@ impl ConptyInstance {
 ///
 /// This is public so callers that need lower-level PTY setup can build on the same
 /// primitive, although the common entry point is `spawn_conpty_process_as_user`.
+#[allow(dead_code)]
 pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
     let raw = RawConPty::new(cols, rows)?;
     let (hpc, input_write, output_read) = raw.into_raw_handles();

@@ -256,8 +256,14 @@ pub(crate) fn prepare_elevated_spawn_context(
         true,
         true,
     )?;
-    let sandbox_creds =
-        require_logon_sandbox_creds(&common.policy, sandbox_policy_cwd, cwd, env_map, codex_home)?;
+    let sandbox_creds = require_logon_sandbox_creds(
+        &common.policy,
+        sandbox_policy_cwd,
+        cwd,
+        env_map,
+        codex_home,
+        /*proxy_enforced*/ false,
+    )?;
     let caps = load_or_create_cap_sids(codex_home)?;
     let (psid_to_use, cap_sids) = match &common.policy {
         SandboxPolicy::ReadOnly { .. } => (

@@ -251,7 +251,6 @@ mod windows_impl {
     use super::logging::log_success;
     use super::path_normalization::canonicalize_path;
     use super::policy::SandboxPolicy;
-    use super::policy::parse_policy;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::prepare_legacy_spawn_context;
