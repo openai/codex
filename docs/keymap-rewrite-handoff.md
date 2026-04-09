@@ -128,21 +128,25 @@ Source of truth for intent and behavior:
 All commands below were run in this workspace.
 
 1. Config commit (`1913b55afb75`)
+
    - `cd codex-rs && just fmt`
    - `cd codex-rs && cargo test -p codex-core --lib`
    - Result: pass (`996 passed; 0 failed; 4 ignored`).
 
 2. Resolver/characterization commit (`187aa6969e03`)
+
    - `cd codex-rs && just fmt`
    - `cd codex-rs && cargo test -p codex-tui`
    - Result: pass (`797 passed; 0 failed; 2 ignored` + integration/doctest pass).
 
 3. Wiring commit (`aeb6caaecbbc`)
+
    - `cd codex-rs && just fmt`
    - `cd codex-rs && cargo test -p codex-tui`
    - Result: pass (`806 passed; 0 failed; 2 ignored` + integration/doctest pass).
 
 4. UX/hints commit (`HEAD`)
+
    - `cd codex-rs && just fmt`
    - `cd codex-rs && cargo test -p codex-tui`
    - Result: pass (`806 passed; 0 failed; 2 ignored` + integration/doctest pass).
