@@ -67,6 +67,14 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 
 fn sample_thread(thread_id: &str, ephemeral: bool) -> Thread {
+    sample_thread_with_source(thread_id, ephemeral, AppServerSessionSource::Exec)
+}
+
+fn sample_thread_with_source(
+    thread_id: &str,
+    ephemeral: bool,
+    source: AppServerSessionSource,
+) -> Thread {
     Thread {
         id: thread_id.to_string(),
         forked_from_id: None,
@@ -79,7 +87,7 @@ fn sample_thread(thread_id: &str, ephemeral: bool) -> Thread {
         path: None,
         cwd: PathBuf::from("/tmp"),
         cli_version: "0.0.0".to_string(),
-        source: AppServerSessionSource::Exec,
+        source,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -105,11 +113,44 @@ fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -
     }
 }
 
+fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
+    CodexAppServerClientMetadata {
+        product_client_id: DEFAULT_ORIGINATOR.to_string(),
+        client_name: Some("codex-tui".to_string()),
+        client_version: Some("1.0.0".to_string()),
+        rpc_transport: AppServerRpcTransport::Stdio,
+        experimental_api_enabled: Some(true),
+    }
+}
+
+fn sample_runtime_metadata() -> CodexRuntimeMetadata {
+    CodexRuntimeMetadata {
+        codex_rs_version: "0.1.0".to_string(),
+        runtime_os: "macos".to_string(),
+        runtime_os_version: "15.3.1".to_string(),
+        runtime_arch: "aarch64".to_string(),
+    }
+}
+
 fn sample_thread_resume_response(thread_id: &str, ephemeral: bool, model: &str) -> ClientResponse {
+    sample_thread_resume_response_with_source(
+        thread_id,
+        ephemeral,
+        model,
+        AppServerSessionSource::Exec,
+    )
+}
+
+fn sample_thread_resume_response_with_source(
+    thread_id: &str,
+    ephemeral: bool,
+    model: &str,
+    source: AppServerSessionSource,
+) -> ClientResponse {
     ClientResponse::ThreadResume {
         request_id: RequestId::Integer(2),
         response: ThreadResumeResponse {
-            thread: sample_thread(thread_id, ephemeral),
+            thread: sample_thread_with_source(thread_id, ephemeral, source),
             model: model.to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
@@ -266,22 +307,29 @@ fn app_used_event_serializes_expected_shape() {
 fn compaction_event_serializes_expected_shape() {
     let event = TrackEventRequest::Compaction(Box::new(CodexCompactionEventRequest {
         event_type: "codex_compaction_event",
-        event_params: crate::events::codex_compaction_event_params(CodexCompactionEvent {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            trigger: CompactionTrigger::Auto,
-            reason: CompactionReason::ContextLimit,
-            implementation: CompactionImplementation::ResponsesCompact,
-            phase: CompactionPhase::MidTurn,
-            strategy: CompactionStrategy::Memento,
-            status: CompactionStatus::Completed,
-            error: None,
-            active_context_tokens_before: 120_000,
-            active_context_tokens_after: 18_000,
-            started_at: 100,
-            completed_at: 106,
-            duration_ms: Some(6543),
-        }),
+        event_params: crate::events::codex_compaction_event_params(
+            CodexCompactionEvent {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                trigger: CompactionTrigger::Auto,
+                reason: CompactionReason::ContextLimit,
+                implementation: CompactionImplementation::ResponsesCompact,
+                phase: CompactionPhase::MidTurn,
+                strategy: CompactionStrategy::Memento,
+                status: CompactionStatus::Completed,
+                error: None,
+                active_context_tokens_before: 120_000,
+                active_context_tokens_after: 18_000,
+                started_at: 100,
+                completed_at: 106,
+                duration_ms: Some(6543),
+            },
+            sample_app_server_client_metadata(),
+            sample_runtime_metadata(),
+            Some("user"),
+            None,
+            None,
+        ),
     }));
 
     let payload = serde_json::to_value(&event).expect("serialize compaction event");
@@ -293,6 +341,22 @@ fn compaction_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
+                "app_server_client": {
+                    "product_client_id": DEFAULT_ORIGINATOR,
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_source": "user",
+                "subagent_source": null,
+                "parent_thread_id": null,
                 "trigger": "auto",
                 "reason": "context_limit",
                 "implementation": "responses_compact",
@@ -509,6 +573,53 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 async fn compaction_event_ingests_custom_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-2222-2222-222222222222")
+            .expect("valid parent thread id");
+
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: Some(InitializeCapabilities {
+                        experimental_api: false,
+                        opt_out_notification_methods: None,
+                    }),
+                },
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Websocket,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_resume_response_with_source(
+                    "thread-1",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                    AppServerSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    }),
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    events.clear();
 
     reducer
         .ingest(
@@ -539,6 +650,31 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_type"], "codex_compaction_event");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
     assert_eq!(payload[0]["event_params"]["turn_id"], "turn-compact");
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        DEFAULT_ORIGINATOR
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["client_name"],
+        "codex-tui"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["rpc_transport"],
+        "websocket"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["codex_rs_version"],
+        "0.1.0"
+    );
+    assert_eq!(payload[0]["event_params"]["thread_source"], "subagent");
+    assert_eq!(
+        payload[0]["event_params"]["subagent_source"],
+        "thread_spawn"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["parent_thread_id"],
+        "22222222-2222-2222-2222-222222222222"
+    );
     assert_eq!(payload[0]["event_params"]["trigger"], "manual");
     assert_eq!(payload[0]["event_params"]["reason"], "user_requested");
     assert_eq!(payload[0]["event_params"]["implementation"], "responses");

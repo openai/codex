@@ -128,6 +128,11 @@ pub(crate) struct CodexAppUsedEventRequest {
 pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
     pub(crate) trigger: crate::facts::CompactionTrigger,
     pub(crate) reason: crate::facts::CompactionReason,
     pub(crate) implementation: crate::facts::CompactionImplementation,
@@ -229,10 +234,20 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
 
 pub(crate) fn codex_compaction_event_params(
     input: CodexCompactionEvent,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
+    thread_source: Option<&'static str>,
+    subagent_source: Option<String>,
+    parent_thread_id: Option<String>,
 ) -> CodexCompactionEventParams {
     CodexCompactionEventParams {
         thread_id: input.thread_id,
         turn_id: input.turn_id,
+        app_server_client,
+        runtime,
+        thread_source,
+        subagent_source,
+        parent_thread_id,
         trigger: input.trigger,
         reason: input.reason,
         implementation: input.implementation,
@@ -305,7 +320,7 @@ pub(crate) fn subagent_thread_started_event_request(
     }
 }
 
-fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
+pub(crate) fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
     match subagent_source {
         SubAgentSource::Review => "review".to_string(),
         SubAgentSource::Compact => "compact".to_string(),
@@ -315,7 +330,7 @@ fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
     }
 }
 
-fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
+pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
     match subagent_source {
         SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
