@@ -13,6 +13,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
@@ -32,6 +33,8 @@ use uuid::Uuid;
 
 mod report_agent_job_result;
 mod spawn_agents_on_csv;
+#[path = "agent_jobs_startup.rs"]
+mod startup;
 
 pub use report_agent_job_result::ReportAgentJobResultHandler;
 pub use spawn_agents_on_csv::SpawnAgentsOnCsvHandler;
@@ -89,6 +92,7 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
+    environments: Vec<TurnEnvironmentSelection>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +135,7 @@ async fn build_runner_options(
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
+        environments: turn.environments.to_selections(),
     })
 }
 
@@ -169,6 +174,7 @@ async fn run_agent_job_loop(
         .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
     let runtime_timeout = job_runtime_timeout(&job);
     let mut active_items: HashMap<ThreadId, ActiveJobItem> = HashMap::new();
+    let mut starting_items = startup::StartupTasks::default();
     recover_running_items(
         session.clone(),
         db.clone(),
@@ -186,89 +192,55 @@ async fn run_agent_job_loop(
             cancel_requested = true;
         }
 
-        if !cancel_requested && active_items.len() < options.max_concurrency {
-            let slots = options.max_concurrency - active_items.len();
-            let pending_items = db
-                .list_agent_job_items(
-                    job_id.as_str(),
-                    Some(codex_state::AgentJobItemStatus::Pending),
-                    Some(slots),
-                )
-                .await?;
-            for item in pending_items {
-                let prompt = build_worker_prompt(&job, &item)?;
-                let items = vec![UserInput::Text {
-                    text: prompt,
-                    text_elements: Vec::new(),
-                }];
-                let thread_id = match session
-                    .services
-                    .agent_control
-                    .spawn_agent_with_metadata(
-                        options.spawn_config.clone(),
-                        items.into(),
-                        Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
-                            "agent_job:{job_id}"
-                        )))),
-                        SpawnAgentOptions {
-                            environments: Some(turn.environments.to_selections()),
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                {
-                    Ok(spawned_agent) => spawned_agent.thread_id,
-                    Err(CodexErr::AgentLimitReached { .. }) => {
-                        db.mark_agent_job_item_pending(
-                            job_id.as_str(),
-                            item.item_id.as_str(),
-                            /*error_message*/ None,
-                        )
-                        .await?;
-                        break;
-                    }
-                    Err(err) => {
-                        let error_message = format!("failed to spawn worker: {err}");
-                        db.mark_agent_job_item_failed(
-                            job_id.as_str(),
-                            item.item_id.as_str(),
-                            error_message.as_str(),
-                        )
-                        .await?;
-                        progressed = true;
-                        continue;
-                    }
-                };
-                let assigned = db
-                    .mark_agent_job_item_running_with_thread(
-                        job_id.as_str(),
-                        item.item_id.as_str(),
-                        thread_id.to_string().as_str(),
-                    )
-                    .await?;
-                if !assigned {
-                    let _ = session
-                        .services
-                        .agent_control
-                        .shutdown_live_agent(thread_id)
-                        .await;
-                    continue;
-                }
-                active_items.insert(
-                    thread_id,
-                    ActiveJobItem {
-                        item_id: item.item_id.clone(),
-                        started_at: Instant::now(),
-                        status_rx: session
-                            .services
-                            .agent_control
-                            .subscribe_status(thread_id)
-                            .await
-                            .ok(),
-                    },
-                );
-                progressed = true;
-            }
+        if startup::drain_ready_startups(
+            session.clone(),
+            db.clone(),
+            job_id.as_str(),
+            &mut active_items,
+            &mut starting_items,
+        )
+        .await?
+        {
+            progressed = true;
+        }
+
+        if !cancel_requested
+            && active_items.len() + starting_items.len() < options.max_concurrency
+            && startup::launch_pending_items(
+                session.clone(),
+                db.clone(),
+                &job,
+                job_id.as_str(),
+                &options,
+                active_items.len(),
+                &mut starting_items,
+            )
+            .await?
+        {
+            progressed = true;
+        }
+
+        if startup::drain_ready_startups(
+            session.clone(),
+            db.clone(),
+            job_id.as_str(),
+            &mut active_items,
+            &mut starting_items,
+        )
+        .await?
+        {
+            progressed = true;
+        }
+
+        if startup::reap_stale_startups(
+            db.clone(),
+            job_id.as_str(),
+            &mut starting_items,
+            runtime_timeout,
+        )
+        .await?
+        {
+            progressed = true;
         }
 
         if reap_stale_active_items(
@@ -287,17 +259,28 @@ async fn run_agent_job_loop(
         if finished.is_empty() {
             let progress = db.get_agent_job_progress(job_id.as_str()).await?;
             if cancel_requested {
-                if progress.running_items == 0 && active_items.is_empty() {
+                if progress.running_items == 0
+                    && active_items.is_empty()
+                    && starting_items.is_empty()
+                {
                     break;
                 }
             } else if progress.pending_items == 0
                 && progress.running_items == 0
                 && active_items.is_empty()
+                && starting_items.is_empty()
             {
                 break;
             }
             if !progressed {
-                wait_for_status_change(&active_items).await;
+                startup::wait_for_startup_or_status_change(
+                    session.clone(),
+                    db.clone(),
+                    job_id.as_str(),
+                    &mut active_items,
+                    &mut starting_items,
+                )
+                .await?;
             }
             continue;
         }
@@ -377,10 +360,10 @@ async fn recover_running_items(
             continue;
         }
         let Some(assigned_thread_id) = item.assigned_thread_id.clone() else {
-            db.mark_agent_job_item_failed(
+            db.mark_agent_job_item_pending(
                 job_id,
                 item.item_id.as_str(),
-                "running item is missing assigned_thread_id",
+                Some("worker startup was interrupted before a thread was assigned"),
             )
             .await?;
             continue;
