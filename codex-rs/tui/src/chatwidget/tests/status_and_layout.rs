@@ -1561,6 +1561,25 @@ async fn completed_hook_with_output_keeps_running_visible_for_floor() {
 }
 
 #[tokio::test]
+async fn identical_parallel_running_hooks_collapse_to_count() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    for tool_call_id in ["tool-call-1", "tool-call-2", "tool-call-3"] {
+        chat.handle_codex_event(hook_started_event(
+            &format!("pre-tool-use:0:/tmp/hooks.json:{tool_call_id}"),
+            codex_protocol::protocol::HookEventName::PreToolUse,
+            Some("checking command policy"),
+        ));
+    }
+    reveal_running_hooks(&mut chat);
+
+    assert_chatwidget_snapshot!(
+        "identical_parallel_running_hooks_collapse_to_count_snapshot",
+        hook_live_and_history_snapshot(&chat, "running", "")
+    );
+}
+
+#[tokio::test]
 async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

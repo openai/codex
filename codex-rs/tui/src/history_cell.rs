@@ -1788,6 +1788,18 @@ struct CompletedHookRun {
     entries: Vec<HookOutputEntry>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RunningHookGroupKey {
+    event_name: HookEventName,
+    status_message: Option<String>,
+}
+
+struct RunningHookGroup {
+    key: RunningHookGroupKey,
+    start_time: Option<Instant>,
+    count: usize,
+}
+
 impl HookCell {
     pub(crate) fn new(run: HookRunSummary, animations_enabled: bool) -> Self {
         let mut cell = Self {
@@ -1958,14 +1970,35 @@ impl HookCell {
 
     fn display_lines_inner(&self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
+        let mut running_group: Option<RunningHookGroup> = None;
         for run in &self.runs {
             if !run.should_render() {
                 continue;
             }
-            if !lines.is_empty() {
-                lines.push("".into());
+            if let Some(key) = run.running_group_key() {
+                match running_group.as_mut() {
+                    Some(group) if group.key == key => {
+                        group.count += 1;
+                        group.start_time = earliest_instant(group.start_time, run.start_time);
+                    }
+                    Some(group) => {
+                        push_running_hook_group(&mut lines, group, self.animations_enabled);
+                        running_group = Some(RunningHookGroup::new(key, run.start_time));
+                    }
+                    None => {
+                        running_group = Some(RunningHookGroup::new(key, run.start_time));
+                    }
+                }
+                continue;
             }
+            if let Some(group) = running_group.take() {
+                push_running_hook_group(&mut lines, &group, self.animations_enabled);
+            }
+            push_hook_line_separator(&mut lines);
             run.push_display_lines(&mut lines, self.animations_enabled);
+        }
+        if let Some(group) = running_group {
+            push_running_hook_group(&mut lines, &group, self.animations_enabled);
         }
         lines
     }
@@ -2045,6 +2078,13 @@ impl HookRunCell {
         self.completed.is_none() || self.completed_reveal_deadline.is_some()
     }
 
+    fn running_group_key(&self) -> Option<RunningHookGroupKey> {
+        self.should_display_running().then(|| RunningHookGroupKey {
+            event_name: self.event_name,
+            status_message: self.status_message.clone(),
+        })
+    }
+
     fn should_render(&self) -> bool {
         self.completed.is_some() || self.running_visible || self.quiet_removal_deadline.is_some()
     }
@@ -2090,6 +2130,58 @@ impl HookRunCell {
                 lines.push(format!("  {}{}", hook_output_prefix(entry.kind), entry.text).into());
             }
         }
+    }
+}
+
+impl RunningHookGroup {
+    fn new(key: RunningHookGroupKey, start_time: Option<Instant>) -> Self {
+        Self {
+            key,
+            start_time,
+            count: 1,
+        }
+    }
+}
+
+fn push_running_hook_group(
+    lines: &mut Vec<Line<'static>>,
+    group: &RunningHookGroup,
+    animations_enabled: bool,
+) {
+    push_hook_line_separator(lines);
+    let label = hook_event_label(group.key.event_name);
+    let hook_text = if group.count == 1 {
+        format!("Running {label} hook")
+    } else {
+        format!("Running {} {label} hooks", group.count)
+    };
+    let mut header = vec![spinner(group.start_time, animations_enabled), " ".into()];
+    if animations_enabled {
+        header.extend(shimmer_spans(&hook_text));
+    } else {
+        header.push(hook_text.bold());
+    }
+    if let Some(status_message) = &group.key.status_message
+        && !status_message.is_empty()
+    {
+        header.push(": ".into());
+        header.push(status_message.clone().dim());
+    }
+    lines.push(header.into());
+}
+
+fn push_hook_line_separator(lines: &mut Vec<Line<'static>>) {
+    if !lines.is_empty() {
+        lines.push("".into());
+    }
+}
+
+fn earliest_instant(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
     }
 }
 
