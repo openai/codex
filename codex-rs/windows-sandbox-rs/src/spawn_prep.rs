@@ -143,7 +143,7 @@ pub(crate) fn prepare_legacy_session_security(
             SandboxPolicy::ReadOnly { .. } => {
                 let psid = LocalSid::from_string(&caps.readonly)?;
                 let (h_token, _psid) = create_readonly_token_with_cap(psid.as_ptr())?;
-                (h_token, psid, None, caps.readonly.clone())
+                (h_token, psid, None, caps.readonly)
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
                 let psid_generic = LocalSid::from_string(&caps.workspace)?;
@@ -156,12 +156,7 @@ pub(crate) fn prepare_legacy_session_security(
                 );
                 CloseHandle(base);
                 let h_token = h_token?;
-                (
-                    h_token,
-                    psid_generic,
-                    Some(psid_workspace),
-                    caps.workspace.clone(),
-                )
+                (h_token, psid_generic, Some(psid_workspace), caps.workspace)
             }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("dangerous policies rejected before legacy session prep")
@@ -185,7 +180,7 @@ pub(crate) fn allow_null_device_for_workspace_write(is_workspace_write: bool) {
     unsafe {
         if let Ok(base) = get_current_token_for_restriction() {
             if let Ok(bytes) = get_logon_sid_bytes(base) {
-                let mut tmp = bytes.clone();
+                let mut tmp = bytes;
                 let psid = tmp.as_mut_ptr() as *mut c_void;
                 allow_null_device(psid);
             }
@@ -221,10 +216,11 @@ pub(crate) fn apply_legacy_session_acl_rules(
             }
         }
         for p in &deny {
-            if let Ok(added) = add_deny_write_ace(p, psid_generic.as_ptr()) {
-                if added && !persist_aces {
-                    guards.push(p.clone());
-                }
+            if let Ok(added) = add_deny_write_ace(p, psid_generic.as_ptr())
+                && added
+                && !persist_aces
+            {
+                guards.push(p.clone());
             }
         }
         allow_null_device(psid_generic.as_ptr());

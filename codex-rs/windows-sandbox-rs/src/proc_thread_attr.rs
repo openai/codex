@@ -68,7 +68,9 @@ impl ProcThreadAttributeList {
     pub fn set_handle_list(&mut self, handles: Vec<HANDLE>) -> io::Result<()> {
         self.handle_list = Some(handles);
         let list = self.as_mut_ptr();
-        let handle_list = self.handle_list.as_mut().expect("handle list just set");
+        let Some(handle_list) = self.handle_list.as_mut() else {
+            return Err(io::Error::other("handle list missing after initialization"));
+        };
         let ok = unsafe {
             UpdateProcThreadAttribute(
                 list,
