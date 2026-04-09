@@ -100,6 +100,7 @@ impl ExecRequest {
     pub(crate) fn from_sandbox_exec_request(
         request: SandboxExecRequest,
         options: ExecOptions,
+        windows_sandbox_policy_cwd: AbsolutePathBuf,
     ) -> Self {
         let SandboxExecRequest {
             command,
@@ -107,7 +108,6 @@ impl ExecRequest {
             mut env,
             network,
             sandbox,
-            sandbox_policy_cwd,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             sandbox_policy,
@@ -129,10 +129,6 @@ impl ExecRequest {
         if sandbox == SandboxType::MacosSeatbelt {
             env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
         }
-        let windows_sandbox_policy_cwd =
-            AbsolutePathBuf::try_from(sandbox_policy_cwd.to_path_buf())
-                .unwrap_or_else(|_| cwd.clone());
-
         Self {
             command,
             cwd,

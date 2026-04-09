@@ -162,7 +162,7 @@ pub(super) async fn try_run_zsh_fork(
         network: sandbox_network,
         windows_sandbox_level,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd,
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -926,8 +926,11 @@ impl CoreShellCommandExecutor {
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: false,
         })?;
-        let mut exec_request =
-            crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, options);
+        let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+            exec_request,
+            options,
+            self.sandbox_policy_cwd.clone(),
+        );
         if let Some(network) = exec_request.network.as_ref() {
             network.apply_to_env(&mut exec_request.env);
         }
