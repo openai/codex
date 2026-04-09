@@ -1,10 +1,13 @@
 use crate::facts::AppInvocation;
+use crate::facts::CodexTurnSteerEvent;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnStatus;
+use crate::facts::TurnSteerRejectionReason;
+use crate::facts::TurnSteerResult;
 use crate::facts::TurnSubmissionType;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_login::default_client::originator;
@@ -34,6 +37,7 @@ pub(crate) enum TrackEventRequest {
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     TurnEvent(Box<CodexTurnEventRequest>),
+    TurnSteer(CodexTurnSteerEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -123,7 +127,6 @@ pub(crate) struct CodexAppUsedEventRequest {
 pub(crate) struct CodexTurnEventParams {
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
-    pub(crate) product_client_id: String,
     pub(crate) submission_type: Option<TurnSubmissionType>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
@@ -156,6 +159,11 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) subagent_tool_call_count: Option<usize>,
     pub(crate) web_search_count: Option<usize>,
     pub(crate) image_generation_count: Option<usize>,
+    pub(crate) input_tokens: Option<i64>,
+    pub(crate) cached_input_tokens: Option<i64>,
+    pub(crate) output_tokens: Option<i64>,
+    pub(crate) reasoning_output_tokens: Option<i64>,
+    pub(crate) total_tokens: Option<i64>,
     pub(crate) duration_ms: Option<u64>,
     pub(crate) started_at: Option<u64>,
     pub(crate) completed_at: Option<u64>,
@@ -165,6 +173,25 @@ pub(crate) struct CodexTurnEventParams {
 pub(crate) struct CodexTurnEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexTurnEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexTurnSteerEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) expected_turn_id: Option<String>,
+    pub(crate) accepted_turn_id: Option<String>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) num_input_images: usize,
+    pub(crate) result: TurnSteerResult,
+    pub(crate) rejection_reason: Option<TurnSteerRejectionReason>,
+    pub(crate) created_at: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexTurnSteerEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexTurnSteerEventParams,
 }
 
 #[derive(Serialize)]
@@ -258,6 +285,25 @@ pub(crate) fn codex_plugin_used_metadata(
     }
 }
 
+pub(crate) fn codex_turn_steer_event_params(
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
+    tracking: &TrackEventsContext,
+    turn_steer: CodexTurnSteerEvent,
+) -> CodexTurnSteerEventParams {
+    CodexTurnSteerEventParams {
+        thread_id: tracking.thread_id.clone(),
+        expected_turn_id: turn_steer.expected_turn_id,
+        accepted_turn_id: turn_steer.accepted_turn_id,
+        app_server_client,
+        runtime,
+        num_input_images: turn_steer.num_input_images,
+        result: turn_steer.result,
+        rejection_reason: turn_steer.rejection_reason,
+        created_at: turn_steer.created_at,
+    }
+}
+
 pub(crate) fn thread_source_name(thread_source: &SessionSource) -> Option<&'static str> {
     match thread_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
@@ -319,5 +365,29 @@ fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String>
             parent_thread_id, ..
         } => Some(parent_thread_id.to_string()),
         _ => None,
+    }
+}
+
+pub(crate) fn turn_subagent_source_name(thread_source: &SessionSource) -> Option<String> {
+    match thread_source {
+        SessionSource::SubAgent(subagent_source) => Some(subagent_source_name(subagent_source)),
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
+    }
+}
+
+pub(crate) fn turn_parent_thread_id(thread_source: &SessionSource) -> Option<String> {
+    match thread_source {
+        SessionSource::SubAgent(subagent_source) => subagent_parent_thread_id(subagent_source),
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
     }
 }
