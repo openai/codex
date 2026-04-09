@@ -13,6 +13,7 @@ additive stack while preserving the final behavior from revision `0f03e76c`.
 ## Commit Sequence
 
 1. **Docs and specification foundation**
+
    - Add/reshape long-term docs that explain how the keymap system works.
    - Include:
      - conceptual model
@@ -22,17 +23,20 @@ additive stack while preserving the final behavior from revision `0f03e76c`.
    - No functional code change.
 
 2. **Additive config primitives (not wired)**
+
    - Introduce keymap config types and schema support in `core`.
    - Keep runtime behavior unchanged by not consuming these config values yet.
    - Ensure parsing/serialization paths are complete and documented.
 
 3. **Behavior characterization tests (pre-rewrite)**
+
    - Add tests that lock down existing event behavior before switching bindings.
    - Cover key event matching and context-sensitive behaviors that must stay stable.
    - Use these tests as the safety net for subsequent rewiring.
    - Run `cargo llvm-cov` and target full branch coverage for keybinding logic.
 
 4. **Binding replacement using characterized behavior**
+
    - Introduce keymap-driven binding resolution and wire call sites.
    - Replace legacy binding checks while preserving characterized behavior.
    - Keep docs in sync with any semantics that became explicit.
