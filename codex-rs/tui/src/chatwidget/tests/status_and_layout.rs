@@ -1561,6 +1561,54 @@ async fn completed_hook_with_output_keeps_running_visible_for_floor() {
 }
 
 #[tokio::test]
+async fn completed_hook_with_output_flushes_at_next_turn_boundary() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(hook_started_event(
+        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        Some("checking command"),
+    ));
+    reveal_running_hooks(&mut chat);
+
+    chat.handle_codex_event(hook_completed_event(
+        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        codex_protocol::protocol::HookRunStatus::Blocked,
+        vec![codex_protocol::protocol::HookOutputEntry {
+            kind: codex_protocol::protocol::HookOutputEntryKind::Feedback,
+            text: "command blocked by policy".to_string(),
+        }],
+    ));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "completed hook should still be deferred before the next turn starts"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "completed_hook_with_output_flushes_at_next_turn_boundary_snapshot",
+        format!(
+            "active hooks:\n{}history:\n{history}",
+            active_hook_blob(&chat)
+        )
+    );
+}
+
+#[tokio::test]
 async fn identical_parallel_running_hooks_collapse_to_count() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

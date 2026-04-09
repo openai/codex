@@ -2296,7 +2296,7 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.retry_status_header = None;
-        self.active_hook_cell = None;
+        self.flush_active_hook_cell_for_new_turn();
         self.pending_status_indicator_restore = false;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
@@ -4008,6 +4008,20 @@ impl ChatWidget {
         if cell.should_flush()
             && let Some(cell) = self.active_hook_cell.take()
         {
+            self.bump_active_cell_revision();
+            self.needs_final_message_separator = true;
+            self.app_event_tx
+                .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        }
+    }
+
+    fn flush_active_hook_cell_for_new_turn(&mut self) {
+        let Some(mut cell) = self.active_hook_cell.take() else {
+            return;
+        };
+        cell.prepare_for_turn_boundary_flush();
+        self.bump_active_cell_revision();
+        if !cell.is_empty() {
             self.needs_final_message_separator = true;
             self.app_event_tx
                 .send(AppEvent::InsertHistoryCell(Box::new(cell)));

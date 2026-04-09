@@ -1822,6 +1822,16 @@ impl HookCell {
         !self.is_active() && !self.is_empty()
     }
 
+    pub(crate) fn prepare_for_turn_boundary_flush(&mut self) {
+        for run in &mut self.runs {
+            if run.completed.is_some() {
+                run.completed_reveal_deadline = None;
+                run.quiet_removal_deadline = None;
+            }
+        }
+        self.runs.retain(HookRunCell::has_persistent_output);
+    }
+
     pub(crate) fn has_visible_running_run(&self) -> bool {
         self.runs
             .iter()
@@ -2087,6 +2097,12 @@ impl HookRunCell {
 
     fn should_render(&self) -> bool {
         self.completed.is_some() || self.running_visible || self.quiet_removal_deadline.is_some()
+    }
+
+    fn has_persistent_output(&self) -> bool {
+        self.completed.as_ref().is_some_and(|completed| {
+            completed.status != HookRunStatus::Completed || !completed.entries.is_empty()
+        })
     }
 
     fn push_display_lines(&self, lines: &mut Vec<Line<'static>>, animations_enabled: bool) {
