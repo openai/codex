@@ -15,6 +15,7 @@ use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_analytics::ThreadInitializationMode;
 use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -1987,6 +1988,7 @@ async fn set_rate_limits_retains_previous_credits() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_initialization_mode: ThreadInitializationMode::New,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2089,6 +2091,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_initialization_mode: ThreadInitializationMode::New,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2438,6 +2441,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_initialization_mode: ThreadInitializationMode::New,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2701,6 +2705,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_initialization_mode: ThreadInitializationMode::New,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2805,6 +2810,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_initialization_mode: ThreadInitializationMode::New,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -3650,6 +3656,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_initialization_mode: ThreadInitializationMode::New,
         dynamic_tools,
         persist_extended_history: false,
         inherited_shell_snapshot: None,
