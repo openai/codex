@@ -29,10 +29,9 @@ use wiremock::matchers::path;
 const DOCUMENT_EXTRACT_TOOL: &str = "mcp__codex_apps__calendar_extract_text";
 
 fn configure_apps(config: &mut Config, chatgpt_base_url: &str) {
-    config
-        .features
-        .enable(Feature::Apps)
-        .expect("test config should allow feature update");
+    if let Err(err) = config.features.enable(Feature::Apps) {
+        panic!("test config should allow feature update: {err}");
+    }
     config.chatgpt_base_url = chatgpt_base_url.to_string();
 }
 
