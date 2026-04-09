@@ -67,8 +67,7 @@ fn create_codex_apps_tools_cache_context(
 #[test]
 fn declared_openai_file_fields_treat_names_literally() {
     let meta = serde_json::json!({
-        "openai/fileParams": ["file", "input_file", "attachments"],
-        "openai/fileOutputs": ["output", "artifact"]
+        "openai/fileParams": ["file", "input_file", "attachments"]
     });
     let meta = meta.as_object().expect("meta object");
 
