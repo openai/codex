@@ -39,7 +39,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
@@ -173,7 +173,7 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
         &server.uri(),
         /*general_analytics_enabled*/ true,
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -206,7 +206,7 @@ async fn thread_start_does_not_track_thread_initialized_analytics_without_featur
         &server.uri(),
         /*general_analytics_enabled*/ false,
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

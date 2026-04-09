@@ -2620,6 +2620,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
                 .await
                 .expect("create environment"),
         )),
+        /*analytics_events_client*/ None,
     )
     .await;
 
