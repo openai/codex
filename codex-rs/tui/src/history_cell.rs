@@ -2111,13 +2111,7 @@ impl HookRunCell {
 
         if let Some(completed) = &self.completed {
             let status = format!("{:?}", completed.status).to_lowercase();
-            let bullet = match completed.status {
-                HookRunStatus::Completed => "•".green().bold(),
-                HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => {
-                    "•".red().bold()
-                }
-                HookRunStatus::Running => "•".into(),
-            };
+            let bullet = hook_completed_bullet(completed);
             lines.push(
                 vec![
                     bullet,
@@ -2200,6 +2194,24 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
 
 fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
     run.status == HookRunStatus::Completed && run.entries.is_empty()
+}
+
+fn hook_completed_bullet(completed: &CompletedHookRun) -> Span<'static> {
+    match completed.status {
+        HookRunStatus::Completed => {
+            if completed
+                .entries
+                .iter()
+                .any(|entry| entry.kind == HookOutputEntryKind::Warning)
+            {
+                "•".yellow().bold()
+            } else {
+                "•".green().bold()
+            }
+        }
+        HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => "•".red().bold(),
+        HookRunStatus::Running => "•".into(),
+    }
 }
 
 fn hook_output_prefix(kind: HookOutputEntryKind) -> &'static str {
@@ -3280,6 +3292,23 @@ mod tests {
         // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
         // Windows-specific root semantics into the fixtures.
         std::env::temp_dir()
+    }
+
+    #[test]
+    fn completed_hook_with_warning_uses_warning_bullet() {
+        let completed = CompletedHookRun {
+            status: HookRunStatus::Completed,
+            entries: vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "Heads up from the hook".to_string(),
+            }],
+        };
+
+        let bullet = hook_completed_bullet(&completed);
+
+        assert_eq!(bullet.content.as_ref(), "•");
+        assert_eq!(bullet.style.fg, Some(Color::Yellow));
+        assert!(bullet.style.add_modifier.contains(Modifier::BOLD));
     }
 
     fn stdio_server_config(
