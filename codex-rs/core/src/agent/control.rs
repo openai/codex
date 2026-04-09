@@ -283,6 +283,7 @@ impl AgentControl {
                     .analytics_events_client,
                 client_metadata,
                 new_thread.thread_id,
+                /*parent_thread_id*/ None,
                 thread_config,
                 subagent_source.clone(),
             );
