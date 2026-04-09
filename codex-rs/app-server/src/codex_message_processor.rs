@@ -2227,14 +2227,17 @@ impl CodexMessageProcessor {
         request_trace: Option<W3cTraceContext>,
     ) {
         let requested_cwd = typesafe_overrides.cwd.clone();
+        let config_derivation_context = ConfigDerivationContext {
+            cli_overrides: &cli_overrides,
+            loader_overrides: &listener_task_context.loader_overrides,
+            cloud_requirements: &cloud_requirements,
+            codex_home: &listener_task_context.codex_home,
+            runtime_feature_enablement: &runtime_feature_enablement,
+        };
         let mut config = match derive_config_from_params(
-            &cli_overrides,
+            &config_derivation_context,
             config_overrides.clone(),
             typesafe_overrides.clone(),
-            &listener_task_context.loader_overrides,
-            &cloud_requirements,
-            &listener_task_context.codex_home,
-            &runtime_feature_enablement,
         )
         .await
         {
@@ -2292,13 +2295,9 @@ impl CodexMessageProcessor {
             }
 
             config = match derive_config_from_params(
-                &cli_overrides,
+                &config_derivation_context,
                 config_overrides,
                 typesafe_overrides,
-                &listener_task_context.loader_overrides,
-                &cloud_requirements,
-                &listener_task_context.codex_home,
-                &runtime_feature_enablement,
             )
             .await
             {
@@ -3840,15 +3839,18 @@ impl CodexMessageProcessor {
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let config_derivation_context = ConfigDerivationContext {
+            cli_overrides: &cli_overrides,
+            loader_overrides: &self.loader_overrides,
+            cloud_requirements: &cloud_requirements,
+            codex_home: &self.config.codex_home,
+            runtime_feature_enablement: &runtime_feature_enablement,
+        };
         let config = match derive_config_for_cwd(
-            &cli_overrides,
+            &config_derivation_context,
             request_overrides,
             typesafe_overrides,
             history_cwd,
-            &self.loader_overrides,
-            &cloud_requirements,
-            &self.config.codex_home,
-            &runtime_feature_enablement,
         )
         .await
         {
@@ -4395,15 +4397,18 @@ impl CodexMessageProcessor {
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let config_derivation_context = ConfigDerivationContext {
+            cli_overrides: &cli_overrides,
+            loader_overrides: &self.loader_overrides,
+            cloud_requirements: &cloud_requirements,
+            codex_home: &self.config.codex_home,
+            runtime_feature_enablement: &runtime_feature_enablement,
+        };
         let config = match derive_config_for_cwd(
-            &cli_overrides,
+            &config_derivation_context,
             request_overrides,
             typesafe_overrides,
             history_cwd,
-            &self.loader_overrides,
-            &cloud_requirements,
-            &self.config.codex_home,
-            &runtime_feature_enablement,
         )
         .await
         {
@@ -7891,18 +7896,21 @@ impl CodexMessageProcessor {
         let loader_overrides = self.loader_overrides.clone();
 
         tokio::spawn(async move {
+            let config_derivation_context = ConfigDerivationContext {
+                cli_overrides: &cli_overrides,
+                loader_overrides: &loader_overrides,
+                cloud_requirements: &cloud_requirements,
+                codex_home: &config.codex_home,
+                runtime_feature_enablement: &runtime_feature_enablement,
+            };
             let derived_config = derive_config_for_cwd(
-                &cli_overrides,
+                &config_derivation_context,
                 /*request_overrides*/ None,
                 ConfigOverrides {
                     cwd: Some(command_cwd.clone()),
                     ..Default::default()
                 },
                 Some(command_cwd.clone()),
-                &loader_overrides,
-                &cloud_requirements,
-                &config.codex_home,
-                &runtime_feature_enablement,
             )
             .await;
             let setup_result = match derived_config {
@@ -8583,6 +8591,14 @@ async fn sync_default_client_residency_requirement(
     }
 }
 
+struct ConfigDerivationContext<'a> {
+    cli_overrides: &'a [(String, TomlValue)],
+    loader_overrides: &'a LoaderOverrides,
+    cloud_requirements: &'a CloudRequirementsLoader,
+    codex_home: &'a Path,
+    runtime_feature_enablement: &'a BTreeMap<String, bool>,
+}
+
 /// Derive the effective [`Config`] by layering three override sources.
 ///
 /// Precedence (lowest to highest):
@@ -8594,48 +8610,27 @@ async fn sync_default_client_residency_requirement(
 ///   Because the overrides are defined explicitly in the `*Params`, this takes priority over
 ///   the more general "bag of config options" provided by `cli_overrides` and `request_overrides`.
 async fn derive_config_from_params(
-    cli_overrides: &[(String, TomlValue)],
+    context: &ConfigDerivationContext<'_>,
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
-    loader_overrides: &LoaderOverrides,
-    cloud_requirements: &CloudRequirementsLoader,
-    codex_home: &Path,
-    runtime_feature_enablement: &BTreeMap<String, bool>,
 ) -> std::io::Result<Config> {
-    let merged_cli_overrides = cli_overrides
-        .iter()
-        .cloned()
-        .chain(
-            request_overrides
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(k, v)| (k, json_to_toml(v))),
-        )
-        .collect::<Vec<_>>();
-
-    let mut config = codex_core::config::ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .cli_overrides(merged_cli_overrides)
-        .harness_overrides(typesafe_overrides)
-        .loader_overrides(loader_overrides.clone())
-        .cloud_requirements(cloud_requirements.clone())
-        .build()
-        .await?;
-    apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
-    Ok(config)
+    derive_config_for_cwd(
+        context,
+        request_overrides,
+        typesafe_overrides,
+        /*cwd*/ None,
+    )
+    .await
 }
 
 async fn derive_config_for_cwd(
-    cli_overrides: &[(String, TomlValue)],
+    context: &ConfigDerivationContext<'_>,
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
     cwd: Option<PathBuf>,
-    loader_overrides: &LoaderOverrides,
-    cloud_requirements: &CloudRequirementsLoader,
-    codex_home: &Path,
-    runtime_feature_enablement: &BTreeMap<String, bool>,
 ) -> std::io::Result<Config> {
-    let merged_cli_overrides = cli_overrides
+    let merged_cli_overrides = context
+        .cli_overrides
         .iter()
         .cloned()
         .chain(
@@ -8647,15 +8642,15 @@ async fn derive_config_for_cwd(
         .collect::<Vec<_>>();
 
     let mut config = codex_core::config::ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
+        .codex_home(context.codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
-        .loader_overrides(loader_overrides.clone())
-        .cloud_requirements(cloud_requirements.clone())
+        .loader_overrides(context.loader_overrides.clone())
+        .cloud_requirements(context.cloud_requirements.clone())
         .build()
         .await?;
-    apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
+    apply_runtime_feature_enablement(&mut config, context.runtime_feature_enablement);
     Ok(config)
 }
 
