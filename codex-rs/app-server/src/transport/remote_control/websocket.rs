@@ -931,13 +931,10 @@ mod tests {
     }
 
     fn remote_control_url_for_listener(listener: &TcpListener) -> String {
-        format!(
-            "http://localhost:{}/backend-api/",
-            listener
-                .local_addr()
-                .expect("listener should have a local addr")
-                .port()
-        )
+        let addr = listener
+            .local_addr()
+            .expect("listener should have a local addr");
+        format!("http://{addr}/backend-api/")
     }
 
     fn remote_control_auth_dot_json(access_token: &str) -> AuthDotJson {
