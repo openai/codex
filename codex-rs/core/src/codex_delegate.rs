@@ -38,7 +38,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
-use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
@@ -101,17 +100,11 @@ pub(crate) async fn run_codex_thread_interactive(
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
         let thread_config = codex.thread_config_snapshot().await;
         let client_metadata = parent_session.app_server_client_metadata().await;
-        let parent_thread_id = match &subagent_source {
-            SubAgentSource::Other(name) if name == GUARDIAN_REVIEWER_NAME => {
-                Some(parent_session.conversation_id)
-            }
-            _ => None,
-        };
         emit_subagent_session_started(
             &parent_session.services.analytics_events_client,
             client_metadata,
             codex.session.conversation_id,
-            parent_thread_id,
+            Some(parent_session.conversation_id),
             thread_config,
             subagent_source,
         );
