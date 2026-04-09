@@ -219,6 +219,12 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RecentSessionMention>, String>,
     },
 
+    /// Copy hidden context from a previous thread into the current thread.
+    RememberThread {
+        source_thread_id: String,
+        source_thread_title: String,
+    },
+
     /// Fetch plugin marketplace state for the provided working directory.
     FetchPluginsList {
         cwd: PathBuf,

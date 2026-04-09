@@ -4501,6 +4501,43 @@ impl App {
                     self.chat_widget.set_recent_session_mentions(Vec::new());
                 }
             },
+            AppEvent::RememberThread {
+                source_thread_id,
+                source_thread_title,
+            } => {
+                let Some(thread_id) = self.current_displayed_thread_id() else {
+                    self.chat_widget.add_error_message(
+                        "No active thread is available for remembered context.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                let Ok(source_thread_id) = ThreadId::from_string(&source_thread_id) else {
+                    self.chat_widget
+                        .add_error_message("Selected session is not a valid thread.".to_string());
+                    return Ok(AppRunControl::Continue);
+                };
+
+                match app_server
+                    .thread_remember(thread_id, vec![source_thread_id])
+                    .await
+                {
+                    Ok(response) => {
+                        let title = source_thread_title.trim();
+                        let message =
+                            if response.remembered_thread_ids.len() == 1 && !title.is_empty() {
+                                format!("Remembered context from {title}.")
+                            } else {
+                                "Remembered context from a previous session.".to_string()
+                            };
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to remember previous session: {err}"
+                        ));
+                    }
+                }
+            }
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
                     self.chat_widget.refresh_connectors(/*force_refetch*/ true);

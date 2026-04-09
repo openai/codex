@@ -420,7 +420,6 @@ impl AppServerSession {
         Ok(response.thread)
     }
 
-    #[allow(dead_code)] // The picker wiring will call this once the /remember UI lands.
     pub(crate) async fn thread_remember(
         &mut self,
         thread_id: ThreadId,

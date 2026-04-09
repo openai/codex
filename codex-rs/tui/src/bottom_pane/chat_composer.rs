@@ -1562,6 +1562,7 @@ impl ChatComposer {
         };
 
         let mut selected_mention: Option<(String, Option<String>)> = None;
+        let mut selected_recent_session: Option<(String, String)> = None;
         let mut close_popup = false;
 
         let result = match key_event {
@@ -1606,7 +1607,15 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(mention) = popup.selected_mention() {
-                    selected_mention = Some((mention.insert_text.clone(), mention.path.clone()));
+                    if mention.insert_text.starts_with('#')
+                        && let Some(source_thread_id) = mention.path.clone()
+                    {
+                        selected_recent_session =
+                            Some((source_thread_id, mention.display_name.clone()));
+                    } else {
+                        selected_mention =
+                            Some((mention.insert_text.clone(), mention.path.clone()));
+                    }
                 }
                 close_popup = true;
                 (InputResult::None, true)
@@ -1615,7 +1624,16 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some((insert_text, path)) = selected_mention {
+            if let Some((source_thread_id, source_thread_title)) = selected_recent_session {
+                let token_range = self.active_token_range();
+                let start_idx = token_range.start;
+                self.textarea.replace_range(token_range, "");
+                self.textarea.set_cursor(start_idx);
+                self.app_event_tx.send(AppEvent::RememberThread {
+                    source_thread_id,
+                    source_thread_title,
+                });
+            } else if let Some((insert_text, path)) = selected_mention {
                 self.insert_selected_mention(&insert_text, path.as_deref());
             }
             self.active_popup = ActivePopup::None;
@@ -1911,21 +1929,15 @@ impl ChatComposer {
             .map(|query| Self::dismissed_popup_token('#', &query))
     }
 
-    /// Replace the active `@token` (the one under the cursor) with `path`.
-    ///
-    /// The algorithm mirrors `current_at_token` so replacement works no matter
-    /// where the cursor is within the token and regardless of how many
-    /// `@tokens` exist in the line.
-    fn insert_selected_path(&mut self, path: &str) {
+    /// Return the whitespace-delimited token under the cursor.
+    fn active_token_range(&self) -> Range<usize> {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
-        // Clamp to a valid char boundary to avoid panics when slicing.
         let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
 
         let before_cursor = &text[..safe_cursor];
         let after_cursor = &text[safe_cursor..];
 
-        // Determine token boundaries.
         let start_idx = before_cursor
             .char_indices()
             .rfind(|(_, c)| c.is_whitespace())
@@ -1939,6 +1951,15 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
+        start_idx..end_idx
+    }
+
+    /// Replace the active `@token` (the one under the cursor) with `path`.
+    ///
+    /// The algorithm mirrors `current_at_token` so replacement works no matter
+    /// where the cursor is within the token and regardless of how many
+    /// `@tokens` exist in the line.
+    fn insert_selected_path(&mut self, path: &str) {
         // If the path contains whitespace, wrap it in double quotes so the
         // local prompt arg parser treats it as a single argument. Avoid adding
         // quotes when the path already contains one to keep behavior simple.
@@ -1951,35 +1972,19 @@ impl ChatComposer {
 
         // Replace just the active `@token` so unrelated text elements, such as
         // large-paste placeholders, remain atomic and can still expand on submit.
+        let token_range = self.active_token_range();
+        let start_idx = token_range.start;
         self.textarea
-            .replace_range(start_idx..end_idx, &format!("{inserted} "));
+            .replace_range(token_range, &format!("{inserted} "));
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
 
     fn insert_selected_mention(&mut self, insert_text: &str, path: Option<&str>) {
-        let cursor_offset = self.textarea.cursor();
-        let text = self.textarea.text();
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
         // Remove the active token and insert the selected mention as an atomic element.
-        self.textarea.replace_range(start_idx..end_idx, "");
+        let token_range = self.active_token_range();
+        let start_idx = token_range.start;
+        self.textarea.replace_range(token_range, "");
         self.textarea.set_cursor(start_idx);
         let id = self.textarea.insert_element(insert_text);
 
@@ -5053,8 +5058,8 @@ mod tests {
     }
 
     #[test]
-    fn hash_item_popup_inserts_selected_session_id() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
+    fn hash_item_popup_remembers_selected_session() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
             /*has_input_focus*/ true,
@@ -5084,11 +5089,17 @@ mod tests {
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(
-            composer.current_text(),
-            "#11111111-1111-1111-1111-111111111111 "
-        );
+        assert_eq!(composer.current_text(), "");
         assert!(matches!(composer.active_popup, ActivePopup::None));
+        let event = rx.try_recv().expect("expected remember event");
+        assert!(matches!(
+            event,
+            AppEvent::RememberThread {
+                source_thread_id,
+                source_thread_title,
+            } if source_thread_id == "11111111-1111-1111-1111-111111111111"
+                && source_thread_title == "Answer an open question"
+        ));
     }
 
     #[test]
