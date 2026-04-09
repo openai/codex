@@ -667,6 +667,33 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         child_thread.codex.session.prompt_cache_key(),
         parent_thread.codex.session.prompt_cache_key(),
     );
+    assert!(!Arc::ptr_eq(
+        &child_thread.codex.session.services.mcp_connection_manager,
+        &parent_thread.codex.session.services.mcp_connection_manager,
+    ));
+    let mcp_tool_snapshot = child_thread
+        .codex
+        .session
+        .services
+        .mcp_tool_snapshot
+        .lock()
+        .await
+        .clone()
+        .expect("forked child should inherit an MCP tool snapshot");
+    let parent_mcp_tools = parent_thread
+        .codex
+        .session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await;
+    let mut snapshot_tool_names = mcp_tool_snapshot.tools.keys().cloned().collect::<Vec<_>>();
+    snapshot_tool_names.sort();
+    let mut parent_tool_names = parent_mcp_tools.keys().cloned().collect::<Vec<_>>();
+    parent_tool_names.sort();
+    assert_eq!(snapshot_tool_names, parent_tool_names);
     let history = child_thread.codex.session.clone_history().await;
     let expected_history = [
         ResponseItem::Message {
