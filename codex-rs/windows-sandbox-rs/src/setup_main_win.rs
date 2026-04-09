@@ -21,6 +21,7 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::path_owner_sid_string;
 use codex_windows_sandbox::protect_workspace_agents_dir;
 use codex_windows_sandbox::protect_workspace_codex_dir;
 use codex_windows_sandbox::sandbox_bin_dir;
@@ -112,6 +113,27 @@ fn log_line(log: &mut File, msg: &str) -> Result<()> {
         ))
     })?;
     Ok(())
+}
+
+fn add_write_ace_owner_context(
+    path: &Path,
+    err: anyhow::Error,
+    offline_sandbox_sid: &str,
+    offline_sandbox_username: &str,
+) -> anyhow::Error {
+    let owner = match path_owner_sid_string(path) {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return err.context("path has no owner SID"),
+        Err(owner_err) => return err.context(format!("owner lookup failed: {owner_err}")),
+    };
+
+    if owner.eq_ignore_ascii_case(offline_sandbox_sid) {
+        return err.context(format!(
+            "path owner is {offline_sandbox_username}; repair ownership of this workspace path as the normal Windows user"
+        ));
+    }
+
+    err.context(format!("path owner SID is {owner}"))
 }
 
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut File) -> Result<()> {
@@ -718,6 +740,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
             };
             let tx = tx.clone();
+            let offline_sid_str = offline_sid_str.clone();
+            let offline_username = payload.offline_username.clone();
             scope.spawn(move || {
                 // Convert SID strings to psids locally in this thread.
                 let mut psids: Vec<*mut c_void> = Vec::new();
@@ -730,7 +754,9 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                let res = unsafe { ensure_allow_write_aces(&root, &psids) }.map_err(|err| {
+                    add_write_ace_owner_context(&root, err, &offline_sid_str, &offline_username)
+                });
 
                 for psid in psids {
                     unsafe {

@@ -14,6 +14,7 @@ use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
+use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
@@ -28,6 +29,7 @@ use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::GENERIC_MAPPING;
+use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
@@ -90,6 +92,52 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> 
         ));
     }
     Ok((p_dacl, p_sd))
+}
+
+pub fn path_owner_sid_string(path: &Path) -> Result<Option<String>> {
+    unsafe {
+        let mut owner: *mut c_void = std::ptr::null_mut();
+        let mut p_sd: *mut c_void = std::ptr::null_mut();
+        let code = GetNamedSecurityInfoW(
+            to_wide(path).as_ptr() as *mut u16,
+            1, // SE_FILE_OBJECT
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut p_sd,
+        );
+        if code != ERROR_SUCCESS {
+            return Err(anyhow!("GetNamedSecurityInfoW owner failed: {code}"));
+        }
+        if owner.is_null() {
+            if !p_sd.is_null() {
+                LocalFree(p_sd as HLOCAL);
+            }
+            return Ok(None);
+        }
+
+        let mut sid_string_ptr: *mut u16 = std::ptr::null_mut();
+        let ok = ConvertSidToStringSidW(owner, &mut sid_string_ptr);
+        if ok == 0 || sid_string_ptr.is_null() {
+            if !p_sd.is_null() {
+                LocalFree(p_sd as HLOCAL);
+            }
+            return Err(anyhow!("ConvertSidToStringSidW owner failed"));
+        }
+        let mut len = 0;
+        while *sid_string_ptr.add(len) != 0 {
+            len += 1;
+        }
+        let sid =
+            String::from_utf16_lossy(std::slice::from_raw_parts(sid_string_ptr, len as usize));
+        LocalFree(sid_string_ptr as HLOCAL);
+        if !p_sd.is_null() {
+            LocalFree(p_sd as HLOCAL);
+        }
+        Ok(Some(sid))
+    }
 }
 
 /// Fast mask-based check: does an ACE for provided SIDs grant the desired mask? Skips inherit-only.

@@ -62,6 +62,8 @@ pub use acl::fetch_dacl_handle;
 #[cfg(target_os = "windows")]
 pub use acl::path_mask_allows;
 #[cfg(target_os = "windows")]
+pub use acl::path_owner_sid_string;
+#[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
 pub use cap::load_or_create_cap_sids;
