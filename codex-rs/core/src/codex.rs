@@ -1675,6 +1675,7 @@ impl Session {
             ),
         };
         let prompt_cache_key_override = inherited_thread_state.prompt_cache_key();
+        let mcp_tool_snapshot = inherited_thread_state.mcp_tool_snapshot();
         let window_generation = match &initial_history {
             InitialHistory::Resumed(resumed_history) => u64::try_from(
                 resumed_history
@@ -2033,6 +2034,7 @@ impl Session {
                 &config.permissions.approval_policy,
                 &config.permissions.sandbox_policy,
             ))),
+            mcp_tool_snapshot: Mutex::new(mcp_tool_snapshot),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
@@ -4540,8 +4542,12 @@ impl Session {
             *guard = cancel_token;
         }
 
-        let mut manager = self.services.mcp_connection_manager.write().await;
-        *manager = refreshed_manager;
+        {
+            let mut manager = self.services.mcp_connection_manager.write().await;
+            *manager = refreshed_manager;
+        }
+        let mut snapshot = self.services.mcp_tool_snapshot.lock().await;
+        *snapshot = None;
     }
 
     async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
@@ -6976,13 +6982,18 @@ pub(crate) async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-    let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
-        .or_cancel(cancellation_token)
-        .await?;
-    drop(mcp_connection_manager);
+    let inherited_mcp_tools = sess.services.mcp_tool_snapshot.lock().await.clone();
+    let (has_mcp_servers, all_mcp_tools) = if let Some(snapshot) = inherited_mcp_tools {
+        (!snapshot.tools.is_empty(), snapshot.tools)
+    } else {
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+        let has_mcp_servers = mcp_connection_manager.has_servers();
+        let all_mcp_tools = mcp_connection_manager
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await?;
+        (has_mcp_servers, all_mcp_tools)
+    };
     let loaded_plugins = sess
         .services
         .plugins_manager
