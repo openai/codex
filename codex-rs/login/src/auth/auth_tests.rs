@@ -80,70 +80,25 @@ fn login_with_api_key_overwrites_existing_auth_json() {
         .try_read_auth_json(&auth_path)
         .expect("auth.json should parse");
     assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
-    assert_eq!(auth.api_base_url.as_deref(), None);
     assert!(auth.tokens.is_none(), "tokens should be cleared");
 }
 
-#[test]
-fn login_with_api_key_and_base_url_persists_api_base_url() {
-    let dir = tempdir().unwrap();
-
-    super::login_with_api_key_and_base_url(
-        dir.path(),
-        "sk-test",
-        Some(OPENAI_GOV_API_BASE_URL.to_string()),
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("login_with_api_key_and_base_url should succeed");
-
-    let auth = super::load_auth_dot_json(dir.path(), AuthCredentialsStoreMode::File)
-        .expect("auth.json load should succeed")
-        .expect("auth.json should exist");
-    assert_eq!(auth.openai_api_key.as_deref(), Some("sk-test"));
-    assert_eq!(auth.api_base_url.as_deref(), Some(OPENAI_GOV_API_BASE_URL));
-}
-
-#[test]
-fn missing_auth_json_returns_none() {
-    let dir = tempdir().unwrap();
-    let auth = CodexAuth::from_auth_storage(dir.path(), AuthCredentialsStoreMode::File)
-        .expect("call should succeed");
-    assert_eq!(auth, None);
-}
-
 #[tokio::test]
-async fn api_key_login_probe_keeps_commercial_base_for_commercial_current_org() {
-    let commercial = MockServer::start().await;
-    let gov = MockServer::start().await;
-    mount_me_response(&commercial, 200, false).await;
+async fn api_key_login_check_reads_fedramp_status_from_current_org() {
+    let server = MockServer::start().await;
+    mount_me_response(&server, 200, true).await;
 
-    let api_base_url =
-        validate_openai_api_key_for_login("sk-test", &probe_config(&commercial, &gov, None))
+    let result =
+        check_openai_api_key_for_login_with_base_url("sk-test", &format!("{}/v1", server.uri()))
             .await
-            .expect("probe should succeed");
+            .expect("auth check should succeed");
 
-    assert_eq!(api_base_url, None);
+    assert!(result.current_organization_is_fedramp);
 }
 
 #[tokio::test]
-async fn api_key_login_probe_uses_gov_base_when_gov_accepts_key() {
-    let commercial = MockServer::start().await;
-    let gov = MockServer::start().await;
-    mount_empty_response(&commercial, 401).await;
-    mount_me_response(&gov, 200, true).await;
-
-    let api_base_url =
-        validate_openai_api_key_for_login("sk-test", &probe_config(&commercial, &gov, None))
-            .await
-            .expect("probe should succeed");
-
-    assert_eq!(api_base_url, Some(format!("{}/v1", gov.uri())));
-}
-
-#[tokio::test]
-async fn api_key_login_probe_uses_current_org_not_org_membership() {
-    let commercial = MockServer::start().await;
-    let gov = MockServer::start().await;
+async fn api_key_login_check_ignores_fedramp_membership_if_current_org_is_commercial() {
+    let server = MockServer::start().await;
     let response = ResponseTemplate::new(200).set_body_json(json!({
         "current_organization_is_fedramp": false,
         "orgs": {
@@ -155,29 +110,54 @@ async fn api_key_login_probe_uses_current_org_not_org_membership() {
             ]
         }
     }));
-    mount_me_response_template(&commercial, response).await;
+    mount_me_response_template(&server, response).await;
 
-    let api_base_url =
-        validate_openai_api_key_for_login("sk-test", &probe_config(&commercial, &gov, None))
+    let result =
+        check_openai_api_key_for_login_with_base_url("sk-test", &format!("{}/v1", server.uri()))
             .await
-            .expect("probe should succeed");
+            .expect("auth check should succeed");
 
-    assert_eq!(api_base_url, None);
+    assert!(!result.current_organization_is_fedramp);
 }
 
 #[tokio::test]
-async fn api_key_login_probe_rejects_key_rejected_by_both_endpoints() {
-    let commercial = MockServer::start().await;
-    let gov = MockServer::start().await;
-    mount_empty_response(&commercial, 401).await;
-    mount_empty_response(&gov, 401).await;
+async fn api_key_login_check_rejects_invalid_api_key() {
+    let server = MockServer::start().await;
+    mount_me_response_template(&server, ResponseTemplate::new(401)).await;
 
     let error =
-        validate_openai_api_key_for_login("sk-test", &probe_config(&commercial, &gov, None))
+        check_openai_api_key_for_login_with_base_url("sk-test", &format!("{}/v1", server.uri()))
             .await
-            .expect_err("probe should reject invalid key");
+            .expect_err("auth check should fail");
 
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn missing_auth_json_returns_none() {
+    let dir = tempdir().unwrap();
+    let auth = CodexAuth::from_auth_storage(dir.path(), AuthCredentialsStoreMode::File)
+        .expect("call should succeed");
+    assert_eq!(auth, None);
+}
+
+async fn mount_me_response(
+    server: &MockServer,
+    status: u16,
+    current_organization_is_fedramp: bool,
+) {
+    let response = ResponseTemplate::new(status).set_body_json(json!({
+        "current_organization_is_fedramp": current_organization_is_fedramp,
+    }));
+    mount_me_response_template(server, response).await;
+}
+
+async fn mount_me_response_template(server: &MockServer, response: ResponseTemplate) {
+    Mock::given(method("GET"))
+        .and(path("/v1/me"))
+        .respond_with(response)
+        .mount(server)
+        .await;
 }
 
 #[tokio::test]
@@ -216,7 +196,6 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         AuthDotJson {
             auth_mode: None,
             openai_api_key: None,
-            api_base_url: None,
             tokens: Some(TokenData {
                 id_token: IdTokenInfo {
                     email: Some("user@example.com".to_string()),
@@ -265,7 +244,6 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
-        api_base_url: None,
         tokens: None,
         last_refresh: None,
     };
@@ -440,41 +418,6 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
         .and_then(|auth| auth.api_key().map(str::to_string));
     assert_eq!(initial_token.as_deref(), Some("provider-token"));
     assert_eq!(refreshed_token.as_deref(), Some("refreshed-provider-token"));
-}
-
-fn probe_config(
-    commercial: &MockServer,
-    gov: &MockServer,
-    explicit_api_base_url: Option<String>,
-) -> OpenAiApiKeyLoginProbeConfig {
-    OpenAiApiKeyLoginProbeConfig {
-        commercial_api_base_url: format!("{}/v1", commercial.uri()),
-        gov_api_base_url: format!("{}/v1", gov.uri()),
-        explicit_api_base_url,
-    }
-}
-
-async fn mount_me_response(
-    server: &MockServer,
-    status: u16,
-    current_organization_is_fedramp: bool,
-) {
-    let response = ResponseTemplate::new(status).set_body_json(json!({
-        "current_organization_is_fedramp": current_organization_is_fedramp,
-    }));
-    mount_me_response_template(server, response).await;
-}
-
-async fn mount_empty_response(server: &MockServer, status: u16) {
-    mount_me_response_template(server, ResponseTemplate::new(status)).await;
-}
-
-async fn mount_me_response_template(server: &MockServer, response: ResponseTemplate) {
-    Mock::given(method("GET"))
-        .and(path("/v1/me"))
-        .respond_with(response)
-        .mount(server)
-        .await;
 }
 
 struct ProviderAuthScript {

@@ -1,6 +1,5 @@
 use crate::client::ModelClient;
 use crate::codex::Session;
-use crate::openai_api_key_routing::resolve_api_provider;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -515,11 +514,7 @@ async fn prepare_realtime_start(
     let transport = params
         .transport
         .unwrap_or(ConversationStartTransport::Websocket);
-    let mut api_provider = if matches!(auth, Some(CodexAuth::ApiKey(_))) {
-        resolve_api_provider(&provider, auth.as_ref())?
-    } else {
-        provider.to_api_provider(Some(AuthMode::ApiKey))?
-    };
+    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }

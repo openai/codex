@@ -51,7 +51,6 @@ pub use mcp::McpManager;
 pub use network_proxy_loader::MtimeConfigReloader;
 pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
-mod openai_api_key_routing;
 mod original_image_detail;
 pub use codex_mcp::MCP_SANDBOX_STATE_CAPABILITY;
 pub use codex_mcp::MCP_SANDBOX_STATE_METHOD;

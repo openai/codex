@@ -8,17 +8,21 @@
 //! support can request from users.
 
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteErrorCode;
+use codex_app_server_protocol::MergeStrategy;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
+use codex_core::config::ConfigService;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
-use codex_login::OpenAiApiKeyLoginProbeConfig;
+use codex_login::OPENAI_GOV_API_BASE_URL;
 use codex_login::ServerOptions;
-use codex_login::login_with_api_key_and_base_url;
+use codex_login::check_openai_api_key_for_login;
+use codex_login::login_with_api_key;
 use codex_login::logout;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
-use codex_login::validate_openai_api_key_for_login;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
@@ -37,6 +41,53 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+
+async fn write_openai_base_url_for_api_key_login(
+    config: &Config,
+    current_organization_is_fedramp: bool,
+) -> std::io::Result<()> {
+    let effective_base_url = config
+        .model_providers
+        .get("openai")
+        .and_then(|provider| provider.base_url.as_deref())
+        .map(|base_url| base_url.trim_end_matches('/'));
+
+    let desired_base_url = current_organization_is_fedramp.then_some(OPENAI_GOV_API_BASE_URL);
+    if desired_base_url == effective_base_url {
+        return Ok(());
+    }
+
+    if desired_base_url.is_none() && effective_base_url != Some(OPENAI_GOV_API_BASE_URL) {
+        return Ok(());
+    }
+
+    let value = desired_base_url
+        .map(|url| serde_json::Value::String(url.to_string()))
+        .unwrap_or(serde_json::Value::Null);
+
+    let result = ConfigService::new_with_defaults(config.codex_home.clone())
+        .write_value(ConfigValueWriteParams {
+            file_path: None,
+            expected_version: None,
+            key_path: "openai_base_url".to_string(),
+            value,
+            merge_strategy: MergeStrategy::Replace,
+        })
+        .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(err)
+            if desired_base_url.is_none()
+                && err.write_error_code() == Some(ConfigWriteErrorCode::ConfigPathNotFound) =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(std::io::Error::other(format!(
+            "failed to update openai_base_url: {err}"
+        ))),
+    }
+}
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -173,38 +224,35 @@ pub async fn run_login_with_api_key(
         std::process::exit(1);
     }
 
-    let api_base_url = if config.model_provider.is_openai() {
-        match validate_openai_api_key_for_login(
-            &api_key,
-            &OpenAiApiKeyLoginProbeConfig::new(config.model_provider.base_url.clone()),
-        )
-        .await
-        {
-            Ok(api_base_url) => api_base_url,
-            Err(e) => {
-                eprintln!("Error logging in: {e}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        None
-    };
-
-    match login_with_api_key_and_base_url(
-        &config.codex_home,
-        &api_key,
-        api_base_url,
-        config.cli_auth_credentials_store_mode,
-    ) {
-        Ok(_) => {
-            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
-            std::process::exit(0);
-        }
+    let login_check = match check_openai_api_key_for_login(&api_key).await {
+        Ok(check) => check,
         Err(e) => {
             eprintln!("Error logging in: {e}");
             std::process::exit(1);
         }
+    };
+
+    if let Err(e) = login_with_api_key(
+        &config.codex_home,
+        &api_key,
+        config.cli_auth_credentials_store_mode,
+    ) {
+        eprintln!("Error logging in: {e}");
+        std::process::exit(1);
     }
+
+    if let Err(e) = write_openai_base_url_for_api_key_login(
+        &config,
+        login_check.current_organization_is_fedramp,
+    )
+    .await
+    {
+        eprintln!("Error logging in: {e}");
+        std::process::exit(1);
+    }
+
+    eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+    std::process::exit(0);
 }
 
 pub fn read_api_key_from_stdin() -> String {
