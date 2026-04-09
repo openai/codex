@@ -14,6 +14,7 @@ use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agent_identity::AgentIdentityManager;
+use crate::agent_identity::RegisteredAgentTask;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -1588,6 +1589,39 @@ impl Session {
         })
         .await;
         handlers::shutdown(self, self.next_internal_sub_id()).await;
+    }
+
+    async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
+        {
+            let state = self.state.lock().await;
+            if let Some(agent_task) = state.agent_task() {
+                debug!(
+                    agent_runtime_id = %agent_task.agent_runtime_id,
+                    task_id = %agent_task.task_id,
+                    "reusing cached agent task"
+                );
+                return Ok(Some(agent_task));
+            }
+        }
+
+        let Some(agent_task) = self.services.agent_identity_manager.register_task().await? else {
+            return Ok(None);
+        };
+        {
+            let mut state = self.state.lock().await;
+            if let Some(existing_agent_task) = state.agent_task() {
+                return Ok(Some(existing_agent_task));
+            }
+            state.set_agent_task(agent_task.clone());
+        }
+
+        info!(
+            thread_id = %self.conversation_id,
+            agent_runtime_id = %agent_task.agent_runtime_id,
+            task_id = %agent_task.task_id,
+            "registered agent task for thread"
+        );
+        Ok(Some(agent_task))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6405,6 +6439,9 @@ pub(crate) async fn run_turn(
             realtime_active: Some(turn_context.realtime_active),
         }))
         .await;
+    }
+    if let Err(error) = sess.ensure_agent_task_registered().await {
+        warn!(error = %error, "agent task registration failed");
     }
 
     if !skill_items.is_empty() {

@@ -27,6 +27,10 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+mod task_registration;
+
+pub(crate) use task_registration::RegisteredAgentTask;
+
 use crate::config::Config;
 
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -119,32 +123,48 @@ impl AgentIdentityManager {
             return Ok(None);
         }
 
-        let Some(auth) = self.auth_manager.auth().await else {
-            debug!("skipping agent identity registration because no auth is available");
+        let Some((auth, binding)) = self.current_auth_binding().await else {
             return Ok(None);
         };
 
-        let Some(binding) =
-            AgentIdentityBinding::from_auth(&auth, self.auth_manager.forced_chatgpt_workspace_id())
-        else {
-            debug!("skipping agent identity registration because ChatGPT auth is unavailable");
-            return Ok(None);
-        };
+        self.ensure_registered_identity_for_binding(&auth, &binding)
+            .await
+            .map(Some)
+    }
 
+    async fn ensure_registered_identity_for_binding(
+        &self,
+        auth: &CodexAuth,
+        binding: &AgentIdentityBinding,
+    ) -> Result<StoredAgentIdentity> {
         let _guard = self.ensure_lock.lock().await;
 
-        if let Some(stored_identity) = self.load_stored_identity(&auth, &binding)? {
+        if let Some(stored_identity) = self.load_stored_identity(auth, binding)? {
             info!(
                 agent_runtime_id = %stored_identity.agent_runtime_id,
                 binding_id = %binding.binding_id,
                 "reusing stored agent identity"
             );
-            return Ok(Some(stored_identity));
+            return Ok(stored_identity);
         }
 
-        let stored_identity = self.register_agent_identity(&binding).await?;
-        self.store_identity(&auth, &stored_identity)?;
-        Ok(Some(stored_identity))
+        let stored_identity = self.register_agent_identity(binding).await?;
+        self.store_identity(auth, &stored_identity)?;
+        Ok(stored_identity)
+    }
+
+    async fn current_auth_binding(&self) -> Option<(CodexAuth, AgentIdentityBinding)> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            debug!("skipping agent identity flow because no auth is available");
+            return None;
+        };
+
+        let binding =
+            AgentIdentityBinding::from_auth(&auth, self.auth_manager.forced_chatgpt_workspace_id());
+        if binding.is_none() {
+            debug!("skipping agent identity flow because ChatGPT auth is unavailable");
+        }
+        binding.map(|binding| (auth, binding))
     }
 
     async fn register_agent_identity(
