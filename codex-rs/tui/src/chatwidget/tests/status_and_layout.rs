@@ -1517,6 +1517,50 @@ async fn blocked_and_failed_hooks_render_feedback_and_errors() {
 }
 
 #[tokio::test]
+async fn completed_hook_with_output_keeps_running_visible_for_floor() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(hook_started_event(
+        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        Some("checking command"),
+    ));
+    reveal_running_hooks(&mut chat);
+    let running_snapshot = hook_live_and_history_snapshot(&chat, "running", "");
+
+    chat.handle_codex_event(hook_completed_event(
+        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        codex_protocol::protocol::HookRunStatus::Blocked,
+        vec![codex_protocol::protocol::HookOutputEntry {
+            kind: codex_protocol::protocol::HookOutputEntryKind::Feedback,
+            text: "command blocked by policy".to_string(),
+        }],
+    ));
+    let completed_deferred_snapshot =
+        hook_live_and_history_snapshot(&chat, "completed deferred", "");
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "completed hook should stay live until the running row has met its visible floor"
+    );
+
+    reveal_completed_hooks(&mut chat);
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let completed_revealed_snapshot =
+        hook_live_and_history_snapshot(&chat, "completed revealed", &history);
+
+    assert_chatwidget_snapshot!(
+        "completed_hook_with_output_keeps_running_visible_for_floor_snapshot",
+        format!(
+            "{running_snapshot}\n\n{completed_deferred_snapshot}\n\n{completed_revealed_snapshot}"
+        )
+    );
+}
+
+#[tokio::test]
 async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

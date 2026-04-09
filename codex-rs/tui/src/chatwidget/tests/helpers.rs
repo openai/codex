@@ -687,6 +687,13 @@ pub(super) fn reveal_running_hooks(chat: &mut ChatWidget) {
     chat.pre_draw_tick();
 }
 
+pub(super) fn reveal_completed_hooks(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.reveal_completed_runs_now_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
 pub(super) fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .model_catalog
@@ -1044,6 +1051,7 @@ pub(super) async fn assert_hook_events_snapshot(
         }),
     });
 
+    reveal_completed_hooks(&mut chat);
     let cells = drain_insert_history(&mut rx);
     let combined = cells
         .iter()
