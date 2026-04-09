@@ -55,6 +55,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+use url::Url;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
@@ -574,10 +575,16 @@ pub(crate) async fn build_realtime_session_config(
         (false, true) => prompt,
         (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
+    let base_url_pins_model = config
+        .experimental_realtime_ws_base_url
+        .as_deref()
+        .or(provider.base_url.as_deref())
+        .is_some_and(realtime_base_url_pins_model);
     let provider_pins_model = provider
         .query_params
         .as_ref()
-        .is_some_and(|query_params| query_params.contains_key("model"));
+        .is_some_and(|query_params| query_params.contains_key("model"))
+        || base_url_pins_model;
     let model = config.experimental_realtime_ws_model.clone().or_else(|| {
         (config.realtime.version == RealtimeWsVersion::V2 && !provider_pins_model)
             .then(|| DEFAULT_REALTIME_MODEL.to_string())
@@ -636,7 +643,9 @@ fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> 
         voice.wire_name()
     )))
 }
-
+fn realtime_base_url_pins_model(base_url: &str) -> bool {
+    Url::parse(base_url).is_ok_and(|url| url.query_pairs().any(|(key, _)| key == "model"))
+}
 async fn handle_start_inner(
     sess: &Arc<Session>,
     sub_id: &str,

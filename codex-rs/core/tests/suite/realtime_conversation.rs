@@ -618,6 +618,89 @@ async fn conversation_start_v2_with_provider_model_preserves_provider_default() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_v2_with_base_url_model_preserves_provider_default() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_v2_base_url", "instructions": "backend prompt" }
+        })]],
+    ])
+    .await;
+
+    let realtime_ws_base_url =
+        format!("{}/v1?model=base-url-realtime-model", realtime_server.uri());
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.model_provider.supports_websockets = true;
+    });
+    let test = builder.build(&api_server).await?;
+    assert!(
+        realtime_server
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+            transport: None,
+        }))
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_v2_base_url");
+
+    let connections = realtime_server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(
+        realtime_server.handshakes()[1].uri(),
+        "/v1/realtime?model=base-url-realtime-model"
+    );
+    let expected_session_update = json!({
+        "type": "session.update",
+        "session": session_update_session_json(RealtimeSessionConfig {
+            instructions: "backend prompt".to_string(),
+            model: None,
+            session_id: started.session_id.clone(),
+            event_parser: RealtimeEventParser::RealtimeV2,
+            session_mode: RealtimeSessionMode::Conversational,
+        })?
+    });
+    assert_eq!(connections[1][0].body_json(), expected_session_update);
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let _closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
