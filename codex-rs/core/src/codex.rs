@@ -5514,22 +5514,23 @@ mod handlers {
             .into_iter()
             .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
             .collect::<Vec<_>>();
-        sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
-            .await;
-        if let Err(err) = sess.flush_rollout().await {
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Error(ErrorEvent {
-                    message: format!("failed to flush rollout for rollback replay: {err}"),
-                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                }),
-            })
-            .await;
-            return;
-        }
         sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
             .await;
         sess.recompute_token_usage(turn_context.as_ref()).await;
+
+        sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
+            .await;
+        if let Err(err) = sess.flush_rollout().await {
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Rolled the thread back, but failed to save the rollback marker. Codex will continue retrying. Error: {err}"
+                    ),
+                }),
+            )
+            .await;
+        }
 
         sess.deliver_event_raw(Event {
             id: turn_context.sub_id.clone(),
