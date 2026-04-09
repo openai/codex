@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -30,7 +31,9 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 
 use common::exec_server::ExecServerHarness;
-use common::exec_server::exec_server;
+use common::exec_server::exec_server_with_env;
+
+const TEST_ENV_KEY: &str = "CODEX_EXEC_SERVER_TEST_ENV_SOURCE";
 
 struct ProcessContext {
     backend: Arc<dyn ExecBackend>,
@@ -38,8 +41,15 @@ struct ProcessContext {
 }
 
 async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
+    create_process_context_with_server_env(use_remote, &[]).await
+}
+
+async fn create_process_context_with_server_env(
+    use_remote: bool,
+    server_env: &[(&str, &str)],
+) -> Result<ProcessContext> {
     if use_remote {
-        let server = exec_server().await?;
+        let server = exec_server_with_env(server_env).await?;
         let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
@@ -157,6 +167,86 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
     assert_eq!(output, "session output\n");
     assert_eq!(exit_code, Some(0));
     assert!(closed);
+    Ok(())
+}
+
+fn parse_env_output(output: &str) -> HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+async fn collect_env_from_process(
+    use_remote: bool,
+    request_env: HashMap<String, String>,
+    server_env: &[(&str, &str)],
+) -> Result<HashMap<String, String>> {
+    let context = create_process_context_with_server_env(use_remote, server_env).await?;
+    let cwd = std::env::current_dir()?;
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-env-inherit"),
+            argv: vec!["/usr/bin/env".to_string()],
+            cwd: cwd.clone(),
+            env: request_env,
+            tty: false,
+            arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
+            managed_network: None,
+        })
+        .await?;
+
+    let StartedExecProcess { process, .. } = session;
+    let wake_rx = process.subscribe_wake();
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+    assert_eq!(exit_code, Some(0));
+    assert!(closed);
+    Ok(parse_env_output(&output))
+}
+
+async fn assert_exec_process_selects_env_from_spawn_site(
+    use_remote: bool,
+    request_value: Option<&str>,
+    server_value: Option<&str>,
+    expected_value: Option<&str>,
+) -> Result<()> {
+    let request_path = "/orchestrator/path/that/must/not/win";
+    let server_path = "/exec/server/path/that/should/win/remotely";
+    let mut request_env = HashMap::new();
+    if let Some(value) = request_value {
+        request_env.insert(TEST_ENV_KEY.to_string(), value.to_string());
+        request_env.insert("PATH".to_string(), request_path.to_string());
+    }
+    let mut server_env = Vec::new();
+    if let Some(value) = server_value {
+        server_env.push((TEST_ENV_KEY, value));
+        server_env.push(("PATH", server_path));
+    }
+
+    let env = collect_env_from_process(use_remote, request_env, &server_env).await?;
+    assert_eq!(
+        env.get(TEST_ENV_KEY).map(String::as_str),
+        expected_value,
+        "child env should come from the expected process boundary"
+    );
+
+    let expected_path = if use_remote {
+        Some(server_path)
+    } else if request_value.is_some() {
+        Some(request_path)
+    } else {
+        None
+    };
+    assert_eq!(
+        env.get("PATH").map(String::as_str),
+        expected_path,
+        "PATH should follow the same spawn-site env selection"
+    );
     Ok(())
 }
 
@@ -428,6 +518,30 @@ async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_process_streams_output(use_remote: bool) -> Result<()> {
     assert_exec_process_streams_output(use_remote).await
+}
+
+#[test_case(false, Some("client-request"), None, Some("client-request")
+    ; "local uses request env")]
+#[test_case(false, None, None, None
+    ; "local uses empty request env")]
+#[test_case(true, Some("client-request"), Some("exec-server"), Some("exec-server")
+    ; "remote uses server env instead of request env")]
+#[test_case(true, None, Some("exec-server"), Some("exec-server")
+    ; "remote uses server env without request env")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_process_selects_env_from_spawn_site(
+    use_remote: bool,
+    request_value: Option<&str>,
+    server_value: Option<&str>,
+    expected_value: Option<&str>,
+) -> Result<()> {
+    assert_exec_process_selects_env_from_spawn_site(
+        use_remote,
+        request_value,
+        server_value,
+        expected_value,
+    )
+    .await
 }
 
 #[test_case(false ; "local")]

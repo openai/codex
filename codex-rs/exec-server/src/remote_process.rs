@@ -32,10 +32,14 @@ impl RemoteProcess {
 
 #[async_trait]
 impl ExecBackend for RemoteProcess {
-    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
+    async fn start(&self, mut params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let process_id = params.process_id.clone();
         let sandbox_type = params.sandbox.sandbox;
         let session = self.client.register_session(&process_id).await?;
+        // TODO(exec-server): replace request env with an executor-evaluated env
+        // policy plus explicit per-request overrides. Do not send the
+        // orchestrator process environment across this boundary.
+        params.env.clear();
         match self.client.exec(params).await {
             Ok(_) => {}
             Err(err) => {
