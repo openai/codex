@@ -58,6 +58,12 @@ pub(crate) struct AppKeymap {
     pub(crate) toggle_vim_mode: Vec<KeyBinding>,
 }
 
+/// Chat-level keybindings evaluated at the app event layer.
+///
+/// These participate in the first app-scope conflict validation pass alongside
+/// `AppKeymap` actions because both are checked before input reaches the
+/// composer. Dispatch gating (empty-composer guard for backtrack) happens in
+/// handler code, not here.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatKeymap {
     /// Start/advance edit-previous flow when composer is empty.
@@ -66,6 +72,11 @@ pub(crate) struct ChatKeymap {
     pub(crate) confirm_edit_previous_message: Vec<KeyBinding>,
 }
 
+/// Composer-level keybindings validated in the second app-scope conflict pass.
+///
+/// App-level handlers execute before the composer receives input, so any key
+/// bound here that also appears in `AppKeymap` would be silently intercepted.
+/// The conflict validator prevents this by checking app + composer uniqueness.
 #[derive(Clone, Debug)]
 pub(crate) struct ComposerKeymap {
     /// Submit current draft.
@@ -100,6 +111,14 @@ pub(crate) struct EditorKeymap {
     pub(crate) yank: Vec<KeyBinding>,
 }
 
+/// Vim normal-mode keybindings for modal editing in the composer textarea.
+///
+/// Normal mode is the resting state when Vim is enabled. Pressing a movement
+/// or editing key here either moves the cursor, triggers an operator-pending
+/// state (via `start_delete_operator` / `start_yank_operator`), or transitions
+/// to insert mode. Default bindings include both `shift(letter)` and
+/// `plain(UPPERCASE)` variants for uppercase commands like `A`, `I`, `O` to
+/// handle cross-terminal shift-reporting inconsistencies.
 #[derive(Clone, Debug)]
 pub(crate) struct VimNormalKeymap {
     pub(crate) enter_insert: Vec<KeyBinding>,
@@ -126,6 +145,12 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) cancel_operator: Vec<KeyBinding>,
 }
 
+/// Vim operator-pending keybindings active after `d` or `y` in normal mode.
+///
+/// When an operator (`start_delete_operator` or `start_yank_operator`) is
+/// pressed, the next keypress is matched against this context to determine the
+/// motion range. Repeating the operator key (`dd`, `yy`) acts on the whole
+/// line. `Esc` cancels the pending operator and returns to normal mode.
 #[derive(Clone, Debug)]
 pub(crate) struct VimOperatorKeymap {
     pub(crate) delete_line: Vec<KeyBinding>,
