@@ -11884,6 +11884,10 @@ impl Renderable for ChatWidget {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
     }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.as_renderable().cursor_style(area)
+    }
 }
 
 #[derive(Debug)]

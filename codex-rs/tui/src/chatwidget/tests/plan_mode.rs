@@ -1369,7 +1369,10 @@ async fn vim_mode_default_enabled_starts_composer_in_normal_mode() {
     .await;
 
     assert!(chat.bottom_pane.composer_is_vim_enabled());
-    assert!(!chat.bottom_pane.composer_is_vim_insert());
+    assert!(chat.composer_is_empty());
+    let mut chat = chat;
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "");
 }
 
 async fn make_startup_chat_with_cli_overrides(

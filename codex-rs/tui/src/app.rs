@@ -1136,6 +1136,7 @@ Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.t
                         |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(frame.area()));
                                 frame.set_cursor_position((x, y));
                             }
                         },
