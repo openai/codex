@@ -63,10 +63,14 @@ pub(crate) enum StatusLineItem {
     GitBranch,
 
     /// Visual meter of context window usage.
-    ContextRemaining,
-
-    /// Legacy alias for the context window meter.
-    ContextUsed,
+    ///
+    /// Also accepts legacy `context-remaining` and `context-used` config values.
+    #[strum(
+        to_string = "context-usage",
+        serialize = "context-remaining",
+        serialize = "context-used"
+    )]
+    ContextUsage,
 
     /// Remaining usage on the 5-hour rate limit.
     FiveHourLimit,
@@ -105,10 +109,9 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
-            StatusLineItem::ContextRemaining => {
+            StatusLineItem::ContextUsage => {
                 "Visual meter of context window usage (omitted when unknown)"
             }
-            StatusLineItem::ContextUsed => StatusLineItem::ContextRemaining.description(),
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on 5-hour usage limit (omitted when unavailable)"
             }
@@ -136,7 +139,7 @@ const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
     StatusLineItem::CurrentDir,
     StatusLineItem::ProjectRoot,
     StatusLineItem::GitBranch,
-    StatusLineItem::ContextRemaining,
+    StatusLineItem::ContextUsage,
     StatusLineItem::FiveHourLimit,
     StatusLineItem::WeeklyLimit,
     StatusLineItem::CodexVersion,
@@ -147,14 +150,6 @@ const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
     StatusLineItem::SessionId,
     StatusLineItem::FastMode,
 ];
-
-/// Keeps legacy `context-used` configs editable via the supported context meter item.
-fn normalize_status_line_item_for_setup(item: StatusLineItem) -> StatusLineItem {
-    match item {
-        StatusLineItem::ContextUsed => StatusLineItem::ContextRemaining,
-        item => item,
-    }
-}
 
 /// Runtime values used to preview the current status-line selection.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -224,7 +219,6 @@ impl StatusLineSetupView {
                 let Ok(item) = id.parse::<StatusLineItem>() else {
                     continue;
                 };
-                let item = normalize_status_line_item_for_setup(item);
                 let item_id = item.to_string();
                 if !used_ids.insert(item_id.clone()) {
                     continue;
@@ -316,6 +310,23 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use crate::app_event::AppEvent;
+
+    #[test]
+    fn context_usage_is_canonical_and_accepts_legacy_ids() {
+        assert_eq!(StatusLineItem::ContextUsage.to_string(), "context-usage");
+        assert_eq!(
+            "context-usage".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+        assert_eq!(
+            "context-remaining".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+        assert_eq!(
+            "context-used".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+    }
 
     #[test]
     fn preview_uses_runtime_values() {

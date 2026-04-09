@@ -882,6 +882,21 @@ async fn status_line_legacy_context_used_renders_context_meter() {
 }
 
 #[tokio::test]
+async fn status_line_legacy_context_remaining_renders_context_meter() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["context-remaining".to_string()]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Context [     ]".to_string()));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "legacy context-remaining should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("main".to_string());
@@ -980,7 +995,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
     chat.config.cwd = test_project_path().abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
-        "context-remaining".to_string(),
+        "context-usage".to_string(),
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
@@ -1090,7 +1105,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     chat.config.cwd = test_project_path().abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
-        "context-remaining".to_string(),
+        "context-usage".to_string(),
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
