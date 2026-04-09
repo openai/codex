@@ -9,7 +9,6 @@
 
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::MergeStrategy;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
@@ -42,51 +41,18 @@ const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
 
-async fn write_openai_base_url_for_api_key_login(
-    config: &Config,
-    current_organization_is_fedramp: bool,
-) -> std::io::Result<()> {
-    let effective_base_url = config
-        .model_providers
-        .get("openai")
-        .and_then(|provider| provider.base_url.as_deref())
-        .map(|base_url| base_url.trim_end_matches('/'));
-
-    let desired_base_url = current_organization_is_fedramp.then_some(OPENAI_GOV_API_BASE_URL);
-    if desired_base_url == effective_base_url {
-        return Ok(());
-    }
-
-    if desired_base_url.is_none() && effective_base_url != Some(OPENAI_GOV_API_BASE_URL) {
-        return Ok(());
-    }
-
-    let value = desired_base_url
-        .map(|url| serde_json::Value::String(url.to_string()))
-        .unwrap_or(serde_json::Value::Null);
-
-    let result = ConfigService::new_with_defaults(config.codex_home.clone())
+async fn write_gov_openai_base_url(config: &Config) -> std::io::Result<()> {
+    ConfigService::new_with_defaults(config.codex_home.clone())
         .write_value(ConfigValueWriteParams {
             file_path: None,
             expected_version: None,
             key_path: "openai_base_url".to_string(),
-            value,
+            value: serde_json::Value::String(OPENAI_GOV_API_BASE_URL.to_string()),
             merge_strategy: MergeStrategy::Replace,
         })
-        .await;
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(err)
-            if desired_base_url.is_none()
-                && err.write_error_code() == Some(ConfigWriteErrorCode::ConfigPathNotFound) =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(std::io::Error::other(format!(
-            "failed to update openai_base_url: {err}"
-        ))),
-    }
+        .await
+        .map(|_| ())
+        .map_err(|err| std::io::Error::other(format!("failed to update openai_base_url: {err}")))
 }
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
@@ -241,14 +207,12 @@ pub async fn run_login_with_api_key(
         std::process::exit(1);
     }
 
-    if let Err(e) = write_openai_base_url_for_api_key_login(
-        &config,
-        login_check.current_organization_is_fedramp,
-    )
-    .await
-    {
-        eprintln!("Error logging in: {e}");
-        std::process::exit(1);
+    if login_check.current_organization_is_fedramp {
+        eprintln!("FedRAMP API key detected. Configuring Codex to use {OPENAI_GOV_API_BASE_URL}.");
+        if let Err(e) = write_gov_openai_base_url(&config).await {
+            eprintln!("Error logging in: {e}");
+            std::process::exit(1);
+        }
     }
 
     eprintln!("{LOGIN_SUCCESS_MESSAGE}");
