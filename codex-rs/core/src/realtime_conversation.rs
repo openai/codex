@@ -966,28 +966,6 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                                         {
                                             response_in_progress = true;
                                         }
-                                        Some("response.done")
-                                            if matches!(session_kind, RealtimeSessionKind::V2) =>
-                                        {
-                                            response_in_progress = false;
-                                            output_audio_state = None;
-                                            if pending_response_create {
-                                                if let Err(err) = writer.send_response_create().await {
-                                                    let mapped_error = map_api_error(err);
-                                                    warn!(
-                                                        "failed to send deferred response.create: {mapped_error}"
-                                                    );
-                                                    let _ = events_tx
-                                                        .send(RealtimeEvent::Error(
-                                                            mapped_error.to_string(),
-                                                        ))
-                                                        .await;
-                                                    break;
-                                                }
-                                                pending_response_create = false;
-                                                response_in_progress = true;
-                                            }
-                                        }
                                         _ => {}
                                     }
                                 }
