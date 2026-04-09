@@ -415,6 +415,22 @@ fn windows_restricted_token_runs_for_legacy_restricted_policies() {
 }
 
 #[test]
+fn windows_proxy_enforcement_uses_elevated_backend() {
+    assert!(!windows_sandbox_uses_elevated_backend(
+        WindowsSandboxLevel::RestrictedToken,
+        /*proxy_enforced*/ false,
+    ));
+    assert!(windows_sandbox_uses_elevated_backend(
+        WindowsSandboxLevel::RestrictedToken,
+        /*proxy_enforced*/ true,
+    ));
+    assert!(windows_sandbox_uses_elevated_backend(
+        WindowsSandboxLevel::Elevated,
+        /*proxy_enforced*/ false,
+    ));
+}
+
+#[test]
 fn windows_restricted_token_rejects_network_only_restrictions() {
     let policy = SandboxPolicy::ExternalSandbox {
         network_access: codex_protocol::protocol::NetworkAccess::Restricted,
@@ -648,7 +664,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
     ];
 
     assert_eq!(
-        resolve_windows_restricted_token_filesystem_overlay(
+        resolve_windows_restricted_token_filesystem_overrides(
             SandboxType::WindowsRestrictedToken,
             &policy,
             &file_system_policy,
@@ -691,7 +707,7 @@ fn windows_elevated_supports_split_restricted_read_roots() {
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
             temp_dir.path(),
-            WindowsSandboxLevel::Elevated,
+            /*use_windows_elevated_backend*/ true,
         ),
         Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: Some(vec![expected_docs]),
@@ -743,7 +759,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
             temp_dir.path(),
-            WindowsSandboxLevel::Elevated,
+            /*use_windows_elevated_backend*/ true,
         ),
         Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: None,

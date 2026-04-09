@@ -763,8 +763,17 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     });
 
     for path in &payload.deny_write_paths {
-        if !path.exists() || !seen_deny_paths.insert(path.clone()) {
+        if !seen_deny_paths.insert(path.clone()) {
             continue;
+        }
+
+        // Deny ACEs attach to filesystem objects; if the read-only carveout does not
+        // exist during setup, the sandbox could otherwise create it later under a
+        // writable parent and bypass the carveout. Materialize missing carveouts as
+        // directories so the deny-write ACL is present before the command starts.
+        if !path.exists() {
+            std::fs::create_dir_all(path)
+                .with_context(|| format!("failed to create deny-write path {}", path.display()))?;
         }
 
         let canonical_path = canonicalize_path(path);
