@@ -5467,9 +5467,7 @@ impl CodexMessageProcessor {
     ) {
         // This connection was the last subscriber. Only now do we unload the thread.
         info!("thread {thread_id} has no subscribers; shutting down");
-        if !self.pending_thread_unloads.lock().await.insert(thread_id) {
-            return;
-        }
+        let should_start_unload_task = self.pending_thread_unloads.lock().await.insert(thread_id);
 
         // Any pending app-server -> client requests for this thread can no longer be
         // answered; cancel their callbacks before shutdown/unload.
@@ -5479,6 +5477,10 @@ impl CodexMessageProcessor {
         self.thread_state_manager
             .remove_thread_state(thread_id)
             .await;
+
+        if !should_start_unload_task {
+            return;
+        }
 
         let outgoing = self.outgoing.clone();
         let pending_thread_unloads = self.pending_thread_unloads.clone();
