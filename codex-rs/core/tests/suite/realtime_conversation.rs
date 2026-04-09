@@ -1241,16 +1241,11 @@ async fn conversation_uses_configured_realtime_voice() -> Result<()> {
 async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![vec![]]).await;
+    let api_server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config.realtime.version = RealtimeWsVersion::V2;
     });
-    let test = builder.build_with_websocket_server(&server).await?;
-    assert!(
-        server
-            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
-            .await
-    );
+    let test = builder.build(&api_server).await?;
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -1269,9 +1264,6 @@ async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
     })
     .await;
     assert!(error.contains("realtime voice `cove` is not supported for v2"));
-
-    assert_eq!(server.connections().len(), 1);
-    server.shutdown().await;
     Ok(())
 }
 
