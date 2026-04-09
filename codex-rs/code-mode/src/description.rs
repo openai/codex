@@ -194,19 +194,17 @@ pub fn build_exec_tool_description(
     if !enabled_tools.is_empty() {
         let mut current_namespace: Option<&str> = None;
         let mut nested_tool_sections = Vec::with_capacity(enabled_tools.len());
-        let include_shared_mcp_types = enabled_tools
-            .iter()
-            .any(|tool| tool.origin == ToolOrigin::Mcp);
-
-        if include_shared_mcp_types {
-            sections.push(format!(
-                "Shared MCP Types:\n```ts\n{}\n```",
-                MCP_TYPESCRIPT_PREAMBLE
-            ));
-        }
+        let mut shared_mcp_types_rendered = false;
 
         for tool in enabled_tools {
             let name = tool.name.as_str();
+            if tool.origin == ToolOrigin::Mcp && !shared_mcp_types_rendered {
+                nested_tool_sections.push(format!(
+                    "Shared MCP Types:\n```ts\n{}\n```",
+                    MCP_TYPESCRIPT_PREAMBLE
+                ));
+                shared_mcp_types_rendered = true;
+            }
             let nested_description = render_code_mode_sample_for_definition(tool);
             let next_namespace = namespace_descriptions
                 .get(name)
