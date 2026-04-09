@@ -1992,7 +1992,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
+async fn inbound_handoff_request_collects_late_transcript_before_routing() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
@@ -2017,17 +2017,21 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
         }),
         json!({
             "type": "conversation.input_transcript.delta",
-            "delta": "delegated query"
-        }),
-        json!({
-            "type": "conversation.output_transcript.delta",
-            "delta": "assist confirm"
+            "delta": "delegated "
         }),
         json!({
             "type": "conversation.handoff.requested",
             "handoff_id": "handoff_inbound_multi",
             "item_id": "item_inbound_multi",
             "input_transcript": "ignored"
+        }),
+        json!({
+            "type": "conversation.input_transcript.delta",
+            "delta": "query"
+        }),
+        json!({
+            "type": "conversation.output_transcript.delta",
+            "delta": "assist confirm"
         }),
     ]]])
     .await;

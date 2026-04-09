@@ -402,6 +402,10 @@ impl RealtimeWebsocketEvents {
         }
     }
 
+    pub async fn take_active_transcript(&self) -> Vec<RealtimeTranscriptEntry> {
+        std::mem::take(&mut self.active_transcript.lock().await.entries)
+    }
+
     async fn update_active_transcript(&self, event: &mut RealtimeEvent) {
         let mut active_transcript = self.active_transcript.lock().await;
         match event {
