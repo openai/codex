@@ -31,6 +31,7 @@ use super::list::Cursor;
 use super::list::ThreadItem;
 use super::list::ThreadListConfig;
 use super::list::ThreadListLayout;
+use super::list::ThreadSortDirection;
 use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
 use super::list::get_threads;
@@ -167,6 +168,7 @@ impl RolloutRecorder {
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
+        sort_direction: ThreadSortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -177,6 +179,7 @@ impl RolloutRecorder {
             page_size,
             cursor,
             sort_key,
+            sort_direction,
             allowed_sources,
             model_providers,
             default_provider,
@@ -193,6 +196,7 @@ impl RolloutRecorder {
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
+        sort_direction: ThreadSortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -203,6 +207,7 @@ impl RolloutRecorder {
             page_size,
             cursor,
             sort_key,
+            sort_direction,
             allowed_sources,
             model_providers,
             default_provider,
@@ -218,6 +223,7 @@ impl RolloutRecorder {
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
+        sort_direction: ThreadSortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -225,42 +231,48 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
+        let state_db_ctx = state_db::get_state_db(config).await;
+
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing
         // SQLite rollout paths before the final DB-backed page is returned.
         let fs_page_size = page_size.saturating_mul(2).max(page_size);
-        let fs_page = if archived {
-            let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
-            get_threads_in_root(
-                root,
-                fs_page_size,
-                cursor,
-                sort_key,
-                ThreadListConfig {
+        let fs_page = match sort_direction {
+            ThreadSortDirection::Asc => {
+                list_threads_from_files_asc(
+                    codex_home,
+                    page_size,
+                    cursor,
+                    sort_key,
                     allowed_sources,
                     model_providers,
                     default_provider,
-                    layout: ThreadListLayout::Flat,
-                },
-            )
-            .await?
-        } else {
-            get_threads(
-                codex_home,
-                fs_page_size,
-                cursor,
-                sort_key,
-                allowed_sources,
-                model_providers,
-                default_provider,
-            )
-            .await?
+                    archived,
+                    search_term,
+                )
+                .await?
+            }
+            ThreadSortDirection::Desc => {
+                list_threads_from_files_desc(
+                    codex_home,
+                    fs_page_size,
+                    cursor,
+                    sort_key,
+                    allowed_sources,
+                    model_providers,
+                    default_provider,
+                    archived,
+                )
+                .await?
+            }
         };
 
-        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
-            return Ok(truncate_fs_page(fs_page, page_size, sort_key));
+            return Ok(match sort_direction {
+                ThreadSortDirection::Asc => fs_page,
+                ThreadSortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
+            });
         }
 
         // Warm the DB by repairing every filesystem hit before querying SQLite.
@@ -280,6 +292,7 @@ impl RolloutRecorder {
             page_size,
             cursor,
             sort_key,
+            sort_direction,
             allowed_sources,
             model_providers,
             archived,
@@ -292,7 +305,10 @@ impl RolloutRecorder {
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
         tracing::warn!("state db discrepancy during list_threads_with_db_fallback: falling_back");
-        Ok(truncate_fs_page(fs_page, page_size, sort_key))
+        Ok(match sort_direction {
+            ThreadSortDirection::Asc => fs_page,
+            ThreadSortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
+        })
     }
 
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
@@ -318,6 +334,7 @@ impl RolloutRecorder {
                     page_size,
                     db_cursor.as_ref(),
                     sort_key,
+                    ThreadSortDirection::Desc,
                     allowed_sources,
                     model_providers,
                     /*archived*/ false,
@@ -646,6 +663,138 @@ fn truncate_fs_page(
         parse_cursor(cursor_token.as_str())
     });
     page
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn list_threads_from_files_desc(
+    codex_home: &Path,
+    page_size: usize,
+    cursor: Option<&Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
+    default_provider: &str,
+    archived: bool,
+) -> std::io::Result<ThreadsPage> {
+    if archived {
+        let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+        get_threads_in_root(
+            root,
+            page_size,
+            cursor,
+            sort_key,
+            ThreadListConfig {
+                allowed_sources,
+                model_providers,
+                default_provider,
+                layout: ThreadListLayout::Flat,
+            },
+        )
+        .await
+    } else {
+        get_threads(
+            codex_home,
+            page_size,
+            cursor,
+            sort_key,
+            allowed_sources,
+            model_providers,
+            default_provider,
+        )
+        .await
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn list_threads_from_files_asc(
+    codex_home: &Path,
+    page_size: usize,
+    cursor: Option<&Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
+    default_provider: &str,
+    archived: bool,
+    search_term: Option<&str>,
+) -> std::io::Result<ThreadsPage> {
+    let mut all_items = Vec::new();
+    let mut scanned_files = 0usize;
+    let mut reached_scan_cap = false;
+    let mut page_cursor = None;
+    loop {
+        let page = list_threads_from_files_desc(
+            codex_home,
+            /*page_size*/ 256,
+            page_cursor.as_ref(),
+            sort_key,
+            allowed_sources,
+            model_providers,
+            default_provider,
+            archived,
+        )
+        .await?;
+        scanned_files = scanned_files.saturating_add(page.num_scanned_files);
+        reached_scan_cap |= page.reached_scan_cap;
+        all_items.extend(page.items);
+        page_cursor = page.next_cursor;
+        if page_cursor.is_none() || reached_scan_cap {
+            break;
+        }
+    }
+
+    if let Some(search_term) = search_term {
+        all_items.retain(|item| {
+            item.first_user_message
+                .as_deref()
+                .is_some_and(|preview| preview.contains(search_term))
+        });
+    }
+
+    all_items.sort_by_key(|item| thread_item_sort_key(item, sort_key));
+    if let Some(cursor) = cursor {
+        let anchor = cursor.parts();
+        all_items
+            .retain(|item| thread_item_sort_key(item, sort_key).is_some_and(|key| key > anchor));
+    }
+
+    let more_matches_available = all_items.len() > page_size;
+    all_items.truncate(page_size);
+    let next_cursor = if more_matches_available {
+        all_items
+            .last()
+            .and_then(|item| cursor_from_thread_item(item, sort_key))
+    } else {
+        None
+    };
+
+    Ok(ThreadsPage {
+        items: all_items,
+        next_cursor,
+        num_scanned_files: scanned_files,
+        reached_scan_cap,
+    })
+}
+
+fn thread_item_sort_key(
+    item: &ThreadItem,
+    sort_key: ThreadSortKey,
+) -> Option<(OffsetDateTime, uuid::Uuid)> {
+    let file_name = item.path.file_name()?.to_str()?;
+    let (created_at, id) = parse_timestamp_uuid_from_filename(file_name)?;
+    let timestamp = match sort_key {
+        ThreadSortKey::CreatedAt => created_at,
+        ThreadSortKey::UpdatedAt => {
+            let updated_at = item.updated_at.as_deref()?;
+            OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
+        }
+    };
+    Some((timestamp, id))
+}
+
+fn cursor_from_thread_item(item: &ThreadItem, sort_key: ThreadSortKey) -> Option<Cursor> {
+    let (timestamp, id) = thread_item_sort_key(item, sort_key)?;
+    let cursor_token = format!("{}|{id}", timestamp.format(&Rfc3339).ok()?);
+    parse_cursor(cursor_token.as_str())
 }
 
 struct LogFileInfo {

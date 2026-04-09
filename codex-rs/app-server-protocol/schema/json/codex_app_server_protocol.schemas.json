@@ -13430,6 +13430,17 @@
               "null"
             ]
           },
+          "sortDirection": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadSortDirection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sort direction; defaults to descending (newest first)."
+          },
           "sortKey": {
             "anyOf": [
               {
@@ -14108,6 +14119,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadShellCommandResponse",
         "type": "object"
+      },
+      "ThreadSortDirection": {
+        "enum": [
+          "asc",
+          "desc"
+        ],
+        "type": "string"
       },
       "ThreadSortKey": {
         "enum": [

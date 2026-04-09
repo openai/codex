@@ -334,6 +334,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
             cursor: None,
             limit: Some(50),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,

@@ -1,6 +1,7 @@
 use crate::config::RolloutConfig;
 use crate::config::RolloutConfigView;
 use crate::list::Cursor;
+use crate::list::ThreadSortDirection;
 use crate::list::ThreadSortKey;
 use crate::metadata;
 use chrono::DateTime;
@@ -202,6 +203,7 @@ pub async fn list_threads_db(
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
+    sort_direction: ThreadSortDirection,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     archived: bool,
@@ -233,6 +235,10 @@ pub async fn list_threads_db(
             match sort_key {
                 ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
                 ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+            },
+            match sort_direction {
+                ThreadSortDirection::Asc => codex_state::SortDirection::Asc,
+                ThreadSortDirection::Desc => codex_state::SortDirection::Desc,
             },
             allowed_sources.as_slice(),
             model_providers.as_deref(),

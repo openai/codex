@@ -84,6 +84,7 @@ async fn list_threads_with_sort(
             cursor,
             limit,
             sort_key,
+            sort_direction: None,
             model_providers: providers,
             source_kinds,
             archived,
@@ -357,6 +358,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     let ThreadListResponse {
         data: data1,
         next_cursor: cursor1,
+        ..
     } = list_threads(
         &mut mcp,
         /*cursor*/ None,
@@ -384,6 +386,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     let ThreadListResponse {
         data: data2,
         next_cursor: cursor2,
+        ..
     } = list_threads(
         &mut mcp,
         Some(cursor1),
@@ -498,6 +501,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
             cursor: None,
             limit: Some(10),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
@@ -579,6 +583,7 @@ sqlite = true
             cursor: None,
             limit: Some(10),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
@@ -1449,6 +1454,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             cursor: Some("not-a-cursor".to_string()),
             limit: Some(2),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,

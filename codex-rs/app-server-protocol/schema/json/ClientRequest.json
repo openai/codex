@@ -2734,6 +2734,17 @@
             "null"
           ]
         },
+        "sortDirection": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSortDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sort direction; defaults to descending (newest first)."
+        },
         "sortKey": {
           "anyOf": [
             {
@@ -3079,6 +3090,13 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "ThreadSortDirection": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
     },
     "ThreadSortKey": {
       "enum": [

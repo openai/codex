@@ -159,6 +159,7 @@ pub use rollout::RolloutRecorderParams;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
 pub use rollout::ThreadItem;
+pub use rollout::ThreadSortDirection;
 pub use rollout::ThreadSortKey;
 pub use rollout::ThreadsPage;
 pub use rollout::append_thread_name;

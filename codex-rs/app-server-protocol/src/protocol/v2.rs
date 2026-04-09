@@ -3068,6 +3068,9 @@ pub struct ThreadListParams {
     /// Optional sort key; defaults to created_at.
     #[ts(optional = nullable)]
     pub sort_key: Option<ThreadSortKey>,
+    /// Optional sort direction; defaults to descending (newest first).
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<ThreadSortDirection>,
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     #[ts(optional = nullable)]
@@ -3113,6 +3116,14 @@ pub enum ThreadSourceKind {
 pub enum ThreadSortKey {
     CreatedAt,
     UpdatedAt,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum ThreadSortDirection {
+    Asc,
+    Desc,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
