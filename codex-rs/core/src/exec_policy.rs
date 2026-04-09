@@ -25,6 +25,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
 use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_shell_command::powershell::parse_powershell_command_sequence;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
@@ -631,6 +632,12 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
 }
 
 fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
+    if let Some(commands) = parse_powershell_command_sequence(command)
+        && !commands.is_empty()
+    {
+        return (commands, false);
+    }
+
     if let Some(commands) = parse_shell_lc_plain_commands(command)
         && !commands.is_empty()
     {
