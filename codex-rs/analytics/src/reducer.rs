@@ -20,6 +20,8 @@ use crate::events::codex_turn_steer_event_params;
 use crate::events::plugin_state_event_type;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
+use crate::events::turn_parent_thread_id;
+use crate::events::turn_subagent_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
@@ -740,15 +742,14 @@ fn codex_turn_event_params(
     CodexTurnEventParams {
         thread_id,
         turn_id,
-        product_client_id: app_server_client.product_client_id.clone(),
         app_server_client,
         runtime,
         submission_type,
         ephemeral,
         thread_source: thread_source_name(&session_source).map(str::to_string),
         initialization_mode,
-        subagent_source: None,
-        parent_thread_id: None,
+        subagent_source: turn_subagent_source_name(&session_source),
+        parent_thread_id: turn_parent_thread_id(&session_source),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),

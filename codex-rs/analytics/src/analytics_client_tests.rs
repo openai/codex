@@ -254,15 +254,6 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
     }
 }
 
-fn sample_runtime_metadata() -> CodexRuntimeMetadata {
-    CodexRuntimeMetadata {
-        codex_rs_version: "0.1.0".to_string(),
-        runtime_os: "macos".to_string(),
-        runtime_os_version: "15.3.1".to_string(),
-        runtime_arch: "aarch64".to_string(),
-    }
-}
-
 fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
     CodexAppServerClientMetadata {
         product_client_id: "codex-tui".to_string(),
@@ -270,6 +261,15 @@ fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
         client_version: Some("1.0.0".to_string()),
         rpc_transport: AppServerRpcTransport::Stdio,
         experimental_api_enabled: None,
+    }
+}
+
+fn sample_runtime_metadata() -> CodexRuntimeMetadata {
+    CodexRuntimeMetadata {
+        codex_rs_version: "0.1.0".to_string(),
+        runtime_os: "macos".to_string(),
+        runtime_os_version: "15.3.1".to_string(),
+        runtime_arch: "aarch64".to_string(),
     }
 }
 
@@ -1160,7 +1160,6 @@ fn turn_event_serializes_expected_shape() {
         event_params: crate::events::CodexTurnEventParams {
             thread_id: "thread-2".to_string(),
             turn_id: "turn-2".to_string(),
-            product_client_id: "codex-tui".to_string(),
             app_server_client: sample_app_server_client_metadata(),
             runtime: sample_runtime_metadata(),
             submission_type: None,
@@ -1211,7 +1210,6 @@ fn turn_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
-                "product_client_id": "codex-tui",
                 "submission_type": null,
                 "app_server_client": {
                     "product_client_id": "codex-tui",
@@ -1648,10 +1646,7 @@ async fn turn_lifecycle_emits_turn_event() {
             "runtime_arch": "aarch64",
         })
     );
-    assert_eq!(
-        payload["event_params"]["product_client_id"],
-        json!("codex-tui")
-    );
+    assert!(payload["event_params"].get("product_client_id").is_none());
     assert_eq!(payload["event_params"]["ephemeral"], json!(false));
     assert_eq!(payload["event_params"]["thread_source"], json!("user"));
     assert_eq!(payload["event_params"]["initialization_mode"], json!("new"));
