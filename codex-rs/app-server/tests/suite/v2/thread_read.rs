@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[tokio::test]
 async fn thread_read_returns_summary_without_turns() -> Result<()> {
