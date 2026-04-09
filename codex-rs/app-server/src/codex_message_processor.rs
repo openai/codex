@@ -1745,14 +1745,8 @@ impl CodexMessageProcessor {
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
-        tracing::debug!(?request_id, "handling account/rateLimits/read request");
         match self.fetch_account_rate_limits().await {
             Ok((rate_limits, rate_limits_by_limit_id)) => {
-                tracing::debug!(
-                    ?request_id,
-                    snapshot_count = rate_limits_by_limit_id.len(),
-                    "account/rateLimits/read request succeeded"
-                );
                 let response = GetAccountRateLimitsResponse {
                     rate_limits: rate_limits.into(),
                     rate_limits_by_limit_id: Some(
@@ -1800,11 +1794,6 @@ impl CodexMessageProcessor {
             });
         }
 
-        tracing::debug!(
-            base_url = %self.config.chatgpt_base_url,
-            has_account_id = auth.get_account_id().is_some(),
-            "fetching account rate limits from backend"
-        );
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -1812,7 +1801,6 @@ impl CodexMessageProcessor {
                 data: None,
             })?;
 
-        tracing::debug!("awaiting backend usage response for account rate limits");
         let snapshots = client
             .get_rate_limits_many()
             .await
@@ -1821,25 +1809,6 @@ impl CodexMessageProcessor {
                 message: format!("failed to fetch codex rate limits: {err}"),
                 data: None,
             })?;
-        tracing::debug!(
-            snapshot_count = snapshots.len(),
-            "backend rate-limit fetch completed"
-        );
-        for snapshot in &snapshots {
-            tracing::debug!(
-                limit_id = ?snapshot.limit_id,
-                limit_name = ?snapshot.limit_name,
-                has_primary = snapshot.primary.is_some(),
-                has_secondary = snapshot.secondary.is_some(),
-                has_credits = snapshot.credits.is_some(),
-                spend_control_reached = snapshot
-                    .spend_control
-                    .as_ref()
-                    .map(|spend_control| spend_control.reached),
-                plan_type = ?snapshot.plan_type,
-                "backend rate-limit snapshot shape"
-            );
-        }
         if snapshots.is_empty() {
             return Err(JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,

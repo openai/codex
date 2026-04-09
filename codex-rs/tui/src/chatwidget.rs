@@ -7449,28 +7449,13 @@ impl ChatWidget {
             frame_requester.schedule_frame();
         });
         if let Some(request_id) = request_id {
-            tracing::info!(
-                request_id,
-                prior_pending_status_outputs = self.refreshing_status_outputs.len(),
-                cached_rate_limit_snapshot_count = rate_limit_snapshots.len(),
-                "registering refreshable /status output"
-            );
             self.refreshing_status_outputs.push((request_id, handle));
         }
         self.add_to_history(cell);
     }
 
     pub(crate) fn finish_status_rate_limit_refresh(&mut self, request_id: u64) {
-        tracing::info!(
-            request_id,
-            pending_status_outputs = self.refreshing_status_outputs.len(),
-            "finishing /status rate-limit refresh"
-        );
         if self.refreshing_status_outputs.is_empty() {
-            tracing::warn!(
-                request_id,
-                "rate-limit refresh completed with no pending /status outputs to update"
-            );
             return;
         }
 
@@ -7491,13 +7476,6 @@ impl ChatWidget {
             }
         }
         self.refreshing_status_outputs = remaining;
-        tracing::info!(
-            request_id,
-            updated_any,
-            remaining_pending_status_outputs = self.refreshing_status_outputs.len(),
-            refreshed_rate_limit_snapshot_count = rate_limit_snapshots.len(),
-            "finished /status rate-limit refresh bookkeeping"
-        );
         if updated_any {
             self.request_redraw();
         }

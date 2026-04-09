@@ -91,14 +91,6 @@ impl StatusHistoryHandle {
         } else {
             compose_rate_limit_data_many(rate_limits, now)
         };
-        let rate_limit_state_summary = match &rate_limits {
-            StatusRateLimitData::Available(rows) => {
-                format!("available:{} rows", rows.len())
-            }
-            StatusRateLimitData::Stale(rows) => format!("stale:{} rows", rows.len()),
-            StatusRateLimitData::Unavailable => "unavailable".to_string(),
-            StatusRateLimitData::Missing => "missing".to_string(),
-        };
         #[expect(clippy::expect_used)]
         let mut state = self
             .rate_limit_state
@@ -106,10 +98,6 @@ impl StatusHistoryHandle {
             .expect("status history rate-limit state poisoned");
         state.rate_limits = rate_limits;
         state.refreshing_rate_limits = false;
-        tracing::info!(
-            rate_limit_state = %rate_limit_state_summary,
-            "updated /status rate-limit state"
-        );
     }
 }
 
