@@ -2,7 +2,11 @@ use crate::facts::AppInvocation;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnStatus;
+use crate::facts::TurnSubmissionType;
+use codex_app_server_protocol::CodexErrorInfo;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SessionSource;
@@ -17,14 +21,6 @@ pub enum AppServerRpcTransport {
     InProcess,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ThreadInitializationMode {
-    New,
-    Forked,
-    Resumed,
-}
-
 #[derive(Serialize)]
 pub(crate) struct TrackEventsRequest {
     pub(crate) events: Vec<TrackEventRequest>,
@@ -37,6 +33,7 @@ pub(crate) enum TrackEventRequest {
     ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    TurnEvent(Box<CodexTurnEventRequest>),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -120,6 +117,54 @@ pub(crate) struct CodexAppMentionedEventRequest {
 pub(crate) struct CodexAppUsedEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexAppMetadata,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexTurnEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) product_client_id: String,
+    pub(crate) submission_type: Option<TurnSubmissionType>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) ephemeral: bool,
+    pub(crate) thread_source: Option<String>,
+    pub(crate) initialization_mode: ThreadInitializationMode,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) model_provider: String,
+    pub(crate) sandbox_policy: Option<&'static str>,
+    pub(crate) reasoning_effort: Option<String>,
+    pub(crate) reasoning_summary: Option<String>,
+    pub(crate) service_tier: String,
+    pub(crate) approval_policy: String,
+    pub(crate) approvals_reviewer: String,
+    pub(crate) sandbox_network_access: bool,
+    pub(crate) collaboration_mode: Option<&'static str>,
+    pub(crate) personality: Option<String>,
+    pub(crate) num_input_images: usize,
+    pub(crate) is_first_turn: bool,
+    pub(crate) status: Option<TurnStatus>,
+    pub(crate) turn_error: Option<CodexErrorInfo>,
+    pub(crate) steer_count: Option<usize>,
+    pub(crate) total_tool_call_count: Option<usize>,
+    pub(crate) shell_command_count: Option<usize>,
+    pub(crate) file_change_count: Option<usize>,
+    pub(crate) mcp_tool_call_count: Option<usize>,
+    pub(crate) dynamic_tool_call_count: Option<usize>,
+    pub(crate) subagent_tool_call_count: Option<usize>,
+    pub(crate) web_search_count: Option<usize>,
+    pub(crate) image_generation_count: Option<usize>,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) started_at: Option<u64>,
+    pub(crate) completed_at: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexTurnEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexTurnEventParams,
 }
 
 #[derive(Serialize)]
