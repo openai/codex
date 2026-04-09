@@ -22,6 +22,8 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use rmcp::model::ReadResourceRequestParams;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -96,8 +98,11 @@ impl CodexThread {
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
-        self.codex.steer_input(input, expected_turn_id).await
+        self.codex
+            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .await
     }
 
     pub async fn set_app_server_client_info(
@@ -197,6 +202,26 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn read_mcp_resource(
+        &self,
+        server: &str,
+        uri: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let result = self
+            .codex
+            .session
+            .read_resource(
+                server,
+                ReadResourceRequestParams {
+                    meta: None,
+                    uri: uri.to_string(),
+                },
+            )
+            .await?;
+
+        Ok(serde_json::to_value(result)?)
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

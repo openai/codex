@@ -3,11 +3,11 @@ use codex_config::types::OtelExporterKind as Kind;
 use codex_config::types::OtelHttpProtocol as Protocol;
 use codex_features::Feature;
 use codex_login::default_client::originator;
+use codex_otel::OtelExporter;
+use codex_otel::OtelHttpProtocol;
 use codex_otel::OtelProvider;
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSettings;
-use codex_otel::config::OtelTlsConfig as OtelTlsSettings;
+use codex_otel::OtelSettings;
+use codex_otel::OtelTlsConfig as OtelTlsSettings;
 use std::error::Error;
 
 /// Build an OpenTelemetry provider from the app Config.

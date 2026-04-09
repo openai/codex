@@ -5,4 +5,4 @@
 /**
  * [UNSTABLE] Risk level assigned by guardian approval review.
  */
-export type GuardianRiskLevel = "low" | "medium" | "high";
+export type GuardianRiskLevel = "low" | "medium" | "high" | "critical";

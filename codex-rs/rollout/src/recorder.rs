@@ -94,7 +94,7 @@ pub enum RolloutRecorderParams {
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
     Persist {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
@@ -225,6 +225,26 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
+        let state_db_ctx = state_db::get_state_db(config).await;
+
+        if search_term.is_some()
+            && let Some(db_page) = state_db::list_threads_db(
+                state_db_ctx.as_deref(),
+                codex_home,
+                page_size,
+                cursor,
+                sort_key,
+                allowed_sources,
+                model_providers,
+                archived,
+                search_term,
+            )
+            .await
+            && (!db_page.items.is_empty() || cursor.is_some())
+        {
+            return Ok(db_page.into());
+        }
+
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing
         // SQLite rollout paths before the final DB-backed page is returned.
         let fs_page_size = page_size.saturating_mul(2).max(page_size);
@@ -256,7 +276,6 @@ impl RolloutRecorder {
             .await?
         };
 
-        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
@@ -514,7 +533,7 @@ impl RolloutRecorder {
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout persist: {e}")))?;
         rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))
+            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))?
     }
 
     /// Flush all queued writes and wait until they are committed by the writer task.
@@ -810,11 +829,13 @@ async fn rollout_writer(
                     .await;
 
                     if let Err(err) = result {
-                        let _ = ack.send(());
-                        return Err(err);
+                        let kind = err.kind();
+                        let message = err.to_string();
+                        let _ = ack.send(Err(IoError::new(kind, message.clone())));
+                        return Err(IoError::new(kind, message));
                     }
                 }
-                let _ = ack.send(());
+                let _ = ack.send(Ok(()));
             }
             RolloutCmd::Flush { ack } => {
                 // Deferred fresh threads may not have an initialized file yet.
@@ -947,6 +968,23 @@ async fn sync_thread_state_after_write(
         Some(updated_at),
     )
     .await;
+}
+
+/// Append one already-filtered rollout item to an existing rollout JSONL file.
+///
+/// This is for metadata updates to unloaded threads. Live sessions should use
+/// `RolloutRecorder::record_items` so rollout and SQLite updates remain ordered
+/// with the rest of the session stream.
+pub async fn append_rollout_item_to_path(
+    rollout_path: &Path,
+    item: &RolloutItem,
+) -> std::io::Result<()> {
+    let file = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(rollout_path)
+        .await?;
+    let mut writer = JsonlWriter { file };
+    writer.write_rollout_item(item).await
 }
 
 struct JsonlWriter {

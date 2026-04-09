@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use pretty_assertions::assert_eq;
@@ -73,8 +74,48 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
     let request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: "thr_123".to_string(),
-            prompt: "hello".to_string(),
+            prompt: Some(Some("hello".to_string())),
             session_id: None,
+            transport: None,
+            voice: None,
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_experimental_capability_error(error, "thread/realtime/start");
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let init = mcp
+        .initialize_with_capabilities(
+            default_client_info(),
+            Some(InitializeCapabilities {
+                experimental_api: false,
+                opt_out_notification_methods: None,
+            }),
+        )
+        .await?;
+    let JSONRPCMessage::Response(_) = init else {
+        anyhow::bail!("expected initialize response, got {init:?}");
+    };
+
+    let request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            thread_id: "thr_123".to_string(),
+            prompt: Some(Some("hello".to_string())),
+            session_id: None,
+            transport: Some(ThreadRealtimeStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            voice: None,
         })
         .await?;
     let error = timeout(

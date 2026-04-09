@@ -1,7 +1,7 @@
 use crate::config::Config;
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::profile::ConfigProfile;
+use codex_config::config_toml::ConfigToml;
+use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::Features;
@@ -89,7 +89,7 @@ pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &Confi
 }
 
 fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool {
-    let Some(entries) = features.map(|features| &features.entries) else {
+    let Some(entries) = features.map(FeaturesToml::entries) else {
         return false;
     };
     entries.contains_key(Feature::WindowsSandboxElevated.key())
@@ -100,8 +100,8 @@ fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool 
 pub fn legacy_windows_sandbox_mode(
     features: Option<&FeaturesToml>,
 ) -> Option<WindowsSandboxModeToml> {
-    let entries = features.map(|features| &features.entries)?;
-    legacy_windows_sandbox_mode_from_entries(entries)
+    let entries = features.map(FeaturesToml::entries)?;
+    legacy_windows_sandbox_mode_from_entries(&entries)
 }
 
 pub fn legacy_windows_sandbox_mode_from_entries(
@@ -363,7 +363,7 @@ fn emit_windows_sandbox_setup_success_metrics(
     originator_tag: &str,
     duration: std::time::Duration,
 ) {
-    let Some(metrics) = codex_otel::metrics::global() else {
+    let Some(metrics) = codex_otel::global() else {
         return;
     };
     let mode_tag = windows_sandbox_setup_mode_tag(mode);
@@ -389,7 +389,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     duration: std::time::Duration,
     _err: &anyhow::Error,
 ) {
-    let Some(metrics) = codex_otel::metrics::global() else {
+    let Some(metrics) = codex_otel::global() else {
         return;
     };
     let mode_tag = windows_sandbox_setup_mode_tag(mode);

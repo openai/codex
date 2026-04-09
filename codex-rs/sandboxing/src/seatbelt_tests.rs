@@ -61,6 +61,19 @@ fn base_policy_allows_node_cpu_sysctls() {
 }
 
 #[test]
+fn base_policy_allows_kmp_registration_shm_read_create_and_unlink() {
+    let expected = r##"(allow ipc-posix-shm-read-data
+  ipc-posix-shm-write-create
+  ipc-posix-shm-write-unlink
+  (ipc-posix-name-regex #"^/__KMP_REGISTERED_LIB_[0-9]+$"))"##;
+
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains(expected),
+        "base policy must allow only KMP registration shm read/create/unlink:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+}
+
+#[test]
 fn create_seatbelt_args_routes_network_through_proxy_ports() {
     let policy = dynamic_network_policy(
         &SandboxPolicy::new_read_only_policy(),

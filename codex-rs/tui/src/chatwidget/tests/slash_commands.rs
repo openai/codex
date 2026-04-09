@@ -1,6 +1,14 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn turn_complete_event(turn_id: &str, last_agent_message: Option<&str>) -> TurnCompleteEvent {
+    serde_json::from_value(serde_json::json!({
+        "turn_id": turn_id,
+        "last_agent_message": last_agent_message,
+    }))
+    .expect("turn complete event should deserialize")
+}
+
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -97,12 +105,14 @@ async fn slash_copy_state_tracks_turn_complete_final_reply() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Final reply **markdown**".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
     assert_eq!(
-        chat.last_copyable_output,
-        Some("Final reply **markdown**".to_string())
+        chat.last_agent_markdown_text(),
+        Some("Final reply **markdown**")
     );
 }
 
@@ -127,14 +137,20 @@ async fn slash_copy_state_tracks_plan_item_completion() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
-    assert_eq!(chat.last_copyable_output, Some(plan_text));
+    assert_eq!(chat.last_agent_markdown_text(), Some(plan_text.as_str()));
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::AgentTurnComplete { ref response }) if response == &plan_text
+    );
 }
 
 #[tokio::test]
-async fn slash_copy_reports_when_no_copyable_output_exists() {
+async fn slash_copy_reports_when_no_agent_response_exists() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Copy);
@@ -144,10 +160,57 @@ async fn slash_copy_reports_when_no_copyable_output_exists() {
     let rendered = lines_to_single_string(&cells[0]);
     assert_chatwidget_snapshot!("slash_copy_no_output_info_message", rendered);
     assert!(
-        rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
+        rendered.contains("No agent response to copy"),
         "expected no-output message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn ctrl_o_copy_reports_when_no_agent_response_exists() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("No agent response to copy"),
+        "expected no-output message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.last_agent_markdown = Some("copy me".to_string());
+
+    chat.copy_last_agent_markdown_with(|markdown| {
+        assert_eq!(markdown, "copy me");
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one success message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copied last message to clipboard"),
+        "expected success message, got {rendered:?}"
+    );
+
+    chat.copy_last_agent_markdown_with(|markdown| {
+        assert_eq!(markdown, "copy me");
+        Err("blocked".into())
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one failure message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copy failed: blocked"),
+        "expected failure message, got {rendered:?}"
     );
 }
 
@@ -160,37 +223,20 @@ async fn slash_copy_state_is_preserved_during_running_task() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Previous completed reply".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
     chat.on_task_started();
 
     assert_eq!(
-        chat.last_copyable_output,
-        Some("Previous completed reply".to_string())
+        chat.last_agent_markdown_text(),
+        Some("Previous completed reply")
     );
 }
 
 #[tokio::test]
-async fn slash_copy_state_clears_on_thread_rollback() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Reply that will be rolled back".to_string()),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
-    });
-
-    assert_eq!(chat.last_copyable_output, None);
-}
-
-#[tokio::test]
-async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_turn_complete() {
+async fn slash_copy_tracks_replayed_legacy_agent_message_when_turn_complete_omits_text() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_codex_event_replay(Event {
@@ -207,20 +253,15 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
-        "expected unavailable message, got {rendered:?}"
+    assert_eq!(
+        chat.last_agent_markdown_text(),
+        Some("Legacy final message")
     );
 }
 
@@ -232,6 +273,7 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-1".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -248,71 +290,42 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        !rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
-        "expected copy state to be available, got {rendered:?}"
-    );
     assert_eq!(
-        chat.last_copyable_output,
-        Some("Legacy item final message".to_string())
+        chat.last_agent_markdown_text(),
+        Some("Legacy item final message")
+    );
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::AgentTurnComplete { ref response }) if response == "Legacy item final message"
     );
 }
 
 #[tokio::test]
-async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Previous reply"))),
     });
-    complete_assistant_message(
-        &mut chat,
-        "msg-1",
-        "Reply that will be rolled back",
-        /*phase*/ None,
-    );
-    let _ = drain_insert_history(&mut rx);
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: None,
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
+    chat.pending_notification = None;
 
     chat.handle_codex_event(Event {
-        id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        id: "turn-2".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event(
+            "turn-2", /*last_agent_message*/ None,
+        )),
     });
-    let _ = drain_insert_history(&mut rx);
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains(
-            "`/copy` is unavailable before the first Codex output or right after a rollback."
-        ),
-        "expected rollback-cleared copy state message, got {rendered:?}"
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::AgentTurnComplete { ref response }) if response.is_empty()
     );
 }
 
@@ -429,6 +442,24 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_resume_with_arg_requests_named_session() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/resume my-saved-thread".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ResumeSessionByIdOrName(id_or_name)) if id_or_name == "my-saved-thread"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -656,6 +687,7 @@ async fn compact_queues_user_messages_snapshot() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-1".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),

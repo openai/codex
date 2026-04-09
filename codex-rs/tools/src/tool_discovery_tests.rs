@@ -1,4 +1,5 @@
 use super::*;
+use crate::JsonSchema;
 use codex_app_server_protocol::AppInfo;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
@@ -25,23 +26,23 @@ fn mcp_tool(name: &str, description: &str) -> Tool {
 }
 
 #[test]
-fn create_tool_search_tool_deduplicates_and_renders_enabled_apps() {
+fn create_tool_search_tool_deduplicates_and_renders_enabled_sources() {
     assert_eq!(
         create_tool_search_tool(
             &[
-                ToolSearchAppInfo {
+                ToolSearchSourceInfo {
                     name: "Google Drive".to_string(),
                     description: Some(
                         "Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work."
                             .to_string(),
                     ),
                 },
-                ToolSearchAppInfo {
+                ToolSearchSourceInfo {
                     name: "Google Drive".to_string(),
                     description: None,
                 },
-                ToolSearchAppInfo {
-                    name: "Slack".to_string(),
+                ToolSearchSourceInfo {
+                    name: "docs".to_string(),
                     description: None,
                 },
             ],
@@ -49,28 +50,20 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_apps() {
         ),
         ToolSpec::ToolSearch {
             execution: "client".to_string(),
-            description: "# Apps (Connectors) tool discovery\n\nSearches over apps/connectors tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to all the tools of the following apps/connectors:\n- Google Drive: Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work.\n- Slack\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required tools and load them for the apps mentioned above. For the apps mentioned above, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates` for tool discovery.".to_string(),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            description: "# MCP tool discovery\n\nSearches over MCP tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following MCP servers/connectors:\n- Google Drive: Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work.\n- docs\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required MCP tools. For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates`.".to_string(),
+            parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "limit".to_string(),
-                        JsonSchema::Number {
-                            description: Some(
+                        JsonSchema::number(Some(
                                 "Maximum number of tools to return (defaults to 8)."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "query".to_string(),
-                        JsonSchema::String {
-                            description: Some("Search query for apps tools.".to_string()),
-                        },
+                        JsonSchema::string(Some("Search query for MCP tools.".to_string()),),
                     ),
-                ]),
-                required: Some(vec!["query".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                ]), Some(vec!["query".to_string()]), Some(false.into())),
         }
     );
 }
@@ -103,53 +96,41 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
             description: "# Tool suggestion discovery\n\nSuggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin, when the user clearly wants a capability that is not currently available in the active `tools` list.\n\nUse this ONLY when:\n- You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means.\n- For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely.\n- For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself. Do not suggest a plugin just because one of its connectors or capabilities seems relevant.\n\nTool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.\n\nDiscoverable tools:\n- GitHub (id: `github`, type: plugin, action: install): skills; MCP servers: github-mcp; app connectors: github-app\n- Slack (id: `slack@openai-curated`, type: connector, action: install): No description provided.\n\nWorkflow:\n\n1. Ensure all possible means have been exhausted to find an existing available tool but none of them matches the request intent.\n2. Match the user's request against the discoverable tools list above. Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard.\n3. If one tool clearly fits, call `tool_suggest` with:\n   - `tool_type`: `connector` or `plugin`\n   - `action_type`: `install` or `enable`\n   - `tool_id`: exact id from the discoverable tools list above\n   - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request\n4. After the suggestion flow completes:\n   - if the user finished the install or enable flow, continue by searching again or using the newly available tool\n   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it.".to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "action_type".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Suggested action for the tool. Use \"install\" or \"enable\"."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "suggest_reason".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Concise one-line user-facing reason why this tool can help with the current request."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "tool_id".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Connector or plugin id to suggest. Must be one of: slack@openai-curated, github."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
                     (
                         "tool_type".to_string(),
-                        JsonSchema::String {
-                            description: Some(
+                        JsonSchema::string(Some(
                                 "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
                                     .to_string(),
-                            ),
-                        },
+                            ),),
                     ),
-                ]),
-                required: Some(vec![
+                ]), Some(vec![
                     "tool_type".to_string(),
                     "action_type".to_string(),
                     "tool_id".to_string(),
                     "suggest_reason".to_string(),
-                ]),
-                additional_properties: Some(false.into()),
-            },
+                ]), Some(false.into())),
             output_schema: None,
         })
     );
@@ -160,9 +141,11 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
     let calendar_create_event = mcp_tool("calendar-create-event", "Create a calendar event.");
     let gmail_read_email = mcp_tool("gmail-read-email", "Read an email.");
     let calendar_list_events = mcp_tool("calendar-list-events", "List calendar events.");
+    let docs_search = mcp_tool("search", "Search docs.");
 
     let tools = collect_tool_search_output_tools([
         ToolSearchResultSource {
+            server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__calendar",
             tool_name: "_create_event",
             tool: &calendar_create_event,
@@ -170,6 +153,7 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
             connector_description: Some("Plan events"),
         },
         ToolSearchResultSource {
+            server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__gmail",
             tool_name: "_read_email",
             tool: &gmail_read_email,
@@ -177,11 +161,20 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
             connector_description: Some("Read mail"),
         },
         ToolSearchResultSource {
+            server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__calendar",
             tool_name: "_list_events",
             tool: &calendar_list_events,
             connector_name: Some("Calendar"),
             connector_description: Some("Plan events"),
+        },
+        ToolSearchResultSource {
+            server_name: "docs",
+            tool_namespace: "mcp__docs__",
+            tool_name: "search",
+            tool: &docs_search,
+            connector_name: None,
+            connector_description: None,
         },
     ])
     .expect("collect tool search output tools");
@@ -198,11 +191,11 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
                         description: "Create a calendar event.".to_string(),
                         strict: false,
                         defer_loading: Some(true),
-                        parameters: JsonSchema::Object {
-                            properties: Default::default(),
-                            required: None,
-                            additional_properties: None,
-                        },
+                        parameters: JsonSchema::object(
+                            Default::default(),
+                            /*required*/ None,
+                            /*additional_properties*/ None
+                        ),
                         output_schema: None,
                     }),
                     ResponsesApiNamespaceTool::Function(ResponsesApiTool {
@@ -210,11 +203,11 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
                         description: "List calendar events.".to_string(),
                         strict: false,
                         defer_loading: Some(true),
-                        parameters: JsonSchema::Object {
-                            properties: Default::default(),
-                            required: None,
-                            additional_properties: None,
-                        },
+                        parameters: JsonSchema::object(
+                            Default::default(),
+                            /*required*/ None,
+                            /*additional_properties*/ None
+                        ),
                         output_schema: None,
                     }),
                 ],
@@ -227,11 +220,27 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
                     description: "Read an email.".to_string(),
                     strict: false,
                     defer_loading: Some(true),
-                    parameters: JsonSchema::Object {
-                        properties: Default::default(),
-                        required: None,
-                        additional_properties: None,
-                    },
+                    parameters: JsonSchema::object(
+                        Default::default(),
+                        /*required*/ None,
+                        /*additional_properties*/ None
+                    ),
+                    output_schema: None,
+                })],
+            }),
+            ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                name: "mcp__docs__".to_string(),
+                description: "Tools from the docs MCP server.".to_string(),
+                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                    name: "search".to_string(),
+                    description: "Search docs.".to_string(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: JsonSchema::object(
+                        Default::default(),
+                        /*required*/ None,
+                        /*additional_properties*/ None
+                    ),
                     output_schema: None,
                 })],
             }),
@@ -244,6 +253,7 @@ fn collect_tool_search_output_tools_falls_back_to_connector_name_description() {
     let gmail_batch_read_email = mcp_tool("gmail-batch-read-email", "Read multiple emails.");
 
     let tools = collect_tool_search_output_tools([ToolSearchResultSource {
+        server_name: "codex_apps",
         tool_namespace: "mcp__codex_apps__gmail",
         tool_name: "_batch_read_email",
         tool: &gmail_batch_read_email,
@@ -262,11 +272,11 @@ fn collect_tool_search_output_tools_falls_back_to_connector_name_description() {
                 description: "Read multiple emails.".to_string(),
                 strict: false,
                 defer_loading: Some(true),
-                parameters: JsonSchema::Object {
-                    properties: Default::default(),
-                    required: None,
-                    additional_properties: None,
-                },
+                parameters: JsonSchema::object(
+                    Default::default(),
+                    /*required*/ None,
+                    /*additional_properties*/ None
+                ),
                 output_schema: None,
             })],
         })],

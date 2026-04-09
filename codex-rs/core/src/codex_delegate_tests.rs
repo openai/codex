@@ -53,6 +53,8 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
             msg: EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("turn-1".to_string()),
                 reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
             }),
         })
         .await
@@ -315,8 +317,8 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
             id: "command-item-1".to_string(),
             turn_id: parent_ctx.sub_id.clone(),
             status: GuardianAssessmentStatus::InProgress,
-            risk_score: None,
             risk_level: None,
+            user_authorization: None,
             rationale: None,
             action: GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,

@@ -38,6 +38,7 @@ pub struct ResponsesApiTool {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum ToolSearchOutputTool {
     #[allow(dead_code)]
     #[serde(rename = "function")]

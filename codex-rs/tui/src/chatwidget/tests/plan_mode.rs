@@ -287,7 +287,8 @@ fn user_input_requested_notification_uses_dedicated_type_name() {
 #[tokio::test]
 async fn open_plan_implementation_prompt_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.config.tui_notifications = Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
+    chat.config.tui_notifications.notifications =
+        Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
 
     chat.open_plan_implementation_prompt();
 
@@ -300,7 +301,8 @@ async fn open_plan_implementation_prompt_sets_pending_notification() {
 #[tokio::test]
 async fn open_plan_reasoning_scope_prompt_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.config.tui_notifications = Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
+    chat.config.tui_notifications.notifications =
+        Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
 
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
@@ -363,7 +365,8 @@ async fn user_input_notification_overrides_pending_agent_turn_complete_notificat
 #[tokio::test]
 async fn handle_request_user_input_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.config.tui_notifications = Notifications::Custom(vec!["user-input-requested".to_string()]);
+    chat.config.tui_notifications.notifications =
+        Notifications::Custom(vec!["user-input-requested".to_string()]);
 
     chat.handle_request_user_input_now(RequestUserInputEvent {
         call_id: "call-1".to_string(),
@@ -566,6 +569,8 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
+        completed_at: None,
+        duration_ms: None,
     })]);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -590,6 +595,8 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
+        completed_at: None,
+        duration_ms: None,
     })]);
     let replay_popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
@@ -602,6 +609,8 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Plan details".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -623,6 +632,8 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Plan details".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
     let duplicate_popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -850,6 +861,9 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
             },
         }),
         /*replay_kind*/ None,
@@ -893,6 +907,9 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 items: Vec::new(),
                 status: AppServerTurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
             },
         }),
         /*replay_kind*/ None,

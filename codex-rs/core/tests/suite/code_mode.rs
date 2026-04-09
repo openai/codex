@@ -1627,6 +1627,34 @@ text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_resume_after_set_timeout() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to wait for a timeout",
+        r#"
+await new Promise((resolve) => setTimeout(resolve, 10));
+text("timer done");
+"#,
+        /*include_apply_patch*/ false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec setTimeout call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "timer done");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_notify_injects_additional_exec_tool_output_into_active_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2099,6 +2127,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "BigInt64Array",
         "BigUint64Array",
         "Boolean",
+        "clearTimeout",
         "DataView",
         "Date",
         "DisposableStack",
@@ -2161,6 +2190,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "notify",
         "parseFloat",
         "parseInt",
+        "setTimeout",
         "store",
         "text",
         "tools",
@@ -2212,7 +2242,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "view_image",
-            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<{ detail: string | null; image_url: string; }>; };\n```",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`.\n  detail: string | null;\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```",
         })
     );
 
@@ -2575,6 +2605,54 @@ text(JSON.stringify(load("nb")));
         loaded,
         serde_json::json!({ "title": "Notebook", "items": [1, true, null] })
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_compare_elapsed_time_around_set_timeout() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "measure elapsed time around setTimeout",
+        r#"
+const start_ms = Date.now();
+await new Promise((resolve) => setTimeout(resolve, 100));
+const end_ms = Date.now();
+text(JSON.stringify({
+  start_ms,
+  end_ms,
+  elapsed_ms: end_ms - start_ms,
+  waited_long_enough: end_ms - start_ms >= 100,
+}));
+"#,
+        /*include_apply_patch*/ false,
+    )
+    .await?;
+
+    let second_request = second_mock.single_request();
+    let (second_output, second_success) =
+        custom_tool_output_body_and_success(&second_request, "call-1");
+    assert_ne!(
+        second_success,
+        Some(false),
+        "exec compare time call failed unexpectedly: {second_output}"
+    );
+    let compared: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&second_request, "call-1")
+            .expect("exec compare time call should emit JSON"),
+    )?;
+    let elapsed_ms = compared
+        .get("elapsed_ms")
+        .and_then(Value::as_i64)
+        .expect("elapsed_ms should be an integer");
+    assert!(
+        elapsed_ms >= 100,
+        "expected elapsed_ms >= 100, got {elapsed_ms}"
+    );
+    assert_eq!(compared.get("waited_long_enough"), Some(&Value::Bool(true)));
 
     Ok(())
 }

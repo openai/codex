@@ -36,6 +36,36 @@ const fn default_enabled() -> bool {
     true
 }
 
+/// Determine where Codex should store CLI auth credentials.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthCredentialsStoreMode {
+    #[default]
+    /// Persist credentials in CODEX_HOME/auth.json.
+    File,
+    /// Persist credentials in the keyring. Fail if unavailable.
+    Keyring,
+    /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
+    Auto,
+    /// Store credentials in memory only for the current process.
+    Ephemeral,
+}
+
+/// Determine where Codex should store and read MCP credentials.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum OAuthCredentialsStoreMode {
+    /// `Keyring` when available; otherwise, `File`.
+    /// Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
+    #[default]
+    Auto,
+    /// CODEX_HOME/.credentials.json
+    /// This file will be readable to Codex and other applications running as the same user.
+    File,
+    /// Keyring when available, otherwise fail.
+    Keyring,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowsSandboxModeToml {
@@ -442,6 +472,44 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NotificationCondition {
+    /// Emit TUI notifications only while the terminal is unfocused.
+    #[default]
+    Unfocused,
+    /// Emit TUI notifications regardless of terminal focus.
+    Always,
+}
+
+impl fmt::Display for NotificationCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NotificationCondition::Unfocused => write!(f, "unfocused"),
+            NotificationCondition::Always => write!(f, "always"),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiNotificationSettings {
+    /// Enable desktop notifications from the TUI.
+    /// Defaults to `true`.
+    #[serde(default, rename = "notifications")]
+    pub notifications: Notifications,
+
+    /// Notification method to use for terminal notifications.
+    /// Defaults to `auto`.
+    #[serde(default, rename = "notification_method")]
+    pub method: NotificationMethod,
+
+    /// Controls whether TUI notifications are delivered only when the terminal is unfocused or
+    /// regardless of focus. Defaults to `unfocused`.
+    #[serde(default, rename = "notification_condition")]
+    pub condition: NotificationCondition,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelAvailabilityNuxConfig {
@@ -454,15 +522,8 @@ pub struct ModelAvailabilityNuxConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct Tui {
-    /// Enable desktop notifications from the TUI when the terminal is unfocused.
-    /// Defaults to `true`.
-    #[serde(default)]
-    pub notifications: Notifications,
-
-    /// Notification method to use for unfocused terminal notifications.
-    /// Defaults to `auto`.
-    #[serde(default)]
-    pub notification_method: NotificationMethod,
+    #[serde(default, flatten)]
+    pub notification_settings: TuiNotificationSettings,
 
     /// Enable animations (welcome screen, shimmer effects, spinners).
     /// Defaults to `true`.
@@ -488,8 +549,7 @@ pub struct Tui {
     /// Ordered list of status line item identifiers.
     ///
     /// When set, the TUI renders the selected items as the status line.
-    /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
-    /// `current-dir`.
+    /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
 

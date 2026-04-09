@@ -95,13 +95,13 @@ use codex_chatgpt::connectors;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
 use codex_core::plugins::PluginsManager;
-use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -293,6 +293,7 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
+use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -316,7 +317,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
-use crate::clipboard_text;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -387,9 +387,7 @@ use unicode_segmentation::UnicodeSegmentation;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const FAST_STATUS_MODEL: &str = "gpt-5.4";
-const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
-    ["model-with-reasoning", "context-remaining", "current-dir"];
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -775,11 +773,22 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
-    // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
-    last_copyable_output: Option<String>,
-    // Latest agent message observed during the active turn. App-server turn completion
-    // notifications do not repeat this payload, so we promote it when the turn completes.
-    pending_turn_copyable_output: Option<String>,
+    /// Holds the platform clipboard lease so copied text remains available while supported.
+    clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    /// Raw markdown of the most recently completed agent response.
+    ///
+    /// This cache is intentionally best-effort: if the user rolls back the
+    /// thread and then copies before a replacement response arrives, `/copy`
+    /// may still return the response from before the rollback. Keeping this as
+    /// a single cache avoids coupling copy state to the backtrack transcript.
+    last_agent_markdown: Option<String>,
+    /// Whether this turn already produced a copyable response.
+    ///
+    /// `TurnComplete.last_agent_message` is a fallback source: use it only when no earlier
+    /// agent/plan/review item recorded copyable markdown for the turn. This gives item-level
+    /// sources precedence and avoids duplicating the same final answer when both event shapes are
+    /// emitted.
+    saw_copy_source_this_turn: bool,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
@@ -1930,8 +1939,19 @@ impl ChatWidget {
         }
     }
 
+    /// Record or update the raw markdown for the current agent turn.
+    fn record_agent_markdown(&mut self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        self.last_agent_markdown = Some(message.to_string());
+        self.saw_copy_source_this_turn = true;
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        self.last_agent_markdown = None;
+        self.saw_copy_source_this_turn = false;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(/*skills*/ None);
@@ -1969,8 +1989,6 @@ impl ChatWidget {
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
-        self.last_copyable_output = None;
-        self.pending_turn_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -2008,6 +2026,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+        self.saw_copy_source_this_turn = false;
         self.submit_op(AppCommand::list_skills(
             Vec::new(),
             /*force_reload*/ true,
@@ -2090,6 +2109,10 @@ impl ChatWidget {
 
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
+            if let Some(name) = event.thread_name.as_deref() {
+                let cell = Self::rename_confirmation_cell(name, self.thread_id);
+                self.add_boxed_history(Box::new(cell));
+            }
             self.thread_name = event.thread_name;
             self.refresh_terminal_title();
             self.request_redraw();
@@ -2158,6 +2181,16 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(Some(&message));
     }
 
+    fn on_context_compacted(&mut self) {
+        self.flush_answer_stream_with_separator();
+        self.handle_stream_finished();
+        self.add_to_history(history_cell::new_info_event(
+            "Context compacted".to_owned(),
+            /*hint*/ None,
+        ));
+        self.request_redraw();
+    }
+
     fn on_agent_message_delta(&mut self, delta: String) {
         self.handle_streaming_delta(delta);
     }
@@ -2198,7 +2231,7 @@ impl ChatWidget {
             text
         };
         if !plan_text.trim().is_empty() {
-            self.last_copyable_output = Some(plan_text.clone());
+            self.record_agent_markdown(&plan_text);
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
@@ -2275,6 +2308,7 @@ impl ChatWidget {
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
+        self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.last_plan_progress = None;
@@ -2282,7 +2316,6 @@ impl ChatWidget {
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
-        self.pending_turn_copyable_output = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
@@ -2302,12 +2335,32 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
-        let copyable_turn_output = last_agent_message
-            .filter(|message| !message.trim().is_empty())
-            .or_else(|| self.pending_turn_copyable_output.take());
-        if let Some(message) = copyable_turn_output.as_ref() {
-            self.last_copyable_output = Some(message.clone());
+        // Use `last_agent_message` from the turn-complete notification as the copy
+        // source only when no earlier item-level event (AgentMessageItem, plan
+        // commit, review output) already recorded markdown for this turn. This
+        // prevents the final summary from overwriting a more specific source.
+        if let Some(message) = last_agent_message
+            .as_ref()
+            .filter(|message| !message.is_empty())
+            && !self.saw_copy_source_this_turn
+        {
+            self.record_agent_markdown(message);
         }
+        // For desktop notifications: prefer the notification payload, fall back to
+        // the item-level copy source if present, otherwise send an empty string.
+        let notification_response = last_agent_message
+            .as_ref()
+            .filter(|message| !message.is_empty())
+            .cloned()
+            .or_else(|| {
+                if self.saw_copy_source_this_turn {
+                    self.last_agent_markdown.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        self.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -2367,7 +2420,7 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
-            response: copyable_turn_output.unwrap_or_default(),
+            response: notification_response,
         });
 
         self.maybe_show_pending_rate_limit_prompt();
@@ -2713,7 +2766,6 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
-        self.pending_turn_copyable_output = None;
         self.pending_status_indicator_restore = false;
         self.request_status_line_branch_refresh();
         self.maybe_show_pending_rate_limit_prompt();
@@ -4041,8 +4093,8 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
         );
-        if self.agent_turn_running && !message.is_empty() {
-            self.pending_turn_copyable_output = Some(message.clone());
+        if matches!(item.phase, Some(MessagePhase::FinalAnswer) | None) && !message.is_empty() {
+            self.record_agent_markdown(&message);
         }
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -4636,7 +4688,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
-            last_copyable_output: None,
+            clipboard_lease: None,
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
@@ -4648,7 +4700,8 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
-            pending_turn_copyable_output: None,
+            last_agent_markdown: None,
+            saw_copy_source_this_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
@@ -4756,6 +4809,19 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            // Ctrl+O - copy last agent response from the main view.
+            KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                self.copy_last_agent_markdown();
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -4990,6 +5056,41 @@ impl ChatWidget {
         false
     }
 
+    /// Copy the last agent response (raw markdown) to the system clipboard.
+    pub(crate) fn copy_last_agent_markdown(&mut self) {
+        self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    /// Inner implementation with an injectable clipboard backend for testing.
+    fn copy_last_agent_markdown_with(
+        &mut self,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match self.last_agent_markdown.clone() {
+            Some(markdown) if !markdown.is_empty() => match copy_fn(&markdown) {
+                Ok(lease) => {
+                    self.clipboard_lease = lease;
+                    self.add_to_history(history_cell::new_info_event(
+                        "Copied last message to clipboard".into(),
+                        /*hint*/ None,
+                    ));
+                }
+                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                    "Copy failed: {error}"
+                ))),
+            },
+            _ => self.add_to_history(history_cell::new_error_event(
+                "No agent response to copy".into(),
+            )),
+        }
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_agent_markdown_text(&self) -> Option<&str> {
+        self.last_agent_markdown.as_deref()
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -5028,15 +5129,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
-                let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        self.add_error_message(format!(
-                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
-                        ));
-                        return;
-                    }
-                };
+                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {
                     let message = format!(
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
@@ -5201,6 +5294,9 @@ impl ChatWidget {
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
             // }
+            SlashCommand::Copy => {
+                self.copy_last_agent_markdown();
+            }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
@@ -5218,34 +5314,6 @@ impl ChatWidget {
                     tx.send(AppEvent::DiffResult(text));
                 });
             }
-            SlashCommand::Copy => {
-                let Some(text) = self.last_copyable_output.as_deref() else {
-                    self.add_info_message(
-                        "`/copy` is unavailable before the first Codex output or right after a rollback."
-                            .to_string(),
-                        /*hint*/ None,
-                    );
-                    return;
-                };
-
-                let copy_result = clipboard_text::copy_text_to_clipboard(text);
-
-                match copy_result {
-                    Ok(()) => {
-                        let hint = self.agent_turn_running.then_some(
-                            "Current turn is still running; copied the latest completed output (not the in-progress response)."
-                                .to_string(),
-                        );
-                        self.add_info_message(
-                            "Copied latest Codex output to clipboard.".to_string(),
-                            hint,
-                        );
-                    }
-                    Err(err) => {
-                        self.add_error_message(format!("Failed to copy to clipboard: {err}"))
-                    }
-                }
-            }
             SlashCommand::Mention => {
                 self.insert_str("@");
             }
@@ -5258,8 +5326,9 @@ impl ChatWidget {
                     self.next_status_refresh_request_id =
                         self.next_status_refresh_request_id.wrapping_add(1);
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
-                    self.app_event_tx
-                        .send(AppEvent::RefreshRateLimits { request_id });
+                    self.app_event_tx.send(AppEvent::RefreshRateLimits {
+                        origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+                    });
                 } else {
                     self.add_status_output(
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
@@ -5406,9 +5475,6 @@ impl ChatWidget {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
-                let cell = Self::rename_confirmation_cell(&name, self.thread_id);
-                self.add_boxed_history(Box::new(cell));
-                self.request_redraw();
                 self.app_event_tx.set_thread_name(name);
                 self.bottom_pane.drain_pending_submission_state();
             }
@@ -5458,6 +5524,17 @@ impl ChatWidget {
                 }));
                 self.bottom_pane.drain_pending_submission_state();
             }
+            SlashCommand::Resume if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::ResumeSessionByIdOrName(prepared_args));
+                self.bottom_pane.drain_pending_submission_state();
+            }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
@@ -5486,7 +5563,6 @@ impl ChatWidget {
         } else {
             "Name thread"
         };
-        let thread_id = self.thread_id;
         let view = CustomPromptView::new(
             title.to_string(),
             "Type a name and press Enter".to_string(),
@@ -5498,8 +5574,6 @@ impl ChatWidget {
                     )));
                     return;
                 };
-                let cell = Self::rename_confirmation_cell(&name, thread_id);
-                tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 tx.set_thread_name(name);
             }),
         );
@@ -5889,6 +5963,9 @@ impl ChatWidget {
                 items,
                 status,
                 error,
+                started_at,
+                completed_at,
+                duration_ms,
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
                 self.last_non_retry_error = None;
@@ -5909,6 +5986,9 @@ impl ChatWidget {
                             items: Vec::new(),
                             status,
                             error,
+                            started_at,
+                            completed_at,
+                            duration_ms,
                         },
                     },
                     Some(replay_kind),
@@ -6503,6 +6583,11 @@ impl ChatWidget {
                     );
                 }
             }
+            ServerNotification::ThreadRealtimeSdp(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_sdp(notification.sdp);
+                }
+            }
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
@@ -6516,23 +6601,18 @@ impl ChatWidget {
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::FsChanged(_)
-            | ServerNotification::ContextCompacted(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
             | ServerNotification::ThreadRealtimeTranscriptUpdated(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
+            ServerNotification::ContextCompacted(_) => self.on_context_compacted(),
         }
     }
 
     pub(crate) fn handle_skills_list_response(&mut self, response: ListSkillsResponseEvent) {
         self.on_list_skills(response);
-    }
-
-    pub(crate) fn handle_thread_rolled_back(&mut self) {
-        self.last_copyable_output = None;
-        self.pending_turn_copyable_output = None;
     }
 
     fn on_mcp_server_elicitation_request(
@@ -6732,7 +6812,6 @@ impl ChatWidget {
                     GuardianAssessmentStatus::Aborted
                 }
             },
-            risk_score: review.risk_score,
             risk_level: review.risk_level.map(|risk_level| match risk_level {
                 codex_app_server_protocol::GuardianRiskLevel::Low => {
                     codex_protocol::protocol::GuardianRiskLevel::Low
@@ -6742,6 +6821,25 @@ impl ChatWidget {
                 }
                 codex_app_server_protocol::GuardianRiskLevel::High => {
                     codex_protocol::protocol::GuardianRiskLevel::High
+                }
+                codex_app_server_protocol::GuardianRiskLevel::Critical => {
+                    codex_protocol::protocol::GuardianRiskLevel::Critical
+                }
+            }),
+            user_authorization: review.user_authorization.map(|user_authorization| {
+                match user_authorization {
+                    codex_app_server_protocol::GuardianUserAuthorization::Unknown => {
+                        codex_protocol::protocol::GuardianUserAuthorization::Unknown
+                    }
+                    codex_app_server_protocol::GuardianUserAuthorization::Low => {
+                        codex_protocol::protocol::GuardianUserAuthorization::Low
+                    }
+                    codex_app_server_protocol::GuardianUserAuthorization::Medium => {
+                        codex_protocol::protocol::GuardianUserAuthorization::Medium
+                    }
+                    codex_app_server_protocol::GuardianUserAuthorization::High => {
+                        codex_protocol::protocol::GuardianUserAuthorization::High
+                    }
                 }
             }),
             rationale: review.rationale,
@@ -6816,18 +6914,34 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { .. })
+            // NOTE: All three AgentMessage arms feed `record_agent_markdown` even
+            // when the message is otherwise not rendered (thread-snapshot replay,
+            // non-review live messages). This ensures the copy source stays
+            // populated across replay, resume, and live paths.
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
-                    && !self.is_review_mode => {}
+                    && !self.is_review_mode =>
+            {
+                if !message.is_empty() {
+                    self.record_agent_markdown(&message);
+                }
+            }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if from_replay || self.is_review_mode =>
             {
+                if !message.is_empty() {
+                    self.record_agent_markdown(&message);
+                }
                 // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
                 // including thread-snapshot replay, and forward
                 // ItemCompleted(TurnItem::AgentMessage(_)) instead.
                 self.on_agent_message(message)
             }
-            EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                if !message.is_empty() {
+                    self.record_agent_markdown(&message);
+                }
+            }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -6965,7 +7079,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => self.on_context_compacted(),
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -6997,11 +7111,6 @@ impl ChatWidget {
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
-                // Conservatively clear `/copy` state on rollback. The app layer trims visible
-                // transcript cells, but we do not maintain rollback-aware raw-markdown history yet,
-                // so keeping the previous cache can return content that was just removed.
-                self.last_copyable_output = None;
-                self.pending_turn_copyable_output = None;
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
                         num_turns: rollback.num_turns,
@@ -7014,12 +7123,18 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::DynamicToolCallResponse(_) => {}
+            | EventMsg::DynamicToolCallResponse(_)
+            | EventMsg::RealtimeConversationListVoicesResponse(_) => {}
             EventMsg::HookStarted(event) => self.on_hook_started(event),
             EventMsg::HookCompleted(event) => self.on_hook_completed(event),
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_started(ev);
+                }
+            }
+            EventMsg::RealtimeConversationSdp(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_sdp(ev.sdp);
                 }
             }
             EventMsg::RealtimeConversationRealtime(ev) => {
@@ -7120,6 +7235,8 @@ impl ChatWidget {
     #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         if let Some(output) = review.review_output {
+            let review_markdown = codex_core::review_format::render_review_output_text(&output);
+            self.record_agent_markdown(&review_markdown);
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
             self.flush_active_cell();
@@ -7198,7 +7315,7 @@ impl ChatWidget {
     }
 
     fn notify(&mut self, notification: Notification) {
-        if !notification.allowed_for(&self.config.tui_notifications) {
+        if !notification.allowed_for(&self.config.tui_notifications.notifications) {
             return;
         }
         if let Some(existing) = self.pending_notification.as_ref()
@@ -7297,6 +7414,8 @@ impl ChatWidget {
             .values()
             .cloned()
             .collect();
+        let config = self.config.clone();
+        let frame_requester = self.frame_requester.clone();
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
             self.status_account_display.as_ref(),
@@ -7311,8 +7430,21 @@ impl ChatWidget {
             self.model_display_name(),
             collaboration_mode,
             reasoning_effort_override,
+            "<none>".to_string(),
             refreshing_rate_limits,
         );
+        let agents_summary_handle = handle.clone();
+        tokio::spawn(async move {
+            let agents_summary = match crate::status::discover_agents_summary(&config).await {
+                Ok(summary) => summary,
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to discover project docs for /status");
+                    "<none>".to_string()
+                }
+            };
+            agents_summary_handle.finish_agents_summary_discovery(agents_summary);
+            frame_requester.schedule_frame();
+        });
         if let Some(request_id) = request_id {
             self.refreshing_status_outputs.push((request_id, handle));
         }
@@ -9476,7 +9608,7 @@ impl ChatWidget {
         model: &str,
         service_tier: Option<ServiceTier>,
     ) -> bool {
-        model == FAST_STATUS_MODEL
+        self.model_supports_fast_mode(model)
             && matches!(service_tier, Some(ServiceTier::Fast))
             && self.has_chatgpt_account
     }
@@ -9589,6 +9721,19 @@ impl ChatWidget {
                     .into_iter()
                     .find(|preset| preset.model == model)
                     .map(|preset| preset.supports_personality)
+            })
+            .unwrap_or(false)
+    }
+
+    fn model_supports_fast_mode(&self, model: &str) -> bool {
+        self.model_catalog
+            .try_list_models()
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.supports_fast_mode())
             })
             .unwrap_or(false)
     }
@@ -10557,6 +10702,7 @@ impl ChatWidget {
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
         self.config.features = config.features.clone();
         self.config.config_layer_stack = config.config_layer_stack.clone();
+        self.config.realtime = config.realtime.clone();
     }
 
     pub(crate) fn open_review_popup(&mut self) {

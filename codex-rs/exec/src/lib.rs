@@ -7,13 +7,14 @@
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-pub mod event_processor_with_jsonl_output;
-pub mod exec_events;
+pub(crate) mod event_processor_with_jsonl_output;
+pub(crate) mod exec_events;
 
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+use codex_app_server_client::EnvironmentManager;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
@@ -59,6 +60,7 @@ use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
+use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
@@ -85,7 +87,42 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+pub use event_processor_with_jsonl_output::CodexStatus;
+pub use event_processor_with_jsonl_output::CollectedThreadEvents;
+pub use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+pub use exec_events::AgentMessageItem;
+pub use exec_events::CollabAgentState;
+pub use exec_events::CollabAgentStatus;
+pub use exec_events::CollabTool;
+pub use exec_events::CollabToolCallItem;
+pub use exec_events::CollabToolCallStatus;
+pub use exec_events::CommandExecutionItem;
+pub use exec_events::CommandExecutionStatus;
+pub use exec_events::ErrorItem;
+pub use exec_events::FileChangeItem;
+pub use exec_events::FileUpdateChange;
+pub use exec_events::ItemCompletedEvent;
+pub use exec_events::ItemStartedEvent;
+pub use exec_events::ItemUpdatedEvent;
+pub use exec_events::McpToolCallItem;
+pub use exec_events::McpToolCallItemError;
+pub use exec_events::McpToolCallItemResult;
+pub use exec_events::McpToolCallStatus;
+pub use exec_events::PatchApplyStatus;
+pub use exec_events::PatchChangeKind;
+pub use exec_events::ReasoningItem;
+pub use exec_events::ThreadErrorEvent;
+pub use exec_events::ThreadEvent;
+pub use exec_events::ThreadItem as ExecThreadItem;
+pub use exec_events::ThreadItemDetails;
+pub use exec_events::ThreadStartedEvent;
+pub use exec_events::TodoItem;
+pub use exec_events::TodoListItem;
+pub use exec_events::TurnCompletedEvent;
+pub use exec_events::TurnFailedEvent;
+pub use exec_events::TurnStartedEvent;
+pub use exec_events::Usage;
+pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::IsTerminal;
@@ -105,7 +142,6 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 use crate::cli::Command as ExecCommand;
-use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
@@ -259,7 +295,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
         &codex_home,
-        &config_cwd,
+        Some(&config_cwd),
         cli_kv_overrides.clone(),
     )
     .await
@@ -437,6 +473,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         loader_overrides: run_loader_overrides,
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env()),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
@@ -514,6 +551,66 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
 
+    let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
+        (Some(ExecCommand::Review(review_cli)), _, _) => {
+            let review_request = build_review_request(review_cli)?;
+            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
+            (InitialOperation::Review { review_request }, summary)
+        }
+        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
+            let prompt_arg = args
+                .prompt
+                .clone()
+                .or_else(|| {
+                    if args.last {
+                        args.session_id.clone()
+                    } else {
+                        None
+                    }
+                })
+                .or(root_prompt);
+            let prompt_text = resolve_prompt(prompt_arg);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .chain(args.images.iter().cloned())
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
+            });
+            let output_schema = load_output_schema(output_schema_path.clone());
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+        (None, root_prompt, imgs) => {
+            let prompt_text = resolve_root_prompt(root_prompt);
+            let mut items: Vec<UserInput> = imgs
+                .into_iter()
+                .map(|path| UserInput::LocalImage { path })
+                .collect();
+            items.push(UserInput::Text {
+                text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
+            });
+            let output_schema = load_output_schema(output_schema_path);
+            (
+                InitialOperation::UserTurn {
+                    items,
+                    output_schema,
+                },
+                prompt_text,
+            )
+        }
+    };
+
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
     if !skip_git_repo_check
@@ -588,66 +685,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
-    let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
-        (Some(ExecCommand::Review(review_cli)), _, _) => {
-            let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary)
-        }
-        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
-            let prompt_arg = args
-                .prompt
-                .clone()
-                .or_else(|| {
-                    if args.last {
-                        args.session_id.clone()
-                    } else {
-                        None
-                    }
-                })
-                .or(root_prompt);
-            let prompt_text = resolve_prompt(prompt_arg);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .chain(args.images.iter().cloned())
-                .map(|path| UserInput::LocalImage { path })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path.clone());
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
-        }
-        (None, root_prompt, imgs) => {
-            let prompt_text = resolve_root_prompt(root_prompt);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .map(|path| UserInput::LocalImage { path })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path);
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
-        }
-    };
-
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
@@ -680,6 +717,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: TurnStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
                         input: items.into_iter().map(Into::into).collect(),
+                        responsesapi_client_metadata: None,
                         cwd: Some(default_cwd),
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
@@ -1220,6 +1258,27 @@ async fn resolve_resume_thread_id(
     if Uuid::parse_str(session_id).is_ok() {
         return Ok(Some(session_id.to_string()));
     }
+    if let Some(state_db) = codex_core::get_state_db(config).await {
+        let cwd = (!args.all).then_some(config.cwd.as_path());
+        let resolved = state_db
+            .find_thread_by_exact_title(
+                session_id,
+                &[],
+                /*model_providers*/ None,
+                /*archived_only*/ false,
+                cwd,
+            )
+            .await?;
+        if let Some(thread) = resolved {
+            return Ok(Some(thread.id.to_string()));
+        }
+        if let Some((_, session_meta)) =
+            find_thread_meta_by_name_str(&config.codex_home, session_id).await?
+            && (args.all || cwds_match(config.cwd.as_path(), &session_meta.meta.cwd))
+        {
+            return Ok(Some(session_meta.meta.id.to_string()));
+        }
+    }
 
     let mut cursor = None;
     loop {
@@ -1235,10 +1294,7 @@ async fn resolve_resume_thread_id(
                     source_kinds: Some(all_thread_source_kinds()),
                     archived: Some(false),
                     cwd: None,
-                    // Thread names are attached separately from rollout titles, so name
-                    // resolution must scan the filtered list client-side instead of relying
-                    // on the backend `search_term` filter.
-                    search_term: None,
+                    search_term: Some(session_id.to_string()),
                 },
             },
             "thread/list",

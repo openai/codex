@@ -1,5 +1,5 @@
-use codex_feedback::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
-use codex_feedback::feedback_diagnostics::FeedbackDiagnostics;
+use codex_feedback::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use codex_feedback::FeedbackDiagnostics;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -556,7 +556,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use codex_feedback::feedback_diagnostics::FeedbackDiagnostic;
+    use codex_feedback::FeedbackDiagnostic;
     use pretty_assertions::assert_eq;
 
     fn render(view: &FeedbackNoteView, width: u16) -> String {

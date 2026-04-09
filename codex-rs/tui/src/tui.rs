@@ -46,6 +46,7 @@ use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
+use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 
 mod event_stream;
@@ -59,6 +60,43 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+
+fn should_emit_notification(condition: NotificationCondition, terminal_focused: bool) -> bool {
+    match condition {
+        NotificationCondition::Unfocused => !terminal_focused,
+        NotificationCondition::Always => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_emit_notification;
+    use codex_config::types::NotificationCondition;
+
+    #[test]
+    fn unfocused_notification_condition_is_suppressed_when_focused() {
+        assert!(!should_emit_notification(
+            NotificationCondition::Unfocused,
+            /*terminal_focused*/ true
+        ));
+    }
+
+    #[test]
+    fn always_notification_condition_emits_when_focused() {
+        assert!(should_emit_notification(
+            NotificationCondition::Always,
+            /*terminal_focused*/ true
+        ));
+    }
+
+    #[test]
+    fn unfocused_notification_condition_emits_when_unfocused() {
+        assert!(should_emit_notification(
+            NotificationCondition::Unfocused,
+            /*terminal_focused*/ false
+        ));
+    }
+}
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
@@ -254,6 +292,7 @@ pub struct Tui {
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
+    notification_condition: NotificationCondition,
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
@@ -270,7 +309,10 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
-        let is_zellij = codex_terminal_detection::terminal_info().is_zellij();
+        let is_zellij = matches!(
+            codex_terminal_detection::terminal_info().multiplexer,
+            Some(codex_terminal_detection::Multiplexer::Zellij {})
+        );
 
         Self {
             frame_requester,
@@ -285,6 +327,7 @@ impl Tui {
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
+            notification_condition: NotificationCondition::default(),
             is_zellij,
             alt_screen_enabled: true,
         }
@@ -295,8 +338,13 @@ impl Tui {
         self.alt_screen_enabled = enabled;
     }
 
-    pub fn set_notification_method(&mut self, method: NotificationMethod) {
+    pub fn set_notification_settings(
+        &mut self,
+        method: NotificationMethod,
+        condition: NotificationCondition,
+    ) {
         self.notification_backend = Some(detect_backend(method));
+        self.notification_condition = condition;
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -364,7 +412,8 @@ impl Tui {
     /// Emit a desktop notification now if the terminal is unfocused.
     /// Returns true if a notification was posted.
     pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
-        if self.terminal_focused.load(Ordering::Relaxed) {
+        let terminal_focused = self.terminal_focused.load(Ordering::Relaxed);
+        if !should_emit_notification(self.notification_condition, terminal_focused) {
             return false;
         }
 

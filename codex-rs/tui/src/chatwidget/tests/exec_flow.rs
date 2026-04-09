@@ -635,6 +635,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-1".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -649,6 +650,8 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Final response.".into()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -667,6 +670,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-1".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -691,6 +695,8 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -756,6 +762,8 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -834,6 +842,8 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -856,11 +866,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 #[tokio::test]
 async fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let image_path = chat
-        .config
-        .cwd
-        .join("example.png")
-        .expect("absolute image path");
+    let image_path = chat.config.cwd.join("example.png");
 
     chat.handle_codex_event(Event {
         id: "sub-image".into(),
@@ -1259,6 +1265,8 @@ async fn interrupt_preserves_unified_exec_processes() {
         msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -1291,6 +1299,7 @@ async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-1".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -1304,6 +1313,8 @@ async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
         msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -1331,6 +1342,8 @@ async fn turn_complete_keeps_unified_exec_processes() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 

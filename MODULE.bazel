@@ -40,9 +40,17 @@ osx.frameworks(names = [
     "ColorSync",
     "CoreFoundation",
     "CoreGraphics",
+    "CoreImage",
+    "CoreMedia",
+    "CoreMIDI",
     "CoreServices",
     "CoreText",
+    "CoreVideo",
+    "DiskArbitration",
     "AudioToolbox",
+    "AVFoundation",
+    "AVFAudio",
+    "AVRouting",
     "CFNetwork",
     "FontServices",
     "AudioUnit",
@@ -50,11 +58,19 @@ osx.frameworks(names = [
     "CoreAudioTypes",
     "Foundation",
     "ImageIO",
+    "IOSurface",
     "IOKit",
     "Kernel",
+    "Metal",
+    "MetalKit",
+    "OpenGL",
     "OSLog",
+    "QuartzCore",
+    "ScreenCaptureKit",
     "Security",
     "SystemConfiguration",
+    "UniformTypeIdentifiers",
+    "VideoToolbox",
 ])
 use_repo(osx, "macos_sdk")
 
@@ -228,10 +244,18 @@ inject_repo(crate, "zstd")
 use_repo(crate, "argument_comment_lint_crates")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
+single_version_override(
+    module_name = "bzip2",
+    patch_strip = 1,
+    patches = [
+        "//patches:bzip2_windows_stack_args.patch",
+    ],
+)
 
 crate.annotation(
     crate = "bzip2-sys",
-    gen_build_script = "on",
+    gen_build_script = "off",
+    deps = ["@bzip2//:bz2"],
 )
 
 inject_repo(crate, "bzip2")
@@ -245,13 +269,24 @@ crate.annotation(
 
 inject_repo(crate, "zlib")
 
-# TODO(zbarsky): Enable annotation after fixing windows arm64 builds.
+bazel_dep(name = "xz", version = "5.4.5.bcr.8")
+single_version_override(
+    module_name = "xz",
+    patch_strip = 1,
+    patches = [
+        "//patches:xz_windows_stack_args.patch",
+    ],
+)
+
 crate.annotation(
     crate = "lzma-sys",
-    gen_build_script = "on",
+    gen_build_script = "off",
+    deps = ["@xz//:lzma"],
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
+
+inject_repo(crate, "xz")
 
 crate.annotation(
     build_script_data = [
@@ -325,6 +360,23 @@ crate.annotation(
 )
 
 inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
+
+crate.annotation(
+    # Provide the hermetic SDK path so the build script doesn't try to invoke an unavailable `xcrun --show-sdk-path`.
+    build_script_data = [
+        "@macos_sdk//sysroot",
+    ],
+    build_script_env = {
+        "WEBRTC_SYS_DARWIN_SDK_PATH": "$(location @macos_sdk//sysroot)",
+        "WEBRTC_SYS_LINK_OUT_DIR": "1",
+    },
+    crate = "webrtc-sys",
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-sys_hermetic_darwin_sysroot.patch",
+    ],
+)
 
 # Fix readme inclusions
 crate.annotation(

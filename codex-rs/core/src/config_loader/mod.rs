@@ -5,12 +5,14 @@ mod macos;
 #[cfg(test)]
 mod tests;
 
-use crate::config::ConfigToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ProjectConfig;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -185,7 +187,7 @@ pub async fn load_config_layers_state(
     // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
     // exists, but is malformed, then this error should be propagated to the
     // user.
-    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
     let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
@@ -543,7 +545,7 @@ struct ProjectTrustContext {
 
 #[derive(Deserialize)]
 struct ProjectTrustConfigToml {
-    projects: Option<std::collections::HashMap<String, crate::config::ProjectConfig>>,
+    projects: Option<std::collections::HashMap<String, ProjectConfig>>,
 }
 
 struct ProjectTrustDecision {
@@ -807,7 +809,7 @@ async fn load_project_layers(
         if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
             continue;
         }
-        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
         match tokio::fs::read_to_string(&config_file).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
@@ -875,11 +877,13 @@ async fn load_project_layers(
 /// exactly one value rather than a list of allowed values.
 ///
 /// If present, re-interpret `managed_config.toml` as a `requirements.toml`
-/// where each specified field is treated as a constraint allowing only that
-/// value.
+/// where each specified field is treated as a constraint. Most fields allow
+/// only the specified value. `approvals_reviewer = "guardian_subagent"` also
+/// allows `user` so people can opt out of the guardian reviewer.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<ApprovalsReviewer>,
     sandbox_mode: Option<SandboxMode>,
 }
 
@@ -889,10 +893,18 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
 
         let LegacyManagedConfigToml {
             approval_policy,
+            approvals_reviewer,
             sandbox_mode,
         } = legacy;
         if let Some(approval_policy) = approval_policy {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
+        }
+        if let Some(approvals_reviewer) = approvals_reviewer {
+            let mut allowed_reviewers = vec![approvals_reviewer];
+            if approvals_reviewer == ApprovalsReviewer::GuardianSubagent {
+                allowed_reviewers.push(ApprovalsReviewer::User);
+            }
+            config_requirements_toml.allowed_approvals_reviewers = Some(allowed_reviewers);
         }
         if let Some(sandbox_mode) = sandbox_mode {
             let required_mode: SandboxModeRequirement = sandbox_mode.into();
@@ -938,7 +950,7 @@ foo = "xyzzy"
         expected_toml_value.insert(
             "model_instructions_file".to_string(),
             TomlValue::String(
-                AbsolutePathBuf::resolve_path_against_base("./some_file.md", base_dir)?
+                AbsolutePathBuf::resolve_path_against_base("./some_file.md", base_dir)
                     .as_path()
                     .to_string_lossy()
                     .to_string(),
@@ -957,6 +969,7 @@ foo = "xyzzy"
     fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
         };
 
@@ -968,6 +981,41 @@ foo = "xyzzy"
                 SandboxModeRequirement::ReadOnly,
                 SandboxModeRequirement::WorkspaceWrite
             ])
+        );
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_allows_user_when_guardian_is_required() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            sandbox_mode: None,
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_approvals_reviewers,
+            Some(vec![
+                ApprovalsReviewer::GuardianSubagent,
+                ApprovalsReviewer::User
+            ])
+        );
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_preserves_user_only_approvals_reviewer() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            sandbox_mode: None,
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_approvals_reviewers,
+            Some(vec![ApprovalsReviewer::User])
         );
     }
 

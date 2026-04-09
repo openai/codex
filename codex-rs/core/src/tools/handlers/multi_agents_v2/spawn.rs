@@ -206,11 +206,15 @@ impl ToolHandler for Handler {
             )
         })?;
 
-        Ok(SpawnAgentResult {
-            agent_id: None,
-            task_name,
-            nickname,
-        })
+        let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
+        if hide_agent_metadata {
+            Ok(SpawnAgentResult::HiddenMetadata { task_name })
+        } else {
+            Ok(SpawnAgentResult::WithNickname {
+                task_name,
+                nickname,
+            })
+        }
     }
 }
 
@@ -266,10 +270,15 @@ impl SpawnAgentArgs {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct SpawnAgentResult {
-    agent_id: Option<String>,
-    task_name: String,
-    nickname: Option<String>,
+#[serde(untagged)]
+pub(crate) enum SpawnAgentResult {
+    WithNickname {
+        task_name: String,
+        nickname: Option<String>,
+    },
+    HiddenMetadata {
+        task_name: String,
+    },
 }
 
 impl ToolOutput for SpawnAgentResult {

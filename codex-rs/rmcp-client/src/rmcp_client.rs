@@ -67,15 +67,15 @@ use tokio::time;
 use tracing::info;
 use tracing::warn;
 
+use crate::elicitation_client_service::ElicitationClientService;
 use crate::load_oauth_tokens;
-use crate::logging_client_handler::LoggingClientHandler;
-use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::create_env_for_mcp_server;
+use codex_config::types::OAuthCredentialsStoreMode;
 
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const JSON_MIME_TYPE: &str = "application/json";
@@ -321,7 +321,7 @@ enum ClientState {
     },
     Ready {
         _process_group_guard: Option<ProcessGroupGuard>,
-        service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
+        service: Arc<RunningService<RoleClient, ElicitationClientService>>,
         oauth: Option<OAuthPersistor>,
     },
 }
@@ -407,7 +407,7 @@ enum TransportRecipe {
 #[derive(Clone)]
 struct InitializeContext {
     timeout: Option<Duration>,
-    handler: LoggingClientHandler,
+    client_service: ElicitationClientService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -539,7 +539,7 @@ impl RmcpClient {
         timeout: Option<Duration>,
         send_elicitation: SendElicitation,
     ) -> Result<InitializeResult> {
-        let client_handler = LoggingClientHandler::new(params.clone(), send_elicitation);
+        let client_service = ElicitationClientService::new(params.clone(), send_elicitation);
         let pending_transport = {
             let mut guard = self.state.lock().await;
             match &mut *guard {
@@ -552,7 +552,7 @@ impl RmcpClient {
         };
 
         let (service, oauth_persistor, process_group_guard) =
-            Self::connect_pending_transport(pending_transport, client_handler.clone(), timeout)
+            Self::connect_pending_transport(pending_transport, client_service.clone(), timeout)
                 .await?;
 
         let initialize_result_rmcp = service
@@ -565,7 +565,7 @@ impl RmcpClient {
             let mut initialize_context = self.initialize_context.lock().await;
             *initialize_context = Some(InitializeContext {
                 timeout,
-                handler: client_handler,
+                client_service,
             });
         }
 
@@ -814,7 +814,7 @@ impl RmcpClient {
         Ok(response)
     }
 
-    async fn service(&self) -> Result<Arc<RunningService<RoleClient, LoggingClientHandler>>> {
+    async fn service(&self) -> Result<Arc<RunningService<RoleClient, ElicitationClientService>>> {
         let guard = self.state.lock().await;
         match &*guard {
             ClientState::Ready { service, .. } => Ok(Arc::clone(service)),
@@ -997,10 +997,10 @@ impl RmcpClient {
 
     async fn connect_pending_transport(
         pending_transport: PendingTransport,
-        client_handler: LoggingClientHandler,
+        client_service: ElicitationClientService,
         timeout: Option<Duration>,
     ) -> Result<(
-        Arc<RunningService<RoleClient, LoggingClientHandler>>,
+        Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
         Option<ProcessGroupGuard>,
     )> {
@@ -1009,12 +1009,12 @@ impl RmcpClient {
                 transport,
                 process_group_guard,
             } => (
-                service::serve_client(client_handler, transport).boxed(),
+                service::serve_client(client_service, transport).boxed(),
                 None,
                 process_group_guard,
             ),
             PendingTransport::StreamableHttp { transport } => (
-                service::serve_client(client_handler, transport).boxed(),
+                service::serve_client(client_service, transport).boxed(),
                 None,
                 None,
             ),
@@ -1022,7 +1022,7 @@ impl RmcpClient {
                 transport,
                 oauth_persistor,
             } => (
-                service::serve_client(client_handler, transport).boxed(),
+                service::serve_client(client_service, transport).boxed(),
                 Some(oauth_persistor),
                 None,
             ),
@@ -1048,7 +1048,7 @@ impl RmcpClient {
         operation: F,
     ) -> Result<T>
     where
-        F: Fn(Arc<RunningService<RoleClient, LoggingClientHandler>>) -> Fut,
+        F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let service = self.service().await?;
@@ -1068,13 +1068,13 @@ impl RmcpClient {
     }
 
     async fn run_service_operation_once<T, F, Fut>(
-        service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
+        service: Arc<RunningService<RoleClient, ElicitationClientService>>,
         label: &str,
         timeout: Option<Duration>,
         operation: &F,
     ) -> std::result::Result<T, ClientOperationError>
     where
-        F: Fn(Arc<RunningService<RoleClient, LoggingClientHandler>>) -> Fut,
+        F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         match timeout {
@@ -1111,7 +1111,7 @@ impl RmcpClient {
 
     async fn reinitialize_after_session_expiry(
         &self,
-        failed_service: &Arc<RunningService<RoleClient, LoggingClientHandler>>,
+        failed_service: &Arc<RunningService<RoleClient, ElicitationClientService>>,
     ) -> Result<()> {
         let _recovery_guard = self.session_recovery_lock.lock().await;
 
@@ -1137,7 +1137,7 @@ impl RmcpClient {
         let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
         let (service, oauth_persistor, process_group_guard) = Self::connect_pending_transport(
             pending_transport,
-            initialize_context.handler,
+            initialize_context.client_service,
             initialize_context.timeout,
         )
         .await?;
