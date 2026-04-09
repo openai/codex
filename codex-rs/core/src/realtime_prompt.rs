@@ -27,8 +27,7 @@ fn current_user_first_name() -> String {
     [whoami::realname(), whoami::username()]
         .into_iter()
         .filter_map(|name| name.split_whitespace().next().map(str::to_string))
-        .filter(|name| !name.is_empty())
-        .next()
+        .find(|name| !name.is_empty())
         .unwrap_or_else(|| DEFAULT_USER_FIRST_NAME.to_string())
 }
 
