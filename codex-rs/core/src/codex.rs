@@ -5606,7 +5606,14 @@ mod handlers {
             state.session_configuration.thread_name = Some(name.clone());
         }
 
-        sess.send_event_raw(Event { id: sub_id, msg }).await;
+        let codex_home = sess.codex_home().await;
+        if let Err(err) =
+            crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
+        {
+            warn!("Failed to update legacy thread name index: {err}");
+        }
+
+        sess.deliver_event_raw(Event { id: sub_id, msg }).await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

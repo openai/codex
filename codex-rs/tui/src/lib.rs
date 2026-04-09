@@ -33,7 +33,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
-use codex_core::find_thread_path_by_name_str;
+use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
@@ -521,24 +521,15 @@ async fn lookup_session_target_by_name_with_app_server(
             if app_server.is_remote() {
                 return Ok(None);
             }
-            return lookup_session_target_by_legacy_name(codex_home, name).await;
+            return Ok(find_thread_meta_by_name_str(codex_home, name).await?.map(
+                |(path, session_meta)| resume_picker::SessionTarget {
+                    path: Some(path),
+                    thread_id: session_meta.meta.id,
+                },
+            ));
         }
         cursor = response.next_cursor;
     }
-}
-
-async fn lookup_session_target_by_legacy_name(
-    codex_home: &Path,
-    name: &str,
-) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
-    let Some(path) = find_thread_path_by_name_str(codex_home, name).await? else {
-        return Ok(None);
-    };
-    let session_meta = read_session_meta_line(&path).await?;
-    Ok(Some(resume_picker::SessionTarget {
-        path: Some(path),
-        thread_id: session_meta.meta.id,
-    }))
 }
 
 async fn lookup_session_target_with_app_server(

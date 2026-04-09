@@ -56,9 +56,9 @@ pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use recorder::append_rollout_item_to_path;
 pub use session_index::append_thread_name;
+pub use session_index::find_thread_meta_by_name_str;
 pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_names_by_ids;
-pub use session_index::find_thread_path_by_name_str;
 pub use state_db::StateDbHandle;
 
 #[cfg(test)]

@@ -199,6 +199,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
+use codex_core::append_thread_name;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -2704,6 +2705,11 @@ impl CodexMessageProcessor {
         let item = RolloutItem::EventMsg(msg);
         if let Err(err) = append_rollout_item_to_path(rollout_path.as_path(), &item).await {
             self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
+                .await;
+            return;
+        }
+        if let Err(err) = append_thread_name(&self.config.codex_home, thread_id, &name).await {
+            self.send_internal_error(request_id, format!("failed to index thread name: {err}"))
                 .await;
             return;
         }
