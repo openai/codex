@@ -4190,7 +4190,6 @@ impl Session {
                     turn_kind: NonSteerableTurnKind::Compact,
                 });
             }
-            None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
