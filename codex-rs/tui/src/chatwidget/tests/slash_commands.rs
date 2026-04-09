@@ -236,26 +236,6 @@ async fn slash_copy_state_is_preserved_during_running_task() {
 }
 
 #[tokio::test]
-async fn slash_copy_state_clears_on_thread_rollback() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Reply that will be rolled back".to_string()),
-            completed_at: None,
-            duration_ms: None,
-        }),
-    });
-    chat.truncate_agent_turn_markdowns_to_turn_count(
-        /*remaining_turn_count*/ 0, /*transcript_fallback*/ None,
-    );
-
-    assert_eq!(chat.last_agent_markdown_text(), None);
-}
-
-#[tokio::test]
 async fn slash_copy_tracks_replayed_legacy_agent_message_when_turn_complete_omits_text() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -324,100 +304,6 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
         chat.pending_notification,
         Some(Notification::AgentTurnComplete { ref response }) if response == "Legacy item final message"
     );
-}
-
-#[tokio::test]
-async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
-    complete_assistant_message(
-        &mut chat,
-        "msg-1",
-        "Reply that will be rolled back",
-        /*phase*/ None,
-    );
-    let _ = drain_insert_history(&mut rx);
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: None,
-            completed_at: None,
-            duration_ms: None,
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-
-    chat.truncate_agent_turn_markdowns_to_turn_count(
-        /*remaining_turn_count*/ 0, /*transcript_fallback*/ None,
-    );
-
-    assert_eq!(chat.last_agent_markdown_text(), None);
-}
-
-#[tokio::test]
-async fn slash_copy_preserves_surviving_response_after_local_prompt_rollback() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_codex_event_replay(Event {
-        id: "old-user".into(),
-        msg: EventMsg::UserMessage(UserMessageEvent {
-            message: "Old prompt".into(),
-            images: None,
-            local_images: Vec::new(),
-            text_elements: Vec::new(),
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    chat.handle_codex_event_replay(Event {
-        id: "old-agent".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Old reply".into(),
-            phase: None,
-            memory_citation: None,
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    assert_eq!(chat.last_agent_markdown_text(), Some("Old reply"));
-
-    chat.thread_id = Some(ThreadId::new());
-    chat.submit_user_message(UserMessage::from("New prompt"));
-    let _ = next_submit_op(&mut op_rx);
-    let _ = drain_insert_history(&mut rx);
-
-    complete_assistant_message(
-        &mut chat,
-        "msg-2",
-        "New reply that will be rolled back",
-        /*phase*/ None,
-    );
-    let _ = drain_insert_history(&mut rx);
-    chat.handle_codex_event(Event {
-        id: "turn-2".into(),
-        msg: EventMsg::TurnComplete(turn_complete_event(
-            "turn-2", /*last_agent_message*/ None,
-        )),
-    });
-    let _ = drain_insert_history(&mut rx);
-    assert_eq!(
-        chat.last_agent_markdown_text(),
-        Some("New reply that will be rolled back")
-    );
-
-    chat.truncate_agent_turn_markdowns_to_turn_count(
-        /*remaining_turn_count*/ 1, /*transcript_fallback*/ None,
-    );
-
-    assert_eq!(chat.last_agent_markdown_text(), Some("Old reply"));
 }
 
 #[tokio::test]

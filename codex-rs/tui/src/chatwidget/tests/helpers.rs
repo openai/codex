@@ -208,8 +208,6 @@ pub(super) async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,
-        agent_turn_markdowns: Vec::new(),
-        completed_turn_count: 0,
         saw_copy_source_this_turn: false,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),

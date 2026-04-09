@@ -460,24 +460,6 @@ impl AgentMessageCell {
             is_first_line,
         }
     }
-
-    /// Join all spans into unstyled plain text, one line per entry in `self.lines`.
-    ///
-    /// Used by `last_agent_markdown_from_transcript` to reconstruct copy-source text
-    /// from rendered transcript cells after a rollback. The result strips style
-    /// information but preserves whitespace and newlines.
-    pub(crate) fn plain_text(&self) -> String {
-        self.lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<String>>()
-            .join("\n")
-    }
 }
 
 impl HistoryCell for AgentMessageCell {
