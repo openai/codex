@@ -6268,7 +6268,7 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         InitialContextInjection::BeforeLastUserMessage,
-                        CompactionReason::TokenLimit,
+                        CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
                     .await
@@ -6457,7 +6457,7 @@ async fn run_pre_sampling_compact(
             sess,
             turn_context,
             InitialContextInjection::DoNotInject,
-            CompactionReason::TokenLimit,
+            CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
         )
         .await?;
