@@ -1038,14 +1038,6 @@ mod tests {
         let remote_control_url = remote_control_url_for_listener(&listener);
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
-        let server_task = tokio::spawn(async move {
-            let (stream, request_line) = accept_http_request(&listener).await;
-            assert_eq!(
-                request_line,
-                "GET /backend-api/wham/remote/control/server HTTP/1.1"
-            );
-            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
-        });
         let codex_home = TempDir::new().expect("temp dir should create");
         save_auth(
             codex_home.path(),
@@ -1072,6 +1064,15 @@ mod tests {
             AuthCredentialsStoreMode::File,
         )
         .expect("fresh auth should save");
+
+        let server_task = tokio::spawn(async move {
+            let (stream, request_line) = accept_http_request(&listener).await;
+            assert_eq!(
+                request_line,
+                "GET /backend-api/wham/remote/control/server HTTP/1.1"
+            );
+            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
+        });
 
         let err = connect_remote_control_websocket(
             &remote_control_target,

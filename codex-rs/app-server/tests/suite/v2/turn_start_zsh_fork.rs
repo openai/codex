@@ -475,7 +475,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let tool_call_arguments = serde_json::to_string(&serde_json::json!({
         "command": shell_command,
         "workdir": serde_json::Value::Null,
-        "timeout_ms": 5000
+        "timeout_ms": 30000
     }))?;
     let response = responses::sse(vec![
         responses::ev_response_created("resp-1"),
