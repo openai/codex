@@ -66,6 +66,10 @@ use approval_request::guardian_assessment_action;
 #[cfg(test)]
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]
+use prompt::GuardianPromptMode;
+#[cfg(test)]
+use prompt::GuardianTranscriptCursor;
+#[cfg(test)]
 use prompt::GuardianTranscriptEntry;
 #[cfg(test)]
 use prompt::GuardianTranscriptEntryKind;
