@@ -7,6 +7,7 @@ use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::marketplace_install_root;
 use codex_core::plugins::record_installed_marketplace_root;
 use codex_core::plugins::validate_marketplace_root;
+use codex_core::plugins::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs;
 use std::path::Path;
@@ -154,7 +155,7 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         }
     }
 
-    let marketplace_name = validate_marketplace_root(&staged_root)
+    let marketplace_name = validate_marketplace_source_root(&staged_root)
         .with_context(|| format!("failed to validate marketplace from {}", source.display()))?;
     if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
         bail!(
@@ -183,6 +184,12 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     println!("Installed marketplace root: {}", destination.display());
 
     Ok(())
+}
+
+fn validate_marketplace_source_root(root: &Path) -> Result<String> {
+    let marketplace_name = validate_marketplace_root(root)?;
+    validate_plugin_segment(&marketplace_name, "marketplace name").map_err(anyhow::Error::msg)?;
+    Ok(marketplace_name)
 }
 
 fn parse_marketplace_source(

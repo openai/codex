@@ -20,6 +20,7 @@ pub use codex_plugin::PluginCapabilitySummary;
 pub use codex_plugin::PluginId;
 pub use codex_plugin::PluginIdError;
 pub use codex_plugin::PluginTelemetryMetadata;
+pub use codex_plugin::validate_plugin_segment;
 
 pub type LoadedPlugin = codex_plugin::LoadedPlugin<McpServerConfig>;
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<McpServerConfig>;

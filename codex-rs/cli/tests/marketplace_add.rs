@@ -13,22 +13,32 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 }
 
 fn write_marketplace_source(source: &Path, marker: &str) -> Result<()> {
+    write_marketplace_source_with_name(source, "debug", marker)
+}
+
+fn write_marketplace_source_with_name(
+    source: &Path,
+    marketplace_name: &str,
+    marker: &str,
+) -> Result<()> {
     std::fs::create_dir_all(source.join(".agents/plugins"))?;
     std::fs::create_dir_all(source.join("plugins/sample/.codex-plugin"))?;
     std::fs::write(
         source.join(".agents/plugins/marketplace.json"),
-        r#"{
-  "name": "debug",
+        format!(
+            r#"{{
+  "name": "{marketplace_name}",
   "plugins": [
-    {
+    {{
       "name": "sample",
-      "source": {
+      "source": {{
         "source": "local",
         "path": "./plugins/sample"
-      }
-    }
+      }}
+    }}
   ]
-}"#,
+}}"#
+        ),
     )?;
     std::fs::write(
         source.join("plugins/sample/.codex-plugin/plugin.json"),
@@ -60,6 +70,35 @@ async fn marketplace_add_local_directory_installs_valid_marketplace_root() -> Re
         installed_root
             .join("plugins/sample/.codex-plugin/plugin.json")
             .is_file()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_rejects_invalid_marketplace_name() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source_with_name(source.path(), "debug.market", "invalid marketplace")?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "invalid marketplace name: only ASCII letters, digits, `_`, and `-` are allowed",
+        ));
+
+    assert!(
+        !marketplace_install_root(codex_home.path())
+            .join("debug.market")
+            .exists()
+    );
+    assert!(
+        !codex_home
+            .path()
+            .join(".tmp/known_marketplaces.json")
+            .exists()
     );
 
     Ok(())
