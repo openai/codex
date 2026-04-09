@@ -322,6 +322,7 @@ pub(crate) async fn execute_exec_request(
         command,
         cwd,
         env,
+        exec_server_env_config: _,
         network,
         expiration,
         capture_policy,

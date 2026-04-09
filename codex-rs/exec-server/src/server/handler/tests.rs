@@ -26,6 +26,7 @@ fn exec_params(process_id: &str) -> ExecParams {
             "sleep 0.1".to_string(),
         ],
         cwd: std::env::current_dir().expect("cwd"),
+        env_policy: None,
         env,
         tty: false,
         arg0: None,

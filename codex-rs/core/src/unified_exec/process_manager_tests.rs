@@ -35,6 +35,37 @@ fn unified_exec_env_overrides_existing_values() {
 }
 
 #[test]
+fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
+    let local_policy_env = HashMap::from([
+        ("HOME".to_string(), "/client-home".to_string()),
+        ("PATH".to_string(), "/client-path".to_string()),
+        ("SHELL_SET".to_string(), "policy".to_string()),
+    ]);
+    let request_env = HashMap::from([
+        ("HOME".to_string(), "/client-home".to_string()),
+        ("PATH".to_string(), "/sandbox-path".to_string()),
+        ("SHELL_SET".to_string(), "policy".to_string()),
+        ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+        (
+            "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
+            "1".to_string(),
+        ),
+    ]);
+
+    assert_eq!(
+        env_overlay_for_exec_server(&request_env, &local_policy_env),
+        HashMap::from([
+            ("PATH".to_string(), "/sandbox-path".to_string()),
+            ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+            (
+                "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
+                "1".to_string()
+            ),
+        ])
+    );
+}
+
+#[test]
 fn exec_server_process_id_matches_unified_exec_process_id() {
     assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
 }

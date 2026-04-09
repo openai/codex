@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_config::types::ShellEnvironmentPolicyInherit;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -60,9 +61,21 @@ pub struct ExecParams {
     pub process_id: ProcessId,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
+    #[serde(default)]
+    pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,
     pub tty: bool,
     pub arg0: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecEnvPolicy {
+    pub inherit: ShellEnvironmentPolicyInherit,
+    pub ignore_default_excludes: bool,
+    pub exclude: Vec<String>,
+    pub r#set: HashMap<String, String>,
+    pub include_only: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

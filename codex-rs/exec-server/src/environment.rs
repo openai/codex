@@ -288,6 +288,7 @@ mod tests {
                 process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
                 cwd: std::env::current_dir().expect("read current dir"),
+                env_policy: None,
                 env: Default::default(),
                 tty: false,
                 arg0: None,

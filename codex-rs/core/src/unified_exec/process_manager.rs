@@ -11,9 +11,11 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -47,6 +49,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_config::types::ShellEnvironmentPolicy;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
@@ -87,6 +90,37 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
         env.insert(key.to_string(), value.to_string());
     }
     env
+}
+
+fn exec_env_policy_from_shell_policy(
+    policy: &ShellEnvironmentPolicy,
+) -> codex_exec_server::ExecEnvPolicy {
+    codex_exec_server::ExecEnvPolicy {
+        inherit: policy.inherit.clone(),
+        ignore_default_excludes: policy.ignore_default_excludes,
+        exclude: policy
+            .exclude
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+        r#set: policy.r#set.clone(),
+        include_only: policy
+            .include_only
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+    }
+}
+
+fn env_overlay_for_exec_server(
+    request_env: &HashMap<String, String>,
+    local_policy_env: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    request_env
+        .iter()
+        .filter(|(key, value)| local_policy_env.get(*key) != Some(*value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 /// Borrowed process state prepared for a `write_stdin` or poll operation.
@@ -600,13 +634,27 @@ impl UnifiedExecProcessManager {
                 ));
             }
 
+            let (env, env_policy) =
+                if let Some(exec_server_env_config) = &request.exec_server_env_config {
+                    (
+                        env_overlay_for_exec_server(
+                            &request.env,
+                            &exec_server_env_config.local_policy_env,
+                        ),
+                        Some(exec_server_env_config.policy.clone()),
+                    )
+                } else {
+                    (request.env.clone(), None)
+                };
+
             let started = environment
                 .get_exec_backend()
                 .start(codex_exec_server::ExecParams {
                     process_id: exec_server_process_id(process_id).into(),
                     argv: request.command.clone(),
                     cwd: request.cwd.to_path_buf(),
-                    env: request.env.clone(),
+                    env_policy,
+                    env,
                     tty,
                     arg0: request.arg0.clone(),
                 })
@@ -649,10 +697,17 @@ impl UnifiedExecProcessManager {
         cwd: AbsolutePathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(
-            &context.turn.shell_environment_policy,
-            Some(context.session.conversation_id),
-        ));
+        let local_policy_env = create_env(&context.turn.shell_environment_policy, None);
+        let mut env = local_policy_env.clone();
+        env.insert(
+            CODEX_THREAD_ID_ENV_VAR.to_string(),
+            context.session.conversation_id.to_string(),
+        );
+        let env = apply_unified_exec_env(env);
+        let exec_server_env_config = ExecServerEnvConfig {
+            policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
+            local_policy_env,
+        };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(
             self,
@@ -680,6 +735,7 @@ impl UnifiedExecProcessManager {
             process_id: request.process_id,
             cwd,
             env,
+            exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
             network: request.network.clone(),
             tty: request.tty,
