@@ -86,7 +86,10 @@ fn login_with_api_key_overwrites_existing_auth_json() {
 #[tokio::test]
 async fn api_key_login_check_reads_fedramp_status_from_current_org() {
     let server = MockServer::start().await;
-    mount_me_response(&server, 200, true).await;
+    mount_me_response(
+        &server, /*status*/ 200, /*current_organization_is_fedramp*/ true,
+    )
+    .await;
 
     let result =
         check_openai_api_key_for_login_with_base_url("sk-test", &format!("{}/v1", server.uri()))
