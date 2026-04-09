@@ -4018,17 +4018,18 @@ impl ChatWidget {
         let Some(cell) = self.active_hook_cell.as_mut() else {
             return;
         };
-        if cell.prune_expired_quiet_runs(Instant::now()) {
+        let now = Instant::now();
+        if cell.update_due_running_visibility(now) || cell.prune_expired_quiet_runs(now) {
             self.bump_active_cell_revision();
         }
         self.finish_active_hook_cell_if_idle();
     }
 
-    fn schedule_quiet_hook_removal_if_needed(&self) {
+    fn schedule_hook_timer_if_needed(&self) {
         let Some(deadline) = self
             .active_hook_cell
             .as_ref()
-            .and_then(HookCell::next_quiet_removal_deadline)
+            .and_then(HookCell::next_timer_deadline)
         else {
             return;
         };
@@ -4084,7 +4085,7 @@ impl ChatWidget {
 
     pub(crate) fn pre_draw_tick(&mut self) {
         self.prune_expired_quiet_hook_runs();
-        self.schedule_quiet_hook_removal_if_needed();
+        self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
         if self.should_animate_terminal_title_spinner() {
             self.refresh_terminal_title();

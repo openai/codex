@@ -1440,6 +1440,7 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
         }),
     });
     assert!(drain_insert_history(&mut rx).is_empty());
+    reveal_running_hooks(&mut chat);
     let running_snapshot = hook_live_and_history_snapshot(&chat, "running", "");
 
     chat.handle_codex_event(Event {
@@ -1528,6 +1529,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
         Some("checking command policy"),
     ));
     assert_eq!(chat.current_status.header, "Thinking");
+    reveal_running_hooks(&mut chat);
     let first_running_snapshot = hook_live_and_history_snapshot(&chat, "pre running", "");
 
     chat.handle_codex_event(hook_started_event(
@@ -1536,6 +1538,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
         Some("checking output policy"),
     ));
     assert_eq!(chat.current_status.header, "Thinking");
+    reveal_running_hooks(&mut chat);
     let second_running_snapshot = hook_live_and_history_snapshot(&chat, "post running", "");
 
     chat.handle_codex_event(hook_completed_event(
@@ -1584,6 +1587,7 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         codex_protocol::protocol::HookEventName::PostToolUse,
         Some("checking output policy"),
     ));
+    reveal_running_hooks(&mut chat);
     let exec_and_hook_running = format!(
         "active exec:\n{}active hooks:\n{}",
         active_blob(&chat),
@@ -1613,6 +1617,37 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         format!(
             "exec running:\n{exec_running}\nexec and hook running:\n{exec_and_hook_running}\nhistory after exec:\n{history_after_exec}\nhook running after exec:\n{hook_running_after_exec}\nquiet hook completed lingering:\n{quiet_hook_completed_lingering}\nquiet hook completed:\n{quiet_hook_completed}"
         )
+    );
+}
+
+#[tokio::test]
+async fn hook_completed_before_reveal_renders_completed_without_running_flash() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(hook_started_event(
+        "session-start:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::SessionStart,
+        Some("warming the shell"),
+    ));
+    let started_hidden_snapshot = active_hook_blob(&chat);
+
+    chat.handle_codex_event(hook_completed_event(
+        "session-start:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::SessionStart,
+        codex_protocol::protocol::HookRunStatus::Completed,
+        vec![codex_protocol::protocol::HookOutputEntry {
+            kind: codex_protocol::protocol::HookOutputEntryKind::Context,
+            text: "session context".to_string(),
+        }],
+    ));
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "hook_completed_before_reveal_renders_completed_without_running_flash_snapshot",
+        format!("started hidden:\n{started_hidden_snapshot}\nhistory:\n{history}")
     );
 }
 

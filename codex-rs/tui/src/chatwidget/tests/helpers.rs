@@ -680,6 +680,13 @@ pub(super) fn expire_quiet_hook_linger(chat: &mut ChatWidget) {
     chat.pre_draw_tick();
 }
 
+pub(super) fn reveal_running_hooks(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.reveal_running_runs_now_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
 pub(super) fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .model_catalog
@@ -997,6 +1004,7 @@ pub(super) async fn assert_hook_events_snapshot(
         drain_insert_history(&mut rx).is_empty(),
         "hook start should update the live hook cell instead of writing history"
     );
+    reveal_running_hooks(&mut chat);
     assert!(
         active_hook_blob(&chat).contains(&format!(
             "Running {} hook: {status_message}",

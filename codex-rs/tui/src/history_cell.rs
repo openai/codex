@@ -1765,7 +1765,8 @@ pub(crate) struct HookCell {
     animations_enabled: bool,
 }
 
-const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(300);
+const HOOK_RUN_REVEAL_DELAY: Duration = Duration::from_millis(300);
+const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
 struct HookRunCell {
@@ -1773,6 +1774,8 @@ struct HookRunCell {
     event_name: HookEventName,
     status_message: Option<String>,
     start_time: Option<Instant>,
+    reveal_deadline: Instant,
+    running_visible: bool,
     completed: Option<CompletedHookRun>,
     quiet_removal_deadline: Option<Instant>,
 }
@@ -1809,16 +1812,22 @@ impl HookCell {
         if let Some(existing) = self.runs.iter_mut().find(|existing| existing.id == run.id) {
             existing.event_name = run.event_name;
             existing.status_message = run.status_message;
-            existing.start_time = Some(Instant::now());
+            let now = Instant::now();
+            existing.start_time = Some(now);
+            existing.reveal_deadline = now + HOOK_RUN_REVEAL_DELAY;
+            existing.running_visible = false;
             existing.completed = None;
             existing.quiet_removal_deadline = None;
             return;
         }
+        let now = Instant::now();
         self.runs.push(HookRunCell {
             id: run.id,
             event_name: run.event_name,
             status_message: run.status_message,
-            start_time: Some(Instant::now()),
+            start_time: Some(now),
+            reveal_deadline: now + HOOK_RUN_REVEAL_DELAY,
+            running_visible: false,
             completed: None,
             quiet_removal_deadline: None,
         });
@@ -1858,6 +1867,8 @@ impl HookCell {
             event_name: run.event_name,
             status_message: run.status_message,
             start_time: None,
+            reveal_deadline: Instant::now(),
+            running_visible: false,
             completed: Some(CompletedHookRun {
                 status: run.status,
                 entries: run.entries,
@@ -1876,10 +1887,25 @@ impl HookCell {
         self.runs.len() != old_len
     }
 
-    pub(crate) fn next_quiet_removal_deadline(&self) -> Option<Instant> {
+    pub(crate) fn update_due_running_visibility(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        for run in &mut self.runs {
+            if run.completed.is_none() && !run.running_visible && now >= run.reveal_deadline {
+                run.running_visible = true;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn next_timer_deadline(&self) -> Option<Instant> {
         self.runs
             .iter()
-            .filter_map(|run| run.quiet_removal_deadline)
+            .filter_map(|run| {
+                run.quiet_removal_deadline.or_else(|| {
+                    (run.completed.is_none() && !run.running_visible).then_some(run.reveal_deadline)
+                })
+            })
             .min()
     }
 
@@ -1892,9 +1918,22 @@ impl HookCell {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn reveal_running_runs_now_for_test(&mut self) {
+        let now = Instant::now();
+        for run in &mut self.runs {
+            if run.completed.is_none() {
+                run.reveal_deadline = now;
+            }
+        }
+    }
+
     fn display_lines_inner(&self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         for run in &self.runs {
+            if !run.should_render() {
+                continue;
+            }
             if !lines.is_empty() {
                 lines.push("".into());
             }
@@ -1937,9 +1976,15 @@ impl Renderable for HookCell {
 
 impl HookRunCell {
     fn quiet_removal_deadline_after_complete(&self) -> Option<Instant> {
-        let start_time = self.start_time?;
-        let minimum_deadline = start_time + QUIET_HOOK_MIN_VISIBLE;
+        if !self.running_visible {
+            return None;
+        }
+        let minimum_deadline = self.reveal_deadline + QUIET_HOOK_MIN_VISIBLE;
         (Instant::now() < minimum_deadline).then_some(minimum_deadline)
+    }
+
+    fn should_render(&self) -> bool {
+        self.completed.is_some() || self.running_visible || self.quiet_removal_deadline.is_some()
     }
 
     fn push_display_lines(&self, lines: &mut Vec<Line<'static>>, animations_enabled: bool) {
