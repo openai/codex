@@ -12,7 +12,15 @@ use codex_exec_server::ExecProcess;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::SandboxLaunchConfig;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 use test_case::test_case;
 use tokio::sync::watch;
 use tokio::time::Duration;
@@ -24,6 +32,16 @@ use common::exec_server::exec_server;
 struct ProcessContext {
     backend: Arc<dyn ExecBackend>,
     server: Option<ExecServerHarness>,
+}
+
+fn platform_sandbox_type() -> SandboxType {
+    if cfg!(target_os = "macos") {
+        SandboxType::MacosSeatbelt
+    } else if cfg!(target_os = "linux") {
+        SandboxType::LinuxSeccomp
+    } else {
+        SandboxType::None
+    }
 }
 
 async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
@@ -45,15 +63,17 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
 
 async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let session = context
         .backend
         .start(ExecParams {
             process_id: ProcessId::from("proc-1"),
             argv: vec!["true".to_string()],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -116,6 +136,7 @@ async fn collect_process_output_from_reads(
 
 async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let process_id = "proc-stream".to_string();
     let session = context
         .backend
@@ -126,15 +147,16 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
                 "-c".to_string(),
                 "sleep 0.05; printf 'session output\\n'".to_string(),
             ],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "session output\n");
@@ -145,27 +167,29 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
 
 async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let process_id = "proc-stdin".to_string();
     let session = context
         .backend
         .start(ExecParams {
             process_id: process_id.clone().into(),
             argv: vec![
-                "/usr/bin/python3".to_string(),
+                "/bin/sh".to_string(),
                 "-c".to_string(),
-                "import sys; line = sys.stdin.readline(); sys.stdout.write(f'from-stdin:{line}'); sys.stdout.flush()".to_string(),
+                "IFS= read -r line; printf 'from-stdin:%s\\n' \"$line\"".to_string(),
             ],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: true,
             arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     session.process.write(b"hello\n".to_vec()).await?;
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
@@ -182,6 +206,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_process_context(use_remote).await?;
+    let cwd = std::env::current_dir()?;
     let session = context
         .backend
         .start(ExecParams {
@@ -191,21 +216,91 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
                 "-c".to_string(),
                 "printf 'queued output\\n'".to_string(),
             ],
-            cwd: std::env::current_dir()?,
+            cwd: cwd.clone(),
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(cwd),
         })
         .await?;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "queued output\n");
     assert_eq!(exit_code, Some(0));
     assert!(closed);
+    Ok(())
+}
+
+fn write_outside_workspace_sandbox(workspace_root: &std::path::Path) -> SandboxLaunchConfig {
+    let mut policy = SandboxPolicy::new_workspace_write_policy();
+    if let SandboxPolicy::WorkspaceWrite {
+        exclude_tmpdir_env_var,
+        exclude_slash_tmp,
+        ..
+    } = &mut policy
+    {
+        *exclude_tmpdir_env_var = true;
+        *exclude_slash_tmp = true;
+    }
+    SandboxLaunchConfig {
+        sandbox_preference: SandboxablePreference::Require,
+        policy: policy.clone(),
+        file_system_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            &policy,
+            workspace_root,
+        ),
+        network_policy: NetworkSandboxPolicy::from(&policy),
+        sandbox_policy_cwd: workspace_root.to_path_buf(),
+        additional_permissions: None,
+        enforce_managed_network: false,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        use_legacy_landlock: false,
+    }
+}
+
+async fn assert_exec_process_sandbox_denies_write_outside_workspace(
+    use_remote: bool,
+) -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let workspace_root = temp_dir.path().join("workspace");
+    std::fs::create_dir(&workspace_root)?;
+    let blocked_path = temp_dir.path().join("blocked.txt");
+    let context = create_process_context(use_remote).await?;
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-sandbox-denied"),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf blocked > \"$1\"".to_string(),
+                "write-outside-workspace".to_string(),
+                blocked_path.to_string_lossy().into_owned(),
+            ],
+            cwd: workspace_root.clone(),
+            env: Default::default(),
+            tty: false,
+            arg0: None,
+            sandbox: write_outside_workspace_sandbox(&workspace_root),
+        })
+        .await?;
+
+    assert_eq!(session.sandbox_type, platform_sandbox_type());
+    let StartedExecProcess { process, .. } = session;
+    let wake_rx = process.subscribe_wake();
+    let (_output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+
+    assert_ne!(exit_code, Some(0));
+    assert!(closed);
+    assert!(
+        !blocked_path.exists(),
+        "sandboxed process unexpectedly wrote outside the workspace root"
+    );
     Ok(())
 }
 
@@ -225,6 +320,9 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
             env: Default::default(),
             tty: false,
             arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(
+                std::env::current_dir().expect("read current dir"),
+            ),
         })
         .await?;
 
@@ -278,4 +376,9 @@ async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_process_preserves_queued_events_before_subscribe(use_remote: bool) -> Result<()> {
     assert_exec_process_preserves_queued_events_before_subscribe(use_remote).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_exec_process_sandbox_denies_write_outside_workspace() -> Result<()> {
+    assert_exec_process_sandbox_denies_write_outside_workspace(/*use_remote*/ true).await
 }

@@ -1,6 +1,6 @@
 use super::SandboxCommand;
+use super::SandboxLaunchConfig;
 use super::SandboxManager;
-use super::SandboxTransformRequest;
 use super::SandboxType;
 use super::SandboxablePreference;
 use super::get_platform_sandbox;
@@ -76,28 +76,31 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
     let manager = SandboxManager::new();
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     let exec_request = manager
-        .transform(SandboxTransformRequest {
-            command: SandboxCommand {
+        .transform(
+            SandboxCommand {
                 program: "true".into(),
                 args: Vec::new(),
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: None,
             },
-            policy: &SandboxPolicy::ExternalSandbox {
-                network_access: NetworkAccess::Restricted,
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Forbid,
+                policy: SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                },
+                file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
             },
-            file_system_policy: &FileSystemSandboxPolicy::unrestricted(),
-            network_policy: NetworkSandboxPolicy::Restricted,
-            sandbox: SandboxType::None,
-            enforce_managed_network: false,
-            network: None,
-            sandbox_policy_cwd: cwd.as_path(),
-            codex_linux_sandbox_exe: None,
-            use_legacy_landlock: false,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-        })
+            /*network*/ None,
+            /*codex_linux_sandbox_exe*/ None,
+        )
         .expect("transform");
 
     assert_eq!(
@@ -120,8 +123,8 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
     )
     .expect("absolute temp dir");
     let exec_request = manager
-        .transform(SandboxTransformRequest {
-            command: SandboxCommand {
+        .transform(
+            SandboxCommand {
                 program: "true".into(),
                 args: Vec::new(),
                 cwd: cwd.clone(),
@@ -136,20 +139,23 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                     }),
                 }),
             },
-            policy: &SandboxPolicy::ExternalSandbox {
-                network_access: NetworkAccess::Restricted,
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Forbid,
+                policy: SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                },
+                file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
             },
-            file_system_policy: &FileSystemSandboxPolicy::unrestricted(),
-            network_policy: NetworkSandboxPolicy::Restricted,
-            sandbox: SandboxType::None,
-            enforce_managed_network: false,
-            network: None,
-            sandbox_policy_cwd: cwd.as_path(),
-            codex_linux_sandbox_exe: None,
-            use_legacy_landlock: false,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-        })
+            /*network*/ None,
+            /*codex_linux_sandbox_exe*/ None,
+        )
         .expect("transform");
 
     assert_eq!(
@@ -176,8 +182,8 @@ fn transform_additional_permissions_preserves_denied_entries() {
     let allowed_path = workspace_root.join("allowed");
     let denied_path = workspace_root.join("denied");
     let exec_request = manager
-        .transform(SandboxTransformRequest {
-            command: SandboxCommand {
+        .transform(
+            SandboxCommand {
                 program: "true".into(),
                 args: Vec::new(),
                 cwd: cwd.clone(),
@@ -190,34 +196,37 @@ fn transform_additional_permissions_preserves_denied_entries() {
                     ..Default::default()
                 }),
             },
-            policy: &SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::FullAccess,
-                network_access: false,
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Forbid,
+                policy: SandboxPolicy::ReadOnly {
+                    access: ReadOnlyAccess::FullAccess,
+                    network_access: false,
+                },
+                file_system_policy: FileSystemSandboxPolicy::restricted(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: denied_path.clone(),
+                        },
+                        access: FileSystemAccessMode::None,
+                    },
+                ]),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
             },
-            file_system_policy: &FileSystemSandboxPolicy::restricted(vec![
-                FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
-                    },
-                    access: FileSystemAccessMode::Read,
-                },
-                FileSystemSandboxEntry {
-                    path: FileSystemPath::Path {
-                        path: denied_path.clone(),
-                    },
-                    access: FileSystemAccessMode::None,
-                },
-            ]),
-            network_policy: NetworkSandboxPolicy::Restricted,
-            sandbox: SandboxType::None,
-            enforce_managed_network: false,
-            network: None,
-            sandbox_policy_cwd: cwd.as_path(),
-            codex_linux_sandbox_exe: None,
-            use_legacy_landlock: false,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-        })
+            /*network*/ None,
+            /*codex_linux_sandbox_exe*/ None,
+        )
         .expect("transform");
 
     assert_eq!(
@@ -252,26 +261,29 @@ fn transform_linux_seccomp_request(
     let manager = SandboxManager::new();
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     manager
-        .transform(SandboxTransformRequest {
-            command: SandboxCommand {
+        .transform(
+            SandboxCommand {
                 program: "true".into(),
                 args: Vec::new(),
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: None,
             },
-            policy: &SandboxPolicy::DangerFullAccess,
-            file_system_policy: &FileSystemSandboxPolicy::unrestricted(),
-            network_policy: NetworkSandboxPolicy::Enabled,
-            sandbox: SandboxType::LinuxSeccomp,
-            enforce_managed_network: false,
-            network: None,
-            sandbox_policy_cwd: cwd.as_path(),
-            codex_linux_sandbox_exe: Some(codex_linux_sandbox_exe),
-            use_legacy_landlock: false,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-        })
+            &SandboxLaunchConfig {
+                sandbox_preference: SandboxablePreference::Require,
+                policy: SandboxPolicy::DangerFullAccess,
+                file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Enabled,
+                sandbox_policy_cwd: cwd.as_path().to_path_buf(),
+                additional_permissions: None,
+                enforce_managed_network: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
+            },
+            /*network*/ None,
+            Some(codex_linux_sandbox_exe),
+        )
         .expect("transform")
 }
 

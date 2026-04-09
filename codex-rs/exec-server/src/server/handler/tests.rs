@@ -6,12 +6,14 @@ use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 
 use super::ExecServerHandler;
+use crate::ExecServerRuntimeConfig;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::rpc::RpcNotificationSender;
+use codex_sandboxing::SandboxLaunchConfig;
 
 fn exec_params(process_id: &str) -> ExecParams {
     let mut env = HashMap::new();
@@ -29,14 +31,16 @@ fn exec_params(process_id: &str) -> ExecParams {
         env,
         tty: false,
         arg0: None,
+        sandbox: SandboxLaunchConfig::no_sandbox(std::env::current_dir().expect("cwd")),
     }
 }
 
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
-    let handler = Arc::new(ExecServerHandler::new(RpcNotificationSender::new(
-        outgoing_tx,
-    )));
+    let handler = Arc::new(ExecServerHandler::new(
+        RpcNotificationSender::new(outgoing_tx),
+        ExecServerRuntimeConfig::detect(),
+    ));
     assert_eq!(
         handler.initialize().expect("initialize"),
         InitializeResponse {}

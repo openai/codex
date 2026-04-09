@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+#[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
@@ -85,10 +86,9 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         }
     }
 
-    if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
-        // Safety: [`run_main`] never returns.
-        codex_linux_sandbox::run_main();
-    } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
+    codex_linux_sandbox::dispatch_if_requested();
+
+    if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
         codex_apply_patch::main();
     }
 

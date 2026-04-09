@@ -17,6 +17,7 @@ codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 dunce = { workspace = true }
 libc = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }

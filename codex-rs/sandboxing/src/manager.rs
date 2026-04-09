@@ -16,11 +16,15 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
+use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SandboxType {
     None,
     MacosSeatbelt,
@@ -39,11 +43,44 @@ impl SandboxType {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SandboxablePreference {
     Auto,
     Require,
     Forbid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxLaunchConfig {
+    pub sandbox_preference: SandboxablePreference,
+    pub policy: SandboxPolicy,
+    pub file_system_policy: FileSystemSandboxPolicy,
+    pub network_policy: NetworkSandboxPolicy,
+    pub sandbox_policy_cwd: PathBuf,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub enforce_managed_network: bool,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
+    pub use_legacy_landlock: bool,
+}
+
+impl SandboxLaunchConfig {
+    pub fn no_sandbox(sandbox_policy_cwd: PathBuf) -> Self {
+        Self {
+            sandbox_preference: SandboxablePreference::Forbid,
+            policy: SandboxPolicy::DangerFullAccess,
+            file_system_policy: FileSystemSandboxPolicy::unrestricted(),
+            network_policy: NetworkSandboxPolicy::Enabled,
+            sandbox_policy_cwd,
+            additional_permissions: None,
+            enforce_managed_network: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            use_legacy_landlock: false,
+        }
+    }
 }
 
 pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
@@ -86,24 +123,20 @@ pub struct SandboxExecRequest {
     pub arg0: Option<String>,
 }
 
-/// Bundled arguments for sandbox transformation.
-///
-/// This keeps call sites self-documenting when several fields are optional.
-pub struct SandboxTransformRequest<'a> {
-    pub command: SandboxCommand,
-    pub policy: &'a SandboxPolicy,
-    pub file_system_policy: &'a FileSystemSandboxPolicy,
-    pub network_policy: NetworkSandboxPolicy,
-    pub sandbox: SandboxType,
-    pub enforce_managed_network: bool,
-    // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
-    // to make shared ownership explicit across runtime/sandbox plumbing.
-    pub network: Option<&'a NetworkProxy>,
-    pub sandbox_policy_cwd: &'a Path,
-    pub codex_linux_sandbox_exe: Option<&'a Path>,
-    pub use_legacy_landlock: bool,
-    pub windows_sandbox_level: WindowsSandboxLevel,
-    pub windows_sandbox_private_desktop: bool,
+impl SandboxExecRequest {
+    pub fn prepare_env_for_spawn(&mut self) {
+        if !self.network_sandbox_policy.is_enabled() {
+            self.env.insert(
+                "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
+                "1".to_string(),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        if self.sandbox == SandboxType::MacosSeatbelt {
+            self.env
+                .insert("CODEX_SANDBOX".to_string(), "seatbelt".to_string());
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -166,32 +199,30 @@ impl SandboxManager {
 
     pub fn transform(
         &self,
-        request: SandboxTransformRequest<'_>,
+        mut command: SandboxCommand,
+        launch: &SandboxLaunchConfig,
+        network: Option<&NetworkProxy>,
+        codex_linux_sandbox_exe: Option<&Path>,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        let SandboxTransformRequest {
-            mut command,
-            policy,
-            file_system_policy,
-            network_policy,
-            sandbox,
-            enforce_managed_network,
-            network,
-            sandbox_policy_cwd,
-            codex_linux_sandbox_exe,
-            use_legacy_landlock,
-            windows_sandbox_level,
-            windows_sandbox_private_desktop,
-        } = request;
         let additional_permissions = command.additional_permissions.take();
         let EffectiveSandboxPermissions {
             sandbox_policy: effective_policy,
-        } = EffectiveSandboxPermissions::new(policy, additional_permissions.as_ref());
+        } = EffectiveSandboxPermissions::new(&launch.policy, additional_permissions.as_ref());
         let effective_file_system_policy = effective_file_system_sandbox_policy(
-            file_system_policy,
+            &launch.file_system_policy,
             additional_permissions.as_ref(),
         );
-        let effective_network_policy =
-            effective_network_sandbox_policy(network_policy, additional_permissions.as_ref());
+        let effective_network_policy = effective_network_sandbox_policy(
+            launch.network_policy,
+            additional_permissions.as_ref(),
+        );
+        let sandbox = self.select_initial(
+            &effective_file_system_policy,
+            effective_network_policy,
+            launch.sandbox_preference,
+            launch.windows_sandbox_level,
+            launch.enforce_managed_network,
+        );
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
@@ -204,8 +235,8 @@ impl SandboxManager {
                     os_argv_to_strings(argv),
                     &effective_file_system_policy,
                     effective_network_policy,
-                    sandbox_policy_cwd,
-                    enforce_managed_network,
+                    launch.sandbox_policy_cwd.as_path(),
+                    launch.enforce_managed_network,
                     network,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
@@ -218,15 +249,15 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
+                let allow_proxy_network = allow_network_for_proxy(launch.enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args_for_policies(
                     os_argv_to_strings(argv),
                     command.cwd.as_path(),
                     &effective_policy,
                     &effective_file_system_policy,
                     effective_network_policy,
-                    sandbox_policy_cwd,
-                    use_legacy_landlock,
+                    launch.sandbox_policy_cwd.as_path(),
+                    launch.use_legacy_landlock,
                     allow_proxy_network,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
@@ -240,19 +271,21 @@ impl SandboxManager {
             SandboxType::WindowsRestrictedToken => (os_argv_to_strings(argv), None),
         };
 
-        Ok(SandboxExecRequest {
+        let mut request = SandboxExecRequest {
             command: argv,
             cwd: command.cwd,
             env: command.env,
             network: network.cloned(),
             sandbox,
-            windows_sandbox_level,
-            windows_sandbox_private_desktop,
+            windows_sandbox_level: launch.windows_sandbox_level,
+            windows_sandbox_private_desktop: launch.windows_sandbox_private_desktop,
             sandbox_policy: effective_policy,
             file_system_sandbox_policy: effective_file_system_policy,
             network_sandbox_policy: effective_network_policy,
             arg0: arg0_override,
-        })
+        };
+        request.prepare_env_for_spawn();
+        Ok(request)
     }
 }
 

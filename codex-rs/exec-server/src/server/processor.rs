@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
 
+use crate::ExecServerRuntimeConfig;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
@@ -15,13 +16,16 @@ use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
 
-pub(crate) async fn run_connection(connection: JsonRpcConnection) {
+pub(crate) async fn run_connection(
+    connection: JsonRpcConnection,
+    runtime: ExecServerRuntimeConfig,
+) {
     let router = Arc::new(build_router());
     let (json_outgoing_tx, mut incoming_rx, connection_tasks) = connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
-    let handler = Arc::new(ExecServerHandler::new(notifications));
+    let handler = Arc::new(ExecServerHandler::new(notifications, runtime));
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {

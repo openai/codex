@@ -609,6 +609,9 @@ impl UnifiedExecProcessManager {
                     env: request.env.clone(),
                     tty,
                     arg0: request.arg0.clone(),
+                    sandbox: codex_sandboxing::SandboxLaunchConfig::no_sandbox(
+                        request.cwd.to_path_buf(),
+                    ),
                 })
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
@@ -641,6 +644,20 @@ impl UnifiedExecProcessManager {
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
         spawn_lifecycle.after_spawn();
         UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
+    }
+
+    pub(crate) async fn open_session_with_remote_exec(
+        &self,
+        params: codex_exec_server::ExecParams,
+        environment: &codex_exec_server::Environment,
+    ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        let started = environment
+            .get_exec_backend()
+            .start(params)
+            .await
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        let sandbox_type = started.sandbox_type;
+        UnifiedExecProcess::from_remote_started(started, sandbox_type).await
     }
 
     pub(super) async fn open_session_with_sandbox(

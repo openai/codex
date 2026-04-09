@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -7,6 +8,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxExecRequest;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
@@ -78,6 +84,7 @@ struct Inner {
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
+    runtime: ExecServerRuntimeConfig,
 }
 
 #[derive(Clone)]
@@ -91,23 +98,56 @@ struct LocalExecProcess {
     wake_tx: watch::Sender<u64>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ExecServerRuntimeConfig {
+    codex_linux_sandbox_exe: Option<PathBuf>,
+}
+
+impl ExecServerRuntimeConfig {
+    pub fn new(codex_linux_sandbox_exe: Option<PathBuf>) -> Self {
+        Self {
+            codex_linux_sandbox_exe,
+        }
+    }
+
+    pub fn detect() -> Self {
+        Self::default()
+    }
+}
+
+struct StartedProcess {
+    process_id: ProcessId,
+    sandbox_type: SandboxType,
+    wake_tx: watch::Sender<u64>,
+}
+
 impl Default for LocalProcess {
     fn default() -> Self {
-        let (outgoing_tx, mut outgoing_rx) =
-            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
-        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::new(RpcNotificationSender::new(outgoing_tx))
+        Self::default_with_runtime(ExecServerRuntimeConfig::detect())
     }
 }
 
 impl LocalProcess {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn default_with_runtime(runtime: ExecServerRuntimeConfig) -> Self {
+        let (outgoing_tx, mut outgoing_rx) =
+            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
+        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        Self::new_with_runtime(RpcNotificationSender::new(outgoing_tx), runtime)
+    }
+}
+
+impl LocalProcess {
+    pub(crate) fn new_with_runtime(
+        notifications: RpcNotificationSender,
+        runtime: ExecServerRuntimeConfig,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 notifications,
                 processes: Mutex::new(HashMap::new()),
                 initialize_requested: AtomicBool::new(false),
                 initialized: AtomicBool::new(false),
+                runtime,
             }),
         }
     }
@@ -162,14 +202,12 @@ impl LocalProcess {
         Ok(())
     }
 
-    async fn start_process(
-        &self,
-        params: ExecParams,
-    ) -> Result<(ExecResponse, watch::Sender<u64>), JSONRPCErrorError> {
+    async fn start_process(&self, params: ExecParams) -> Result<StartedProcess, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
-        let (program, args) = params
-            .argv
+        let launch = prepare_exec_launch(&params, &self.inner.runtime)?;
+        let (program, args) = launch
+            .command
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
 
@@ -188,8 +226,8 @@ impl LocalProcess {
                 program,
                 args,
                 params.cwd.as_path(),
-                &params.env,
-                &params.arg0,
+                &launch.env,
+                &launch.arg0,
                 TerminalSize::default(),
             )
             .await
@@ -198,8 +236,8 @@ impl LocalProcess {
                 program,
                 args,
                 params.cwd.as_path(),
-                &params.env,
-                &params.arg0,
+                &launch.env,
+                &launch.arg0,
             )
             .await
         };
@@ -264,13 +302,20 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok((ExecResponse { process_id }, wake_tx))
+        Ok(StartedProcess {
+            process_id,
+            sandbox_type: launch.sandbox,
+            wake_tx,
+        })
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         self.start_process(params)
             .await
-            .map(|(response, _)| response)
+            .map(|started| ExecResponse {
+                process_id: started.process_id,
+                sandbox: started.sandbox_type,
+            })
     }
 
     pub(crate) async fn exec_read(
@@ -414,16 +459,17 @@ impl LocalProcess {
 #[async_trait]
 impl ExecBackend for LocalProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
-        let (response, wake_tx) = self
+        let started = self
             .start_process(params)
             .await
             .map_err(map_handler_error)?;
         Ok(StartedExecProcess {
             process: Arc::new(LocalExecProcess {
-                process_id: response.process_id,
+                process_id: started.process_id,
                 backend: self.clone(),
-                wake_tx,
+                wake_tx: started.wake_tx,
             }),
+            sandbox_type: started.sandbox_type,
         })
     }
 }
@@ -456,6 +502,35 @@ impl ExecProcess for LocalExecProcess {
     async fn terminate(&self) -> Result<(), ExecServerError> {
         self.backend.terminate(&self.process_id).await
     }
+}
+
+fn prepare_exec_launch(
+    params: &ExecParams,
+    runtime: &ExecServerRuntimeConfig,
+) -> Result<SandboxExecRequest, JSONRPCErrorError> {
+    let (program, args) = params
+        .argv
+        .split_first()
+        .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+    let command = SandboxCommand {
+        program: program.clone().into(),
+        args: args.to_vec(),
+        cwd: AbsolutePathBuf::try_from(params.cwd.as_path())
+            .map_err(|err| invalid_params(format!("cwd must be absolute: {err}")))?,
+        env: params.env.clone(),
+        additional_permissions: params.sandbox.additional_permissions.clone(),
+    };
+    SandboxManager::new()
+        .transform(
+            command,
+            &params.sandbox,
+            // TODO: Thread managed-network proxy state across exec-server so
+            // sandbox profile generation preserves proxy-specific allowances.
+            /*network*/
+            None,
+            runtime.codex_linux_sandbox_exe.as_deref(),
+        )
+        .map_err(|err| internal_error(format!("failed to build sandbox launch: {err}")))
 }
 
 impl LocalProcess {

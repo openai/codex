@@ -22,9 +22,9 @@ use codex_protocol::protocol::ReviewDecision;
 #[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxLaunchConfig;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformError;
-use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use futures::Future;
@@ -332,29 +332,41 @@ pub(crate) struct SandboxAttempt<'a> {
 }
 
 impl<'a> SandboxAttempt<'a> {
+    pub(crate) fn sandbox_preference(&self) -> SandboxablePreference {
+        match self.sandbox {
+            SandboxType::None => SandboxablePreference::Forbid,
+            SandboxType::MacosSeatbelt
+            | SandboxType::LinuxSeccomp
+            | SandboxType::WindowsRestrictedToken => SandboxablePreference::Require,
+        }
+    }
+
     pub fn env_for(
         &self,
         command: SandboxCommand,
         options: ExecOptions,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
+        let sandbox_launch_config = SandboxLaunchConfig {
+            sandbox_preference: self.sandbox_preference(),
+            policy: self.policy.clone(),
+            file_system_policy: self.file_system_policy.clone(),
+            network_policy: self.network_policy,
+            sandbox_policy_cwd: self.sandbox_cwd.to_path_buf(),
+            additional_permissions: None,
+            enforce_managed_network: self.enforce_managed_network,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            use_legacy_landlock: self.use_legacy_landlock,
+        };
         self.manager
-            .transform(SandboxTransformRequest {
+            .transform(
                 command,
-                policy: self.policy,
-                file_system_policy: self.file_system_policy,
-                network_policy: self.network_policy,
-                sandbox: self.sandbox,
-                enforce_managed_network: self.enforce_managed_network,
+                &sandbox_launch_config,
                 network,
-                sandbox_policy_cwd: self.sandbox_cwd,
-                codex_linux_sandbox_exe: self
-                    .codex_linux_sandbox_exe
+                self.codex_linux_sandbox_exe
                     .map(std::path::PathBuf::as_path),
-                use_legacy_landlock: self.use_legacy_landlock,
-                windows_sandbox_level: self.windows_sandbox_level,
-                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
-            })
+            )
             .map(|request| {
                 crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })

@@ -16,5 +16,12 @@ pub async fn run_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
 pub async fn run_main_with_listen_url(
     listen_url: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    transport::run_transport(listen_url).await
+    run_main_with_runtime(listen_url, crate::ExecServerRuntimeConfig::detect()).await
+}
+
+pub async fn run_main_with_runtime(
+    listen_url: &str,
+    runtime: crate::ExecServerRuntimeConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    transport::run_transport(listen_url, runtime).await
 }

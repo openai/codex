@@ -34,8 +34,8 @@ use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxLaunchConfig;
 use codex_sandboxing::SandboxManager;
-use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
@@ -824,13 +824,6 @@ impl CoreShellCommandExecutor {
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
         let sandbox_manager = SandboxManager::new();
-        let sandbox = sandbox_manager.select_initial(
-            file_system_sandbox_policy,
-            network_sandbox_policy,
-            SandboxablePreference::Auto,
-            self.windows_sandbox_level,
-            self.network.is_some(),
-        );
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),
@@ -842,20 +835,24 @@ impl CoreShellCommandExecutor {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
-        let exec_request = sandbox_manager.transform(SandboxTransformRequest {
-            command,
-            policy: sandbox_policy,
-            file_system_policy: file_system_sandbox_policy,
+        let sandbox_launch_config = SandboxLaunchConfig {
+            sandbox_preference: SandboxablePreference::Auto,
+            policy: sandbox_policy.clone(),
+            file_system_policy: file_system_sandbox_policy.clone(),
             network_policy: network_sandbox_policy,
-            sandbox,
+            sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
+            additional_permissions: None,
             enforce_managed_network: self.network.is_some(),
-            network: self.network.as_ref(),
-            sandbox_policy_cwd: &self.sandbox_policy_cwd,
-            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
-            use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: false,
-        })?;
+            use_legacy_landlock: self.use_legacy_landlock,
+        };
+        let exec_request = sandbox_manager.transform(
+            command,
+            &sandbox_launch_config,
+            self.network.as_ref(),
+            self.codex_linux_sandbox_exe.as_deref(),
+        )?;
         let mut exec_request =
             crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, options);
         if let Some(network) = exec_request.network.as_ref() {
