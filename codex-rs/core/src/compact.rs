@@ -287,6 +287,7 @@ pub(crate) struct CompactionAnalyticsAttempt {
     turn_id: String,
     trigger: CompactionTrigger,
     mode: CompactionMode,
+    active_context_tokens_before: i64,
     started_at: u64,
     start_instant: Instant,
 }
@@ -298,12 +299,19 @@ impl CompactionAnalyticsAttempt {
         trigger: CompactionTrigger,
         mode: CompactionMode,
     ) -> Self {
+        let enabled = sess.enabled(Feature::GeneralAnalytics);
+        let active_context_tokens_before = if enabled {
+            sess.get_total_token_usage().await
+        } else {
+            0
+        };
         Self {
-            enabled: sess.enabled(Feature::GeneralAnalytics),
+            enabled,
             thread_id: sess.conversation_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             trigger,
             mode,
+            active_context_tokens_before,
             started_at: now_unix_seconds(),
             start_instant: Instant::now(),
         }
@@ -318,6 +326,7 @@ impl CompactionAnalyticsAttempt {
         if !self.enabled {
             return;
         }
+        let active_context_tokens_after = sess.get_total_token_usage().await;
         sess.services
             .analytics_events_client
             .track_compaction(CodexCompactionEvent {
@@ -327,6 +336,8 @@ impl CompactionAnalyticsAttempt {
                 mode: self.mode,
                 status,
                 error,
+                active_context_tokens_before: self.active_context_tokens_before,
+                active_context_tokens_after,
                 started_at: self.started_at,
                 completed_at: now_unix_seconds(),
                 duration_ms: Some(

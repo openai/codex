@@ -95,6 +95,8 @@ pub struct CodexCompactionEvent {
     pub mode: CompactionMode,
     pub status: CompactionStatus,
     pub error: Option<String>,
+    pub active_context_tokens_before: i64,
+    pub active_context_tokens_after: i64,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,
