@@ -342,6 +342,86 @@ fn lock_sandbox_dir(
     Ok(())
 }
 
+#[derive(Debug, Default)]
+struct WriteAclRepairStats {
+    changed: usize,
+    visited: usize,
+    errors: Vec<String>,
+}
+
+impl WriteAclRepairStats {
+    fn note_error(&mut self, message: String) {
+        // Keep the setup log useful without letting one damaged artifact hide every other path.
+        const MAX_RECORDED_ERRORS: usize = 20;
+        if self.errors.len() < MAX_RECORDED_ERRORS {
+            self.errors.push(message);
+        }
+    }
+}
+
+fn ensure_allow_write_tree(root: &Path, psids: &[*mut c_void]) -> WriteAclRepairStats {
+    let mut stats = WriteAclRepairStats::default();
+    repair_write_acl_descendants(root, psids, &mut stats);
+    stats
+}
+
+fn repair_write_acl_descendants(
+    path: &Path,
+    psids: &[*mut c_void],
+    stats: &mut WriteAclRepairStats,
+) {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) => {
+            stats.note_error(format!("read_dir {} failed: {err}", path.display()));
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                stats.note_error(format!(
+                    "read_dir entry under {} failed: {err}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        let child = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                stats.note_error(format!("file_type {} failed: {err}", child.display()));
+                continue;
+            }
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        stats.visited += 1;
+        match unsafe { ensure_allow_write_aces(&child, psids) } {
+            Ok(true) => {
+                stats.changed += 1;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                stats.note_error(format!(
+                    "write ACE repair failed on {}: {err}",
+                    child.display()
+                ));
+                continue;
+            }
+        }
+
+        if file_type.is_dir() {
+            repair_write_acl_descendants(&child, psids, stats);
+        }
+    }
+}
+
 pub fn main() -> Result<()> {
     let ret = real_main();
     if let Err(e) = &ret {
@@ -640,7 +720,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
-    let mut grant_tasks: Vec<PathBuf> = Vec::new();
+    let mut grant_tasks: Vec<(PathBuf, bool)> = Vec::new();
 
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
     let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
@@ -696,6 +776,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 need_grant = true;
             }
         }
+        let repair_descendants = !refresh_only || need_grant;
         if need_grant {
             log_line(
                 log,
@@ -704,13 +785,15 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     root.display()
                 ),
             )?;
-            grant_tasks.push(root.clone());
+        }
+        if repair_descendants {
+            grant_tasks.push((root.clone(), repair_descendants));
         }
     }
 
-    let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
+    let (tx, rx) = mpsc::channel::<(PathBuf, Result<WriteAclRepairStats>)>();
     std::thread::scope(|scope| {
-        for root in grant_tasks {
+        for (root, repair_descendants) in grant_tasks {
             let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
             let sid_strings = if is_command_cwd {
                 vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
@@ -730,7 +813,19 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                let res = (|| {
+                    let mut stats = WriteAclRepairStats::default();
+                    if unsafe { ensure_allow_write_aces(&root, &psids) }? {
+                        stats.changed += 1;
+                    }
+                    if repair_descendants {
+                        let tree_stats = ensure_allow_write_tree(&root, &psids);
+                        stats.changed += tree_stats.changed;
+                        stats.visited += tree_stats.visited;
+                        stats.errors.extend(tree_stats.errors);
+                    }
+                    Ok(stats)
+                })();
 
                 for psid in psids {
                     unsafe {
@@ -743,7 +838,20 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         drop(tx);
         for (root, res) in rx {
             match res {
-                Ok(_) => {}
+                Ok(stats) => {
+                    if stats.visited > 0 || stats.changed > 0 || !stats.errors.is_empty() {
+                        let _ = log_line(
+                            log,
+                            &format!(
+                                "write ACE repair on {}: visited={}, changed={}, sample_errors={:?}",
+                                root.display(),
+                                stats.visited,
+                                stats.changed,
+                                stats.errors
+                            ),
+                        );
+                    }
+                }
                 Err(e) => {
                     refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
                     if log_line(
