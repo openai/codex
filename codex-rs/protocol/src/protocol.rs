@@ -1649,8 +1649,8 @@ pub struct HookCompletedEvent {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeConversationVersion {
-    #[default]
     V1,
+    #[default]
     V2,
 }
 
