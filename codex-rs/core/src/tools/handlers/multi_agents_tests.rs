@@ -2,6 +2,7 @@ use super::*;
 use crate::CodexThread;
 use crate::ThreadManager;
 use crate::codex::make_session_and_context;
+use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::session_prefix::format_subagent_notification_message;
@@ -28,6 +29,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -1636,6 +1638,93 @@ async fn multi_agent_v2_spawn_omits_agent_id_when_named() {
     assert_eq!(result["task_name"], "/root/test_process");
     assert!(result.get("nickname").is_some());
     assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_forked_spawn_inherits_parent_config_instead_of_spawn_overrides() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+
+    let parent_developer_instructions = "parent developer instructions".to_string();
+    let role_developer_instructions = "role developer instructions";
+    let role_name = "fork_config_override_role".to_string();
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.join("fork-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        format!(
+            "model_reasoning_effort = \"low\"\ndeveloper_instructions = \"{role_developer_instructions}\"\n",
+        ),
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+    config.developer_instructions = Some(parent_developer_instructions.clone());
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("role that would override forked parent config".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.reasoning_effort = Some(ReasoningEffort::High);
+    turn.developer_instructions = Some(parent_developer_instructions.clone());
+    turn.config = Arc::new(config);
+
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "worker",
+                "agent_type": role_name,
+                "model": "not-a-real-model",
+                "reasoning_effort": "low",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect("forked spawn should ignore requested model config");
+
+    let child_thread_id = manager
+        .captured_ops()
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("spawned agent should receive an op");
+    let child_thread = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist");
+    let child_config = child_thread.codex.session.get_config().await;
+    let child_developer_instructions = child_config
+        .developer_instructions
+        .as_deref()
+        .expect("forked child should have developer instructions");
+
+    assert_eq!(
+        child_config.model_reasoning_effort,
+        Some(ReasoningEffort::High)
+    );
+    assert!(child_developer_instructions.contains(&parent_developer_instructions));
+    assert!(!child_developer_instructions.contains(role_developer_instructions));
 }
 
 #[tokio::test]
