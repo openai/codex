@@ -2280,7 +2280,14 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "mcp__rmcp__echo",
-            "description": "Echo back the provided message and include environment data.\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```",
+            "description": concat!(
+                "Echo back the provided message and include environment data.\n\n",
+                "exec tool declaration:\n",
+                "```ts\n",
+                "declare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): ",
+                "Promise<mcp_result<{ echo: string; env: string | null; }>>; };\n",
+                "```",
+            ),
         })
     );
 

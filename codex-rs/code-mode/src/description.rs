@@ -169,7 +169,7 @@ pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
 }
 
 pub fn build_exec_tool_description(
-    enabled_tools: &[(String, String)],
+    enabled_tools: &[ToolDefinition],
     namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
     code_mode_only: bool,
 ) -> String {
@@ -185,8 +185,18 @@ pub fn build_exec_tool_description(
     if !enabled_tools.is_empty() {
         let mut current_namespace: Option<&str> = None;
         let mut nested_tool_sections = Vec::with_capacity(enabled_tools.len());
+        let include_shared_mcp_types = enabled_tools.iter().any(is_mcp_tool);
 
-        for (name, nested_description) in enabled_tools {
+        if include_shared_mcp_types {
+            sections.push(format!(
+                "Shared MCP Types:\n```ts\n{}\n```",
+                render_mcp_typescript_preamble()
+            ));
+        }
+
+        for tool in enabled_tools {
+            let name = tool.name.as_str();
+            let nested_description = append_code_mode_sample_for_definition(tool);
             let next_namespace = namespace_descriptions
                 .get(name)
                 .map(|namespace_description| namespace_description.name.as_str());
@@ -300,6 +310,28 @@ fn append_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
             .unwrap_or_else(|| "unknown".to_string()),
         CodeModeToolKind::Freeform => "string".to_string(),
     };
+    if is_mcp_tool(definition) {
+        let structured_content_type = definition
+            .output_schema
+            .as_ref()
+            .and_then(extract_mcp_structured_content_schema)
+            .map(render_json_schema_to_typescript)
+            .unwrap_or_else(|| "unknown".to_string());
+        let output_type = if structured_content_type == "unknown" {
+            "mcp_result".to_string()
+        } else {
+            format!("mcp_result<{structured_content_type}>")
+        };
+
+        return append_code_mode_sample(
+            &definition.description,
+            &definition.name,
+            input_name,
+            input_type,
+            output_type,
+        );
+    }
+
     let output_type = definition
         .output_schema
         .as_ref()
@@ -326,6 +358,34 @@ fn render_code_mode_tool_declaration(
 
 pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
     render_json_schema_to_typescript_inner(schema)
+}
+
+fn extract_mcp_structured_content_schema(output_schema: &JsonValue) -> Option<&JsonValue> {
+    let properties = output_schema.get("properties")?.as_object()?;
+    Some(
+        properties
+            .get("structuredContent")
+            .unwrap_or(&JsonValue::Bool(true)),
+    )
+}
+
+fn is_mcp_tool(definition: &ToolDefinition) -> bool {
+    // MCP tools are qualified in `mcp_connection_manager::qualify_tools` as
+    // `mcp__<server>__<tool>`. Code mode nested tool specs do not include the
+    // separate `codex_apps` app-tool registration path.
+    definition.name.starts_with("mcp__")
+}
+
+fn render_mcp_typescript_preamble() -> &'static str {
+    concat!(
+        "type mcp_output = { [key: string]: unknown; };\n",
+        "type mcp_result<TStructured = unknown> = {\n",
+        "  _meta?: unknown;\n",
+        "  content: Array<mcp_output>;\n",
+        "  isError?: boolean;\n",
+        "  structuredContent?: TStructured;\n",
+        "};"
+    )
 }
 
 fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
@@ -676,7 +736,13 @@ mod tests {
     #[test]
     fn code_mode_only_description_includes_nested_tools() {
         let description = build_exec_tool_description(
-            &[("foo".to_string(), "bar".to_string())],
+            &[ToolDefinition {
+                name: "foo".to_string(),
+                description: "bar".to_string(),
+                kind: CodeModeToolKind::Function,
+                input_schema: None,
+                output_schema: None,
+            }],
             &BTreeMap::new(),
             /*code_mode_only*/ true,
         );
@@ -711,8 +777,20 @@ mod tests {
         ]);
         let description = build_exec_tool_description(
             &[
-                ("mcp__sample__alpha".to_string(), "First tool".to_string()),
-                ("mcp__sample__beta".to_string(), "Second tool".to_string()),
+                ToolDefinition {
+                    name: "mcp__sample__alpha".to_string(),
+                    description: "First tool".to_string(),
+                    kind: CodeModeToolKind::Function,
+                    input_schema: None,
+                    output_schema: None,
+                },
+                ToolDefinition {
+                    name: "mcp__sample__beta".to_string(),
+                    description: "Second tool".to_string(),
+                    kind: CodeModeToolKind::Function,
+                    input_schema: None,
+                    output_schema: None,
+                },
             ],
             &namespace_descriptions,
             /*code_mode_only*/ true,
@@ -740,12 +818,117 @@ Second tool"#
             },
         )]);
         let description = build_exec_tool_description(
-            &[("mcp__sample__alpha".to_string(), "First tool".to_string())],
+            &[ToolDefinition {
+                name: "mcp__sample__alpha".to_string(),
+                description: "First tool".to_string(),
+                kind: CodeModeToolKind::Function,
+                input_schema: None,
+                output_schema: None,
+            }],
             &namespace_descriptions,
             /*code_mode_only*/ true,
         );
 
         assert!(!description.contains("## mcp__sample"));
         assert!(description.contains("### `mcp__sample__alpha` (`mcp__sample__alpha`)"));
+    }
+
+    #[test]
+    fn code_mode_only_description_renders_shared_mcp_types_once() {
+        let first_tool = augment_tool_definition(ToolDefinition {
+            name: "mcp__sample__alpha".to_string(),
+            description: "First tool".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "structuredContent": {
+                        "type": "object",
+                        "properties": {
+                            "echo": { "type": "string" }
+                        },
+                        "required": ["echo"],
+                        "additionalProperties": false
+                    },
+                    "isError": { "type": "boolean" },
+                    "_meta": { "type": "object" }
+                },
+                "required": ["content"],
+                "additionalProperties": false
+            })),
+        });
+        let second_tool = augment_tool_definition(ToolDefinition {
+            name: "mcp__sample__beta".to_string(),
+            description: "Second tool".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "structuredContent": {
+                        "type": "object",
+                        "properties": {
+                            "count": { "type": "integer" }
+                        },
+                        "required": ["count"],
+                        "additionalProperties": false
+                    },
+                    "isError": { "type": "boolean" },
+                    "_meta": { "type": "object" }
+                },
+                "required": ["content"],
+                "additionalProperties": false
+            })),
+        });
+
+        let description = build_exec_tool_description(
+            &[
+                ToolDefinition {
+                    name: first_tool.name,
+                    description: "First tool".to_string(),
+                    kind: first_tool.kind,
+                    input_schema: first_tool.input_schema,
+                    output_schema: first_tool.output_schema,
+                },
+                ToolDefinition {
+                    name: second_tool.name,
+                    description: "Second tool".to_string(),
+                    kind: second_tool.kind,
+                    input_schema: second_tool.input_schema,
+                    output_schema: second_tool.output_schema,
+                },
+            ],
+            &BTreeMap::new(),
+            /*code_mode_only*/ true,
+        );
+
+        assert_eq!(
+            description
+                .matches("type mcp_result<TStructured = unknown>")
+                .count(),
+            1
+        );
+        assert_eq!(description.matches("Shared MCP Types:").count(), 1);
     }
 }

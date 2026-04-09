@@ -1608,7 +1608,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
 exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<mcp_result>; };
 ```"#
     );
 }
@@ -1694,7 +1694,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
     assert!(description.contains(
         r#"exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<mcp_result>; };
 ```"#
     ));
 }
@@ -1917,6 +1917,88 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
         icons: None,
         meta: None,
     }
+}
+
+fn mcp_tool_with_output_schema(
+    name: &str,
+    description: &str,
+    input_schema: serde_json::Value,
+    output_schema: serde_json::Value,
+) -> rmcp::model::Tool {
+    let mut tool = mcp_tool(name, description, input_schema);
+    tool.output_schema = Some(std::sync::Arc::new(rmcp::model::object(output_schema)));
+    tool
+}
+
+#[test]
+fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            "mcp__sample__echo".to_string(),
+            mcp_tool_with_output_schema(
+                "echo",
+                "Echo text",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"}
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false
+                }),
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "echo": {"type": "string"},
+                        "env": {
+                            "anyOf": [
+                                {"type": "string"},
+                                {"type": "null"}
+                            ]
+                        }
+                    },
+                    "required": ["echo", "env"],
+                    "additionalProperties": false
+                }),
+            ),
+        )])),
+        /*app_tools*/ None,
+        &[],
+    );
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        &find_tool(&tools, "mcp__sample__echo").spec
+    else {
+        panic!("expected function tool");
+    };
+
+    assert_eq!(
+        description,
+        r#"Echo text
+
+exec tool declaration:
+```ts
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<mcp_result<{ echo: string; env: string | null; }>>; };
+```"#
+    );
 }
 
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
