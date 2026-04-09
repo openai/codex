@@ -74,9 +74,10 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
     let request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: "thr_123".to_string(),
-            prompt: "hello".to_string(),
+            prompt: Some(Some("hello".to_string())),
             session_id: None,
             transport: None,
+            voice: None,
         })
         .await?;
     let error = timeout(
@@ -109,11 +110,12 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
     let request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: "thr_123".to_string(),
-            prompt: "hello".to_string(),
+            prompt: Some(Some("hello".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            voice: None,
         })
         .await?;
     let error = timeout(

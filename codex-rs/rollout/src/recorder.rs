@@ -94,7 +94,7 @@ pub enum RolloutRecorderParams {
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
     Persist {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
@@ -534,7 +534,7 @@ impl RolloutRecorder {
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout persist: {e}")))?;
         rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))
+            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))?
     }
 
     /// Flush all queued writes and wait until they are committed by the writer task.
@@ -830,11 +830,13 @@ async fn rollout_writer(
                     .await;
 
                     if let Err(err) = result {
-                        let _ = ack.send(());
-                        return Err(err);
+                        let kind = err.kind();
+                        let message = err.to_string();
+                        let _ = ack.send(Err(IoError::new(kind, message.clone())));
+                        return Err(IoError::new(kind, message));
                     }
                 }
-                let _ = ack.send(());
+                let _ = ack.send(Ok(()));
             }
             RolloutCmd::Flush { ack } => {
                 // Deferred fresh threads may not have an initialized file yet.

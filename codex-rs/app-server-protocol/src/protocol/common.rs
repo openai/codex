@@ -414,6 +414,11 @@ client_request_definitions! {
         params: v2::ThreadRealtimeStopParams,
         response: v2::ThreadRealtimeStopResponse,
     },
+    #[experimental("thread/realtime/listVoices")]
+    ThreadRealtimeListVoices => "thread/realtime/listVoices" {
+        params: v2::ThreadRealtimeListVoicesParams,
+        response: v2::ThreadRealtimeListVoicesResponse,
+    },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
         response: v2::ReviewStartResponse,
@@ -1761,9 +1766,10 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
-                prompt: "You are on a call".to_string(),
+                prompt: Some(Some("You are on a call".to_string())),
                 session_id: Some("sess_456".to_string()),
                 transport: None,
+                voice: Some(codex_protocol::protocol::RealtimeVoice::Marin),
             },
         };
         assert_eq!(
@@ -1774,11 +1780,97 @@ mod tests {
                     "threadId": "thr_123",
                     "prompt": "You are on a call",
                     "sessionId": "sess_456",
-                    "transport": null
+                    "transport": null,
+                    "voice": "marin"
                 }
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_start_prompt_default_and_null() -> Result<()> {
+        let default_prompt_request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: None,
+                session_id: None,
+                transport: None,
+                voice: None,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "sessionId": null,
+                    "transport": null,
+                    "voice": null
+                }
+            }),
+            serde_json::to_value(&default_prompt_request)?,
+        );
+
+        let null_prompt_request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: Some(None),
+                session_id: None,
+                transport: None,
+                voice: None,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "prompt": null,
+                    "sessionId": null,
+                    "transport": null,
+                    "voice": null
+                }
+            }),
+            serde_json::to_value(&null_prompt_request)?,
+        );
+
+        let default_prompt_value = json!({
+            "method": "thread/realtime/start",
+            "id": 9,
+            "params": {
+                "threadId": "thr_123",
+                "sessionId": null,
+                "transport": null,
+                "voice": null
+            }
+        });
+        assert_eq!(
+            serde_json::from_value::<ClientRequest>(default_prompt_value)?,
+            default_prompt_request,
+        );
+
+        let null_prompt_value = json!({
+            "method": "thread/realtime/start",
+            "id": 9,
+            "params": {
+                "threadId": "thr_123",
+                "prompt": null,
+                "sessionId": null,
+                "transport": null,
+                "voice": null
+            }
+        });
+        assert_eq!(
+            serde_json::from_value::<ClientRequest>(null_prompt_value)?,
+            null_prompt_request,
+        );
+
         Ok(())
     }
 
@@ -1852,9 +1944,10 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
-                prompt: "You are on a call".to_string(),
+                prompt: Some(Some("You are on a call".to_string())),
                 session_id: None,
                 transport: None,
+                voice: None,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);

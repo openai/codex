@@ -3,6 +3,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::guardian_rejection_message;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
@@ -469,7 +470,13 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            EscalationDecision::deny(Some("User denied execution".to_string()))
+                            let message = if routes_approval_to_guardian(&self.turn) {
+                                guardian_rejection_message(self.session.as_ref(), &self.call_id)
+                                    .await
+                            } else {
+                                "User denied execution".to_string()
+                            };
+                            EscalationDecision::deny(Some(message))
                         }
                         ReviewDecision::Abort => {
                             EscalationDecision::deny(Some("User cancelled execution".to_string()))
@@ -658,7 +665,7 @@ fn commands_for_intercepted_exec_policy(
 
 struct CoreShellCommandExecutor {
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
@@ -827,7 +834,7 @@ impl CoreShellCommandExecutor {
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),
-            cwd: workdir.to_path_buf(),
+            cwd: workdir.clone(),
             env,
             additional_permissions,
         };
@@ -844,7 +851,7 @@ impl CoreShellCommandExecutor {
             enforce_managed_network: self.network.is_some(),
             network: self.network.as_ref(),
             sandbox_policy_cwd: &self.sandbox_policy_cwd,
-            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: false,
@@ -857,7 +864,7 @@ impl CoreShellCommandExecutor {
 
         Ok(PreparedExec {
             command: exec_request.command,
-            cwd: exec_request.cwd,
+            cwd: exec_request.cwd.to_path_buf(),
             env: exec_request.env,
             arg0: exec_request.arg0,
         })

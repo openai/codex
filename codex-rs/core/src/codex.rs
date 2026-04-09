@@ -52,6 +52,7 @@ use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::build_track_events_context;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -384,6 +385,13 @@ use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+
+fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
+    matches!(
+        auth_manager.and_then(AuthManager::auth_mode),
+        Some(AuthMode::Chatgpt)
+    )
+}
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -954,6 +962,9 @@ impl TurnContext {
                 .list_models(RefreshStrategy::OnlineIfUncached)
                 .await,
             features: &features,
+            image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(
+                self.auth_manager.as_deref(),
+            ),
             web_search_mode: self.tools_config.web_search_mode,
             session_source: self.session_source.clone(),
             sandbox_policy: self.sandbox_policy.get(),
@@ -963,6 +974,9 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_has_environment(self.tools_config.has_environment)
+        .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
+        .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
+        .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
@@ -1015,10 +1029,9 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
+    pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
         path.as_ref()
-            .map(PathBuf::from)
-            .map_or_else(|| self.cwd.to_path_buf(), |p| self.cwd.as_path().join(p))
+            .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
 
     pub(crate) fn compact_prompt(&self) -> &str {
@@ -1480,6 +1493,8 @@ impl Session {
             model_info.slug.as_str(),
         );
         let session_source = session_configuration.session_source.clone();
+        let image_generation_tool_auth_allowed =
+            image_generation_tool_auth_allowed(auth_manager.as_deref());
         let auth_manager_for_context = auth_manager;
         let provider_for_context = provider;
         let session_telemetry_for_context = session_telemetry;
@@ -1487,6 +1502,7 @@ impl Session {
             model_info: &model_info,
             available_models: &models_manager.try_list_models().unwrap_or_default(),
             features: &per_turn_config.features,
+            image_generation_tool_auth_allowed,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
             session_source: session_source.clone(),
             sandbox_policy: session_configuration.sandbox_policy.get(),
@@ -1500,6 +1516,9 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_has_environment(environment.is_some())
+        .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
+        .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
+        .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -1967,6 +1986,7 @@ impl Session {
             // setup is straightforward enough and performs well.
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
                 &config.permissions.approval_policy,
+                &config.permissions.sandbox_policy,
             ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
@@ -1989,6 +2009,7 @@ impl Session {
             session_telemetry,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            guardian_rejection_rationales: Mutex::new(HashMap::new()),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager: Arc::clone(&mcp_manager),
@@ -2200,14 +2221,19 @@ impl Session {
         }
     }
 
-    pub(crate) async fn ensure_rollout_materialized(&self) {
+    pub(crate) async fn try_ensure_rollout_materialized(&self) -> std::io::Result<()> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
         };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.persist().await
-        {
+        if let Some(rec) = recorder {
+            rec.persist().await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_rollout_materialized(&self) {
+        if let Err(e) = self.try_ensure_rollout_materialized().await {
             warn!("failed to materialize rollout recorder: {e}");
         }
     }
@@ -2544,11 +2570,12 @@ impl Session {
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .set_approval_policy(&session_configuration.approval_policy);
+        {
+            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
+            mcp_connection_manager
+                .set_sandbox_policy(per_turn_config.permissions.sandbox_policy.get());
+        }
 
         if sandbox_policy_changed {
             self.refresh_managed_network_proxy_for_current_sandbox_policy()
@@ -4603,6 +4630,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handle_realtime_conversation_close(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::RealtimeConversationListVoices => {
+                    handlers::realtime_conversation_list_voices(&sess, sub.id.clone()).await;
+                    false
+                }
                 Op::OverrideTurnContext {
                     cwd,
                     approval_policy,
@@ -4836,6 +4867,8 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
+    use codex_protocol::protocol::RealtimeVoicesList;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
@@ -4868,6 +4901,18 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
+    }
+
+    pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::RealtimeConversationListVoicesResponse(
+                RealtimeConversationListVoicesResponseEvent {
+                    voices: RealtimeVoicesList::builtin(),
+                },
+            ),
+        })
+        .await;
     }
 
     pub async fn override_turn_context(
@@ -5669,6 +5714,9 @@ async fn spawn_review_thread(
             .list_models(RefreshStrategy::OnlineIfUncached)
             .await,
         features: &review_features,
+        image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(Some(
+            sess.services.auth_manager.as_ref(),
+        )),
         web_search_mode: Some(review_web_search_mode),
         session_source: parent_turn_context.session_source.clone(),
         sandbox_policy: parent_turn_context.sandbox_policy.get(),
@@ -5682,6 +5730,9 @@ async fn spawn_review_thread(
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_has_environment(parent_turn_context.environment.is_some())
+    .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
+    .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
+    .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
     .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         &config.agent_roles,
     ));
@@ -7150,6 +7201,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListSkillsResponse(_)
+        | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)

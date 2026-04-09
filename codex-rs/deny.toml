@@ -101,6 +101,9 @@ allow = [
     # Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
     # Used by: allocative, anyhow, arboard, assert_cmd, assert_matches, async-channel, async-trait, base64, chardetng, chrono, clap, clap_complete, color-eyre, ctor, diffy, dirs, dunce, encoding_rs, env_logger, escargot, eventsource-stream, futures, http, image, indexmap, insta, itertools, keyring, landlock, lazy_static, libc, log, maplit, multimap, once_cell, opentelemetry, opentelemetry-appender-tracing, opentelemetry-otlp, opentelemetry-semantic-conventions, opentelemetry_sdk, pathdiff, predicates, pretty_assertions, rand, regex-lite, reqwest, seccompiler, serde, serde_json, serde_with, sha1, sha2, shlex, similar, socket2, starlark, supports-color, sys-locale, tempfile, test-log, thiserror, time, tiny_http, toml, toml_edit, unicode-segmentation, unicode-width, url, uuid, webbrowser, wiremock, zeroize
     "Apache-2.0",
+    # Apache-2.0 WITH LLVM-exception - https://spdx.org/licenses/LLVM-exception.html
+    # Used by: target-lexicon
+    "Apache-2.0 WITH LLVM-exception",
     # BSD-2-Clause - https://opensource.org/license/bsd-2-clause
     # Used by: transitive only
     "BSD-2-Clause",
