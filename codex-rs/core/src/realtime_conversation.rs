@@ -573,12 +573,10 @@ pub(crate) async fn build_realtime_session_config(
         (false, true) => prompt,
         (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
-    let model = Some(
-        config
-            .experimental_realtime_ws_model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_REALTIME_MODEL.to_string()),
-    );
+    let model = config.experimental_realtime_ws_model.clone().or_else(|| {
+        (config.realtime.version == RealtimeWsVersion::V2)
+            .then(|| DEFAULT_REALTIME_MODEL.to_string())
+    });
     let event_parser = match config.realtime.version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,

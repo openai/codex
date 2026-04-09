@@ -6,6 +6,7 @@ use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
 use codex_api::session_update_session_json;
+use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
@@ -434,6 +435,95 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
         })?
     });
     assert_eq!(connections[1][0].body_json(), expected_session_update);
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let _closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_v1_without_model_override_preserves_provider_default() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_v1_default", "instructions": "backend prompt" }
+        })]],
+    ])
+    .await;
+
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.model_provider.supports_websockets = true;
+        config.realtime.version = RealtimeWsVersion::V1;
+    });
+    let test = builder.build(&api_server).await?;
+    assert!(
+        realtime_server
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+            transport: None,
+        }))
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    assert_eq!(started.version, RealtimeConversationVersion::V1);
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_v1_default");
+
+    let connections = realtime_server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(
+        realtime_server.handshakes()[1].uri(),
+        "/v1/realtime?intent=quicksilver"
+    );
+    assert_eq!(
+        connections[1][0].body_json(),
+        json!({
+            "type": "session.update",
+            "session": {
+                "id": started.session_id,
+                "type": "quicksilver",
+                "instructions": "backend prompt",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 24000}
+                    },
+                    "output": {"voice": "fathom"}
+                }
+            }
+        })
+    );
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
     let _closed = wait_for_event_match(&test.codex, |msg| match msg {
