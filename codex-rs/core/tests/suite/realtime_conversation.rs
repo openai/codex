@@ -2,6 +2,10 @@ use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_api::RealtimeEventParser;
+use codex_api::RealtimeSessionConfig;
+use codex_api::RealtimeSessionMode;
+use codex_api::session_update_session_json;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
@@ -257,7 +261,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
     assert!(started.session_id.is_some());
-    assert_eq!(started.version, RealtimeConversationVersion::V1);
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
@@ -324,7 +328,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     );
     assert_eq!(
         server.handshakes()[1].uri(),
-        "/v1/realtime?intent=quicksilver&model=realtime-test-model"
+        "/v1/realtime?model=realtime-test-model"
     );
     let mut request_types = [
         connection[1].body_json()["type"]
@@ -357,6 +361,88 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     ));
 
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_default", "instructions": "backend prompt" }
+        })]],
+    ])
+    .await;
+
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.model_provider.supports_websockets = true;
+    });
+    let test = builder.build(&api_server).await?;
+    assert!(
+        realtime_server
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+            transport: None,
+        }))
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_default");
+
+    let connections = realtime_server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(
+        realtime_server.handshakes()[1].uri(),
+        "/v1/realtime?model=gpt-realtime-1.5"
+    );
+    let expected_session_update = json!({
+        "type": "session.update",
+        "session": session_update_session_json(RealtimeSessionConfig {
+            instructions: "backend prompt".to_string(),
+            model: Some("gpt-realtime-1.5".to_string()),
+            session_id: started.session_id.clone(),
+            event_parser: RealtimeEventParser::RealtimeV2,
+            session_mode: RealtimeSessionMode::Conversational,
+        })?
+    });
+    assert_eq!(connections[1][0].body_json(), expected_session_update);
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let _closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+
+    realtime_server.shutdown().await;
     Ok(())
 }
 
@@ -500,6 +586,110 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         closed.reason.as_deref(),
         Some("requested" | "transport_closed")
     ));
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_webrtc_start_defaults_to_gpt_realtime_1_5() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let capture = RealtimeCallRequestCapture::new();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/realtime/calls$"))
+        .and(capture.clone())
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/realtime/calls/calls/rtc_core_default")
+                .set_body_string("v=answer\r\n"),
+        )
+        .mount(&server)
+        .await;
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_default_webrtc", "instructions": "backend prompt" }
+        })]],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
+
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+        }))
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
+    let _created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationSdp(created) => Some(Ok(created.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
+
+    let request = capture.single_request();
+    let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
+    let mut session = session_update_session_json(RealtimeSessionConfig {
+        instructions: "backend prompt".to_string(),
+        model: Some("gpt-realtime-1.5".to_string()),
+        session_id: Some("ignored".to_string()),
+        event_parser: RealtimeEventParser::RealtimeV2,
+        session_mode: RealtimeSessionMode::Conversational,
+    })?;
+    session
+        .as_object_mut()
+        .expect("session should be an object")
+        .remove("id");
+    let session = serde_json::to_string(&session).expect("session should serialize");
+    assert_eq!(
+        body,
+        format!(
+            "--codex-realtime-call-boundary\r\n\
+             Content-Disposition: form-data; name=\"sdp\"\r\n\
+             Content-Type: application/sdp\r\n\
+             \r\n\
+             v=offer\r\n\
+             \r\n\
+             --codex-realtime-call-boundary\r\n\
+             Content-Disposition: form-data; name=\"session\"\r\n\
+             Content-Type: application/json\r\n\
+             \r\n\
+             {session}\r\n\
+             --codex-realtime-call-boundary--\r\n"
+        )
+    );
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let _closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
 
     realtime_server.shutdown().await;
     Ok(())
