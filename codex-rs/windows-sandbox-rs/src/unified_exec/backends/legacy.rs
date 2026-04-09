@@ -99,12 +99,13 @@ fn spawn_legacy_process(
             logs_base_dir,
         )?;
         let stdout_join = spawn_output_reader(pipe_handles.stdout_read, stdout_tx);
-        let stderr_join = spawn_output_reader(
-            pipe_handles
-                .stderr_read
-                .expect("separate stderr handle should be present"),
-            stderr_tx.expect("separate stderr channel should be present"),
-        );
+        let Some(stderr_read) = pipe_handles.stderr_read else {
+            anyhow::bail!("separate stderr handle should be present");
+        };
+        let Some(stderr_tx) = stderr_tx else {
+            anyhow::bail!("separate stderr channel should be present");
+        };
+        let stderr_join = spawn_output_reader(stderr_read, stderr_tx);
         let output_join = std::thread::spawn(move || {
             let _ = stdout_join.join();
             let _ = stderr_join.join();
@@ -206,12 +207,12 @@ fn finalize_exit(
 ) {
     let exit_code = {
         let mut raw_exit = 1u32;
-        if let Ok(guard) = process_handle.lock() {
-            if let Some(handle) = guard.as_ref() {
-                unsafe {
-                    WaitForSingleObject(*handle, INFINITE);
-                    GetExitCodeProcess(*handle, &mut raw_exit);
-                }
+        if let Ok(guard) = process_handle.lock()
+            && let Some(handle) = guard.as_ref()
+        {
+            unsafe {
+                WaitForSingleObject(*handle, INFINITE);
+                GetExitCodeProcess(*handle, &mut raw_exit);
             }
         }
         raw_exit as i32
@@ -224,25 +225,25 @@ fn finalize_exit(
         if thread_handle != 0 && thread_handle != INVALID_HANDLE_VALUE {
             CloseHandle(thread_handle);
         }
-        if let Ok(mut guard) = process_handle.lock() {
-            if let Some(handle) = guard.take() {
-                CloseHandle(handle);
-            }
+        if let Ok(mut guard) = process_handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            CloseHandle(handle);
         }
     }
 
     if exit_code == 0 {
         log_success(&command, logs_base_dir);
     } else {
-        log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+        log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
     }
 
-    if let Some(cap_sid) = cap_sid {
-        if let Ok(sid) = LocalSid::from_string(&cap_sid) {
-            unsafe {
-                for path in guards {
-                    revoke_ace(&path, sid.as_ptr());
-                }
+    if let Some(cap_sid) = cap_sid
+        && let Ok(sid) = LocalSid::from_string(&cap_sid)
+    {
+        unsafe {
+            for path in guards {
+                revoke_ace(&path, sid.as_ptr());
             }
         }
     }
@@ -337,7 +338,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         use_private_desktop,
         tty,
         stdin_open,
-        stdout_tx.clone(),
+        stdout_tx,
         stderr_rx.as_ref().map(|(tx, _rx)| tx.clone()),
         writer_rx,
         common.logs_base_dir.as_deref(),
@@ -345,11 +346,12 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         Ok(handles) => handles,
         Err(err) => {
             unsafe {
-                if !persist_aces && !guards.is_empty() {
-                    if let Ok(sid) = LocalSid::from_string(&security.cap_sid_str) {
-                        for path in &guards {
-                            revoke_ace(path, sid.as_ptr());
-                        }
+                if !persist_aces
+                    && !guards.is_empty()
+                    && let Ok(sid) = LocalSid::from_string(&security.cap_sid_str)
+                {
+                    for path in &guards {
+                        revoke_ace(path, sid.as_ptr());
                     }
                 }
                 CloseHandle(security.h_token);
@@ -366,7 +368,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let cap_sid_for_wait = if guards_for_wait.is_empty() {
         None
     } else {
-        Some(security.cap_sid_str.clone())
+        Some(security.cap_sid_str)
     };
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
@@ -375,20 +377,19 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
         if wait_res == WAIT_TIMEOUT {
             unsafe {
-                if let Ok(guard) = wait_handle.lock() {
-                    if let Some(handle) = guard.as_ref() {
-                        let _ = TerminateProcess(*handle, 1);
-                    }
+                if let Ok(guard) = wait_handle.lock()
+                    && let Some(handle) = guard.as_ref()
+                {
+                    let _ = TerminateProcess(*handle, 1);
                 }
             }
         }
-        if let Some(hpc) = hpc_for_wait {
-            if let Ok(mut guard) = hpc.lock() {
-                if let Some(hpc) = guard.take() {
-                    unsafe {
-                        ClosePseudoConsole(hpc);
-                    }
-                }
+        if let Some(hpc) = hpc_for_wait
+            && let Ok(mut guard) = hpc.lock()
+            && let Some(hpc) = guard.take()
+        {
+            unsafe {
+                ClosePseudoConsole(hpc);
             }
         }
         unsafe {
@@ -411,11 +412,11 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let terminator = {
         let process_handle = Arc::clone(&process_handle);
         Some(Box::new(move || {
-            if let Ok(guard) = process_handle.lock() {
-                if let Some(handle) = guard.as_ref() {
-                    unsafe {
-                        let _ = TerminateProcess(*handle, 1);
-                    }
+            if let Ok(guard) = process_handle.lock()
+                && let Some(handle) = guard.as_ref()
+            {
+                unsafe {
+                    let _ = TerminateProcess(*handle, 1);
                 }
             }
         }) as Box<dyn FnMut() + Send + Sync>)

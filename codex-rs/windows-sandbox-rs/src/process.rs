@@ -146,7 +146,7 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
-                return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
+                return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
             }
             Ok(CreatedProcess {
                 process_info: pi,
@@ -187,7 +187,7 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
-                return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
+                return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
             }
             Ok(CreatedProcess {
                 process_info: pi,
@@ -223,6 +223,7 @@ pub struct PipeSpawnHandles {
 }
 
 /// Spawns a process with anonymous pipes and returns the relevant handles.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_process_with_pipes(
     h_token: HANDLE,
     argv: &[String],

@@ -375,17 +375,17 @@ fn spawn_input_loop(
                 Message::Resize {
                     payload: ResizePayload { rows, cols },
                 } => {
-                    if let Ok(guard) = hpc_handle.lock() {
-                        if let Some(hpc) = guard.as_ref() {
-                            unsafe {
-                                let _ = ResizePseudoConsole(
-                                    *hpc,
-                                    COORD {
-                                        X: cols as i16,
-                                        Y: rows as i16,
-                                    },
-                                );
-                            }
+                    if let Ok(guard) = hpc_handle.lock()
+                        && let Some(hpc) = guard.as_ref()
+                    {
+                        unsafe {
+                            let _ = ResizePseudoConsole(
+                                *hpc,
+                                COORD {
+                                    X: cols as i16,
+                                    Y: rows as i16,
+                                },
+                            );
                         }
                     }
                 }
@@ -537,11 +537,11 @@ pub fn main() -> Result<()> {
         }
     }
 
-    if let Ok(mut guard) = hpc_handle.lock() {
-        if let Some(hpc) = guard.take() {
-            unsafe {
-                ClosePseudoConsole(hpc);
-            }
+    if let Ok(mut guard) = hpc_handle.lock()
+        && let Some(hpc) = guard.take()
+    {
+        unsafe {
+            ClosePseudoConsole(hpc);
         }
     }
 
