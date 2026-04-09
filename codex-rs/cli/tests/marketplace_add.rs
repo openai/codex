@@ -127,3 +127,39 @@ async fn marketplace_add_rejects_same_name_from_different_source() -> Result<()>
 
     Ok(())
 }
+
+#[tokio::test]
+async fn marketplace_add_sparse_flag_parses_before_and_after_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    let source = source.path().to_str().unwrap();
+    let sparse_requires_git = "--sparse can only be used with git marketplace sources";
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", "--sparse", "plugins/foo", source])
+        .assert()
+        .failure()
+        .stderr(contains(sparse_requires_git));
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", source, "--sparse", "plugins/foo"])
+        .assert()
+        .failure()
+        .stderr(contains(sparse_requires_git));
+
+    codex_command(codex_home.path())?
+        .args([
+            "marketplace",
+            "add",
+            "--sparse",
+            "plugins/foo",
+            "--sparse",
+            "skills/bar",
+            source,
+        ])
+        .assert()
+        .failure()
+        .stderr(contains(sparse_requires_git));
+
+    Ok(())
+}
