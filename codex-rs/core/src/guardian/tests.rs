@@ -15,7 +15,10 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::test_support;
+use codex_config::McpServerConfig;
+use codex_config::McpServerTransportConfig;
 use codex_config::config_toml::ConfigToml;
+use codex_features::Feature;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -560,6 +563,13 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let mut config = (*turn.config).clone();
     config.cwd = temp_cwd.abs();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.base_instructions = Some("PARENT_BASE_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE".to_string());
+    config.user_instructions = Some("PARENT_USER_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE".to_string());
+    config.developer_instructions =
+        Some("PARENT_DEVELOPER_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE".to_string());
+    config.include_permissions_instructions = true;
+    config.include_apps_instructions = true;
+    config.include_environment_context = true;
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
         config.codex_home.clone(),
@@ -608,6 +618,20 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
 
     let request = request_log.single_request();
+    let request_body = request.body_json();
+    let request_body_text = request_body.to_string();
+    for omitted_parent_text in [
+        "PARENT_BASE_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE",
+        "PARENT_USER_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE",
+        "PARENT_DEVELOPER_INSTRUCTIONS_SHOULD_NOT_BE_VISIBLE",
+        "<environment_context>",
+        "<permissions instructions>",
+    ] {
+        assert!(
+            !request_body_text.contains(omitted_parent_text),
+            "guardian review request should omit inherited parent text: {omitted_parent_text}"
+        );
+    }
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
     settings.set_prepend_module_to_snapshot(false);
@@ -1081,6 +1105,116 @@ fn guardian_review_session_config_overrides_parent_developer_instructions() {
         guardian_config.developer_instructions,
         Some(guardian_policy_prompt())
     );
+}
+
+#[test]
+fn guardian_review_session_config_strips_parent_prompt_and_tooling_surface() {
+    let mut parent_config = test_config();
+    parent_config.base_instructions = Some("parent base instructions".to_string());
+    parent_config.user_instructions = Some("parent user instructions".to_string());
+    parent_config.developer_instructions = Some("parent developer instructions".to_string());
+    parent_config.compact_prompt = Some("parent compact prompt".to_string());
+    parent_config.include_permissions_instructions = true;
+    parent_config.include_apps_instructions = true;
+    parent_config.include_environment_context = true;
+    parent_config.project_doc_max_bytes = 4096;
+    parent_config
+        .mcp_servers
+        .set(std::collections::HashMap::from([(
+            "parent-mcp".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "parent-mcp".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: None,
+                tools: std::collections::HashMap::new(),
+            },
+        )]))
+        .expect("set parent mcp servers");
+    parent_config.js_repl_node_path = Some(PathBuf::from("/parent/node"));
+    parent_config.js_repl_node_module_dirs = vec![PathBuf::from("/parent/node_modules")];
+    parent_config.zsh_path = Some(PathBuf::from("/parent/zsh"));
+    parent_config.main_execve_wrapper_exe = Some(PathBuf::from("/parent/execve-wrapper"));
+    parent_config.include_apply_patch_tool = true;
+    parent_config.use_experimental_unified_exec_tool = true;
+    parent_config
+        .features
+        .enable(Feature::JsRepl)
+        .expect("enable js repl");
+    parent_config
+        .features
+        .enable(Feature::CodeMode)
+        .expect("enable code mode");
+    parent_config
+        .features
+        .enable(Feature::MemoryTool)
+        .expect("enable memory");
+    parent_config
+        .features
+        .enable(Feature::Collab)
+        .expect("enable collab");
+    parent_config
+        .features
+        .enable(Feature::SpawnCsv)
+        .expect("enable spawn csv");
+    parent_config
+        .features
+        .enable(Feature::ApplyPatchFreeform)
+        .expect("enable apply patch");
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
+
+    assert_eq!(
+        guardian_config.base_instructions.as_deref(),
+        Some(
+            "You are Codex Guardian, a focused approval-review agent. Follow the guardian developer policy. Return only the required final JSON."
+        )
+    );
+    assert_eq!(guardian_config.user_instructions, None);
+    assert_eq!(guardian_config.compact_prompt, None);
+    assert!(!guardian_config.include_permissions_instructions);
+    assert!(!guardian_config.include_apps_instructions);
+    assert!(!guardian_config.include_environment_context);
+    assert_eq!(guardian_config.project_doc_max_bytes, 0);
+    assert!(guardian_config.mcp_servers.is_empty());
+    assert_eq!(guardian_config.js_repl_node_path, None);
+    assert_eq!(
+        guardian_config.js_repl_node_module_dirs,
+        Vec::<PathBuf>::new()
+    );
+    assert_eq!(guardian_config.zsh_path, None);
+    assert_eq!(guardian_config.main_execve_wrapper_exe, None);
+    assert!(!guardian_config.include_apply_patch_tool);
+    assert!(!guardian_config.use_experimental_unified_exec_tool);
+    assert!(!guardian_config.permissions.allow_login_shell);
+    for disabled_feature in [
+        Feature::JsRepl,
+        Feature::CodeMode,
+        Feature::MemoryTool,
+        Feature::Collab,
+        Feature::SpawnCsv,
+        Feature::ApplyPatchFreeform,
+    ] {
+        assert!(!guardian_config.features.enabled(disabled_feature));
+    }
 }
 
 #[test]

@@ -6,8 +6,9 @@
 //!    relevant recent assistant and tool context.
 //! 2. Ask a dedicated guardian review session to assess the exact planned
 //!    action and return strict JSON.
-//!    The guardian clones the parent config, so it inherits any managed
-//!    network proxy / allowlist that the parent turn already had.
+//!    The guardian runs with a sanitized review-session config. It may inherit
+//!    the parent managed-network proxy / allowlist for read-only checks, but it
+//!    does not inherit parent prompt context.
 //! 3. Fail closed on timeout, execution failure, or malformed output.
 //! 4. Apply the guardian's explicit allow/deny outcome.
 

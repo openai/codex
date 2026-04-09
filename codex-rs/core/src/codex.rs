@@ -3731,81 +3731,89 @@ impl Session {
         {
             developer_sections.push(developer_instructions.to_string());
         }
-        // Add developer instructions for memories.
-        if turn_context.features.enabled(Feature::MemoryTool)
-            && turn_context.config.memories.use_memories
-            && let Some(memory_prompt) =
-                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
-        {
-            developer_sections.push(memory_prompt);
-        }
-        // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if let Some(collab_instructions) =
-            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
-        {
-            developer_sections.push(collab_instructions.into_text());
-        }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
-            reference_context_item.as_ref(),
-            previous_turn_settings.as_ref(),
-            turn_context,
-        ) {
-            developer_sections.push(realtime_update.into_text());
-        }
-        if self.features.enabled(Feature::Personality)
-            && let Some(personality) = turn_context.personality
-        {
-            let model_info = turn_context.model_info.clone();
-            let has_baked_personality = model_info.supports_personality()
-                && base_instructions == model_info.get_model_instructions(Some(personality));
-            if !has_baked_personality
-                && let Some(personality_message) =
-                    crate::context_manager::updates::personality_message_for(
-                        &model_info,
-                        personality,
-                    )
+        if !separate_guardian_developer_message {
+            // Add developer instructions for memories.
+            if turn_context.features.enabled(Feature::MemoryTool)
+                && turn_context.config.memories.use_memories
+                && let Some(memory_prompt) =
+                    build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
             {
-                developer_sections.push(
-                    DeveloperInstructions::personality_spec_message(personality_message)
-                        .into_text(),
-                );
+                developer_sections.push(memory_prompt);
             }
-        }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
-            let accessible_and_enabled_connectors =
-                connectors::list_accessible_and_enabled_connectors_from_manager(
-                    &mcp_connection_manager,
-                    &turn_context.config,
+            // Add developer instructions from collaboration_mode if they exist and are non-empty
+            if let Some(collab_instructions) =
+                DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
+            {
+                developer_sections.push(collab_instructions.into_text());
+            }
+            if let Some(realtime_update) =
+                crate::context_manager::updates::build_initial_realtime_item(
+                    reference_context_item.as_ref(),
+                    previous_turn_settings.as_ref(),
+                    turn_context,
                 )
-                .await;
-            if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
-                developer_sections.push(apps_section);
+            {
+                developer_sections.push(realtime_update.into_text());
+            }
+            if self.features.enabled(Feature::Personality)
+                && let Some(personality) = turn_context.personality
+            {
+                let model_info = turn_context.model_info.clone();
+                let has_baked_personality = model_info.supports_personality()
+                    && base_instructions == model_info.get_model_instructions(Some(personality));
+                if !has_baked_personality
+                    && let Some(personality_message) =
+                        crate::context_manager::updates::personality_message_for(
+                            &model_info,
+                            personality,
+                        )
+                {
+                    developer_sections.push(
+                        DeveloperInstructions::personality_spec_message(personality_message)
+                            .into_text(),
+                    );
+                }
+            }
+            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+                let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+                let accessible_and_enabled_connectors =
+                    connectors::list_accessible_and_enabled_connectors_from_manager(
+                        &mcp_connection_manager,
+                        &turn_context.config,
+                    )
+                    .await;
+                if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors)
+                {
+                    developer_sections.push(apps_section);
+                }
+            }
+            let implicit_skills = turn_context
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation();
+            if let Some(skills_section) = render_skills_section(&implicit_skills) {
+                developer_sections.push(skills_section);
+            }
+            let loaded_plugins = self
+                .services
+                .plugins_manager
+                .plugins_for_config(&turn_context.config);
+            if let Some(plugin_section) =
+                render_plugins_section(loaded_plugins.capability_summaries())
+            {
+                developer_sections.push(plugin_section);
+            }
+            if turn_context.features.enabled(Feature::CodexGitCommit)
+                && let Some(commit_message_instruction) = commit_message_trailer_instruction(
+                    turn_context.config.commit_attribution.as_deref(),
+                )
+            {
+                developer_sections.push(commit_message_instruction);
             }
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
-        }
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config);
-        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
+        if !separate_guardian_developer_message
+            && let Some(user_instructions) = turn_context.user_instructions.as_deref()
         {
-            developer_sections.push(plugin_section);
-        }
-        if turn_context.features.enabled(Feature::CodexGitCommit)
-            && let Some(commit_message_instruction) = commit_message_trailer_instruction(
-                turn_context.config.commit_attribution.as_deref(),
-            )
-        {
-            developer_sections.push(commit_message_instruction);
-        }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(
                 UserInstructions {
                     text: user_instructions.to_string(),
