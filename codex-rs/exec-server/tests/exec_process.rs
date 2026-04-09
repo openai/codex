@@ -170,6 +170,37 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
     Ok(())
 }
 
+async fn assert_exec_process_uses_requested_cwd(use_remote: bool) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+    let requested_cwd = TempDir::new()?;
+    let requested_cwd = std::fs::canonicalize(requested_cwd.path())?;
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-cwd"),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf 'PWD=%s\\n' \"$PWD\"".to_string(),
+            ],
+            cwd: requested_cwd.clone(),
+            env: Default::default(),
+            tty: false,
+            arg0: None,
+            sandbox: SandboxLaunchConfig::no_sandbox(requested_cwd.clone()),
+            managed_network: None,
+        })
+        .await?;
+
+    let StartedExecProcess { process, .. } = session;
+    let wake_rx = process.subscribe_wake();
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+    assert_eq!(output, format!("PWD={}\n", requested_cwd.display()));
+    assert_eq!(exit_code, Some(0));
+    assert!(closed);
+    Ok(())
+}
+
 fn parse_env_output(output: &str) -> HashMap<String, String> {
     output
         .lines()
@@ -518,6 +549,13 @@ async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_process_streams_output(use_remote: bool) -> Result<()> {
     assert_exec_process_streams_output(use_remote).await
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_process_uses_requested_cwd(use_remote: bool) -> Result<()> {
+    assert_exec_process_uses_requested_cwd(use_remote).await
 }
 
 #[test_case(false, Some("client-request"), None, Some("client-request")

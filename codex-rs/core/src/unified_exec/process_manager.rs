@@ -692,6 +692,7 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
+        let sandbox_cwd = context.turn.environment_cwd().to_path_buf();
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             process_id: request.process_id,

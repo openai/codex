@@ -350,7 +350,7 @@ impl ExecServerClient {
                 .notify(INITIALIZED_METHOD, &serde_json::json!({}))
                 .await
                 .map_err(ExecServerError::Json)?;
-            Ok(response)
+            Ok::<InitializeResponse, ExecServerError>(response)
         })
         .await
         .map_err(|_| ExecServerError::InitializeTimedOut {
