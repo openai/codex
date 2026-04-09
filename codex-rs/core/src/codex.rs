@@ -6144,6 +6144,11 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    // Pending input is drained into history before building the next model request.
+    // However, we defer that drain until after sampling in two cases:
+    // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
+    // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
+    let mut can_drain_pending_input = input.is_empty();
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -6153,7 +6158,11 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = sess.get_pending_input().await;
+        let pending_input = if can_drain_pending_input {
+            sess.get_pending_input().await
+        } else {
+            Vec::new()
+        };
 
         let mut blocked_pending_input = false;
         let mut blocked_pending_input_contexts = Vec::new();
@@ -6227,9 +6236,12 @@ pub(crate) async fn run_turn(
         {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
-                    needs_follow_up,
+                    needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
+                can_drain_pending_input = true;
+                let has_pending_input = sess.has_pending_input().await;
+                let needs_follow_up = model_needs_follow_up || has_pending_input;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -6242,6 +6254,8 @@ pub(crate) async fn run_turn(
                     estimated_token_count = ?estimated_token_count,
                     auto_compact_limit,
                     token_limit_reached,
+                    model_needs_follow_up,
+                    has_pending_input,
                     needs_follow_up,
                     "post sampling token usage"
                 );
@@ -6259,6 +6273,7 @@ pub(crate) async fn run_turn(
                         return None;
                     }
                     client_session.reset_websocket_session();
+                    can_drain_pending_input = !model_needs_follow_up;
                     continue;
                 }
 
@@ -7766,8 +7781,6 @@ async fn try_run_sampling_request(
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
-
-                needs_follow_up |= sess.has_pending_input().await;
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
