@@ -37,6 +37,14 @@ pub(crate) enum TrackEventRequest {
     ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    #[allow(dead_code)]
+    CommandExecution(CodexCommandExecutionEventRequest),
+    FileChange(CodexFileChangeEventRequest),
+    McpToolCall(CodexMcpToolCallEventRequest),
+    DynamicToolCall(CodexDynamicToolCallEventRequest),
+    CollabAgentToolCall(CodexCollabAgentToolCallEventRequest),
+    WebSearch(CodexWebSearchEventRequest),
+    ImageGeneration(CodexImageGenerationEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -97,6 +105,237 @@ pub(crate) struct ThreadInitializedEventParams {
 pub(crate) struct ThreadInitializedEvent {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: ThreadInitializedEventParams,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub(crate) enum ToolKind {
+    Shell,
+    UnifiedExec,
+    ApplyPatch,
+    Mcp,
+    Dynamic,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub(crate) enum ToolCallFinalReviewOutcome {
+    NotNeeded,
+    GuardianApproved,
+    GuardianDenied,
+    GuardianAborted,
+    UserApproved,
+    UserApprovedForSession,
+    UserDenied,
+    UserAborted,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub(crate) enum ToolItemTerminalStatus {
+    Completed,
+    Failed,
+    Rejected,
+    Interrupted,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub(crate) enum ToolItemFailureKind {
+    ToolError,
+    ApprovalDenied,
+    ApprovalAborted,
+    SandboxDenied,
+    PolicyForbidden,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexToolItemEventBase {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    /// App-server ThreadItem.id. For tool-originated items this generally
+    /// corresponds to the originating core call_id.
+    pub(crate) item_id: String,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) tool_name: String,
+    pub(crate) started_at: u64,
+    pub(crate) completed_at: Option<u64>,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) execution_started: bool,
+    pub(crate) review_count: u64,
+    pub(crate) guardian_review_count: u64,
+    pub(crate) user_review_count: u64,
+    pub(crate) final_approval_outcome: ToolItemFinalApprovalOutcome,
+    pub(crate) terminal_status: ToolItemTerminalStatus,
+    pub(crate) failure_kind: Option<ToolItemFailureKind>,
+    pub(crate) requested_additional_permissions: bool,
+    pub(crate) requested_network_access: bool,
+    pub(crate) retry_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CommandExecutionFamily {
+    Shell,
+    UserShell,
+    UnifiedExec,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CommandExecutionSourceKind {
+    Agent,
+    UserShell,
+    UnifiedExecStartup,
+    UnifiedExecInteraction,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CollabAgentToolKind {
+    SpawnAgent,
+    SendInput,
+    ResumeAgent,
+    Wait,
+    CloseAgent,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WebSearchActionKind {
+    Search,
+    OpenPage,
+    FindInPage,
+    Other,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexCommandExecutionEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) command_execution_source: CommandExecutionSourceKind,
+    pub(crate) command_execution_family: CommandExecutionFamily,
+    pub(crate) process_id: Option<String>,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) command_action_count: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexCommandExecutionEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexCommandExecutionEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexFileChangeEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) file_change_count: u64,
+    pub(crate) file_add_count: u64,
+    pub(crate) file_update_count: u64,
+    pub(crate) file_delete_count: u64,
+    pub(crate) file_move_count: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexFileChangeEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexFileChangeEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexMcpToolCallEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) mcp_server_name: String,
+    pub(crate) mcp_tool_name: String,
+    pub(crate) mcp_error_present: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexMcpToolCallEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexMcpToolCallEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexDynamicToolCallEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) dynamic_tool_name: String,
+    pub(crate) success: Option<bool>,
+    pub(crate) output_content_item_count: Option<u64>,
+    pub(crate) output_text_item_count: Option<u64>,
+    pub(crate) output_image_item_count: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexDynamicToolCallEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexDynamicToolCallEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexCollabAgentToolCallEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) collab_agent_tool: CollabAgentToolKind,
+    pub(crate) sender_thread_id: String,
+    pub(crate) receiver_thread_count: u64,
+    pub(crate) receiver_thread_ids: Vec<String>,
+    pub(crate) requested_model: Option<String>,
+    pub(crate) requested_reasoning_effort: Option<String>,
+    pub(crate) agent_state_count: u64,
+    pub(crate) completed_agent_count: u64,
+    pub(crate) failed_agent_count: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexCollabAgentToolCallEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexCollabAgentToolCallEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexWebSearchEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) web_search_action: Option<WebSearchActionKind>,
+    pub(crate) query_present: bool,
+    pub(crate) query_count: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexWebSearchEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexWebSearchEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexImageGenerationEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) image_generation_status: String,
+    pub(crate) revised_prompt_present: bool,
+    pub(crate) saved_path_present: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexImageGenerationEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexImageGenerationEventParams,
 }
 
 #[derive(Serialize)]
