@@ -1,3 +1,12 @@
+//! Key binding primitives and input matching for the TUI.
+//!
+//! This module provides `KeyBinding`, the runtime representation of a single
+//! keybinding (key code + modifier set), along with matching logic that handles
+//! cross-terminal inconsistencies in how shifted letters are reported.
+//!
+//! It also supplies rendering helpers that convert bindings into styled
+//! `ratatui::text::Span` values for UI hint display.
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -15,6 +24,12 @@ const ALT_PREFIX: &str = "alt + ";
 const CTRL_PREFIX: &str = "ctrl + ";
 const SHIFT_PREFIX: &str = "shift + ";
 
+/// A single key chord (key code + modifier set) used for input matching.
+///
+/// Matching via `is_press` handles both exact equality and a shifted-letter
+/// compatibility fallback for terminals that report uppercase letters without
+/// the SHIFT modifier flag. This means a binding defined as `shift-a` will
+/// match a terminal event of either `Shift+a` or plain `A`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct KeyBinding {
     key: KeyCode,
@@ -38,6 +53,17 @@ impl KeyBinding {
         self.matches_shifted_ascii_letter_compat(event)
     }
 
+    /// Cross-terminal compatibility for shifted ASCII letter bindings.
+    ///
+    /// Some terminals (e.g. certain Kitty/Alacritty builds) report `Shift+a` as
+    /// `KeyCode::Char('A')` with `KeyModifiers::NONE`, while others keep the
+    /// lowercase char and set the SHIFT flag. This method accepts both forms
+    /// when the binding specifies SHIFT + an ASCII lowercase letter, and
+    /// preserves any additional modifiers (e.g. Ctrl) so `ctrl-shift-i`
+    /// also matches `Ctrl+I`.
+    ///
+    /// Only applies to ASCII lowercase letters — non-ASCII shift behavior
+    /// (accented characters on European layouts, for instance) is not handled.
     fn matches_shifted_ascii_letter_compat(&self, event: KeyEvent) -> bool {
         let (KeyCode::Char(bound), KeyCode::Char(observed)) = (self.key, event.code) else {
             return false;
