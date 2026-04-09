@@ -1574,7 +1574,7 @@ async fn completed_hook_output_precedes_following_assistant_message() {
         &mut chat,
         "msg-after-hook",
         "The hook feedback was applied.",
-        None,
+        /*phase*/ None,
     );
 
     let history = drain_insert_history(&mut rx)
