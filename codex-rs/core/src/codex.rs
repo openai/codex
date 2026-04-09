@@ -14,6 +14,7 @@ use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agent_identity::AgentIdentityManager;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -1477,6 +1478,23 @@ impl Session {
         });
     }
 
+    fn start_agent_identity_registration(self: &Arc<Self>) {
+        let weak_sess = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let Some(sess) = weak_sess.upgrade() else {
+                return;
+            };
+            if let Err(error) = sess
+                .services
+                .agent_identity_manager
+                .ensure_registered_identity()
+                .await
+            {
+                warn!(error = %error, "agent identity registration failed");
+            }
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         conversation_id: ThreadId,
@@ -2019,6 +2037,11 @@ impl Session {
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
+            agent_identity_manager: Arc::new(AgentIdentityManager::new(
+                config.as_ref(),
+                Arc::clone(&auth_manager),
+                session_configuration.session_source.clone(),
+            )),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
@@ -2116,6 +2139,7 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
+        sess.start_agent_identity_registration();
         // Construct sandbox_state before MCP startup so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
