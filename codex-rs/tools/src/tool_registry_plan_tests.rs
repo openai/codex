@@ -12,12 +12,8 @@ use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
 use crate::ToolNamespace;
-<<<<<<< HEAD
-use crate::ToolRegistryPlanDeferredTool;
-=======
 use crate::ToolOrigin;
 use crate::ToolRegistryPlanAppTool;
->>>>>>> 546fa338d (Thread tool origin into code mode rendering)
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
 use crate::mcp_call_tool_result_output_schema;
