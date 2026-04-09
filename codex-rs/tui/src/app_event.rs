@@ -30,7 +30,6 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
-use crate::timer_scheduler::ParsedTimerSpec;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -108,30 +107,6 @@ pub(crate) enum AppEvent {
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
-
-    /// List timers for the specified thread and open the management UI.
-    OpenThreadTimers {
-        thread_id: ThreadId,
-    },
-
-    /// Parse a `/loop <spec>` input into structured timer params.
-    CreateThreadTimerFromSpec {
-        thread_id: ThreadId,
-        spec: String,
-    },
-
-    /// Result of parsing a `/loop <spec>` input.
-    ThreadTimerSpecParsed {
-        thread_id: ThreadId,
-        spec: String,
-        result: Result<ParsedTimerSpec, String>,
-    },
-
-    /// Delete one timer from the specified thread.
-    DeleteThreadTimer {
-        thread_id: ThreadId,
-        id: String,
-    },
 
     /// Request to exit the application.
     ///

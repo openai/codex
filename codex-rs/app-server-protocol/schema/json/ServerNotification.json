@@ -3463,81 +3463,6 @@
       ],
       "type": "object"
     },
-    "ThreadTimer": {
-      "properties": {
-        "createdAt": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "delivery": {
-          "$ref": "#/definitions/TimerDelivery"
-        },
-        "id": {
-          "type": "string"
-        },
-        "lastRunAt": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "nextRunAt": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "prompt": {
-          "type": "string"
-        },
-        "trigger": {
-          "$ref": "#/definitions/TimerTrigger"
-        }
-      },
-      "required": [
-        "createdAt",
-        "delivery",
-        "id",
-        "prompt",
-        "trigger"
-      ],
-      "type": "object"
-    },
-    "ThreadTimerFiredNotification": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        },
-        "timer": {
-          "$ref": "#/definitions/ThreadTimer"
-        }
-      },
-      "required": [
-        "threadId",
-        "timer"
-      ],
-      "type": "object"
-    },
-    "ThreadTimerUpdatedNotification": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        },
-        "timers": {
-          "items": {
-            "$ref": "#/definitions/ThreadTimer"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "threadId",
-        "timers"
-      ],
-      "type": "object"
-    },
     "ThreadTokenUsage": {
       "properties": {
         "last": {
@@ -3589,70 +3514,6 @@
         "threadId"
       ],
       "type": "object"
-    },
-    "TimerDelivery": {
-      "enum": [
-        "after-turn",
-        "steer-current-turn"
-      ],
-      "type": "string"
-    },
-    "TimerTrigger": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "delay"
-              ],
-              "type": "string"
-            },
-            "repeat": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            },
-            "seconds": {
-              "format": "uint64",
-              "minimum": 0.0,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "kind",
-            "seconds"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "dtstart": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "kind": {
-              "enum": [
-                "schedule"
-              ],
-              "type": "string"
-            },
-            "rrule": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "KindTimerTrigger",
-          "type": "object"
-        }
-      ]
     },
     "TokenUsageBreakdown": {
       "properties": {
@@ -4317,46 +4178,6 @@
         "params"
       ],
       "title": "Thread/name/updatedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/timer/updated"
-          ],
-          "title": "Thread/timer/updatedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadTimerUpdatedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/timer/updatedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/timer/fired"
-          ],
-          "title": "Thread/timer/firedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadTimerFiredNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/timer/firedNotification",
       "type": "object"
     },
     {

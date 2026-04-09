@@ -242,7 +242,6 @@ pub(super) async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
-        thread_timers: Vec::new(),
         thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
