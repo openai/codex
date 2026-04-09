@@ -448,9 +448,9 @@ pub enum RealtimeWsMode {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeTransport {
+    #[default]
     #[serde(rename = "webrtc")]
     WebRtc,
-    #[default]
     Websocket,
 }
 
