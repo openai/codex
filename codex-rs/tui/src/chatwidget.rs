@@ -5452,6 +5452,17 @@ impl ChatWidget {
                 }));
                 self.bottom_pane.drain_pending_submission_state();
             }
+            SlashCommand::Resume if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::ResumeSessionByIdOrName(prepared_args));
+                self.bottom_pane.drain_pending_submission_state();
+            }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
