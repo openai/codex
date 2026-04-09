@@ -187,21 +187,49 @@ pub fn require_logon_sandbox_creds(
                 proxy_enforced,
             },
             crate::setup::SetupRootOverrides {
-                read_roots: Some(needed_read),
-                write_roots: Some(needed_write),
+                read_roots: Some(needed_read.clone()),
+                write_roots: Some(needed_write.clone()),
             },
         )?;
         identity = select_identity(network_identity, codex_home)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    crate::setup::run_setup_refresh(
+    // If a previous sandboxed command left a write root owned by the sandbox user,
+    // the interactive user may no longer be allowed to update its DACL. Fall back
+    // to the elevated setup path once so the sandbox can repair its write grants.
+    if let Err(refresh_err) = crate::setup::run_setup_refresh(
         policy,
         policy_cwd,
         command_cwd,
         env_map,
         codex_home,
         proxy_enforced,
-    )?;
+    ) {
+        crate::logging::log_note(
+            &format!(
+                "sandbox setup refresh failed ({refresh_err}); retrying via elevated setup"
+            ),
+            Some(&sandbox_dir),
+        );
+        run_elevated_setup(
+            crate::setup::SandboxSetupRequest {
+                policy,
+                policy_cwd,
+                command_cwd,
+                env_map,
+                codex_home,
+                proxy_enforced,
+            },
+            crate::setup::SetupRootOverrides {
+                read_roots: Some(needed_read),
+                write_roots: Some(needed_write),
+            },
+        )
+        .with_context(|| {
+            format!("Windows sandbox setup refresh failed ({refresh_err}); elevated recovery also failed")
+        })?;
+        identity = select_identity(network_identity, codex_home)?;
+    }
     let identity = identity.ok_or_else(|| {
         anyhow!(
             "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"
