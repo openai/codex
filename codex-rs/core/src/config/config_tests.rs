@@ -6498,10 +6498,8 @@ voice = "marin"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
-            version: RealtimeWsVersion::V2,
-            session_type: RealtimeWsMode::Conversational,
-            transport: RealtimeTransport::Websocket,
             voice: Some(RealtimeVoice::Marin),
+            ..RealtimeConfig::default()
         }
     );
     Ok(())
