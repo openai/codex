@@ -77,6 +77,13 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecentSessionMention {
+    pub(crate) thread_id: String,
+    pub(crate) title: String,
+    pub(crate) preview: String,
+}
+
 /// Distinguishes why a rate-limit refresh was requested so the completion
 /// handler can route the result correctly.
 ///
@@ -202,6 +209,14 @@ pub(crate) enum AppEvent {
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,
+    },
+
+    /// Fetch a small recent-sessions page for composer `#` mentions.
+    RequestRecentSessionMentions,
+
+    /// Result of fetching recent sessions for composer `#` mentions.
+    RecentSessionMentionsLoaded {
+        result: Result<Vec<RecentSessionMention>, String>,
     },
 
     /// Fetch plugin marketplace state for the provided working directory.

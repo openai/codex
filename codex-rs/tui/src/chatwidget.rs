@@ -2159,6 +2159,13 @@ impl ChatWidget {
         self.bottom_pane.set_skills(skills);
     }
 
+    pub(crate) fn set_recent_session_mentions(
+        &mut self,
+        sessions: Vec<crate::app_event::RecentSessionMention>,
+    ) {
+        self.bottom_pane.set_recent_session_mentions(sessions);
+    }
+
     pub(crate) fn open_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,

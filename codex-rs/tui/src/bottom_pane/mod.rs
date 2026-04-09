@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_event::RecentSessionMention;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
 use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
@@ -264,6 +265,11 @@ impl BottomPane {
 
     pub fn set_plugin_mentions(&mut self, plugins: Option<Vec<PluginCapabilitySummary>>) {
         self.composer.set_plugin_mentions(plugins);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_recent_session_mentions(&mut self, sessions: Vec<RecentSessionMention>) {
+        self.composer.set_recent_session_mentions(sessions);
         self.request_redraw();
     }
 

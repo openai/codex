@@ -184,6 +184,7 @@ use codex_protocol::user_input::TextElement;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_event::RecentSessionMention;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
@@ -320,6 +321,8 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
+    recent_session_mentions: Option<Vec<RecentSessionMention>>,
+    recent_session_mentions_requested: bool,
     dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
     recent_submission_mention_bindings: Vec<MentionBinding>,
@@ -442,6 +445,8 @@ impl ChatComposer {
             skills: None,
             plugins: None,
             connectors_snapshot: None,
+            recent_session_mentions: None,
+            recent_session_mentions_requested: false,
             dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
             recent_submission_mention_bindings: Vec::new(),
@@ -502,6 +507,15 @@ impl ChatComposer {
 
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
+        self.sync_popups();
+    }
+
+    pub(crate) fn set_recent_session_mentions(
+        &mut self,
+        recent_session_mentions: Vec<RecentSessionMention>,
+    ) {
+        self.recent_session_mentions = Some(recent_session_mentions);
+        self.recent_session_mentions_requested = false;
         self.sync_popups();
     }
 
@@ -1577,7 +1591,7 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = self.current_mention_token() {
+                if let Some(tok) = self.current_dismissible_mention_popup_token() {
                     self.dismissed_mention_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
@@ -1879,6 +1893,22 @@ impl ChatComposer {
             return None;
         }
         Self::current_prefixed_token(&self.textarea, '$', /*allow_empty*/ true)
+    }
+
+    fn current_hash_item_token(&self) -> Option<String> {
+        Self::current_prefixed_token(&self.textarea, '#', /*allow_empty*/ true)
+    }
+
+    fn dismissed_popup_token(prefix: char, query: &str) -> String {
+        format!("{prefix}{query}")
+    }
+
+    fn current_dismissible_mention_popup_token(&self) -> Option<String> {
+        if let Some(query) = self.current_mention_token() {
+            return Some(Self::dismissed_popup_token('$', &query));
+        }
+        self.current_hash_item_token()
+            .map(|query| Self::dismissed_popup_token('#', &query))
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
@@ -2874,9 +2904,16 @@ impl ChatComposer {
             return;
         }
         let mention_token = self.current_mention_token();
+        let hash_item_token = if mention_token.is_none() {
+            self.current_hash_item_token()
+        } else {
+            None
+        };
 
-        let allow_command_popup =
-            self.slash_commands_enabled() && file_token.is_none() && mention_token.is_none();
+        let allow_command_popup = self.slash_commands_enabled()
+            && file_token.is_none()
+            && mention_token.is_none()
+            && hash_item_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -2897,6 +2934,16 @@ impl ChatComposer {
                 self.current_file_query = None;
             }
             self.sync_mention_popup(token);
+            return;
+        }
+
+        if let Some(token) = hash_item_token {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
+            self.sync_hash_item_popup(token);
             return;
         }
         self.dismissed_mention_popup_token = None;
@@ -3133,7 +3180,9 @@ impl ChatComposer {
     }
 
     fn sync_mention_popup(&mut self, query: String) {
-        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+        if self.dismissed_mention_popup_token.as_ref()
+            == Some(&Self::dismissed_popup_token('$', &query))
+        {
             return;
         }
 
@@ -3143,6 +3192,70 @@ impl ChatComposer {
             return;
         }
 
+        self.sync_skill_popup(query, mentions);
+    }
+
+    fn sync_hash_item_popup(&mut self, query: String) {
+        if self.dismissed_mention_popup_token.as_ref()
+            == Some(&Self::dismissed_popup_token('#', &query))
+        {
+            return;
+        }
+
+        if self.recent_session_mentions.is_none() && !self.recent_session_mentions_requested {
+            self.app_event_tx
+                .send(AppEvent::RequestRecentSessionMentions);
+            self.recent_session_mentions_requested = true;
+        }
+
+        self.sync_skill_popup(query, self.recent_session_mention_items());
+    }
+
+    fn recent_session_mention_items(&self) -> Vec<MentionItem> {
+        let Some(sessions) = self.recent_session_mentions.as_ref() else {
+            return vec![MentionItem {
+                display_name: "Loading sessions...".to_string(),
+                description: Some("Recent Codex sessions".to_string()),
+                insert_text: "#".to_string(),
+                search_terms: vec!["loading".to_string(), "sessions".to_string()],
+                path: None,
+                category_tag: Some("[Session]".to_string()),
+                sort_rank: 0,
+            }];
+        };
+
+        if sessions.is_empty() {
+            return vec![MentionItem {
+                display_name: "No recent sessions".to_string(),
+                description: Some("Start a new session, then try # again".to_string()),
+                insert_text: "#".to_string(),
+                search_terms: vec!["no recent sessions".to_string()],
+                path: None,
+                category_tag: Some("[Session]".to_string()),
+                sort_rank: 0,
+            }];
+        }
+
+        sessions
+            .iter()
+            .enumerate()
+            .map(|(idx, session)| MentionItem {
+                display_name: session.title.clone(),
+                description: Some(session.preview.clone()),
+                insert_text: format!("#{}", session.thread_id),
+                search_terms: vec![
+                    session.title.clone(),
+                    session.preview.clone(),
+                    session.thread_id.clone(),
+                ],
+                path: Some(session.thread_id.clone()),
+                category_tag: Some("[Session]".to_string()),
+                sort_rank: idx.try_into().unwrap_or(u8::MAX),
+            })
+            .collect()
+    }
+
+    fn sync_skill_popup(&mut self, query: String, mentions: Vec<MentionItem>) {
         match &mut self.active_popup {
             ActivePopup::Skill(popup) => {
                 popup.set_query(&query);
@@ -4913,6 +5026,90 @@ mod tests {
                 }]));
             },
         );
+    }
+
+    #[test]
+    fn hash_item_popup_snapshot() {
+        snapshot_composer_state_with_width(
+            "hash_item_popup",
+            /*width*/ 72,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_recent_session_mentions(vec![
+                    RecentSessionMention {
+                        thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
+                        title: "Fix flaky remote image deletion".to_string(),
+                        preview: "Debug a composer test failure".to_string(),
+                    },
+                    RecentSessionMention {
+                        thread_id: "22222222-2222-2222-2222-222222222222".to_string(),
+                        title: "Explore skill autocomplete".to_string(),
+                        preview: "Trace the $ mention popup path".to_string(),
+                    },
+                ]);
+                composer.set_text_content("#".to_string(), Vec::new(), Vec::new());
+            },
+        );
+    }
+
+    #[test]
+    fn hash_item_popup_inserts_selected_session_id() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_recent_session_mentions(vec![RecentSessionMention {
+            thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            title: "Answer an open question".to_string(),
+            preview: "Prior session preview".to_string(),
+        }]);
+
+        type_chars_humanlike(&mut composer, &['#', 'q']);
+
+        let ActivePopup::Skill(popup) = &composer.active_popup else {
+            panic!("expected hash item popup to open");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected hash item to be selected");
+        assert_eq!(
+            mention.insert_text,
+            "#11111111-1111-1111-1111-111111111111".to_string()
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            composer.current_text(),
+            "#11111111-1111-1111-1111-111111111111 "
+        );
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+    }
+
+    #[test]
+    fn hash_item_popup_requests_sessions_on_first_open() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['#']);
+
+        let event = rx
+            .try_recv()
+            .expect("expected recent sessions request event");
+        assert!(matches!(event, AppEvent::RequestRecentSessionMentions));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
