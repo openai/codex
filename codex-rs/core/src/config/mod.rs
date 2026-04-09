@@ -42,6 +42,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::SessionTitlesConfig;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -396,6 +397,8 @@ pub struct Config {
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
+    /// Settings for default generated thread names.
+    pub session_titles: SessionTitlesConfig,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -2042,6 +2045,7 @@ impl Config {
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
+            session_titles: cfg.session_titles.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             codex_home,
             sqlite_home,

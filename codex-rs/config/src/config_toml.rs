@@ -19,6 +19,7 @@ use crate::types::OAuthCredentialsStoreMode;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
+use crate::types::SessionTitlesToml;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
 use crate::types::ToolSuggestConfig;
@@ -317,6 +318,9 @@ pub struct ConfigToml {
 
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
+
+    /// Default generated names for interactive sessions.
+    pub session_titles: Option<SessionTitlesToml>,
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,

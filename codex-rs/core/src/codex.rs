@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -76,6 +78,7 @@ use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
 use codex_mcp::codex_apps_tools_cache_key;
+use codex_models_manager::ModelsManagerConfig;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
@@ -150,6 +153,7 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -373,6 +377,7 @@ use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_protocol::protocol::SkillToolDependency as ProtocolSkillToolDependency;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -440,6 +445,23 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+const DEFAULT_THREAD_TITLE_MODEL: &str = "gpt-5.4-mini";
+const THREAD_TITLE_PROMPT: &str = r#"Create a short activity label for this Codex session.
+
+Return JSON with exactly one field: {"title": "..."}.
+The title must be at least 2 words and at most 6 words, 48 characters or fewer, no markdown, no surrounding quotes, no trailing period.
+Name the user's concrete intent, not the wording of the prompt.
+Mention the most useful differentiating entity when one exists: a PR number, file, command, feature, error, ticket, or product name.
+Do not force paths, project names, or branch names when a clear plain-language task is better.
+
+Style:
+- Write a compact activity label, not a document heading.
+- Prefer sentence case: capitalize only the first word, proper nouns, acronyms such as PR/API/MCP/SSH, commands, file paths, ticket IDs, and product names.
+- Prefer an -ing verb when it sounds natural: "Reviewing PR description", "Investigating startup regression", "Checking branch purpose".
+- Use simple familiar verbs. Avoid uncommon verbs like "inventorying"; use "Researching statusline options" or "Listing statusline options" instead.
+- Use an imperative verb only when it is the natural command/task wording: "Rebase and resolve conflicts", "Install timeout globally", "Run $documentation-pass".
+- Avoid title case like "Branch Purpose Inquiry" or "Review PR Description"."#;
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -838,6 +860,8 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    thread_name_generation_started: AtomicBool,
+    thread_name_write_lock: Mutex<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -2071,6 +2095,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            thread_name_generation_started: AtomicBool::new(false),
+            thread_name_write_lock: Mutex::new(()),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -4074,6 +4100,65 @@ impl Session {
         self.ensure_rollout_materialized().await;
     }
 
+    async fn maybe_start_thread_name_generation(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: &[UserInput],
+    ) {
+        let initial_user_message = UserMessageItem::new(input).message();
+        if initial_user_message.trim().is_empty() {
+            return;
+        }
+        if !self.should_start_thread_name_generation().await {
+            return;
+        }
+
+        let sess = Arc::clone(self);
+        let title_request = ThreadNameGenerationRequest {
+            sub_id: turn_context.sub_id.clone(),
+            user_message: truncate_string_chars(&initial_user_message, 4_000),
+            cwd: turn_context.cwd.to_path_buf(),
+            model_name: turn_context
+                .config
+                .session_titles
+                .model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_THREAD_TITLE_MODEL.to_string()),
+            model_reasoning_summary: turn_context.reasoning_summary,
+            service_tier: turn_context.config.service_tier,
+            session_telemetry: turn_context.session_telemetry.clone(),
+            turn_metadata_header: turn_context.turn_metadata_state.current_header_value(),
+            models_manager_config: turn_context.config.to_models_manager_config(),
+        };
+        tokio::spawn(async move {
+            if let Err(err) = generate_and_set_thread_name(sess, title_request).await {
+                debug!("auto thread name generation skipped or failed: {err:#}");
+            }
+        });
+    }
+
+    async fn should_start_thread_name_generation(&self) -> bool {
+        let (enabled, source_allows_generation, has_thread_name) = {
+            let state = self.state.lock().await;
+            let config = &state.session_configuration.original_config_do_not_use;
+            (
+                config.session_titles.enabled,
+                session_source_allows_thread_name_generation(
+                    &state.session_configuration.session_source,
+                ),
+                state.session_configuration.thread_name.is_some(),
+            )
+        };
+        let persistence_enabled = self.services.rollout.lock().await.is_some();
+        if !enabled || !source_allows_generation || has_thread_name || !persistence_enabled {
+            return false;
+        }
+
+        !self
+            .thread_name_generation_started
+            .swap(true, Ordering::AcqRel)
+    }
+
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
@@ -4832,6 +4917,281 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     debug!("Agent loop exited");
 }
 
+#[derive(Debug)]
+enum SetThreadNameError {
+    Empty,
+    PersistenceDisabled,
+    Persist(anyhow::Error),
+}
+
+impl SetThreadNameError {
+    fn to_error_event(&self) -> ErrorEvent {
+        match self {
+            Self::Empty => ErrorEvent {
+                message: "Thread name cannot be empty.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::PersistenceDisabled => ErrorEvent {
+                message: "Session persistence is disabled; cannot rename thread.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            },
+            Self::Persist(err) => ErrorEvent {
+                message: format!("Failed to set thread name: {err}"),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SetThreadNameMode {
+    Always,
+    IfUnset,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SetThreadNameOutcome {
+    Updated,
+    SkippedExisting,
+}
+
+async fn persist_thread_name_update(
+    sess: &Arc<Session>,
+    event: ThreadNameUpdatedEvent,
+) -> std::result::Result<EventMsg, SetThreadNameError> {
+    let msg = EventMsg::ThreadNameUpdated(event);
+    let item = RolloutItem::EventMsg(msg.clone());
+    let recorder = {
+        let guard = sess.services.rollout.lock().await;
+        guard.clone()
+    }
+    .ok_or(SetThreadNameError::PersistenceDisabled)?;
+    recorder
+        .persist()
+        .await
+        .map_err(|err| SetThreadNameError::Persist(err.into()))?;
+    recorder
+        .record_items(std::slice::from_ref(&item))
+        .await
+        .map_err(|err| SetThreadNameError::Persist(err.into()))?;
+    recorder
+        .flush()
+        .await
+        .map_err(|err| SetThreadNameError::Persist(err.into()))?;
+    Ok(msg)
+}
+
+async fn commit_thread_name(
+    sess: &Arc<Session>,
+    sub_id: String,
+    name: String,
+    mode: SetThreadNameMode,
+) -> std::result::Result<SetThreadNameOutcome, SetThreadNameError> {
+    let Some(name) = crate::util::normalize_thread_name(&name) else {
+        return Err(SetThreadNameError::Empty);
+    };
+
+    let _guard = sess.thread_name_write_lock.lock().await;
+
+    if matches!(mode, SetThreadNameMode::IfUnset) {
+        let state = sess.state.lock().await;
+        if state.session_configuration.thread_name.is_some() {
+            return Ok(SetThreadNameOutcome::SkippedExisting);
+        }
+    }
+
+    let msg = persist_thread_name_update(
+        sess,
+        ThreadNameUpdatedEvent {
+            thread_id: sess.conversation_id,
+            thread_name: Some(name.clone()),
+        },
+    )
+    .await?;
+
+    if let Some(state_db) = sess.services.state_db.as_deref()
+        && let Err(err) = state_db
+            .update_thread_title(sess.conversation_id, &name)
+            .await
+    {
+        warn!("Failed to update thread title in state db: {err}");
+    }
+
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.thread_name = Some(name.clone());
+    }
+
+    let codex_home = sess.codex_home().await;
+    if let Err(err) =
+        crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
+    {
+        warn!("Failed to update legacy thread name index: {err}");
+    }
+
+    sess.deliver_event_raw(Event { id: sub_id, msg }).await;
+
+    Ok(SetThreadNameOutcome::Updated)
+}
+
+fn session_source_allows_thread_name_generation(session_source: &SessionSource) -> bool {
+    !matches!(
+        session_source,
+        SessionSource::Exec | SessionSource::SubAgent(_)
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThreadNameOutput {
+    title: String,
+}
+
+struct ThreadNameGenerationRequest {
+    sub_id: String,
+    user_message: String,
+    cwd: PathBuf,
+    model_name: String,
+    model_reasoning_summary: ReasoningSummaryConfig,
+    service_tier: Option<ServiceTier>,
+    session_telemetry: SessionTelemetry,
+    turn_metadata_header: Option<String>,
+    models_manager_config: ModelsManagerConfig,
+}
+
+async fn generate_and_set_thread_name(
+    sess: Arc<Session>,
+    request: ThreadNameGenerationRequest,
+) -> anyhow::Result<SetThreadNameOutcome> {
+    let model_info = sess
+        .services
+        .models_manager
+        .get_model_info(&request.model_name, &request.models_manager_config)
+        .await;
+    let generated_name = generate_thread_name(sess.as_ref(), &request, &model_info).await?;
+    let Some(generated_name) = sanitize_generated_thread_name(&generated_name) else {
+        anyhow::bail!("generated thread name was empty after normalization");
+    };
+
+    commit_thread_name(
+        &sess,
+        request.sub_id,
+        generated_name,
+        SetThreadNameMode::IfUnset,
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("{err:?}"))
+}
+
+async fn generate_thread_name(
+    sess: &Session,
+    request: &ThreadNameGenerationRequest,
+    model_info: &ModelInfo,
+) -> anyhow::Result<String> {
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: build_thread_name_input(request.cwd.as_path(), &request.user_message),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions {
+            text: THREAD_TITLE_PROMPT.to_string(),
+        },
+        personality: None,
+        output_schema: Some(thread_name_output_schema()),
+    };
+
+    let mut client_session = sess.services.model_client.new_session();
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            model_info,
+            &request.session_telemetry,
+            Some(ReasoningEffortConfig::Low),
+            request.model_reasoning_summary,
+            request.service_tier,
+            request.turn_metadata_header.as_deref(),
+        )
+        .await?;
+
+    let mut result = String::new();
+    while let Some(event) = stream.next().await.transpose()? {
+        match event {
+            ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
+            ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
+                if result.is_empty()
+                    && let Some(text) = compact::content_items_to_text(&content)
+                {
+                    result.push_str(&text);
+                }
+            }
+            ResponseEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
+
+    let output = serde_json::from_str::<ThreadNameOutput>(&result)
+        .map(|output| output.title)
+        .unwrap_or(result);
+    Ok(output)
+}
+
+fn thread_name_output_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" }
+        },
+        "required": ["title"],
+        "additionalProperties": false
+    })
+}
+
+fn build_thread_name_input(cwd: &Path, user_message: &str) -> String {
+    let git_root = get_git_repo_root(cwd);
+    let project = git_root
+        .as_deref()
+        .and_then(Path::file_name)
+        .or_else(|| cwd.file_name())
+        .map(|name| name.to_string_lossy().to_string());
+    match project {
+        Some(project) => format!(
+            "Project: {project}\n\nUser's first message:\n{}\n",
+            user_message.trim()
+        ),
+        None => format!("User's first message:\n{}\n", user_message.trim()),
+    }
+}
+
+fn sanitize_generated_thread_name(name: &str) -> Option<String> {
+    let collapsed = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let stripped = collapsed
+        .trim()
+        .trim_matches(['"', '\'', '`', '*', '_'])
+        .trim_end_matches('.')
+        .trim();
+    if stripped.is_empty() {
+        return None;
+    }
+    Some(truncate_string_chars(stripped, 48))
+}
+
+fn truncate_string_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        truncated.trim_end().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     let op_name = sub.op.kind();
     let span_name = format!("op.dispatch.{op_name}");
@@ -4902,7 +5262,6 @@ mod handlers {
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SkillsListEntry;
-    use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
@@ -5625,80 +5984,19 @@ mod handlers {
         .await;
     }
 
-    async fn persist_thread_name_update(
-        sess: &Arc<Session>,
-        event: ThreadNameUpdatedEvent,
-    ) -> anyhow::Result<EventMsg> {
-        let msg = EventMsg::ThreadNameUpdated(event);
-        let item = RolloutItem::EventMsg(msg.clone());
-        let recorder = {
-            let guard = sess.services.rollout.lock().await;
-            guard.clone()
-        }
-        .ok_or_else(|| anyhow::anyhow!("Session persistence is disabled; cannot rename thread."))?;
-        recorder.persist().await?;
-        recorder.record_items(std::slice::from_ref(&item)).await?;
-        recorder.flush().await?;
-        Ok(msg)
-    }
-
     /// Persists the thread name in the rollout and state database, updates in-memory state, and
     /// emits a `ThreadNameUpdated` event on success.
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
-        let Some(name) = crate::util::normalize_thread_name(&name) else {
+        let result =
+            super::commit_thread_name(sess, sub_id.clone(), name, super::SetThreadNameMode::Always)
+                .await;
+        if let Err(err) = result {
             let event = Event {
                 id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "Thread name cannot be empty.".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::BadRequest),
-                }),
+                msg: EventMsg::Error(err.to_error_event()),
             };
             sess.send_event_raw(event).await;
-            return;
         };
-
-        let updated = ThreadNameUpdatedEvent {
-            thread_id: sess.conversation_id,
-            thread_name: Some(name.clone()),
-        };
-
-        let msg = match persist_thread_name_update(sess, updated).await {
-            Ok(msg) => msg,
-            Err(err) => {
-                warn!("Failed to persist thread name update to rollout: {err}");
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: err.to_string(),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
-                };
-                sess.send_event_raw(event).await;
-                return;
-            }
-        };
-
-        if let Some(state_db) = sess.services.state_db.as_deref()
-            && let Err(err) = state_db
-                .update_thread_title(sess.conversation_id, &name)
-                .await
-        {
-            warn!("Failed to update thread title in state db: {err}");
-        }
-
-        {
-            let mut state = sess.state.lock().await;
-            state.session_configuration.thread_name = Some(name.clone());
-        }
-
-        let codex_home = sess.codex_home().await;
-        if let Err(err) =
-            crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
-        {
-            warn!("Failed to update legacy thread name index: {err}");
-        }
-
-        sess.deliver_event_raw(Event { id: sub_id, msg }).await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -6191,6 +6489,8 @@ pub(crate) async fn run_turn(
             return None;
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+        sess.maybe_start_thread_name_generation(Arc::clone(&turn_context), &input)
             .await;
         user_prompt_submit_outcome.additional_contexts
     };
