@@ -237,7 +237,7 @@ impl TextArea {
         !self.vim_enabled || self.vim_mode == VimMode::Insert
     }
 
-    pub(crate) fn is_vim_insert(&self) -> bool {
+    pub(crate) fn uses_vim_insert_cursor(&self) -> bool {
         self.vim_enabled && self.vim_mode == VimMode::Insert
     }
 
@@ -1952,7 +1952,7 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert_eq!(t.text(), "h");
-        assert!(!t.is_vim_insert());
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
         assert_eq!(t.cursor(), 0);
     }
 
@@ -1964,7 +1964,7 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        assert!(!t.is_vim_insert());
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
         assert_eq!(t.cursor(), 0);
     }
 
@@ -1977,7 +1977,7 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        assert!(!t.is_vim_insert());
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
         assert_eq!(t.cursor(), "👍".len());
     }
 
@@ -1991,7 +1991,7 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        assert!(!t.is_vim_insert());
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
         assert_eq!(t.cursor(), 1);
     }
 
@@ -2004,7 +2004,7 @@ mod tests {
 
         t.input(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::NONE));
 
-        assert!(t.is_vim_insert());
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
         assert_eq!(t.cursor(), 6);
     }
 
@@ -2017,7 +2017,7 @@ mod tests {
 
         t.input(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE));
 
-        assert!(t.is_vim_insert());
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
         assert_eq!(t.cursor(), 11);
     }
 
@@ -2031,7 +2031,7 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE));
 
         assert_eq!(t.text(), "hello\n\nworld");
-        assert!(t.is_vim_insert());
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
         assert_eq!(t.cursor(), 6);
     }
 

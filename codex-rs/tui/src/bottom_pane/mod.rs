@@ -887,11 +887,6 @@ impl BottomPane {
     }
 
     #[cfg(test)]
-    pub(crate) fn composer_is_vim_insert(&self) -> bool {
-        self.composer.is_vim_insert()
-    }
-
-    #[cfg(test)]
     pub(crate) fn composer_is_vim_enabled(&self) -> bool {
         self.composer.is_vim_enabled()
     }
@@ -1267,6 +1262,10 @@ impl Renderable for BottomPane {
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.as_renderable().cursor_style(area)
     }
 }
 

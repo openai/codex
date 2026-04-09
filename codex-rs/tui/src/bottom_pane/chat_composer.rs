@@ -874,10 +874,6 @@ impl ChatComposer {
         enabled
     }
 
-    pub(crate) fn is_vim_insert(&self) -> bool {
-        self.textarea.is_vim_insert()
-    }
-
     #[cfg(test)]
     pub(crate) fn is_vim_enabled(&self) -> bool {
         self.textarea.is_vim_enabled()
@@ -2910,8 +2906,6 @@ impl ChatComposer {
             quit_shortcut_key: self.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            context_window_percent: self.context_window_percent,
-            context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
             active_agent_label: self.active_agent_label.clone(),
@@ -3528,6 +3522,14 @@ impl Renderable for ChatComposer {
         let [_, _, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
+    }
+
+    fn cursor_style(&self, _area: Rect) -> crossterm::cursor::SetCursorStyle {
+        if self.textarea.uses_vim_insert_cursor() {
+            crossterm::cursor::SetCursorStyle::SteadyBar
+        } else {
+            crossterm::cursor::SetCursorStyle::DefaultUserShape
+        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -4670,6 +4672,46 @@ mod tests {
             Some("Vim: Normal".magenta())
         );
         assert_eq!(composer.textarea.cursor(), "he".len());
+    }
+
+    #[test]
+    fn vim_insert_uses_bar_cursor_style() {
+        use crate::render::renderable::Renderable;
+        use crossterm::cursor::SetCursorStyle;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use crossterm::queue;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let area = Rect::new(0, 0, 80, 10);
+        let style_output = |style| {
+            let mut output = Vec::new();
+            queue!(output, style).expect("queue cursor style");
+            output
+        };
+        let default = style_output(SetCursorStyle::DefaultUserShape);
+        let steady_bar = style_output(SetCursorStyle::SteadyBar);
+
+        assert_eq!(style_output(composer.cursor_style(area)), default,);
+
+        composer.set_vim_enabled(true);
+        assert_eq!(style_output(composer.cursor_style(area)), default,);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("hey".to_string(), Vec::new(), Vec::new());
+        assert_eq!(style_output(composer.cursor_style(area)), steady_bar);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(style_output(composer.cursor_style(area)), default,);
     }
 
     #[test]
