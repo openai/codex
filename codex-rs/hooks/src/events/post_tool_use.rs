@@ -59,7 +59,7 @@ pub(crate) fn preview(
         Some(&request.tool_name),
     )
     .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
+    .map(|handler| hook_run_for_tool_use(dispatcher::running_summary(&handler), request))
     .collect()
 }
 
@@ -113,7 +113,7 @@ pub(crate) async fn run(
         matched,
         input_json,
         request.cwd.as_path(),
-        Some(request.turn_id),
+        Some(request.turn_id.clone()),
         parse_completed,
     )
     .await;
@@ -135,12 +135,28 @@ pub(crate) async fn run(
     );
 
     PostToolUseOutcome {
-        hook_events: results.into_iter().map(|result| result.completed).collect(),
+        hook_events: results
+            .into_iter()
+            .map(|result| hook_completed_for_tool_use(result.completed, &request))
+            .collect(),
         should_stop,
         stop_reason,
         additional_contexts,
         feedback_message,
     }
+}
+
+fn hook_completed_for_tool_use(
+    mut event: HookCompletedEvent,
+    request: &PostToolUseRequest,
+) -> HookCompletedEvent {
+    event.run = hook_run_for_tool_use(event.run, request);
+    event
+}
+
+fn hook_run_for_tool_use(mut run: HookRunSummary, request: &PostToolUseRequest) -> HookRunSummary {
+    run.id = format!("{}:{}", run.id, request.tool_use_id);
+    run
 }
 
 fn parse_completed(
@@ -295,14 +311,18 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PostTo
 mod tests {
     use std::path::PathBuf;
 
+    use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::PostToolUseHandlerData;
+    use super::hook_completed_for_tool_use;
     use super::parse_completed;
+    use super::preview;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
 
@@ -463,6 +483,24 @@ mod tests {
         assert_eq!(parsed.completed.run.entries, Vec::<HookOutputEntry>::new());
     }
 
+    #[test]
+    fn preview_and_completed_run_ids_include_tool_use_id() {
+        let request = request_for_tool_use("tool-call-456");
+        let runs = preview(&[handler()], &request);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "post-tool-use:0:/tmp/hooks.json:tool-call-456");
+
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "", ""),
+            Some("turn-1".to_string()),
+        );
+        let completed = hook_completed_for_tool_use(parsed.completed, &request);
+
+        assert_eq!(completed.run.id, runs[0].id);
+    }
+
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::PostToolUse,
@@ -484,6 +522,21 @@ mod tests {
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             error: None,
+        }
+    }
+
+    fn request_for_tool_use(tool_use_id: &str) -> super::PostToolUseRequest {
+        super::PostToolUseRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_use_id: tool_use_id.to_string(),
+            command: "echo hello".to_string(),
+            tool_response: json!({"ok": true}),
         }
     }
 }
