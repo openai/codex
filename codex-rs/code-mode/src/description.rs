@@ -201,7 +201,7 @@ pub fn build_exec_tool_description(
         if include_shared_mcp_types {
             sections.push(format!(
                 "Shared MCP Types:\n```ts\n{}\n```",
-                render_mcp_typescript_preamble()
+                MCP_TYPESCRIPT_PREAMBLE
             ));
         }
 
@@ -426,10 +426,6 @@ type mcp_result<TStructured = unknown> = {
   isError?: boolean;
   structuredContent?: TStructured;
 };"#;
-
-fn render_mcp_typescript_preamble() -> &'static str {
-    MCP_TYPESCRIPT_PREAMBLE
-}
 
 fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
     match schema {
