@@ -1778,11 +1778,11 @@ impl ChatComposer {
     /// - If the token under the cursor starts with `prefix`, that token is
     ///   returned without the leading prefix. When `allow_empty` is true, a
     ///   lone prefix character yields `Some(String::new())` to surface hints.
-    fn current_prefixed_token(
+    fn current_prefixed_token_with_range(
         textarea: &TextArea,
         prefix: char,
         allow_empty: bool,
-    ) -> Option<String> {
+    ) -> Option<(Range<usize>, String)> {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
 
@@ -1852,20 +1852,26 @@ impl ChatComposer {
         };
 
         let prefix_str = prefix.to_string();
-        let left_match = token_left.filter(|t| t.starts_with(prefix));
-        let right_match = token_right.filter(|t| t.starts_with(prefix));
-
-        let left_prefixed = left_match.map(|t| t[prefix.len_utf8()..].to_string());
-        let right_prefixed = right_match.map(|t| t[prefix.len_utf8()..].to_string());
+        let left_match = token_left
+            .filter(|token| token.starts_with(prefix))
+            .map(|token| (start_left..end_left, token[prefix.len_utf8()..].to_string()));
+        let right_match = token_right
+            .filter(|token| token.starts_with(prefix))
+            .map(|token| {
+                (
+                    start_right..end_right,
+                    token[prefix.len_utf8()..].to_string(),
+                )
+            });
 
         if at_whitespace {
-            if right_prefixed.is_some() {
-                return right_prefixed;
+            if right_match.is_some() {
+                return right_match;
             }
             if token_left.is_some_and(|t| t == prefix_str) {
-                return allow_empty.then(String::new);
+                return allow_empty.then_some((start_left..end_left, String::new()));
             }
-            return left_prefixed;
+            return left_match;
         }
         if after_cursor.starts_with(prefix) {
             let prefix_starts_token = before_cursor
@@ -1873,12 +1879,21 @@ impl ChatComposer {
                 .next_back()
                 .is_none_or(char::is_whitespace);
             return if prefix_starts_token {
-                right_prefixed.or(left_prefixed)
+                right_match.or(left_match)
             } else {
-                left_prefixed
+                left_match
             };
         }
-        left_prefixed.or(right_prefixed)
+        left_match.or(right_match)
+    }
+
+    fn current_prefixed_token(
+        textarea: &TextArea,
+        prefix: char,
+        allow_empty: bool,
+    ) -> Option<String> {
+        Self::current_prefixed_token_with_range(textarea, prefix, allow_empty)
+            .map(|(_range, token)| token)
     }
 
     /// Extract the `@token` that the cursor is currently positioned on, if any.
@@ -1896,7 +1911,22 @@ impl ChatComposer {
     }
 
     fn current_hash_item_token(&self) -> Option<String> {
-        Self::current_prefixed_token(&self.textarea, '#', /*allow_empty*/ true)
+        let (token_range, token) = Self::current_prefixed_token_with_range(
+            &self.textarea,
+            '#',
+            /*allow_empty*/ true,
+        )?;
+        let overlaps_text_element =
+            self.textarea
+                .text_element_snapshots()
+                .into_iter()
+                .any(|snapshot| {
+                    token_range.start < snapshot.range.end && snapshot.range.start < token_range.end
+                });
+        if overlaps_text_element {
+            return None;
+        }
+        Some(token)
     }
 
     fn dismissed_popup_token(prefix: char, query: &str) -> String {
@@ -5112,6 +5142,25 @@ mod tests {
             .try_recv()
             .expect("expected recent sessions request event");
         assert!(matches!(event, AppEvent::RequestRecentSessionMentions));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn hash_item_popup_ignores_hash_inside_text_element() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.textarea.insert_element("[Image #2]");
+        composer.sync_popups();
+
+        assert!(matches!(composer.active_popup, ActivePopup::None));
         assert!(rx.try_recv().is_err());
     }
 
