@@ -63,8 +63,28 @@ fn ensure_unique_headers_rejects_duplicates() {
 
 #[test]
 fn should_wait_when_agent_limit_blocks_refill() {
-    assert_eq!(should_wait_for_scheduler_change(false, false), true);
-    assert_eq!(should_wait_for_scheduler_change(true, false), false);
-    assert_eq!(should_wait_for_scheduler_change(false, true), true);
-    assert_eq!(should_wait_for_scheduler_change(true, true), true);
+    assert_eq!(
+        should_wait_for_scheduler_change(
+            /*progressed*/ false, /*agent_limit_reached*/ false,
+        ),
+        true
+    );
+    assert_eq!(
+        should_wait_for_scheduler_change(
+            /*progressed*/ true, /*agent_limit_reached*/ false,
+        ),
+        false
+    );
+    assert_eq!(
+        should_wait_for_scheduler_change(
+            /*progressed*/ false, /*agent_limit_reached*/ true,
+        ),
+        true
+    );
+    assert_eq!(
+        should_wait_for_scheduler_change(
+            /*progressed*/ true, /*agent_limit_reached*/ true,
+        ),
+        true
+    );
 }
