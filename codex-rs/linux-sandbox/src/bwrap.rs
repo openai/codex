@@ -221,12 +221,14 @@ fn create_filesystem_args(
         .collect::<Vec<_>>();
     let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
 
+    let mut logical_readable_roots = Vec::new();
     let mut args = if file_system_sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
         // In bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev`
         // creates the standard minimal nodes: null, zero, full, random,
         // urandom, and tty. `/dev` must be mounted before writable roots so
         // explicit `/dev/*` writable binds remain visible.
+        logical_readable_roots.push(PathBuf::from("/"));
         vec![
             "--ro-bind".to_string(),
             "/".to_string(),
@@ -262,6 +264,7 @@ fn create_filesystem_args(
         // the broad read baseline. Explicit unreadable carveouts are
         // re-applied later.
         if readable_roots.iter().any(|root| root == Path::new("/")) {
+            logical_readable_roots.push(PathBuf::from("/"));
             args = vec![
                 "--ro-bind".to_string(),
                 "/".to_string(),
@@ -278,10 +281,13 @@ fn create_filesystem_args(
                 // for their restricted-read bootstrap mount. Plain read-only
                 // roots must stay logical because callers may execute those
                 // paths inside bwrap, such as Bazel runfiles helper binaries.
-                let mount_root = if writable_roots
+                let read_root_bootstraps_writable_root = writable_roots
                     .iter()
-                    .any(|writable_root| root.starts_with(writable_root.root.as_path()))
-                {
+                    .any(|writable_root| root.starts_with(writable_root.root.as_path()));
+                if !read_root_bootstraps_writable_root {
+                    logical_readable_roots.push(root.clone());
+                }
+                let mount_root = if read_root_bootstraps_writable_root {
                     canonical_target_if_symlinked_path(&root).unwrap_or(root)
                 } else {
                     root
@@ -354,6 +360,7 @@ fn create_filesystem_args(
         args.push("--bind".to_string());
         args.push(path_to_string(mount_root));
         args.push(path_to_string(mount_root));
+        append_logical_symlink_alias_args(&mut args, root, &logical_readable_roots);
 
         let mut read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
@@ -423,6 +430,16 @@ fn path_depth(path: &Path) -> usize {
 }
 
 fn canonical_target_if_symlinked_path(path: &Path) -> Option<PathBuf> {
+    let _ = first_symlink_alias_in_path(path)?;
+    let target = fs::canonicalize(path).ok()?;
+    if target.as_path() == path {
+        None
+    } else {
+        Some(target)
+    }
+}
+
+fn first_symlink_alias_in_path(path: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut current = PathBuf::new();
     for component in path.components() {
         use std::path::Component;
@@ -445,11 +462,11 @@ fn canonical_target_if_symlinked_path(path: &Path) -> Option<PathBuf> {
             Err(_) => return None,
         };
         if metadata.file_type().is_symlink() {
-            let target = fs::canonicalize(path).ok()?;
-            if target.as_path() == path {
+            let target = fs::canonicalize(&current).ok()?;
+            if target.as_path() == current {
                 return None;
             }
-            return Some(target);
+            return Some((current, target));
         }
     }
     None
@@ -472,6 +489,43 @@ fn normalize_command_cwd_for_bwrap(command_cwd: &Path) -> PathBuf {
     command_cwd
         .canonicalize()
         .unwrap_or_else(|_| command_cwd.to_path_buf())
+}
+
+fn append_logical_symlink_alias_args(
+    args: &mut Vec<String>,
+    writable_root: &Path,
+    logical_readable_roots: &[PathBuf],
+) {
+    let Some((alias_path, target)) = first_symlink_alias_in_path(writable_root) else {
+        return;
+    };
+    if logical_readable_roots
+        .iter()
+        .any(|root| alias_path.starts_with(root))
+    {
+        return;
+    }
+
+    append_parent_dir_args_for_path(args, &alias_path, Path::new("/"));
+    args.push("--symlink".to_string());
+    args.push(path_to_string(&target));
+    args.push(path_to_string(&alias_path));
+}
+
+fn append_parent_dir_args_for_path(args: &mut Vec<String>, path: &Path, anchor: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let mut parent_dirs: Vec<PathBuf> = parent
+        .ancestors()
+        .take_while(|path| *path != anchor)
+        .map(Path::to_path_buf)
+        .collect();
+    parent_dirs.reverse();
+    for parent_dir in parent_dirs {
+        args.push("--dir".to_string());
+        args.push(path_to_string(&parent_dir));
+    }
 }
 
 fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Path, anchor: &Path) {
@@ -920,6 +974,102 @@ mod tests {
                     logical_memories_str.as_str(),
                 ]
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_writable_roots_recreate_logical_alias_when_parent_is_not_readable() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let real_root = temp_root.join("real");
+        let link_root = temp_root.join("link");
+        std::fs::create_dir_all(&real_root).expect("create real root");
+        std::os::unix::fs::symlink(&real_root, &link_root).expect("create symlinked root");
+
+        let link_root =
+            AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
+        let real_root_str = path_to_string(&real_root);
+        let link_root_str = path_to_string(link_root.as_path());
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_root },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let bind_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", real_root_str.as_str(), real_root_str.as_str()])
+            .expect("writable root should bind real target");
+        let symlink_index = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window == ["--symlink", real_root_str.as_str(), link_root_str.as_str()]
+            })
+            .expect("logical symlink alias should be recreated");
+
+        assert!(
+            bind_index < symlink_index,
+            "logical alias must point at the mounted writable target: {:#?}",
+            args.args
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_writable_roots_skip_logical_alias_when_parent_is_readable() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let parent = temp_root.join("parent");
+        let real_root = temp_root.join("real");
+        let link_root = parent.join("link");
+        std::fs::create_dir_all(&parent).expect("create parent");
+        std::fs::create_dir_all(&real_root).expect("create real root");
+        std::os::unix::fs::symlink(&real_root, &link_root).expect("create symlinked root");
+
+        let parent = AbsolutePathBuf::from_absolute_path(&parent).expect("absolute parent");
+        let link_root =
+            AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
+        let parent_str = path_to_string(parent.as_path());
+        let real_root_str = path_to_string(&real_root);
+        let link_root_str = path_to_string(link_root.as_path());
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: parent },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_root },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+
+        assert!(
+            args.args.windows(3).any(|window| {
+                window == ["--ro-bind", parent_str.as_str(), parent_str.as_str()]
+            })
+        );
+        assert!(args.args.windows(3).any(|window| {
+            window == ["--bind", real_root_str.as_str(), real_root_str.as_str()]
+        }));
+        assert!(
+            !args.args.windows(3).any(|window| {
+                window == ["--symlink", real_root_str.as_str(), link_root_str.as_str()]
+            }),
+            "readable parent already exposes the logical symlink: {:#?}",
+            args.args
+        );
     }
 
     #[cfg(unix)]
