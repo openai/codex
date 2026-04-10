@@ -691,7 +691,7 @@ impl AgentControl {
         let state = self.upgrade()?;
         let result = if let Ok(thread) = state.get_thread(agent_id).await {
             thread.codex.session.ensure_rollout_materialized().await;
-            thread.codex.session.flush_rollout().await;
+            let _ = thread.codex.session.flush_rollout().await;
             if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
                 Ok(String::new())
             } else {
