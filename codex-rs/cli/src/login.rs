@@ -17,6 +17,7 @@ use codex_login::login_with_api_key;
 use codex_login::logout;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
@@ -112,7 +113,7 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
 
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
-    forced_chatgpt_workspace_id: Option<String>,
+    forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
     let opts = ServerOptions::new(

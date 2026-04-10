@@ -10,6 +10,7 @@ use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
 
@@ -117,7 +118,9 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        forced_chatgpt_workspace_id: Some(chatgpt_account_id.to_string()),
+        forced_chatgpt_workspace_id: Some(ForcedChatgptWorkspaceIds::Single(
+            chatgpt_account_id.to_string(),
+        )),
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -217,7 +220,9 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state.clone()),
-        forced_chatgpt_workspace_id: Some("org-required".to_string()),
+        forced_chatgpt_workspace_id: Some(ForcedChatgptWorkspaceIds::Single(
+            "org-required".to_string(),
+        )),
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -234,7 +239,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     assert!(resp.status().is_success());
     let body = resp.text().await?;
     assert!(
-        body.contains("Login is restricted to workspace id org-required"),
+        body.contains("Login is restricted to workspace org-required"),
         "error body should mention workspace restriction"
     );
 
