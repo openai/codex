@@ -13,6 +13,7 @@ use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::state::McpToolSnapshot;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
@@ -1077,17 +1078,22 @@ impl AgentControl {
             return InheritedThreadState::default();
         };
 
-        let Some(prompt_cache_key) = state
-            .get_thread(*parent_thread_id)
-            .await
-            .ok()
-            .map(|parent_thread| parent_thread.codex.session.prompt_cache_key())
-        else {
+        let Some(parent_thread) = state.get_thread(*parent_thread_id).await.ok() else {
             return InheritedThreadState::default();
         };
+        let mcp_tools = parent_thread
+            .codex
+            .session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await;
 
         InheritedThreadState {
-            prompt_cache_key: Some(prompt_cache_key),
+            prompt_cache_key: Some(parent_thread.codex.session.prompt_cache_key()),
+            mcp_tool_snapshot: Some(McpToolSnapshot { tools: mcp_tools }),
         }
     }
 
