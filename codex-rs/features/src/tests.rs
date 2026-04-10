@@ -170,10 +170,13 @@ fn use_agent_identity_is_under_development() {
 }
 
 #[test]
-fn image_detail_original_feature_is_under_development() {
+fn image_detail_original_feature_is_experimental_and_user_toggleable() {
+    let stage = Feature::ImageDetailOriginal.stage();
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
     assert_eq!(
-        Feature::ImageDetailOriginal.stage(),
-        Stage::UnderDevelopment
+        stage.experimental_menu_name(),
+        Some("Original image detail")
     );
     assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
 }
