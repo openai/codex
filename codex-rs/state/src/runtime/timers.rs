@@ -381,13 +381,17 @@ ORDER BY name
 
         assert!(
             runtime
-                .claim_recurring_thread_timer("thread-1", "timer-1", None, &update)
+                .claim_recurring_thread_timer(
+                    "thread-1", "timer-1", /*expected_last_run_at*/ None, &update,
+                )
                 .await
                 .expect("claim recurring timer")
         );
         assert!(
             !runtime
-                .claim_recurring_thread_timer("thread-1", "timer-1", None, &update)
+                .claim_recurring_thread_timer(
+                    "thread-1", "timer-1", /*expected_last_run_at*/ None, &update,
+                )
                 .await
                 .expect("claim recurring timer again")
         );
