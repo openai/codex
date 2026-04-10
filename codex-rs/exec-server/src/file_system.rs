@@ -41,6 +41,10 @@ pub struct ReadDirectoryEntry {
 pub struct FileSystemSandboxContext {
     pub sandbox_policy: SandboxPolicy,
     pub windows_sandbox_level: WindowsSandboxLevel,
+    #[serde(default)]
+    pub windows_sandbox_private_desktop: bool,
+    #[serde(default)]
+    pub use_legacy_landlock: bool,
     pub additional_permissions: Option<PermissionProfile>,
 }
 
@@ -49,6 +53,8 @@ impl FileSystemSandboxContext {
         Self {
             sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            use_legacy_landlock: false,
             additional_permissions: None,
         }
     }
