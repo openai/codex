@@ -294,8 +294,8 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         cwd,
         &mut env_map,
         &command,
-        false,
-        false,
+        /*inherit_path*/ false,
+        /*add_git_safe_directory*/ false,
     )?;
     if !common.policy.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");

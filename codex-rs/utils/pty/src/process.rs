@@ -397,7 +397,7 @@ pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
         wait_handle,
         exit_status,
         exit_code,
-        None,
+        /*pty_handles*/ None,
         resizer,
     );
 

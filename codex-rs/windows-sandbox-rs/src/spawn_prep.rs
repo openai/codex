@@ -249,8 +249,8 @@ pub(crate) fn prepare_elevated_spawn_context(
         cwd,
         env_map,
         command,
-        true,
-        true,
+        /*inherit_path*/ true,
+        /*add_git_safe_directory*/ true,
     )?;
     let sandbox_creds = require_logon_sandbox_creds(
         &common.policy,
