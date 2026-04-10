@@ -322,7 +322,7 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_apply_patch::ApplyPatchProgress;
 use codex_apply_patch::ApplyPatchProgressChange;
-use codex_apply_patch::parse_apply_patch_tool_input_progress;
+use codex_apply_patch::parse_patch_progress;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -7907,7 +7907,8 @@ async fn maybe_emit_apply_patch_changes(
     state: &mut ToolInputStreamState,
     should_start: bool,
 ) {
-    let progress = parse_apply_patch_tool_input_progress(&state.input);
+    let patch_text = apply_patch_text_from_tool_input(&state.input);
+    let progress = parse_patch_progress(&patch_text);
     if !state.apply_patch_started && (should_start || progress.is_some()) {
         state.apply_patch_started = true;
         sess.send_event(
@@ -7961,6 +7962,83 @@ fn convert_apply_patch_progress_to_protocol(
         .collect()
 }
 
+fn apply_patch_text_from_tool_input(input: &str) -> String {
+    extract_json_input_prefix(input).unwrap_or_else(|| input.to_string())
+}
+
+fn extract_json_input_prefix(input: &str) -> Option<String> {
+    let key = "\"input\"";
+    let mut search_start = 0;
+    while let Some(offset) = input[search_start..].find(key) {
+        let key_start = search_start + offset;
+        let mut index = key_start + key.len();
+        index = skip_json_whitespace(input, index);
+        if input.as_bytes().get(index) != Some(&b':') {
+            search_start = key_start + key.len();
+            continue;
+        }
+        index += 1;
+        index = skip_json_whitespace(input, index);
+        if input.as_bytes().get(index) != Some(&b'"') {
+            search_start = key_start + key.len();
+            continue;
+        }
+        return Some(decode_json_string_prefix(&input[index + 1..]));
+    }
+    None
+}
+
+fn skip_json_whitespace(input: &str, mut index: usize) -> usize {
+    while let Some(byte) = input.as_bytes().get(index)
+        && byte.is_ascii_whitespace()
+    {
+        index += 1;
+    }
+    index
+}
+
+fn decode_json_string_prefix(input: &str) -> String {
+    let mut decoded = String::new();
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => break,
+            '\\' => {
+                let Some(escaped) = chars.next() else {
+                    break;
+                };
+                match escaped {
+                    '"' => decoded.push('"'),
+                    '\\' => decoded.push('\\'),
+                    '/' => decoded.push('/'),
+                    'b' => decoded.push('\u{0008}'),
+                    'f' => decoded.push('\u{000c}'),
+                    'n' => decoded.push('\n'),
+                    'r' => decoded.push('\r'),
+                    't' => decoded.push('\t'),
+                    'u' => {
+                        let mut digits = String::with_capacity(4);
+                        for _ in 0..4 {
+                            let Some(digit) = chars.next() else {
+                                return decoded;
+                            };
+                            digits.push(digit);
+                        }
+                        if let Ok(value) = u16::from_str_radix(&digits, 16)
+                            && let Some(ch) = char::from_u32(u32::from(value))
+                        {
+                            decoded.push(ch);
+                        }
+                    }
+                    other => decoded.push(other),
+                }
+            }
+            other => decoded.push(other),
+        }
+    }
+    decoded
+}
+
 fn response_item_is_apply_patch(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::FunctionCall { name, .. } | ResponseItem::CustomToolCall { name, .. } => {
@@ -7991,6 +8069,29 @@ fn response_item_tool_input(item: &ResponseItem) -> Option<&str> {
         ResponseItem::FunctionCall { arguments, .. } => Some(arguments),
         ResponseItem::CustomToolCall { input, .. } => Some(input),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod apply_patch_tool_input_tests {
+    use super::apply_patch_text_from_tool_input;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn decodes_partial_function_call_arguments() {
+        let input = r#"{"input":"*** Begin Patch\n*** Add File: src/hello.txt\n+hel"#;
+
+        assert_eq!(
+            apply_patch_text_from_tool_input(input),
+            "*** Begin Patch\n*** Add File: src/hello.txt\n+hel"
+        );
+    }
+
+    #[test]
+    fn keeps_direct_custom_tool_input() {
+        let input = "*** Begin Patch\n*** Delete File: gone.txt";
+
+        assert_eq!(apply_patch_text_from_tool_input(input), input);
     }
 }
 

@@ -20,8 +20,8 @@ pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
 use parser::UpdateFileChunk;
-pub use parser::parse_apply_patch_tool_input_progress;
 pub use parser::parse_patch;
+pub use parser::parse_patch_progress;
 use similar::TextDiff;
 use thiserror::Error;
 
