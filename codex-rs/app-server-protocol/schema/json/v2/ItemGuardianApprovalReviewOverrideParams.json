@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GuardianApprovalReviewOverrideDecision": {
+      "description": "[UNSTABLE] Client decision that preempts a pending guardian approval review.",
+      "enum": [
+        "approve",
+        "decline"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "[UNSTABLE] Params for preempting a pending guardian approval review.",
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/GuardianApprovalReviewOverrideDecision"
+    },
+    "reviewId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "decision",
+    "reviewId",
+    "threadId",
+    "turnId"
+  ],
+  "title": "ItemGuardianApprovalReviewOverrideParams",
+  "type": "object"
+}

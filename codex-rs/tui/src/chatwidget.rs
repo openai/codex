@@ -171,6 +171,7 @@ use codex_protocol::protocol::ExecCommandSource;
 #[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::GuardianAssessmentAction;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
@@ -3345,11 +3346,17 @@ impl ChatWidget {
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
+            let actor =
+                if ev.decision_source == Some(GuardianAssessmentDecisionSource::ClientOverride) {
+                    history_cell::ApprovalDecisionActor::User
+                } else {
+                    history_cell::ApprovalDecisionActor::Guardian
+                };
             let cell = if let Some(command) = guardian_command(&ev.action) {
                 history_cell::new_approval_decision_cell(
                     command,
                     codex_protocol::protocol::ReviewDecision::Approved,
-                    history_cell::ApprovalDecisionActor::Guardian,
+                    actor,
                 )
             } else if let Some(summary) = guardian_action_summary(&ev.action) {
                 history_cell::new_guardian_approved_action_request(summary)
@@ -3367,11 +3374,17 @@ impl ChatWidget {
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
+        let actor = if ev.decision_source == Some(GuardianAssessmentDecisionSource::ClientOverride)
+        {
+            history_cell::ApprovalDecisionActor::User
+        } else {
+            history_cell::ApprovalDecisionActor::Guardian
+        };
         let cell = if let Some(command) = guardian_command(&ev.action) {
             history_cell::new_approval_decision_cell(
                 command,
                 codex_protocol::protocol::ReviewDecision::Denied,
-                history_cell::ApprovalDecisionActor::Guardian,
+                actor,
             )
         } else {
             match &ev.action {
@@ -6442,6 +6455,7 @@ impl ChatWidget {
                     notification.review_id,
                     notification.turn_id,
                     notification.review,
+                    None,
                     notification.action,
                 );
             }
@@ -6450,6 +6464,7 @@ impl ChatWidget {
                     notification.review_id,
                     notification.turn_id,
                     notification.review,
+                    Some(notification.decision_source),
                     notification.action,
                 );
             }
@@ -6725,6 +6740,7 @@ impl ChatWidget {
         id: String,
         turn_id: String,
         review: codex_app_server_protocol::GuardianApprovalReview,
+        decision_source: Option<codex_app_server_protocol::GuardianApprovalReviewDecisionSource>,
         action: GuardianApprovalReviewAction,
     ) {
         self.on_guardian_assessment(GuardianAssessmentEvent {
@@ -6776,7 +6792,14 @@ impl ChatWidget {
                 }
             }),
             rationale: review.rationale,
-            decision_source: None,
+            decision_source: decision_source.map(|source| match source {
+                codex_app_server_protocol::GuardianApprovalReviewDecisionSource::Guardian => {
+                    GuardianAssessmentDecisionSource::Guardian
+                }
+                codex_app_server_protocol::GuardianApprovalReviewDecisionSource::ClientOverride => {
+                    GuardianAssessmentDecisionSource::ClientOverride
+                }
+            }),
             action: action.into(),
         });
     }

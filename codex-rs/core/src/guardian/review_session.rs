@@ -12,6 +12,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianReviewOverrideDecision;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -83,6 +85,18 @@ pub(crate) struct GuardianReviewSessionManager {
 struct GuardianReviewSessionState {
     trunk: Option<Arc<GuardianReviewSession>>,
     ephemeral_reviews: Vec<Arc<GuardianReviewSession>>,
+    pending_overrides: HashMap<String, PendingGuardianReviewOverride>,
+}
+
+struct PendingGuardianReviewOverride {
+    turn_id: String,
+    sender: oneshot::Sender<GuardianReviewOverrideDecision>,
+}
+
+#[derive(Debug)]
+pub(crate) enum GuardianReviewOverrideError {
+    NotFound,
+    TurnMismatch { expected_turn_id: String },
 }
 
 struct GuardianReviewSession {
@@ -246,6 +260,53 @@ impl Drop for EphemeralReviewCleanup {
 }
 
 impl GuardianReviewSessionManager {
+    pub(crate) async fn register_pending_override(
+        &self,
+        review_id: String,
+        turn_id: String,
+    ) -> oneshot::Receiver<GuardianReviewOverrideDecision> {
+        let (sender, receiver) = oneshot::channel();
+        let mut state = self.state.lock().await;
+        if state
+            .pending_overrides
+            .insert(
+                review_id.clone(),
+                PendingGuardianReviewOverride { turn_id, sender },
+            )
+            .is_some()
+        {
+            warn!("replaced pending guardian review override for review {review_id}");
+        }
+        receiver
+    }
+
+    pub(crate) async fn clear_pending_override(&self, review_id: &str) {
+        self.state.lock().await.pending_overrides.remove(review_id);
+    }
+
+    pub(crate) async fn override_review(
+        &self,
+        review_id: &str,
+        turn_id: &str,
+        decision: GuardianReviewOverrideDecision,
+    ) -> Result<(), GuardianReviewOverrideError> {
+        let mut state = self.state.lock().await;
+        let Some(pending) = state.pending_overrides.remove(review_id) else {
+            return Err(GuardianReviewOverrideError::NotFound);
+        };
+        if pending.turn_id != turn_id {
+            let expected_turn_id = pending.turn_id.clone();
+            state
+                .pending_overrides
+                .insert(review_id.to_string(), pending);
+            return Err(GuardianReviewOverrideError::TurnMismatch { expected_turn_id });
+        }
+        pending
+            .sender
+            .send(decision)
+            .map_err(|_| GuardianReviewOverrideError::NotFound)
+    }
+
     pub(crate) async fn shutdown(&self) {
         let (review_session, ephemeral_reviews) = {
             let mut state = self.state.lock().await;

@@ -1,0 +1,6 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "[UNSTABLE] Empty response for `item/autoApprovalReview/override`.",
+  "title": "ItemGuardianApprovalReviewOverrideResponse",
+  "type": "object"
+}

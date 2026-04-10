@@ -1640,6 +1640,30 @@
             },
             "method": {
               "enum": [
+                "item/autoApprovalReview/override"
+              ],
+              "title": "Item/autoApprovalReview/overrideRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ItemGuardianApprovalReviewOverrideParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/autoApprovalReview/overrideRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "model/list"
               ],
               "title": "Model/listRequestMethod",
@@ -5051,6 +5075,14 @@
       ],
       "type": "string"
     },
+    "GuardianApprovalReviewOverrideDecision": {
+      "description": "[UNSTABLE] Client decision that preempts a pending guardian approval review.",
+      "enum": [
+        "approve",
+        "decline"
+      ],
+      "type": "string"
+    },
     "GuardianApprovalReviewStatus": {
       "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
       "enum": [
@@ -5419,6 +5451,38 @@
         "turnId"
       ],
       "title": "ItemGuardianApprovalReviewCompletedNotification",
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewOverrideParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Params for preempting a pending guardian approval review.",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/GuardianApprovalReviewOverrideDecision"
+        },
+        "reviewId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision",
+        "reviewId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ItemGuardianApprovalReviewOverrideParams",
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewOverrideResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Empty response for `item/autoApprovalReview/override`.",
+      "title": "ItemGuardianApprovalReviewOverrideResponse",
       "type": "object"
     },
     "ItemGuardianApprovalReviewStartedNotification": {

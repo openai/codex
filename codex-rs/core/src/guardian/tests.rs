@@ -23,7 +23,10 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
+use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianReviewOverrideDecision;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
@@ -665,6 +668,169 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         guardian_request_turn_id(&apply_patch, "fallback-turn"),
         "fallback-turn"
     );
+}
+
+fn guardian_override_test_request(id: &str) -> GuardianApprovalRequest {
+    GuardianApprovalRequest::Shell {
+        id: id.to_string(),
+        command: vec!["git".to_string(), "push".to_string()],
+        cwd: PathBuf::from("/repo/codex-rs/core"),
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        justification: Some("Need to push the reviewed docs fix.".to_string()),
+    }
+}
+
+async fn recv_guardian_assessment_with_status(
+    rx: &async_channel::Receiver<codex_protocol::protocol::Event>,
+    status: GuardianAssessmentStatus,
+) -> GuardianAssessmentEvent {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event channel should remain open");
+            if let EventMsg::GuardianAssessment(assessment) = event.msg
+                && assessment.status == status
+            {
+                return assessment;
+            }
+        }
+    })
+    .await
+    .expect("guardian assessment event should arrive")
+}
+
+#[tokio::test]
+async fn guardian_review_override_validates_pending_turn_id() {
+    let (session, _) = crate::codex::make_session_and_context().await;
+    let override_rx = session
+        .guardian_review_session
+        .register_pending_override("review-1".to_string(), "turn-1".to_string())
+        .await;
+
+    let err = session
+        .guardian_review_session
+        .override_review(
+            "review-1",
+            "turn-2",
+            GuardianReviewOverrideDecision::Approve,
+        )
+        .await
+        .expect_err("turn mismatch should fail");
+    assert!(matches!(
+        err,
+        super::review_session::GuardianReviewOverrideError::TurnMismatch { expected_turn_id }
+            if expected_turn_id == "turn-1"
+    ));
+
+    session
+        .guardian_review_session
+        .override_review(
+            "review-1",
+            "turn-1",
+            GuardianReviewOverrideDecision::Approve,
+        )
+        .await
+        .expect("expected turn should be accepted");
+    assert_eq!(
+        override_rx.await.expect("override decision"),
+        GuardianReviewOverrideDecision::Approve
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_decline_override_preempts_automatic_review() -> anyhow::Result<()> {
+    let (_gate_tx, gate_rx) = tokio::sync::oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_response_created("resp-guardian-override")]),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: sse(vec![
+                ev_assistant_message(
+                    "msg-guardian-override",
+                    &serde_json::json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "guardian would allow",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-override"),
+            ]),
+        },
+    ]])
+    .await;
+    let (mut session, mut turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.user_instructions = None;
+    let config = Arc::new(config);
+    let models_manager = Arc::new(test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .services
+        .models_manager = models_manager;
+    let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
+    turn_mut.config = Arc::clone(&config);
+    turn_mut.provider = config.model_provider.clone();
+    turn_mut.user_instructions = None;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let session_for_review = Arc::clone(&session);
+    let turn_for_review = Arc::clone(&turn);
+    let review = tokio::spawn(async move {
+        review_approval_request(
+            &session_for_review,
+            &turn_for_review,
+            guardian_override_test_request("shell-guardian-override"),
+            /*retry_reason*/ None,
+        )
+        .await
+    });
+    let started =
+        recv_guardian_assessment_with_status(&rx, GuardianAssessmentStatus::InProgress).await;
+    session
+        .guardian_review_session
+        .override_review(
+            &started.id,
+            &started.turn_id,
+            GuardianReviewOverrideDecision::Decline,
+        )
+        .await
+        .expect("override should be accepted");
+
+    assert_eq!(review.await?, ReviewDecision::Denied);
+    let completed =
+        recv_guardian_assessment_with_status(&rx, GuardianAssessmentStatus::Denied).await;
+    assert_eq!(completed.id, started.id);
+    assert_eq!(
+        completed.decision_source,
+        Some(GuardianAssessmentDecisionSource::ClientOverride)
+    );
+    assert_eq!(completed.risk_level, None);
+    assert_eq!(completed.user_authorization, None);
+    assert_eq!(
+        guardian_rejection_message(session.as_ref(), "shell-guardian-override").await,
+        concat!(
+            "This action was declined before the automatic approval review completed.\n",
+            "Reason: User/client preempted the automatic guardian review and declined this review.\n",
+            "The agent must not attempt to achieve the same outcome via workaround, ",
+            "indirect execution, or policy circumvention. ",
+            "Proceed only with a materially safer alternative, ",
+            "or if the user explicitly approves the action after being informed of the risk. ",
+            "Otherwise, stop and request user input."
+        )
+    );
+    server.shutdown().await;
+
+    Ok(())
 }
 
 #[tokio::test]
