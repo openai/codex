@@ -2,10 +2,12 @@ use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
+use super::create_network_only_seatbelt_command_args;
 use super::create_seatbelt_command_args;
 use super::create_seatbelt_command_args_for_policies;
 use super::dynamic_network_policy;
 use super::macos_dir_params;
+use super::network_only_policy_for_network;
 use super::normalize_path_for_sandbox;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
@@ -304,6 +306,121 @@ fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
     assert!(
         !policy.contains("\n(allow network-outbound)\n"),
         "policy should keep proxy-routed behavior without blanket outbound allowance:\n{policy}"
+    );
+}
+
+#[test]
+fn network_only_policy_denies_direct_ip_except_proxy_ports() {
+    let policy = network_only_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
+        /*enforce_managed_network*/ true,
+        &ProxyPolicyInputs {
+            ports: vec![43128],
+            has_proxy_config: true,
+            allow_local_binding: false,
+            ..ProxyPolicyInputs::default()
+        },
+    );
+
+    assert!(
+        policy.contains(
+            "(deny network-outbound (require-all (remote ip \"*:*\") (require-not (remote ip \"localhost:43128\"))))"
+        ),
+        "policy should deny direct outbound IP while preserving proxy access:\n{policy}"
+    );
+    assert!(
+        policy.contains("(deny network-bind (local ip \"*:*\"))"),
+        "policy should deny local IP binding unless explicitly allowed:\n{policy}"
+    );
+    assert!(
+        policy.contains("(deny network-inbound (local ip \"*:*\"))"),
+        "policy should deny inbound IP unless explicitly allowed:\n{policy}"
+    );
+    assert!(
+        !policy.contains("(deny default)"),
+        "network-only policy should not use the closed Seatbelt base policy:\n{policy}"
+    );
+}
+
+#[test]
+fn network_only_policy_allows_loopback_when_local_binding_is_enabled() {
+    let policy = network_only_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
+        /*enforce_managed_network*/ true,
+        &ProxyPolicyInputs {
+            ports: vec![43128],
+            has_proxy_config: true,
+            allow_local_binding: true,
+            ..ProxyPolicyInputs::default()
+        },
+    );
+
+    assert!(
+        policy.contains("(require-not (remote ip \"localhost:*\"))"),
+        "policy should preserve loopback outbound when local binding is allowed:\n{policy}"
+    );
+    assert!(
+        policy.contains(
+            "(deny network-bind (require-all (local ip \"*:*\") (require-not (local ip \"localhost:*\"))))"
+        ),
+        "policy should only allow loopback binding when local binding is enabled:\n{policy}"
+    );
+    assert!(
+        policy.contains(
+            "(deny network-inbound (require-all (local ip \"*:*\") (require-not (local ip \"localhost:*\"))))"
+        ),
+        "policy should only allow loopback inbound when local binding is enabled:\n{policy}"
+    );
+}
+
+#[test]
+fn network_only_policy_respects_unix_socket_allowlist() {
+    let policy = network_only_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
+        /*enforce_managed_network*/ true,
+        &ProxyPolicyInputs {
+            unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                allowed: vec![absolute_path("/tmp/example.sock")],
+            },
+            ..ProxyPolicyInputs::default()
+        },
+    );
+
+    assert!(
+        policy.contains(
+            "(deny network-outbound (require-all (remote unix-socket) (require-not (remote unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))))"
+        ),
+        "policy should deny unix-socket outbound except allowlisted paths:\n{policy}"
+    );
+    assert!(
+        policy.contains(
+            "(deny network-bind (require-all (local unix-socket) (require-not (local unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))))"
+        ),
+        "policy should deny unix-socket binding except allowlisted paths:\n{policy}"
+    );
+}
+
+#[test]
+fn create_network_only_seatbelt_args_uses_open_base_policy() {
+    let args = create_network_only_seatbelt_command_args(
+        vec!["true".to_string()],
+        NetworkSandboxPolicy::Enabled,
+        /*enforce_managed_network*/ true,
+        /*network*/ None,
+    );
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.starts_with("(version 1)\n(allow default)"),
+        "network-only Seatbelt profile should start from an open default:\n{policy}"
+    );
+    assert!(
+        policy.contains("(deny network-outbound (remote ip \"*:*\")"),
+        "network-only Seatbelt profile should still deny direct IP outbound:\n{policy}"
+    );
+    assert!(
+        !policy.contains("(deny default)"),
+        "network-only Seatbelt profile should not inherit the closed base profile:\n{policy}"
     );
 }
 
