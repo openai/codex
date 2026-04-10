@@ -409,9 +409,10 @@ impl TimersState {
             timer_cancel,
         } = runtime;
         let is_recurring = timer.trigger.is_recurring();
-        let deleted_one_shot_timer = !is_recurring;
+        let delete_after_claim =
+            !is_recurring || (!timer.trigger.is_idle_recurring() && timer.next_run_at.is_none());
         let previous_last_run_at = timer.last_run_at;
-        if deleted_one_shot_timer {
+        if delete_after_claim {
             if let Some(cancel) = timer_cancel.as_ref() {
                 cancel.cancel();
             }
@@ -438,11 +439,11 @@ impl TimersState {
                 content: timer.content,
                 instructions: timer.instructions,
                 meta: timer.meta,
-                recurring: is_recurring,
+                recurring: !delete_after_claim,
                 delivery: actual_delivery,
                 queued_at: now.timestamp(),
             },
-            deleted_one_shot_timer,
+            deleted_one_shot_timer: delete_after_claim,
             previous_last_run_at,
         })
     }
@@ -602,6 +603,54 @@ mod tests {
             .expect("timer should be claimed");
         assert_eq!(claimed.context.current_timer_id, "timer-1");
         assert!(claimed.deleted_one_shot_timer);
+        assert!(timers.list_timers().is_empty());
+    }
+
+    #[test]
+    fn exhausted_recurring_schedule_is_removed_after_final_claim() {
+        let now = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
+        let mut timers = TimersState::default();
+        let (timer, timer_spec) = timers
+            .create_timer(
+                CreateTimer {
+                    id: "timer-1".to_string(),
+                    trigger: TimerTrigger::Schedule {
+                        dtstart: None,
+                        rrule: Some("FREQ=MINUTELY;COUNT=1".to_string()),
+                    },
+                    payload: MessagePayload {
+                        content: "final scheduled run".to_string(),
+                        instructions: None,
+                        meta: BTreeMap::new(),
+                    },
+                    delivery: TimerDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("timer should be created");
+        assert_eq!(timer_spec, None);
+        assert_eq!(
+            timers.persisted_timers(),
+            vec![PersistedTimer {
+                timer: ThreadTimer {
+                    next_run_at: None,
+                    ..timer
+                },
+                pending_run: true,
+            }]
+        );
+
+        let claimed = timers
+            .claim_next_timer(
+                now,
+                /*can_after_turn*/ true,
+                /*can_steer_current_turn*/ true,
+                IdleRecurringTimerPolicy::IncludeAll,
+            )
+            .expect("timer should be claimed");
+        assert!(claimed.deleted_one_shot_timer);
+        assert!(!claimed.context.recurring);
         assert!(timers.list_timers().is_empty());
     }
 
