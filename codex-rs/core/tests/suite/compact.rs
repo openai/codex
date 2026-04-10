@@ -2844,6 +2844,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
+            let _ = config.features.disable(Feature::ToolSuggest);
         })
         .build(&server)
         .await
@@ -2965,6 +2966,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
+            let _ = config.features.disable(Feature::ToolSuggest);
         })
         .build(&server)
         .await

@@ -47,6 +47,7 @@ use wiremock::matchers::path_regex;
 
 fn enable_prefix_compaction(config: &mut codex_core::config::Config) {
     let _ = config.features.enable(Feature::PrefixCompaction);
+    let _ = config.features.disable(Feature::ToolSuggest);
 }
 
 fn approx_token_count(text: &str) -> i64 {
