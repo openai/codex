@@ -735,6 +735,7 @@ mod tests {
                     }),
                     secondary: None,
                     credits: None,
+                    spend_control: None,
                     plan_type: Some(PlanType::Plus),
                 },
             });
@@ -754,6 +755,7 @@ mod tests {
                         },
                         "secondary": null,
                         "credits": null,
+                        "spendControl": null,
                         "planType": "plus"
                     }
                 },
@@ -769,6 +771,8 @@ mod tests {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
             auth_mode: Some(AuthMode::ApiKey),
             plan_type: None,
+            workspace_role: None,
+            is_workspace_owner: None,
         });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
@@ -777,7 +781,9 @@ mod tests {
                 "method": "account/updated",
                 "params": {
                     "authMode": "apikey",
-                    "planType": null
+                    "planType": null,
+                    "workspaceRole": null,
+                    "isWorkspaceOwner": null
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

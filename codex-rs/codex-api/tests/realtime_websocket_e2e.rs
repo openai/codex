@@ -493,7 +493,7 @@ async fn realtime_ws_e2e_realtime_v2_parser_emits_handoff_requested() {
                 "item": {
                     "id": "item_123",
                     "type": "function_call",
-                    "name": "codex",
+                    "name": "background_agent",
                     "call_id": "call_123",
                     "arguments": "{\"prompt\":\"delegate now\"}"
                 }

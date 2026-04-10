@@ -128,6 +128,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                     chatgpt_plan_type: Some(InternalPlanType::Known(InternalKnownPlan::Pro)),
                     chatgpt_user_id: Some("user-12345".to_string()),
                     chatgpt_account_id: None,
+                    is_org_owner: None,
                     raw_jwt: fake_jwt,
                 },
                 access_token: "test-access-token".to_string(),

@@ -137,13 +137,22 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
 }
 
 #[test]
-fn collect_tool_search_output_tools_groups_results_by_namespace() {
+fn collect_tool_search_output_tools_preserves_search_order_while_grouping_by_namespace() {
     let calendar_create_event = mcp_tool("calendar-create-event", "Create a calendar event.");
     let gmail_read_email = mcp_tool("gmail-read-email", "Read an email.");
+    let gmail_send_email = mcp_tool("gmail-send-email", "Send an email.");
     let calendar_list_events = mcp_tool("calendar-list-events", "List calendar events.");
     let docs_search = mcp_tool("search", "Search docs.");
 
     let tools = collect_tool_search_output_tools([
+        ToolSearchResultSource {
+            server_name: "codex_apps",
+            tool_namespace: "mcp__codex_apps__gmail",
+            tool_name: "_send_email",
+            tool: &gmail_send_email,
+            connector_name: Some("Gmail"),
+            connector_description: Some("Read mail"),
+        },
         ToolSearchResultSource {
             server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__calendar",
@@ -183,6 +192,36 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
         tools,
         vec![
             ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                name: "mcp__codex_apps__gmail".to_string(),
+                description: "Read mail".to_string(),
+                tools: vec![
+                    ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                        name: "_send_email".to_string(),
+                        description: "Send an email.".to_string(),
+                        strict: false,
+                        defer_loading: Some(true),
+                        parameters: JsonSchema::object(
+                            Default::default(),
+                            /*required*/ None,
+                            /*additional_properties*/ None
+                        ),
+                        output_schema: None,
+                    }),
+                    ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                        name: "_read_email".to_string(),
+                        description: "Read an email.".to_string(),
+                        strict: false,
+                        defer_loading: Some(true),
+                        parameters: JsonSchema::object(
+                            Default::default(),
+                            /*required*/ None,
+                            /*additional_properties*/ None
+                        ),
+                        output_schema: None,
+                    }),
+                ],
+            }),
+            ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
                 name: "mcp__codex_apps__calendar".to_string(),
                 description: "Plan events".to_string(),
                 tools: vec![
@@ -211,22 +250,6 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
                         output_schema: None,
                     }),
                 ],
-            }),
-            ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
-                name: "mcp__codex_apps__gmail".to_string(),
-                description: "Read mail".to_string(),
-                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                    name: "_read_email".to_string(),
-                    description: "Read an email.".to_string(),
-                    strict: false,
-                    defer_loading: Some(true),
-                    parameters: JsonSchema::object(
-                        Default::default(),
-                        /*required*/ None,
-                        /*additional_properties*/ None
-                    ),
-                    output_schema: None,
-                })],
             }),
             ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
                 name: "mcp__docs__".to_string(),

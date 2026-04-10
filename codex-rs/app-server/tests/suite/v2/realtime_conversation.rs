@@ -165,14 +165,15 @@ struct StartedWebrtcRealtime {
     sdp: ThreadRealtimeSdpNotification,
 }
 
-// Scripted SSE responses for the normal Codex agent loop. Realtime can ask for a delegated
-// Codex turn; that turn talks to this mock `/responses` endpoint and may request ordinary tools.
+// Scripted SSE responses for the normal background agent loop. Realtime can ask for a delegated
+// background agent turn; that turn talks to this mock `/responses` endpoint and may request
+// ordinary tools.
 struct MainLoopResponsesScript {
     responses: Vec<String>,
 }
 
 // Scripted server events for the direct realtime sideband WebSocket. This mock is the realtime
-// session app-server joins after call creation; it is not the main-loop Responses stream.
+// session app-server joins after call creation; it is not the background agent Responses stream.
 struct RealtimeSidebandScript {
     connections: Vec<WebSocketConnectionConfig>,
 }
@@ -425,13 +426,13 @@ fn session_updated(session_id: &str) -> Value {
     })
 }
 
-fn v2_codex_tool_call(call_id: &str, prompt: &str) -> Value {
+fn v2_background_agent_tool_call(call_id: &str, prompt: &str) -> Value {
     json!({
         "type": "conversation.item.done",
         "item": {
             "id": format!("item_{call_id}"),
             "type": "function_call",
-            "name": "codex",
+            "name": "background_agent",
             "call_id": call_id,
             "arguments": json!({ "prompt": prompt }).to_string()
         }
@@ -478,7 +479,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "item": {
                     "id": "item_2",
                     "type": "function_call",
-                    "name": "codex",
+                    "name": "background_agent",
                     "call_id": "handoff_1",
                     "arguments": "{\"input_transcript\":\"delegate now\"}"
                 }
@@ -973,7 +974,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"codex","description":"Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to Codex."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
     assert_eq!(
         body,
         format!(
@@ -1089,7 +1090,7 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
 
-    // Phase 2: wait for the delegated Codex turn that is launched by the handoff request.
+    // Phase 2: wait for the delegated background agent turn that is launched by the handoff request.
     let turn_started = harness
         .read_notification::<TurnStartedNotification>("turn/started")
         .await?;
@@ -1204,11 +1205,12 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
 }
 
 #[tokio::test]
-async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Result<()> {
+async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_output() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
-    // Phase 1: script a v2 codex function call and a delegated Responses turn that returns final
-    // assistant text.
+    // Phase 1: script a v2 background agent function call and a delegated Responses turn that
+    // returns final assistant text.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V2,
         main_loop_responses(vec![create_final_assistant_message_sse_response(
@@ -1217,7 +1219,7 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_tool"),
-                v2_codex_tool_call("call_v2", "delegate from v2"),
+                v2_background_agent_tool_call("call_v2", "delegate from v2"),
             ],
             vec![],
         ])]),
@@ -1259,8 +1261,8 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     skip_if_no_network!(Ok(()));
 
     // Phase 1: keep the two mocked OpenAI conversations explicit. The realtime sideband only
-    // calls the `codex` function; the shell command is requested by the delegated main-loop
-    // Responses turn that app-server starts after receiving that function call.
+    // calls the `background_agent` function; the shell command is requested by the delegated
+    // background agent Responses turn that app-server starts after receiving that function call.
     let main_loop = main_loop_responses(vec![
         create_shell_command_sse_response(
             realtime_tool_ok_command(),
@@ -1273,7 +1275,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     let realtime = realtime_sideband(vec![realtime_sideband_connection(vec![
         vec![
             session_updated("sess_v2_shell"),
-            v2_codex_tool_call("call_shell", "run shell through delegated turn"),
+            v2_background_agent_tool_call("call_shell", "run shell through delegated turn"),
         ],
         vec![],
     ])]);
@@ -1288,7 +1290,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
 
     let _ = harness.start_webrtc_realtime("v=offer\r\n").await?;
 
-    // Phase 2: observe the delegated main-loop turn executing the requested shell command.
+    // Phase 2: observe the delegated background agent turn executing the requested shell command.
     let started_command = wait_for_started_command_execution(&mut harness.mcp).await?;
     let ThreadItem::CommandExecution { id, status, .. } = started_command.item else {
         unreachable!("helper returns command execution items");
@@ -1367,7 +1369,7 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_nonblocking"),
-                v2_codex_tool_call("call_audio", "delegate while audio continues"),
+                v2_background_agent_tool_call("call_audio", "delegate while audio continues"),
                 json!({
                     "type": "response.output_audio.delta",
                     "delta": "CQoL",
@@ -1669,7 +1671,7 @@ fn assert_v2_session_update(request: &Value) -> Result<()> {
     );
     assert_eq!(
         request["session"]["tools"][0]["name"].as_str(),
-        Some("codex")
+        Some("background_agent")
     );
     Ok(())
 }

@@ -570,6 +570,117 @@ async fn live_app_server_server_overloaded_error_renders_warning() {
 }
 
 #[tokio::test]
+async fn live_app_server_usage_limit_error_shows_notify_owner_hint() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: None,
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                message: "The usage limit has been reached".to_string(),
+                codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded.into()),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Your workspace is out of credits."),
+        "expected usage-limit error, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected workspace-owner prompt, got {rendered:?}"
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Request more credits from your workspace owner?"),
+        "expected workspace-owner confirmation popup, got {popup:?}"
+    );
+    assert_chatwidget_snapshot!(
+        "live_app_server_usage_limit_error_shows_notify_owner_hint",
+        rendered
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_usage_limit_error_shows_spend_cap_hint() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: Some(codex_protocol::protocol::SpendControlSnapshot { reached: true }),
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                message: "The usage limit has been reached".to_string(),
+                codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded.into()),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Your workspace has reached its spend cap."),
+        "expected spend-cap error, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected spend-cap guidance instead of workspace-owner prompt, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_invalid_thread_name_update_is_ignored() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
