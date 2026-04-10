@@ -9,6 +9,9 @@ use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use codex_api::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
+use codex_login::CodexAuth;
+use codex_login::OPENAI_GOV_API_BASE_URL;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
@@ -77,6 +80,48 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+#[test]
+fn fedramp_api_key_uses_gov_base_url_for_default_openai_provider() {
+    let provider_info = ModelProviderInfo::create_openai_provider(None);
+    let mut api_provider = provider_info
+        .to_api_provider(Some(AuthMode::ApiKey))
+        .expect("provider should convert");
+    let auth = CodexAuth::from_api_key_with_fedramp_status("sk-test", true);
+
+    super::apply_fedramp_api_endpoint_if_needed(&provider_info, Some(&auth), &mut api_provider);
+
+    assert_eq!(api_provider.base_url, OPENAI_GOV_API_BASE_URL);
+}
+
+#[test]
+fn fedramp_api_key_preserves_custom_openai_base_url() {
+    let custom_base_url = "https://proxy.example/v1";
+    let provider_info =
+        ModelProviderInfo::create_openai_provider(Some(custom_base_url.to_string()));
+    let mut api_provider = provider_info
+        .to_api_provider(Some(AuthMode::ApiKey))
+        .expect("provider should convert");
+    let auth = CodexAuth::from_api_key_with_fedramp_status("sk-test", true);
+
+    super::apply_fedramp_api_endpoint_if_needed(&provider_info, Some(&auth), &mut api_provider);
+
+    assert_eq!(api_provider.base_url, custom_base_url);
+}
+
+#[test]
+fn fedramp_api_key_preserves_custom_provider_base_url() {
+    let custom_base_url = "https://provider.example/v1";
+    let provider_info = create_oss_provider_with_base_url(custom_base_url, WireApi::Responses);
+    let mut api_provider = provider_info
+        .to_api_provider(Some(AuthMode::ApiKey))
+        .expect("provider should convert");
+    let auth = CodexAuth::from_api_key_with_fedramp_status("sk-test", true);
+
+    super::apply_fedramp_api_endpoint_if_needed(&provider_info, Some(&auth), &mut api_provider);
+
+    assert_eq!(api_provider.base_url, custom_base_url);
 }
 
 #[test]

@@ -59,6 +59,7 @@ fn login_with_api_key_overwrites_existing_auth_json() {
     let auth_path = dir.path().join("auth.json");
     let stale_auth = json!({
         "OPENAI_API_KEY": "sk-old",
+        "OPENAI_API_KEY_IS_FEDRAMP": true,
         "tokens": {
             "id_token": "stale.header.payload",
             "access_token": "stale-access",
@@ -80,7 +81,38 @@ fn login_with_api_key_overwrites_existing_auth_json() {
         .try_read_auth_json(&auth_path)
         .expect("auth.json should parse");
     assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
+    assert_eq!(auth.openai_api_key_is_fedramp, None);
     assert!(auth.tokens.is_none(), "tokens should be cleared");
+}
+
+#[test]
+fn login_with_api_key_and_fedramp_status_persists_status_with_key() {
+    let dir = tempdir().unwrap();
+
+    super::login_with_api_key_and_fedramp_status(
+        dir.path(),
+        "sk-fed",
+        Some(true),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("login_with_api_key_and_fedramp_status should succeed");
+
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let auth_file = dir.path().join("auth.json");
+    let auth_dot_json = storage
+        .try_read_auth_json(&auth_file)
+        .expect("auth.json should parse");
+    assert_eq!(auth_dot_json.openai_api_key.as_deref(), Some("sk-fed"));
+    assert_eq!(auth_dot_json.openai_api_key_is_fedramp, Some(true));
+
+    let auth = super::load_auth(
+        dir.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(auth.openai_api_key_is_fedramp());
 }
 
 #[tokio::test]
@@ -199,6 +231,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         AuthDotJson {
             auth_mode: None,
             openai_api_key: None,
+            openai_api_key_is_fedramp: None,
             tokens: Some(TokenData {
                 id_token: IdTokenInfo {
                     email: Some("user@example.com".to_string()),
@@ -237,8 +270,32 @@ async fn loads_api_key_from_auth_json() {
     .unwrap();
     assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
+    assert!(!auth.openai_api_key_is_fedramp());
 
     assert!(auth.get_token_data().is_err());
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn loads_api_key_fedramp_status_from_auth_json() {
+    let dir = tempdir().unwrap();
+    let auth_file = dir.path().join("auth.json");
+    std::fs::write(
+        auth_file,
+        r#"{"OPENAI_API_KEY":"sk-test-key","OPENAI_API_KEY_IS_FEDRAMP":true}"#,
+    )
+    .unwrap();
+
+    let auth = super::load_auth(
+        dir.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
+    assert_eq!(auth.api_key(), Some("sk-test-key"));
+    assert!(auth.openai_api_key_is_fedramp());
 }
 
 #[test]
@@ -247,6 +304,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
+        openai_api_key_is_fedramp: None,
         tokens: None,
         last_refresh: None,
     };

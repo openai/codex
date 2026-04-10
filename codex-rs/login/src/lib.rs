@@ -44,6 +44,7 @@ pub use auth::default_client;
 pub use auth::enforce_login_restrictions;
 pub use auth::load_auth_dot_json;
 pub use auth::login_with_api_key;
+pub use auth::login_with_api_key_and_fedramp_status;
 pub use auth::logout;
 pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;

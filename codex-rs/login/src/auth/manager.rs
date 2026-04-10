@@ -50,6 +50,7 @@ pub enum CodexAuth {
 #[derive(Debug, Clone)]
 pub struct ApiKeyAuth {
     api_key: String,
+    openai_api_key_is_fedramp: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -209,7 +210,10 @@ impl CodexAuth {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
-            return Ok(Self::from_api_key(api_key));
+            return Ok(Self::from_api_key_with_fedramp_status(
+                api_key,
+                auth_dot_json.openai_api_key_is_fedramp.unwrap_or(false),
+            ));
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -370,6 +374,7 @@ impl CodexAuth {
         let auth_dot_json = AuthDotJson {
             auth_mode: Some(ApiAuthMode::Chatgpt),
             openai_api_key: None,
+            openai_api_key_is_fedramp: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
                 access_token: "Access Token".to_string(),
@@ -389,9 +394,24 @@ impl CodexAuth {
     }
 
     pub fn from_api_key(api_key: &str) -> Self {
+        Self::from_api_key_with_fedramp_status(api_key, /*openai_api_key_is_fedramp*/ false)
+    }
+
+    pub fn from_api_key_with_fedramp_status(
+        api_key: &str,
+        openai_api_key_is_fedramp: bool,
+    ) -> Self {
         Self::ApiKey(ApiKeyAuth {
             api_key: api_key.to_owned(),
+            openai_api_key_is_fedramp,
         })
+    }
+
+    pub fn openai_api_key_is_fedramp(&self) -> bool {
+        match self {
+            Self::ApiKey(auth) => auth.openai_api_key_is_fedramp,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => false,
+        }
     }
 }
 
@@ -493,9 +513,25 @@ pub fn login_with_api_key(
     api_key: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
+    login_with_api_key_and_fedramp_status(
+        codex_home,
+        api_key,
+        /*openai_api_key_is_fedramp*/ None,
+        auth_credentials_store_mode,
+    )
+}
+
+/// Writes an `auth.json` that contains the API key and optional FedRAMP routing metadata.
+pub fn login_with_api_key_and_fedramp_status(
+    codex_home: &Path,
+    api_key: &str,
+    openai_api_key_is_fedramp: Option<bool>,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
+        openai_api_key_is_fedramp,
         tokens: None,
         last_refresh: None,
     };
@@ -869,6 +905,7 @@ impl AuthDotJson {
         Ok(Self {
             auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
             openai_api_key: None,
+            openai_api_key_is_fedramp: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
         })
