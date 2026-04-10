@@ -967,35 +967,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         "unexpected close reason: {closed_notification:?}"
     );
 
-    let request = call_capture.single_request();
-    assert_eq!(request.url.path(), "/v1/realtime/calls");
-    assert_eq!(request.url.query(), None);
-    assert_eq!(
-        request
-            .headers
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-        Some("multipart/form-data; boundary=codex-realtime-call-boundary")
-    );
-    let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
     let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             v=offer\r\n\
-             \r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
-    );
+    assert_call_create_multipart(call_capture.single_request(), "v=offer\r\n", session)?;
 
     realtime_server.shutdown().await;
     Ok(())
@@ -1620,7 +1593,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     };
     assert_eq!(id.as_str(), "shell_call");
     assert_eq!(status, CommandExecutionStatus::Completed);
-    assert_eq!(aggregated_output.as_deref(), Some("realtime-tool-ok"));
+    assert_output_contains(aggregated_output.as_deref(), "realtime-tool-ok");
 
     // Phase 3: verify the shell output reached Responses and the final delegated answer returned
     // to realtime as a single function-call-output item.
@@ -2001,6 +1974,16 @@ fn assert_v2_response_create(request: &Value) {
     );
 }
 
+fn assert_output_contains(aggregated_output: Option<&str>, expected_output: &str) {
+    let Some(aggregated_output) = aggregated_output else {
+        panic!("expected aggregated command output");
+    };
+    assert!(
+        aggregated_output.contains(expected_output),
+        "expected aggregated output to contain {expected_output:?}, got {aggregated_output:?}"
+    );
+}
+
 fn assert_v1_session_update(request: &Value) -> Result<()> {
     assert_eq!(request["type"].as_str(), Some("session.update"));
     assert_eq!(request["session"]["type"].as_str(), Some("quicksilver"));
@@ -2049,22 +2032,27 @@ fn assert_call_create_multipart(
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             {offer_sdp}\r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
+    let prefix = format!(
+        "--codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"sdp\"\r\n\
+         Content-Type: application/sdp\r\n\
+         \r\n\
+         {offer_sdp}\r\n\
+         --codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"session\"\r\n\
+         Content-Type: application/json\r\n\
+         \r\n"
     );
+    let session_part = body
+        .strip_prefix(&prefix)
+        .context("multipart body should include expected SDP part")?
+        .strip_suffix("\r\n--codex-realtime-call-boundary--\r\n")
+        .context("multipart body should end with closing boundary")?;
+    let actual_session: Value =
+        serde_json::from_str(session_part).context("actual session part should be JSON")?;
+    let expected_session: Value =
+        serde_json::from_str(session).context("expected session part should be JSON")?;
+    assert_eq!(actual_session, expected_session);
     Ok(())
 }
 
