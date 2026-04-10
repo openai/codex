@@ -252,12 +252,28 @@ pub(crate) fn prepare_elevated_spawn_context(
         /*inherit_path*/ true,
         /*add_git_safe_directory*/ true,
     )?;
+    let AllowDenyPaths { allow, deny } = compute_allow_paths(
+        &common.policy,
+        sandbox_policy_cwd,
+        &common.current_dir,
+        env_map,
+    );
+    let write_roots: Vec<PathBuf> = allow.into_iter().collect();
+    let deny_write_paths: Vec<PathBuf> = deny.into_iter().collect();
+    let write_roots_override = if common.is_workspace_write {
+        Some(write_roots.as_slice())
+    } else {
+        None
+    };
     let sandbox_creds = require_logon_sandbox_creds(
         &common.policy,
         sandbox_policy_cwd,
         cwd,
         env_map,
         codex_home,
+        /*read_roots_override*/ None,
+        write_roots_override,
+        &deny_write_paths,
         /*proxy_enforced*/ false,
     )?;
     let caps = load_or_create_cap_sids(codex_home)?;
@@ -278,12 +294,6 @@ pub(crate) fn prepare_elevated_spawn_context(
         }
     };
 
-    let AllowDenyPaths { allow: _, deny: _ } = compute_allow_paths(
-        &common.policy,
-        sandbox_policy_cwd,
-        &common.current_dir,
-        env_map,
-    );
     unsafe {
         allow_null_device(psid_to_use.as_ptr());
     }
