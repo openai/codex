@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+mod list;
 mod metadata;
 mod ops;
 
@@ -32,6 +33,8 @@ pub struct MarketplaceCli {
 enum MarketplaceSubcommand {
     /// Add a marketplace repository or local marketplace directory.
     Add(AddMarketplaceArgs),
+    /// List configured marketplaces.
+    List(list::ListMarketplaceArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -78,6 +81,7 @@ impl MarketplaceCli {
 
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(args).await?,
+            MarketplaceSubcommand::List(args) => list::run_list(args).await?,
         }
 
         Ok(())

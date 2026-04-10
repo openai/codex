@@ -4,6 +4,7 @@ use codex_core::plugins::marketplace_install_root;
 use codex_core::plugins::validate_marketplace_root;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
+use serde_json::Value as JsonValue;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -281,6 +282,92 @@ async fn marketplace_add_rejects_ref_for_local_directory() -> Result<()> {
             .join("debug")
             .exists()
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_prints_configured_marketplaces() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "first install")?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "list"])
+        .assert()
+        .success()
+        .stdout(contains("debug"))
+        .stdout(contains("Source: directory"))
+        .stdout(contains(
+            source.path().canonicalize()?.display().to_string(),
+        ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_json_includes_source_and_install_location() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "first install")?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = codex_command(codex_home.path())?
+        .args(["marketplace", "list", "--json"])
+        .output()?;
+    assert!(output.status.success());
+
+    let json: JsonValue = serde_json::from_slice(&output.stdout)?;
+    let entries = json
+        .as_array()
+        .context("list --json should return an array")?;
+    let expected_source = source.path().canonicalize()?.display().to_string();
+    let expected_install_root = marketplace_install_root(codex_home.path())
+        .join("debug")
+        .canonicalize()?
+        .display()
+        .to_string();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].get("name").and_then(JsonValue::as_str),
+        Some("debug")
+    );
+    assert_eq!(
+        entries[0].get("sourceType").and_then(JsonValue::as_str),
+        Some("directory")
+    );
+    assert_eq!(
+        entries[0].get("path").and_then(JsonValue::as_str),
+        Some(expected_source.as_str())
+    );
+    assert_eq!(
+        entries[0]
+            .get("installLocation")
+            .and_then(JsonValue::as_str),
+        Some(expected_install_root.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_without_marketplaces_prints_empty_message() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    codex_command(codex_home.path())?
+        .args(["marketplace", "list"])
+        .assert()
+        .success()
+        .stdout(contains("No marketplaces configured."));
 
     Ok(())
 }
