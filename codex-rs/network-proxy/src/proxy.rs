@@ -364,7 +364,6 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
 
 pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
-pub const PROXY_ENV_ACTIVE_ENV_KEY: &str = ALLOW_LOCAL_BINDING_ENV_KEY;
 const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
 pub const PROXY_ENV_KEYS: &[&str] = &[
