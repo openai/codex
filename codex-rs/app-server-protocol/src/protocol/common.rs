@@ -424,6 +424,10 @@ client_request_definitions! {
         params: v2::ReviewStartParams,
         response: v2::ReviewStartResponse,
     },
+    ItemGuardianApprovalReviewOverride => "item/autoApprovalReview/override" {
+        params: v2::ItemGuardianApprovalReviewOverrideParams,
+        response: v2::ItemGuardianApprovalReviewOverrideResponse,
+    },
 
     ModelList => "model/list" {
         params: v2::ModelListParams,

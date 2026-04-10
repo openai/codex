@@ -69,6 +69,7 @@ pub use crate::approvals::GuardianAssessmentDecisionSource;
 pub use crate::approvals::GuardianAssessmentEvent;
 pub use crate::approvals::GuardianAssessmentStatus;
 pub use crate::approvals::GuardianCommandSource;
+pub use crate::approvals::GuardianReviewOverrideDecision;
 pub use crate::approvals::GuardianRiskLevel;
 pub use crate::approvals::GuardianUserAuthorization;
 pub use crate::approvals::NetworkApprovalContext;
