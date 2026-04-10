@@ -58,6 +58,8 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
@@ -87,6 +89,7 @@ fn merge_responsesapi_client_metadata(
 
 fn build_turn_metadata_bag(
     session_id: Option<String>,
+    session_source: Option<String>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -101,6 +104,7 @@ fn build_turn_metadata_bag(
 
     TurnMetadataBag {
         session_id,
+        session_source,
         turn_id,
         workspaces,
         sandbox,
@@ -126,6 +130,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
 
     build_turn_metadata_bag(
         /*session_id*/ None,
+        /*session_source*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
@@ -152,6 +157,7 @@ pub(crate) struct TurnMetadataState {
 impl TurnMetadataState {
     pub(crate) fn new(
         session_id: String,
+        session_source: String,
         turn_id: String,
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
@@ -161,6 +167,7 @@ impl TurnMetadataState {
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
+            Some(session_source),
             Some(turn_id),
             sandbox,
             /*repo_root*/ None,
@@ -240,6 +247,7 @@ impl TurnMetadataState {
 
             let enriched_metadata = build_turn_metadata_bag(
                 state.base_metadata.session_id.clone(),
+                state.base_metadata.session_source.clone(),
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),

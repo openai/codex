@@ -69,6 +69,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
+        "exec".to_string(),
         "turn-a".to_string(),
         cwd,
         &sandbox_policy,
@@ -79,10 +80,12 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let json: Value = serde_json::from_str(&header).expect("json");
     let sandbox_name = json.get("sandbox").and_then(Value::as_str);
     let session_id = json.get("session_id").and_then(Value::as_str);
+    let session_source = json.get("session_source").and_then(Value::as_str);
 
     let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
     assert_eq!(sandbox_name, Some(expected_sandbox));
     assert_eq!(session_id, Some("session-a"));
+    assert_eq!(session_source, Some("exec"));
 }
 
 #[test]
@@ -93,6 +96,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
+        "exec".to_string(),
         "turn-a".to_string(),
         cwd,
         &sandbox_policy,
@@ -108,5 +112,6 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     assert_eq!(json["fiber_run_id"].as_str(), Some("fiber-123"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
+    assert_eq!(json["session_source"].as_str(), Some("exec"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
 }

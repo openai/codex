@@ -437,6 +437,12 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .and_then(serde_json::Value::as_str),
         Some("none")
     );
+    assert_eq!(
+        initial_parsed
+            .get("session_source")
+            .and_then(serde_json::Value::as_str),
+        Some("exec")
+    );
 
     let git_config_global = cwd.join("empty-git-config");
     std::fs::write(&git_config_global, "").expect("write empty git config");
@@ -528,6 +534,18 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .get("turn_id")
         .and_then(serde_json::Value::as_str)
         .expect("second turn_id should be present");
+    assert_eq!(
+        first_parsed
+            .get("session_source")
+            .and_then(serde_json::Value::as_str),
+        Some("exec")
+    );
+    assert_eq!(
+        second_parsed
+            .get("session_source")
+            .and_then(serde_json::Value::as_str),
+        Some("exec")
+    );
     assert_eq!(
         first_turn_id, second_turn_id,
         "requests should share turn_id"
