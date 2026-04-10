@@ -105,18 +105,10 @@ pub struct Environment {
 
 impl Default for Environment {
     fn default() -> Self {
-        let local_process = LocalProcess::default();
-        if let Err(err) = local_process.initialize() {
-            panic!("default local process initialization should succeed: {err:?}");
-        }
-        if let Err(err) = local_process.initialized() {
-            panic!("default local process should accept initialized notification: {err}");
-        }
-
         Self {
             exec_server_url: None,
             remote_exec_server_client: None,
-            exec_backend: Arc::new(local_process),
+            exec_backend: Arc::new(LocalProcess::default()),
         }
     }
 }
@@ -146,6 +138,7 @@ impl Environment {
                     client_name: "codex-environment".to_string(),
                     connect_timeout: std::time::Duration::from_secs(5),
                     initialize_timeout: std::time::Duration::from_secs(5),
+                    resume_session_id: None,
                 })
                 .await?,
             )
@@ -153,24 +146,12 @@ impl Environment {
             None
         };
 
-        let exec_backend: Arc<dyn ExecBackend> = match remote_exec_server_client.clone() {
-            Some(client) => Arc::new(RemoteProcess::new(client)),
-            None if exec_server_url.is_some() => {
-                return Err(ExecServerError::Protocol(
-                    "remote mode should have an exec-server client".to_string(),
-                ));
-            }
-            None => {
-                let local_process = LocalProcess::default();
-                local_process
-                    .initialize()
-                    .map_err(|err| ExecServerError::Protocol(err.message))?;
-                local_process
-                    .initialized()
-                    .map_err(ExecServerError::Protocol)?;
-                Arc::new(local_process)
-            }
-        };
+        let exec_backend: Arc<dyn ExecBackend> =
+            if let Some(client) = remote_exec_server_client.clone() {
+                Arc::new(RemoteProcess::new(client))
+            } else {
+                Arc::new(LocalProcess::default())
+            };
 
         Ok(Self {
             exec_server_url,

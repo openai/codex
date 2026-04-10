@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -21,6 +23,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
@@ -70,6 +74,7 @@ use codex_utils_path as path_utils;
 #[derive(Clone)]
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
+    writer_task: Arc<RolloutWriterTask>,
     pub(crate) rollout_path: PathBuf,
     state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
@@ -98,11 +103,58 @@ enum RolloutCmd {
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     Shutdown {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
+}
+
+/// Observable state for the background rollout writer task.
+struct RolloutWriterTask {
+    handle: Mutex<Option<JoinHandle<()>>>,
+    terminal_failure: Mutex<Option<Arc<IoError>>>,
+}
+
+impl RolloutWriterTask {
+    /// Create task observability state before spawning the writer.
+    fn new() -> Self {
+        Self {
+            handle: Mutex::new(None),
+            terminal_failure: Mutex::new(None),
+        }
+    }
+
+    /// Store the spawned task handle so it remains owned for the lifetime of recorder clones.
+    fn set_handle(&self, handle: JoinHandle<()>) {
+        let mut guard = self
+            .handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(handle);
+    }
+
+    /// Remember a terminal task failure for future recorder API calls.
+    fn mark_failed(&self, err: &IoError) {
+        let mut guard = self
+            .terminal_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(Arc::new(clone_io_error(err)));
+    }
+
+    /// Return the terminal writer-task failure, if the task exited with an error.
+    fn terminal_failure(&self) -> Option<IoError> {
+        let guard = self
+            .terminal_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.as_ref().map(|err| clone_io_error(err.as_ref()))
+    }
+}
+
+fn clone_io_error(err: &IoError) -> IoError {
+    IoError::new(err.kind(), err.to_string())
 }
 
 impl RolloutRecorderParams {
@@ -472,21 +524,41 @@ impl RolloutRecorder {
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
-        tokio::task::spawn(rollout_writer(
-            file,
-            deferred_log_file_info,
-            rx,
-            meta,
-            cwd,
-            rollout_path.clone(),
-            state_db_ctx.clone(),
-            state_builder,
-            config.model_provider_id().to_string(),
-            config.generate_memories(),
-        ));
+        let writer_task = Arc::new(RolloutWriterTask::new());
+        let writer_task_for_spawn = Arc::clone(&writer_task);
+        let rollout_path_for_spawn = rollout_path.clone();
+        let default_provider = config.model_provider_id().to_string();
+        let generate_memories = config.generate_memories();
+        let state_db_ctx_for_spawn = state_db_ctx.clone();
+        let handle = tokio::task::spawn(async move {
+            let result = rollout_writer(
+                file,
+                deferred_log_file_info,
+                rx,
+                meta,
+                cwd,
+                rollout_path_for_spawn.clone(),
+                state_db_ctx_for_spawn,
+                state_builder,
+                default_provider,
+                generate_memories,
+            )
+            .await;
+            if let Err(err) = result {
+                // This is the terminal background-task failure path. Normal I/O failures stay inside
+                // `rollout_writer`, are reported through command acks, and leave items buffered for retry.
+                error!(
+                    "rollout writer task failed for {}: {err}",
+                    rollout_path_for_spawn.display()
+                );
+                writer_task_for_spawn.mark_failed(&err);
+            }
+        });
+        writer_task.set_handle(handle);
 
         Ok(Self {
             tx,
+            writer_task,
             rollout_path,
             state_db: state_db_ctx,
             event_persistence_mode,
@@ -520,31 +592,53 @@ impl RolloutRecorder {
         self.tx
             .send(RolloutCmd::AddItems(filtered))
             .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
+            .map_err(|e| {
+                self.writer_task.terminal_failure().unwrap_or_else(|| {
+                    IoError::other(format!("failed to queue rollout items: {e}"))
+                })
+            })
     }
 
     /// Materialize the rollout file and persist all buffered items.
     ///
-    /// This is idempotent; after first materialization, repeated calls are no-ops.
+    /// This is idempotent. If materialization fails, the recorder keeps all pending items in memory
+    /// and a later `persist()` or `flush()` can retry opening and writing the rollout file.
     pub async fn persist(&self) -> std::io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(RolloutCmd::Persist { ack: tx })
             .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout persist: {e}")))?;
-        rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))?
+            .map_err(|e| {
+                self.writer_task.terminal_failure().unwrap_or_else(|| {
+                    IoError::other(format!("failed to queue rollout persist: {e}"))
+                })
+            })?;
+        rx.await.map_err(|e| {
+            self.writer_task.terminal_failure().unwrap_or_else(|| {
+                IoError::other(format!("failed waiting for rollout persist: {e}"))
+            })
+        })?
     }
 
     /// Flush all queued writes and wait until they are committed by the writer task.
+    ///
+    /// If the first writer attempt fails, the writer drops and reopens the file handle before
+    /// retrying. This returns an error only when that retry also fails or the writer task is gone.
     pub async fn flush(&self) -> std::io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(RolloutCmd::Flush { ack: tx })
             .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
-        rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
+            .map_err(|e| {
+                self.writer_task.terminal_failure().unwrap_or_else(|| {
+                    IoError::other(format!("failed to queue rollout flush: {e}"))
+                })
+            })?;
+        rx.await.map_err(|e| {
+            self.writer_task
+                .terminal_failure()
+                .unwrap_or_else(|| IoError::other(format!("failed waiting for rollout flush: {e}")))
+        })?
     }
 
     pub async fn load_rollout_items(
@@ -629,13 +723,24 @@ impl RolloutRecorder {
         }))
     }
 
+    /// Drain pending items before stopping the writer task.
+    ///
+    /// If draining fails, the writer stays alive so callers can continue retrying flush/shutdown.
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
         match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
-            Ok(_) => rx_done
-                .await
-                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}")))?,
+            Ok(_) => rx_done.await.map_err(|e| {
+                self.writer_task.terminal_failure().unwrap_or_else(|| {
+                    IoError::other(format!("failed waiting for rollout shutdown: {e}"))
+                })
+            })??,
             Err(e) => {
+                if let Some(err) = self.writer_task.terminal_failure() {
+                    warn!(
+                        "failed to send rollout shutdown command because writer task failed: {err}"
+                    );
+                    return Err(err);
+                }
                 warn!("failed to send rollout shutdown command: {e}");
                 return Err(IoError::other(format!(
                     "failed to send rollout shutdown command: {e}"
@@ -724,132 +829,259 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
         .open(path)
 }
 
+/// Mutable state owned by the background rollout writer.
+///
+/// Items are first appended to `pending_items`; persist/flush/shutdown remove each item from that
+/// queue only after it is written successfully. I/O failures drop the file handle but keep the
+/// unwritten suffix so the next barrier can reopen the file and retry.
+struct RolloutWriterState {
+    writer: Option<JsonlWriter>,
+    deferred_log_file_info: Option<LogFileInfo>,
+    pending_items: Vec<RolloutItem>,
+    meta: Option<SessionMeta>,
+    cwd: PathBuf,
+    rollout_path: PathBuf,
+    state_db_ctx: Option<StateDbHandle>,
+    state_builder: Option<ThreadMetadataBuilder>,
+    default_provider: String,
+    generate_memories: bool,
+    last_logged_error: Option<String>,
+}
+
+impl RolloutWriterState {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        file: Option<tokio::fs::File>,
+        deferred_log_file_info: Option<LogFileInfo>,
+        meta: Option<SessionMeta>,
+        cwd: PathBuf,
+        rollout_path: PathBuf,
+        state_db_ctx: Option<StateDbHandle>,
+        mut state_builder: Option<ThreadMetadataBuilder>,
+        default_provider: String,
+        generate_memories: bool,
+    ) -> Self {
+        if let Some(builder) = state_builder.as_mut() {
+            builder.rollout_path = rollout_path.clone();
+        }
+        Self {
+            writer: file.map(|file| JsonlWriter { file }),
+            deferred_log_file_info,
+            pending_items: Vec::new(),
+            meta,
+            cwd,
+            rollout_path,
+            state_db_ctx,
+            state_builder,
+            default_provider,
+            generate_memories,
+            last_logged_error: None,
+        }
+    }
+
+    fn add_items(&mut self, items: Vec<RolloutItem>) {
+        self.pending_items.extend(items);
+    }
+
+    async fn flush_if_materialized(&mut self) {
+        if self.is_deferred() {
+            return;
+        }
+        if let Err(err) = self.flush().await {
+            self.enter_recovery_mode(&err);
+        }
+    }
+
+    async fn persist(&mut self) -> std::io::Result<()> {
+        self.write_pending_with_recovery("persist").await
+    }
+
+    async fn flush(&mut self) -> std::io::Result<()> {
+        if self.is_deferred() && self.pending_items.is_empty() {
+            return Ok(());
+        }
+        self.write_pending_with_recovery("flush").await
+    }
+
+    async fn shutdown(&mut self) -> std::io::Result<()> {
+        if self.is_deferred() && self.pending_items.is_empty() {
+            return Ok(());
+        }
+        self.write_pending_with_recovery("shutdown").await
+    }
+
+    async fn write_pending_with_recovery(&mut self, operation: &str) -> std::io::Result<()> {
+        match self.write_pending_once().await {
+            Ok(()) => {
+                self.last_logged_error = None;
+                Ok(())
+            }
+            Err(first_err) => {
+                self.enter_recovery_mode(&first_err);
+                warn!("failed to {operation} rollout writer; reopening and retrying: {first_err}");
+                match self.write_pending_once().await {
+                    Ok(()) => {
+                        self.last_logged_error = None;
+                        Ok(())
+                    }
+                    Err(second_err) => {
+                        self.enter_recovery_mode(&second_err);
+                        warn!(
+                            "retrying rollout writer {operation} failed; first error: \
+                             {first_err}; final error: {second_err}"
+                        );
+                        Err(second_err)
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_deferred(&self) -> bool {
+        self.writer.is_none() && self.deferred_log_file_info.is_some()
+    }
+
+    fn enter_recovery_mode(&mut self, err: &IoError) {
+        let message = err.to_string();
+        if self.last_logged_error.as_ref() != Some(&message) {
+            error!(
+                "rollout writer failed for {}; buffered rollout items will be retried: {err}",
+                self.rollout_path.display()
+            );
+        }
+        self.last_logged_error = Some(message);
+        self.writer = None;
+    }
+
+    async fn ensure_writer_open(&mut self) -> std::io::Result<()> {
+        if self.writer.is_some() {
+            return Ok(());
+        }
+
+        let path = self
+            .deferred_log_file_info
+            .as_ref()
+            .map(|info| info.path.as_path())
+            .unwrap_or(self.rollout_path.as_path());
+        let file = open_log_file(path)?;
+        self.writer = Some(JsonlWriter {
+            file: tokio::fs::File::from_std(file),
+        });
+        self.deferred_log_file_info = None;
+        Ok(())
+    }
+
+    async fn write_session_meta_if_needed(&mut self) -> std::io::Result<()> {
+        let Some(session_meta) = self.meta.as_ref().cloned() else {
+            return Ok(());
+        };
+        write_session_meta(
+            self.writer.as_mut(),
+            session_meta,
+            &self.cwd,
+            &self.rollout_path,
+            self.state_db_ctx.as_deref(),
+            &mut self.state_builder,
+            self.default_provider.as_str(),
+            self.generate_memories,
+        )
+        .await?;
+        self.meta = None;
+        Ok(())
+    }
+
+    async fn write_pending_once(&mut self) -> std::io::Result<()> {
+        self.ensure_writer_open().await?;
+        self.write_session_meta_if_needed().await?;
+
+        self.write_pending_items_once().await?;
+
+        if let Some(writer) = self.writer.as_mut() {
+            writer.file.flush().await?;
+        }
+        Ok(())
+    }
+
+    async fn write_pending_items_once(&mut self) -> std::io::Result<()> {
+        let Some(writer) = self.writer.as_mut() else {
+            return Err(IoError::other("rollout writer is not open"));
+        };
+
+        let mut written_count = 0usize;
+        let mut write_result = Ok(());
+        for item in &self.pending_items {
+            if let Err(err) = writer.write_rollout_item(item).await {
+                write_result = Err(err);
+                break;
+            }
+            written_count += 1;
+        }
+
+        if written_count > 0 {
+            let written_items: Vec<RolloutItem> =
+                self.pending_items.drain(..written_count).collect();
+            sync_thread_state_after_write(
+                self.state_db_ctx.as_deref(),
+                &self.rollout_path,
+                self.state_builder.as_ref(),
+                written_items.as_slice(),
+                self.default_provider.as_str(),
+                /*new_thread_memory_mode*/ None,
+            )
+            .await;
+        }
+
+        write_result
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn rollout_writer(
     file: Option<tokio::fs::File>,
-    mut deferred_log_file_info: Option<LogFileInfo>,
+    deferred_log_file_info: Option<LogFileInfo>,
     mut rx: mpsc::Receiver<RolloutCmd>,
-    mut meta: Option<SessionMeta>,
-    cwd: std::path::PathBuf,
+    meta: Option<SessionMeta>,
+    cwd: PathBuf,
     rollout_path: PathBuf,
     state_db_ctx: Option<StateDbHandle>,
-    mut state_builder: Option<ThreadMetadataBuilder>,
+    state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
     generate_memories: bool,
 ) -> std::io::Result<()> {
-    let mut writer = file.map(|file| JsonlWriter { file });
-    let mut buffered_items = Vec::<RolloutItem>::new();
-    if let Some(builder) = state_builder.as_mut() {
-        builder.rollout_path = rollout_path.clone();
-    }
-
-    // Resumed sessions already have a file handle open, so session metadata can
-    // be written immediately if present.
-    if writer.is_some()
-        && let Some(session_meta) = meta.take()
-    {
-        write_session_meta(
-            writer.as_mut(),
-            session_meta,
-            &cwd,
-            &rollout_path,
-            state_db_ctx.as_deref(),
-            &mut state_builder,
-            default_provider.as_str(),
-            generate_memories,
-        )
-        .await?;
-    }
+    let mut state = RolloutWriterState::new(
+        file,
+        deferred_log_file_info,
+        meta,
+        cwd,
+        rollout_path,
+        state_db_ctx,
+        state_builder,
+        default_provider,
+        generate_memories,
+    );
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
             RolloutCmd::AddItems(items) => {
-                if items.is_empty() {
-                    continue;
-                }
-
-                if writer.is_none() {
-                    buffered_items.extend(items);
-                    continue;
-                }
-
-                write_and_reconcile_items(
-                    writer.as_mut(),
-                    items.as_slice(),
-                    &rollout_path,
-                    state_db_ctx.as_deref(),
-                    state_builder.as_ref(),
-                    default_provider.as_str(),
-                )
-                .await?;
+                state.add_items(items);
+                state.flush_if_materialized().await;
             }
             RolloutCmd::Persist { ack } => {
-                if writer.is_none() {
-                    let result = async {
-                        let Some(log_file_info) = deferred_log_file_info.take() else {
-                            return Err(IoError::other(
-                                "deferred rollout recorder missing log file metadata",
-                            ));
-                        };
-                        let file = open_log_file(log_file_info.path.as_path())?;
-                        writer = Some(JsonlWriter {
-                            file: tokio::fs::File::from_std(file),
-                        });
-
-                        if let Some(session_meta) = meta.take() {
-                            write_session_meta(
-                                writer.as_mut(),
-                                session_meta,
-                                &cwd,
-                                &rollout_path,
-                                state_db_ctx.as_deref(),
-                                &mut state_builder,
-                                default_provider.as_str(),
-                                generate_memories,
-                            )
-                            .await?;
-                        }
-
-                        if !buffered_items.is_empty() {
-                            write_and_reconcile_items(
-                                writer.as_mut(),
-                                buffered_items.as_slice(),
-                                &rollout_path,
-                                state_db_ctx.as_deref(),
-                                state_builder.as_ref(),
-                                default_provider.as_str(),
-                            )
-                            .await?;
-                            buffered_items.clear();
-                        }
-
-                        Ok(())
-                    }
-                    .await;
-
-                    if let Err(err) = result {
-                        let kind = err.kind();
-                        let message = err.to_string();
-                        let _ = ack.send(Err(IoError::new(kind, message.clone())));
-                        return Err(IoError::new(kind, message));
-                    }
-                }
-                let _ = ack.send(Ok(()));
+                let _ = ack.send(state.persist().await);
             }
             RolloutCmd::Flush { ack } => {
-                // Deferred fresh threads may not have an initialized file yet.
-                if let Some(writer) = writer.as_mut()
-                    && let Err(e) = writer.file.flush().await
-                {
-                    let _ = ack.send(());
-                    return Err(e);
+                let _ = ack.send(state.flush().await);
+            }
+            RolloutCmd::Shutdown { ack } => match state.shutdown().await {
+                Ok(()) => {
+                    let _ = ack.send(Ok(()));
+                    break;
                 }
-                let _ = ack.send(());
-            }
-            RolloutCmd::Shutdown { ack } => {
-                let _ = ack.send(());
-            }
+                Err(err) => {
+                    let _ = ack.send(Err(err));
+                }
+            },
         }
     }
 
@@ -891,31 +1123,6 @@ async fn write_session_meta(
         std::slice::from_ref(&rollout_item),
         default_provider,
         (!generate_memories).then_some("disabled"),
-    )
-    .await;
-    Ok(())
-}
-
-async fn write_and_reconcile_items(
-    mut writer: Option<&mut JsonlWriter>,
-    items: &[RolloutItem],
-    rollout_path: &Path,
-    state_db_ctx: Option<&StateRuntime>,
-    state_builder: Option<&ThreadMetadataBuilder>,
-    default_provider: &str,
-) -> std::io::Result<()> {
-    if let Some(writer) = writer.as_mut() {
-        for item in items {
-            writer.write_rollout_item(item).await?;
-        }
-    }
-    sync_thread_state_after_write(
-        state_db_ctx,
-        rollout_path,
-        state_builder,
-        items,
-        default_provider,
-        /*new_thread_memory_mode*/ None,
     )
     .await;
     Ok(())

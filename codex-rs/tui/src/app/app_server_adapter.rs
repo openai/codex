@@ -176,6 +176,8 @@ impl App {
                         notification.auth_mode,
                         notification.plan_type,
                     ),
+                    notification.workspace_role,
+                    notification.is_workspace_owner,
                     notification.plan_type,
                     matches!(
                         notification.auth_mode,
@@ -398,6 +400,9 @@ fn server_notification_thread_target(
             Some(notification.thread_id.as_str())
         }
         ServerNotification::ThreadRealtimeClosed(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::AddCreditsNudgeEmailCompleted(notification) => {
             Some(notification.thread_id.as_str())
         }
         ServerNotification::SkillsChanged(_)
@@ -1027,10 +1032,14 @@ fn app_server_codex_error_info_to_core(
 
 #[cfg(test)]
 mod tests {
+    use super::ServerNotificationThreadTarget;
     use super::command_execution_started_event;
     use super::server_notification_thread_events;
+    use super::server_notification_thread_target;
     use super::thread_snapshot_events;
     use super::turn_snapshot_events;
+    use codex_app_server_protocol::AddCreditsNudgeEmailNotification;
+    use codex_app_server_protocol::AddCreditsNudgeEmailResult;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CodexErrorInfo;
     use codex_app_server_protocol::CommandAction;
@@ -1060,6 +1069,19 @@ mod tests {
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+
+    #[test]
+    fn add_credits_nudge_email_completion_targets_thread() {
+        let thread_id = ThreadId::new();
+        let target = server_notification_thread_target(
+            &ServerNotification::AddCreditsNudgeEmailCompleted(AddCreditsNudgeEmailNotification {
+                thread_id: thread_id.to_string(),
+                result: AddCreditsNudgeEmailResult::Sent,
+            }),
+        );
+
+        assert_eq!(target, ServerNotificationThreadTarget::Thread(thread_id));
+    }
 
     #[test]
     fn bridges_completed_agent_messages_from_server_notifications() {

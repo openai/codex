@@ -340,7 +340,9 @@ impl ChatWidget {
                 ev.payload,
                 RealtimeEvent::AudioOut(_)
                     | RealtimeEvent::InputAudioSpeechStarted(_)
+                    | RealtimeEvent::ResponseCreated(_)
                     | RealtimeEvent::ResponseCancelled(_)
+                    | RealtimeEvent::ResponseDone(_)
             )
         {
             return;
@@ -353,7 +355,9 @@ impl ChatWidget {
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCreated(_) => {}
             RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
+            RealtimeEvent::ResponseDone(_) => {}
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}

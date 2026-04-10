@@ -22,7 +22,6 @@ use super::GuardianAssessmentOutcome;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_id;
 use super::approval_request::guardian_request_turn_id;
-use super::prompt::build_guardian_prompt_items;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
 use super::review_session::GuardianReviewSessionOutcome;
@@ -137,19 +136,15 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let outcome = match build_guardian_prompt_items(session.as_ref(), retry_reason, request).await {
-        Ok(prompt_items) => {
-            run_guardian_review_session(
-                session.clone(),
-                turn.clone(),
-                prompt_items,
-                schema,
-                external_cancel,
-            )
-            .await
-        }
-        Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
-    };
+    let outcome = run_guardian_review_session(
+        session.clone(),
+        turn.clone(),
+        request,
+        retry_reason,
+        schema,
+        external_cancel,
+    )
+    .await;
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
@@ -294,7 +289,8 @@ pub(crate) async fn review_approval_request_with_cancel(
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    prompt_items: Vec<codex_protocol::user_input::UserInput>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
 ) -> GuardianReviewOutcome {
@@ -360,7 +356,8 @@ pub(super) async fn run_guardian_review_session(
             parent_session: Arc::clone(&session),
             parent_turn: turn.clone(),
             spawn_config: guardian_config,
-            prompt_items,
+            request,
+            retry_reason,
             schema,
             model: guardian_model,
             reasoning_effort: guardian_reasoning_effort,
