@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "ThreadSortDirection": {
+    "SortDirection": {
       "enum": [
         "asc",
         "desc"
@@ -82,7 +82,7 @@
     "sortDirection": {
       "anyOf": [
         {
-          "$ref": "#/definitions/ThreadSortDirection"
+          "$ref": "#/definitions/SortDirection"
         },
         {
           "type": "null"

@@ -13,8 +13,8 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListResponse;
-use codex_app_server_protocol::ThreadSortDirection;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -1282,7 +1282,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cursor: None,
                 limit: Some(1),
                 sort_key: Some(ThreadSortKey::UpdatedAt),
-                sort_direction: Some(ThreadSortDirection::Desc),
+                sort_direction: Some(SortDirection::Desc),
                 model_providers: Some(vec!["mock_provider".to_string()]),
                 source_kinds: None,
                 archived: None,
@@ -1322,7 +1322,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cursor: Some(backwards_cursor),
                 limit: Some(10),
                 sort_key: Some(ThreadSortKey::UpdatedAt),
-                sort_direction: Some(ThreadSortDirection::Asc),
+                sort_direction: Some(SortDirection::Asc),
                 model_providers: Some(vec!["mock_provider".to_string()]),
                 source_kinds: None,
                 archived: None,
