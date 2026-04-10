@@ -200,9 +200,8 @@ impl SandboxManager {
             SandboxType::None => (os_argv_to_strings(argv), None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
-                let command = os_argv_to_strings(argv);
                 let mut args = create_seatbelt_command_args_for_policies(
-                    command,
+                    os_argv_to_strings(argv),
                     &effective_file_system_policy,
                     effective_network_policy,
                     sandbox_policy_cwd,
