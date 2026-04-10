@@ -244,6 +244,7 @@ pub(super) async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status: StatusIndicatorState::working(),
+        active_hook_cell: None,
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
@@ -670,6 +671,35 @@ pub(super) fn active_blob(chat: &ChatWidget) -> String {
     lines_to_single_string(&lines)
 }
 
+pub(super) fn active_hook_blob(chat: &ChatWidget) -> String {
+    let Some(cell) = chat.active_hook_cell.as_ref() else {
+        return "<empty>\n".to_string();
+    };
+    let lines = cell.display_lines(/*width*/ 80);
+    lines_to_single_string(&lines)
+}
+
+pub(super) fn expire_quiet_hook_linger(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.expire_quiet_runs_now_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
+pub(super) fn reveal_running_hooks(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.reveal_running_runs_now_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
+pub(super) fn reveal_running_hooks_after_delayed_redraw(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.reveal_running_runs_after_delayed_redraw_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
 pub(super) fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .model_catalog
@@ -983,6 +1013,18 @@ pub(super) async fn assert_hook_events_snapshot(
             },
         }),
     });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "hook start should update the live hook cell instead of writing history"
+    );
+    reveal_running_hooks(&mut chat);
+    assert!(
+        active_hook_blob(&chat).contains(&format!(
+            "Running {} hook: {status_message}",
+            hook_event_label(event_name)
+        )),
+        "hook start should render in the live hook cell"
+    );
 
     chat.handle_codex_event(Event {
         id: "hook-1".into(),
@@ -1021,4 +1063,14 @@ pub(super) async fn assert_hook_events_snapshot(
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!(snapshot_name, combined);
+}
+
+fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
+    match event_name {
+        codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        codex_protocol::protocol::HookEventName::Stop => "Stop",
+    }
 }

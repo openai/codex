@@ -1103,6 +1103,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         Arc::new(codex_exec_server::EnvironmentManager::new(
             /*exec_server_url*/ None,
         )),
+        /*analytics_events_client*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
