@@ -255,8 +255,6 @@ use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
-use crate::apply_patch_stream::ApplyPatchStreamProgress;
-use crate::apply_patch_stream::apply_patch_stream_progress;
 use crate::build_skill_injections;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
@@ -322,6 +320,9 @@ use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_apply_patch::ApplyPatchProgress;
+use codex_apply_patch::ApplyPatchProgressChange;
+use codex_apply_patch::parse_apply_patch_tool_input_progress;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -7823,7 +7824,7 @@ async fn try_run_sampling_request(
 struct ToolInputStreamState {
     input: String,
     apply_patch_started: bool,
-    last_progress: Option<ApplyPatchStreamProgress>,
+    last_progress: Option<ApplyPatchProgress>,
 }
 
 fn tool_input_state_mut(
@@ -7906,7 +7907,7 @@ async fn maybe_emit_apply_patch_changes(
     state: &mut ToolInputStreamState,
     should_start: bool,
 ) {
-    let progress = apply_patch_stream_progress(&state.input);
+    let progress = parse_apply_patch_tool_input_progress(&state.input);
     if !state.apply_patch_started && (should_start || progress.is_some()) {
         state.apply_patch_started = true;
         sess.send_event(
@@ -7929,11 +7930,35 @@ async fn maybe_emit_apply_patch_changes(
         turn_context,
         EventMsg::ApplyPatchChangesDelta(ApplyPatchChangesDeltaEvent {
             call_id,
-            changes: progress.changes,
+            changes: convert_apply_patch_progress_to_protocol(progress.changes),
             active_path: progress.active_path,
         }),
     )
     .await;
+}
+
+fn convert_apply_patch_progress_to_protocol(
+    changes: HashMap<PathBuf, ApplyPatchProgressChange>,
+) -> HashMap<PathBuf, FileChange> {
+    changes
+        .into_iter()
+        .map(|(path, change)| {
+            let change = match change {
+                ApplyPatchProgressChange::Add { content } => FileChange::Add { content },
+                ApplyPatchProgressChange::Delete => FileChange::Delete {
+                    content: String::new(),
+                },
+                ApplyPatchProgressChange::Update {
+                    unified_diff,
+                    move_path,
+                } => FileChange::Update {
+                    unified_diff,
+                    move_path,
+                },
+            };
+            (path, change)
+        })
+        .collect()
 }
 
 fn response_item_is_apply_patch(item: &ResponseItem) -> bool {

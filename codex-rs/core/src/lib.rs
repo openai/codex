@@ -6,7 +6,6 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod apply_patch;
-mod apply_patch_stream;
 mod apps;
 mod arc_monitor;
 mod client;

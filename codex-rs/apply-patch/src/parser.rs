@@ -26,17 +26,18 @@ use crate::ApplyPatchArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_absolute_path::test_support::PathBufExt;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
 use thiserror::Error;
 
-const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
-const END_PATCH_MARKER: &str = "*** End Patch";
-const ADD_FILE_MARKER: &str = "*** Add File: ";
-const DELETE_FILE_MARKER: &str = "*** Delete File: ";
-const UPDATE_FILE_MARKER: &str = "*** Update File: ";
-const MOVE_TO_MARKER: &str = "*** Move to: ";
+pub(crate) const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
+pub(crate) const END_PATCH_MARKER: &str = "*** End Patch";
+pub(crate) const ADD_FILE_MARKER: &str = "*** Add File: ";
+pub(crate) const DELETE_FILE_MARKER: &str = "*** Delete File: ";
+pub(crate) const UPDATE_FILE_MARKER: &str = "*** Update File: ";
+pub(crate) const MOVE_TO_MARKER: &str = "*** Move to: ";
 const EOF_MARKER: &str = "*** End of File";
 const CHANGE_CONTEXT_MARKER: &str = "@@ ";
 const EMPTY_CHANGE_CONTEXT_MARKER: &str = "@@";
@@ -169,6 +170,12 @@ enum ParseMode {
     /// `<<'EOF'` and ends with `EOF\n`. If so, we strip off these markers,
     /// trim() the result, and treat what is left as the patch text.
     Lenient,
+
+    /// Parse partial patch text for progress reporting while the model is
+    /// still streaming tool input. This mode requires a begin marker but does
+    /// not require an end marker, and its output must not be used to apply a
+    /// patch.
+    Streaming,
 }
 
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
@@ -180,16 +187,37 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
                 return Err(e);
             }
             ParseMode::Lenient => check_patch_boundaries_lenient(&lines, e)?,
+            ParseMode::Streaming => check_patch_boundaries_streaming(&lines, e)?,
         },
     };
 
     let mut hunks: Vec<Hunk> = Vec::new();
-    // The above checks ensure that lines.len() >= 2.
-    let last_line_index = lines.len().saturating_sub(1);
-    let mut remaining_lines = &lines[1..last_line_index];
+    // The above checks ensure that lines.len() >= 2 for strict/lenient mode.
+    // Streaming mode may omit the end marker, so its body extends through the
+    // final line unless the final line is an explicit end marker.
+    let body_end_index = if matches!(mode, ParseMode::Streaming)
+        && lines
+            .last()
+            .is_some_and(|line| line.trim() != END_PATCH_MARKER)
+    {
+        lines.len()
+    } else {
+        lines.len().saturating_sub(1)
+    };
+    let mut remaining_lines = &lines[1..body_end_index];
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
-        let (hunk, hunk_lines) = parse_one_hunk(remaining_lines, line_number)?;
+        let parsed_hunk = parse_one_hunk(remaining_lines, line_number);
+        let (hunk, hunk_lines) = match parsed_hunk {
+            Ok(parsed) => parsed,
+            Err(err) if matches!(mode, ParseMode::Streaming) => {
+                if hunks.is_empty() {
+                    return Err(err);
+                }
+                break;
+            }
+            Err(err) => return Err(err),
+        };
         hunks.push(hunk);
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
@@ -200,6 +228,16 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         patch,
         workdir: None,
     })
+}
+
+fn check_patch_boundaries_streaming<'a>(
+    original_lines: &'a [&'a str],
+    original_parse_error: ParseError,
+) -> Result<&'a [&'a str], ParseError> {
+    match original_lines {
+        [first, ..] if first.trim() == BEGIN_PATCH_MARKER => Ok(original_lines),
+        _ => Err(original_parse_error),
+    }
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
@@ -451,6 +489,395 @@ fn parse_update_file_chunk(
     }
 
     Ok((chunk, parsed_lines + start_index))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApplyPatchProgress {
+    pub changes: HashMap<PathBuf, ApplyPatchProgressChange>,
+    pub active_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ApplyPatchProgressChange {
+    Add {
+        content: String,
+    },
+    Delete,
+    Update {
+        unified_diff: String,
+        move_path: Option<PathBuf>,
+    },
+}
+
+/// Parses streamed `apply_patch` tool input into best-effort structured progress.
+///
+/// Unlike [`parse_patch`], this parser intentionally accepts incomplete input
+/// via [`ParseMode::Streaming`] so callers can report progress while the model
+/// is still writing the patch. The returned changes are not authoritative and
+/// must not be used to apply a patch.
+pub fn parse_apply_patch_tool_input_progress(input: &str) -> Option<ApplyPatchProgress> {
+    let patch = extract_patch_text(input)?;
+    let progress = parse_patch_progress_text(&patch, ParseMode::Streaming)?;
+    if progress.changes.is_empty() && progress.active_path.is_none() {
+        return None;
+    }
+    Some(progress)
+}
+
+fn extract_patch_text(input: &str) -> Option<String> {
+    if let Some(patch) = extract_json_input_prefix(input)
+        && patch.contains(BEGIN_PATCH_MARKER)
+    {
+        return Some(patch);
+    }
+
+    let start = input.find(BEGIN_PATCH_MARKER)?;
+    Some(input[start..].to_string())
+}
+
+fn extract_json_input_prefix(input: &str) -> Option<String> {
+    let key = "\"input\"";
+    let mut search_start = 0;
+    while let Some(offset) = input[search_start..].find(key) {
+        let key_start = search_start + offset;
+        let mut index = key_start + key.len();
+        index = skip_json_whitespace(input, index);
+        if input.as_bytes().get(index) != Some(&b':') {
+            search_start = key_start + key.len();
+            continue;
+        }
+        index += 1;
+        index = skip_json_whitespace(input, index);
+        if input.as_bytes().get(index) != Some(&b'"') {
+            search_start = key_start + key.len();
+            continue;
+        }
+        return Some(decode_json_string_prefix(&input[index + 1..]));
+    }
+    None
+}
+
+fn skip_json_whitespace(input: &str, mut index: usize) -> usize {
+    while let Some(byte) = input.as_bytes().get(index)
+        && byte.is_ascii_whitespace()
+    {
+        index += 1;
+    }
+    index
+}
+
+fn decode_json_string_prefix(input: &str) -> String {
+    let mut decoded = String::new();
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => break,
+            '\\' => {
+                let Some(escaped) = chars.next() else {
+                    break;
+                };
+                match escaped {
+                    '"' => decoded.push('"'),
+                    '\\' => decoded.push('\\'),
+                    '/' => decoded.push('/'),
+                    'b' => decoded.push('\u{0008}'),
+                    'f' => decoded.push('\u{000c}'),
+                    'n' => decoded.push('\n'),
+                    'r' => decoded.push('\r'),
+                    't' => decoded.push('\t'),
+                    'u' => {
+                        let mut digits = String::with_capacity(4);
+                        for _ in 0..4 {
+                            let Some(digit) = chars.next() else {
+                                return decoded;
+                            };
+                            digits.push(digit);
+                        }
+                        if let Ok(value) = u16::from_str_radix(&digits, 16)
+                            && let Some(ch) = char::from_u32(u32::from(value))
+                        {
+                            decoded.push(ch);
+                        }
+                    }
+                    other => decoded.push(other),
+                }
+            }
+            other => decoded.push(other),
+        }
+    }
+    decoded
+}
+
+fn parse_patch_progress_text(patch: &str, mode: ParseMode) -> Option<ApplyPatchProgress> {
+    let ParseMode::Streaming = mode else {
+        return None;
+    };
+
+    let segments = patch_line_segments(patch);
+    let lines: Vec<&str> = segments.iter().map(|segment| segment.line).collect();
+    check_patch_boundaries_streaming(
+        &lines,
+        InvalidPatchError(String::from(
+            "The first line of the patch must be '*** Begin Patch'",
+        )),
+    )
+    .ok()?;
+    let body_end_index = if lines
+        .last()
+        .is_some_and(|line| line.trim() == END_PATCH_MARKER)
+    {
+        segments.len().saturating_sub(1)
+    } else {
+        segments.len()
+    };
+    let body_segments = &segments[1..body_end_index];
+    let body_lines: Vec<&str> = body_segments.iter().map(|segment| segment.line).collect();
+    let mut changes = HashMap::new();
+    let mut active_path: Option<PathBuf> = None;
+
+    let mut offset = 0;
+    let mut line_number = 2;
+    while offset < body_lines.len() {
+        match parse_one_hunk(&body_lines[offset..], line_number) {
+            Ok((hunk, hunk_lines)) => {
+                let hunk_segments = &body_segments[offset..offset + hunk_lines];
+                active_path = Some(hunk.path().to_path_buf());
+                insert_progress_hunk(&mut changes, &hunk, hunk_segments);
+                offset += hunk_lines;
+                line_number += hunk_lines;
+            }
+            Err(_) => {
+                if let Some((path, change, hunk_active_path)) =
+                    parse_partial_progress_hunk(&body_segments[offset..])
+                {
+                    active_path = hunk_active_path.or_else(|| Some(path.clone()));
+                    changes.insert(path, change);
+                }
+                break;
+            }
+        }
+    }
+
+    Some(ApplyPatchProgress {
+        changes,
+        active_path,
+    })
+}
+
+fn insert_progress_hunk(
+    changes: &mut HashMap<PathBuf, ApplyPatchProgressChange>,
+    hunk: &Hunk,
+    segments: &[PatchLineSegment<'_>],
+) {
+    match hunk {
+        AddFile { path, .. } => {
+            changes.insert(
+                path.clone(),
+                ApplyPatchProgressChange::Add {
+                    content: add_content_from_segments(segments),
+                },
+            );
+        }
+        DeleteFile { path } => {
+            changes.insert(path.clone(), ApplyPatchProgressChange::Delete);
+        }
+        UpdateFile {
+            path, move_path, ..
+        } => {
+            changes.insert(
+                path.clone(),
+                ApplyPatchProgressChange::Update {
+                    unified_diff: update_diff_from_segments(segments),
+                    move_path: move_path.clone(),
+                },
+            );
+        }
+    }
+}
+
+fn parse_partial_progress_hunk(
+    segments: &[PatchLineSegment<'_>],
+) -> Option<(PathBuf, ApplyPatchProgressChange, Option<PathBuf>)> {
+    let first = segments.first()?;
+    if let Some(path) = marker_path(first.line, ADD_FILE_MARKER) {
+        return Some((
+            path,
+            ApplyPatchProgressChange::Add {
+                content: add_content_from_segments(segments),
+            },
+            None,
+        ));
+    }
+    if let Some(path) = marker_path(first.line, DELETE_FILE_MARKER) {
+        return Some((path, ApplyPatchProgressChange::Delete, None));
+    }
+    if let Some(path) = marker_path(first.line, UPDATE_FILE_MARKER) {
+        let move_path = segments
+            .get(1)
+            .and_then(|segment| marker_path(segment.line, MOVE_TO_MARKER));
+        let active_path = move_path.clone();
+        return Some((
+            path,
+            ApplyPatchProgressChange::Update {
+                unified_diff: update_diff_from_segments(segments),
+                move_path,
+            },
+            active_path,
+        ));
+    }
+    None
+}
+
+fn add_content_from_segments(segments: &[PatchLineSegment<'_>]) -> String {
+    let mut content = String::new();
+    for segment in &segments[1..] {
+        if let Some(added_line) = segment.raw.strip_prefix('+') {
+            content.push_str(added_line);
+        } else {
+            break;
+        }
+    }
+    content
+}
+
+fn update_diff_from_segments(segments: &[PatchLineSegment<'_>]) -> String {
+    let mut diff = String::new();
+    let mut index = 1;
+    if segments
+        .get(index)
+        .is_some_and(|segment| marker_path(segment.line, MOVE_TO_MARKER).is_some())
+    {
+        index += 1;
+    }
+    for segment in &segments[index..] {
+        diff.push_str(segment.raw);
+    }
+    diff
+}
+
+fn marker_path(line: &str, marker: &str) -> Option<PathBuf> {
+    let path = line.trim().strip_prefix(marker)?.trim();
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+#[derive(Clone, Copy)]
+struct PatchLineSegment<'a> {
+    raw: &'a str,
+    line: &'a str,
+}
+
+fn patch_line_segments(patch: &str) -> Vec<PatchLineSegment<'_>> {
+    patch
+        .split_inclusive('\n')
+        .map(|raw| PatchLineSegment {
+            raw,
+            line: raw.trim_end_matches('\n').trim_end_matches('\r'),
+        })
+        .collect()
+}
+
+#[test]
+fn test_parse_apply_patch_tool_input_progress_direct_add() {
+    let progress = parse_apply_patch_tool_input_progress(
+        "*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor",
+    )
+    .expect("patch progress");
+
+    assert_eq!(progress.active_path, Some(PathBuf::from("src/hello.txt")));
+    assert_eq!(
+        progress.changes,
+        HashMap::from([(
+            PathBuf::from("src/hello.txt"),
+            ApplyPatchProgressChange::Add {
+                content: "hello\nwor".to_string(),
+            },
+        )])
+    );
+}
+
+#[test]
+fn test_parse_apply_patch_tool_input_progress_partial_json_arguments() {
+    let progress = parse_apply_patch_tool_input_progress(
+        r#"{"input":"*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor"#,
+    )
+    .expect("patch progress");
+
+    assert_eq!(progress.active_path, Some(PathBuf::from("src/hello.txt")));
+    assert_eq!(
+        progress.changes,
+        HashMap::from([(
+            PathBuf::from("src/hello.txt"),
+            ApplyPatchProgressChange::Add {
+                content: "hello\nwor".to_string(),
+            },
+        )])
+    );
+}
+
+#[test]
+fn test_parse_apply_patch_tool_input_progress_update_and_move_path() {
+    let progress = parse_apply_patch_tool_input_progress(
+        "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new",
+    )
+    .expect("patch progress");
+
+    assert_eq!(progress.active_path, Some(PathBuf::from("src/new.rs")));
+    assert_eq!(
+        progress.changes,
+        HashMap::from([(
+            PathBuf::from("src/old.rs"),
+            ApplyPatchProgressChange::Update {
+                unified_diff: "@@\n-old\n+new".to_string(),
+                move_path: Some(PathBuf::from("src/new.rs")),
+            },
+        )])
+    );
+}
+
+#[test]
+fn test_parse_patch_text_streaming_mode_omits_end_marker() {
+    assert!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Delete File: gone.txt",
+            ParseMode::Streaming
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Delete File: gone.txt",
+            ParseMode::Strict
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn test_parse_apply_patch_tool_input_progress_complete_hunk_before_partial_hunk() {
+    let progress = parse_apply_patch_tool_input_progress(
+        "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Update File: src/two.txt\n",
+    )
+    .expect("patch progress");
+
+    assert_eq!(progress.active_path, Some(PathBuf::from("src/two.txt")));
+    assert_eq!(
+        progress.changes,
+        HashMap::from([
+            (
+                PathBuf::from("src/one.txt"),
+                ApplyPatchProgressChange::Add {
+                    content: "one\n".to_string(),
+                },
+            ),
+            (
+                PathBuf::from("src/two.txt"),
+                ApplyPatchProgressChange::Update {
+                    unified_diff: String::new(),
+                    move_path: None,
+                },
+            ),
+        ])
+    );
 }
 
 #[test]
