@@ -4,6 +4,7 @@ use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::codex::InheritedThreadState;
 use crate::codex::emit_subagent_session_started;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::find_archived_thread_path_by_id_str;
@@ -218,6 +219,9 @@ impl AgentControl {
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match (session_source, options.fork_mode.as_ref()) {
             (Some(session_source), Some(_)) => {
+                let inherited_thread_state = self
+                    .inherited_thread_state_for_source(&state, Some(&session_source))
+                    .await;
                 self.spawn_forked_thread(
                     &state,
                     config,
@@ -225,6 +229,7 @@ impl AgentControl {
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
+                    inherited_thread_state,
                 )
                 .await?
             }
@@ -238,6 +243,7 @@ impl AgentControl {
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
                         inherited_exec_policy,
+                        InheritedThreadState::default(),
                     )
                     .await?
             }
@@ -332,6 +338,7 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_thread_state: InheritedThreadState,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -397,6 +404,7 @@ impl AgentControl {
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                inherited_thread_state,
             )
             .await
     }
@@ -546,6 +554,7 @@ impl AgentControl {
                 session_source,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                InheritedThreadState::default(),
             )
             .await?;
         let mut agent_metadata = agent_metadata;
@@ -1054,6 +1063,32 @@ impl AgentControl {
         Some(Arc::clone(
             &parent_thread.codex.session.services.exec_policy,
         ))
+    }
+
+    async fn inherited_thread_state_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> InheritedThreadState {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return InheritedThreadState::default();
+        };
+
+        let Some(prompt_cache_key) = state
+            .get_thread(*parent_thread_id)
+            .await
+            .ok()
+            .map(|parent_thread| parent_thread.codex.session.prompt_cache_key())
+        else {
+            return InheritedThreadState::default();
+        };
+
+        InheritedThreadState {
+            prompt_cache_key: Some(prompt_cache_key),
+        }
     }
 
     async fn open_thread_spawn_children(

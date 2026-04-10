@@ -4,6 +4,7 @@ use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
+use crate::codex::InheritedThreadState;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::file_watcher::FileWatcher;
@@ -756,6 +757,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
+            InheritedThreadState::default(),
         ))
         .await
     }
@@ -770,6 +772,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_thread_state: InheritedThreadState,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -782,6 +785,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_thread_state,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -796,6 +800,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_thread_state: InheritedThreadState,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         Box::pin(self.spawn_thread_with_source(
@@ -809,6 +814,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_thread_state,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -825,6 +831,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_thread_state: InheritedThreadState,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -837,6 +844,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_thread_state,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -868,6 +876,7 @@ impl ThreadManagerState {
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
+            InheritedThreadState::default(),
             parent_trace,
             user_shell_override,
         ))
@@ -887,6 +896,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_thread_state: InheritedThreadState,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -914,6 +924,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_thread_state,
             user_shell_override,
             parent_trace,
         })

@@ -147,6 +147,7 @@ struct ModelClientState {
     conversation_id: ThreadId,
     window_generation: AtomicU64,
     installation_id: String,
+    prompt_cache_key: ThreadId,
     provider: ModelProviderInfo,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
@@ -300,6 +301,7 @@ impl ModelClient {
         auth_manager: Option<Arc<AuthManager>>,
         conversation_id: ThreadId,
         installation_id: String,
+        prompt_cache_key: ThreadId,
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
@@ -318,6 +320,7 @@ impl ModelClient {
                 conversation_id,
                 window_generation: AtomicU64::new(0),
                 installation_id,
+                prompt_cache_key,
                 provider,
                 auth_env_telemetry,
                 session_source,
@@ -363,6 +366,10 @@ impl ModelClient {
         let conversation_id = self.state.conversation_id;
         let window_generation = self.state.window_generation.load(Ordering::Relaxed);
         format!("{conversation_id}:{window_generation}")
+    }
+
+    pub(crate) fn prompt_cache_key(&self) -> ThreadId {
+        self.state.prompt_cache_key
     }
 
     fn take_cached_websocket_session(&self) -> WebsocketSession {
@@ -861,7 +868,7 @@ impl ModelClientSession {
             None
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
+        let prompt_cache_key = Some(self.client.state.prompt_cache_key.to_string());
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
