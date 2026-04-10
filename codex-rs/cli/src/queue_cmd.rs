@@ -97,7 +97,7 @@ pub(crate) async fn run_queue_command(
         thread_id,
         "external".to_string(),
         cmd.message,
-        None,
+        /*instructions*/ None,
         "{}".to_string(),
         delivery.as_str().to_string(),
         unix_timestamp_now()?,
