@@ -571,6 +571,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
     .await??;
     let ThreadReadResponse {
         thread: read_thread,
+        ..
     } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(read_thread.status, ThreadStatus::Idle);

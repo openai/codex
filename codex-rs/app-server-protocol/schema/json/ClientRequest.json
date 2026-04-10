@@ -2539,6 +2539,13 @@
       },
       "type": "object"
     },
+    "SortDirection": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -2737,7 +2744,7 @@
         "sortDirection": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ThreadSortDirection"
+              "$ref": "#/definitions/SortDirection"
             },
             {
               "type": "null"
@@ -3091,13 +3098,6 @@
       ],
       "type": "object"
     },
-    "ThreadSortDirection": {
-      "enum": [
-        "asc",
-        "desc"
-      ],
-      "type": "string"
-    },
     "ThreadSortKey": {
       "enum": [
         "created_at",
@@ -3230,6 +3230,44 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ThreadTurnsListParams": {
+      "properties": {
+        "cursor": {
+          "description": "Opaque cursor to pass to the next call to continue after the last turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Optional turn page size.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sortDirection": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SortDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional turn pagination direction; defaults to descending."
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
       "type": "object"
     },
     "ThreadUnarchiveParams": {
@@ -3921,6 +3959,30 @@
         "params"
       ],
       "title": "Thread/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/turns/list"
+          ],
+          "title": "Thread/turns/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadTurnsListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/turns/listRequest",
       "type": "object"
     },
     {

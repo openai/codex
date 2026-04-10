@@ -276,7 +276,7 @@ async fn thread_unsubscribe_clears_cached_status_before_resume() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.status, ThreadStatus::SystemError);
 
     let unsubscribe_id = mcp

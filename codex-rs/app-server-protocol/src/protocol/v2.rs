@@ -3070,7 +3070,7 @@ pub struct ThreadListParams {
     pub sort_key: Option<ThreadSortKey>,
     /// Optional sort direction; defaults to descending (newest first).
     #[ts(optional = nullable)]
-    pub sort_direction: Option<ThreadSortDirection>,
+    pub sort_direction: Option<SortDirection>,
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     #[ts(optional = nullable)]
@@ -3121,7 +3121,7 @@ pub enum ThreadSortKey {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
-pub enum ThreadSortDirection {
+pub enum SortDirection {
     Asc,
     Desc,
 }
@@ -3200,6 +3200,35 @@ pub struct ThreadReadParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadReadResponse {
     pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnsListParams {
+    pub thread_id: String,
+    /// Opaque cursor to pass to the next call to continue after the last turn.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional turn page size.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional turn pagination direction; defaults to descending.
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<SortDirection>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnsListResponse {
+    pub data: Vec<Turn>,
+    /// Opaque cursor to pass to the next call to continue after the last turn.
+    /// if None, there are no more turns to return.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+    /// if None, the page contained no turns.
+    pub backwards_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
