@@ -1,5 +1,4 @@
 use crate::ToolDefinition;
-use crate::ToolOrigin;
 use crate::parse_tool_input_schema;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -33,7 +32,6 @@ pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_
         output_schema: Some(mcp_call_tool_result_output_schema(
             structured_content_schema,
         )),
-        origin: ToolOrigin::Mcp,
         defer_loading: false,
     })
 }

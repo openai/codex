@@ -1,7 +1,6 @@
 use super::parse_dynamic_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
-use crate::ToolOrigin;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -35,7 +34,6 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
                 /*additional_properties*/ None
             ),
             output_schema: None,
-            origin: ToolOrigin::Dynamic,
             defer_loading: false,
         }
     );
@@ -64,7 +62,6 @@ fn parse_dynamic_tool_preserves_defer_loading() {
                 /*additional_properties*/ None
             ),
             output_schema: None,
-            origin: ToolOrigin::Dynamic,
             defer_loading: true,
         }
     );

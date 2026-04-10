@@ -12,8 +12,7 @@ use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
 use crate::ToolNamespace;
-use crate::ToolOrigin;
-use crate::ToolRegistryPlanAppTool;
+use crate::ToolRegistryPlanDeferredTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
 use crate::mcp_call_tool_result_output_schema;
@@ -1146,7 +1145,6 @@ fn test_build_specs_mcp_tools_converted() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
-            origin: ToolOrigin::Mcp,
         })
     );
 }
@@ -1610,7 +1608,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
 exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<mcp_result>; };
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult>; };
 ```"#
     );
 }
@@ -1696,7 +1694,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
     assert!(description.contains(
         r#"exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<mcp_result>; };
+declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<CallToolResult>; };
 ```"#
     ));
 }
@@ -1771,8 +1769,8 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     assert!(description.starts_with(
         "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
-    assert!(description.contains("### `update_plan` (`update_plan`)"));
-    assert!(description.contains("### `view_image` (`view_image`)"));
+    assert!(description.contains("### `update_plan`"));
+    assert!(description.contains("### `view_image`"));
 }
 
 #[test]
@@ -1806,8 +1804,8 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     assert!(!description.starts_with(
         "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
-    assert!(!description.contains("### `update_plan` (`update_plan`)"));
-    assert!(!description.contains("### `view_image` (`view_image`)"));
+    assert!(!description.contains("### `update_plan`"));
+    assert!(!description.contains("### `view_image`"));
 }
 
 fn model_info() -> ModelInfo {
@@ -1921,17 +1919,6 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
     }
 }
 
-fn mcp_tool_with_output_schema(
-    name: &str,
-    description: &str,
-    input_schema: serde_json::Value,
-    output_schema: serde_json::Value,
-) -> rmcp::model::Tool {
-    let mut tool = mcp_tool(name, description, input_schema);
-    tool.output_schema = Some(std::sync::Arc::new(rmcp::model::object(output_schema)));
-    tool
-}
-
 #[test]
 fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
     let model_info = model_info();
@@ -1951,38 +1938,39 @@ fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
+    let mut tool = mcp_tool(
+        "echo",
+        "Echo text",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"}
+            },
+            "required": ["message"],
+            "additionalProperties": false
+        }),
+    );
+    tool.output_schema = Some(std::sync::Arc::new(rmcp::model::object(
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "echo": {"type": "string"},
+                "env": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "null"}
+                    ]
+                }
+            },
+            "required": ["echo", "env"],
+            "additionalProperties": false
+        }),
+    )));
+
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
-            "mcp__sample__echo".to_string(),
-            mcp_tool_with_output_schema(
-                "echo",
-                "Echo text",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"}
-                    },
-                    "required": ["message"],
-                    "additionalProperties": false
-                }),
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "echo": {"type": "string"},
-                        "env": {
-                            "anyOf": [
-                                {"type": "string"},
-                                {"type": "null"}
-                            ]
-                        }
-                    },
-                    "required": ["echo", "env"],
-                    "additionalProperties": false
-                }),
-            ),
-        )])),
-        /*app_tools*/ None,
+        Some(HashMap::from([("mcp__sample__echo".to_string(), tool)])),
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -1998,7 +1986,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
 
 exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<mcp_result<{ echo: string; env: string | null; }>>; };
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
 ```"#
     );
 }

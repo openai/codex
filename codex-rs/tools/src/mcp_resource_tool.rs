@@ -1,6 +1,5 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
-use crate::ToolOrigin;
 use crate::ToolSpec;
 use std::collections::BTreeMap;
 
@@ -29,7 +28,6 @@ pub fn create_list_mcp_resources_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 
@@ -58,7 +56,6 @@ pub fn create_list_mcp_resource_templates_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 
@@ -93,7 +90,6 @@ pub fn create_read_mcp_resource_tool() -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 

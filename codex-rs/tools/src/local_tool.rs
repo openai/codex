@@ -1,6 +1,5 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
-use crate::ToolOrigin;
 use crate::ToolSpec;
 use serde_json::Value;
 use serde_json::json;
@@ -87,7 +86,6 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: Some(unified_exec_output_schema()),
-        origin: ToolOrigin::Native,
     })
 }
 
@@ -132,7 +130,6 @@ pub fn create_write_stdin_tool() -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: Some(unified_exec_output_schema()),
-        origin: ToolOrigin::Native,
     })
 }
 
@@ -196,7 +193,6 @@ Examples of valid command strings:
             Some(false.into()),
         ),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 
@@ -267,7 +263,6 @@ Examples of valid command strings:
             Some(false.into()),
         ),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 
@@ -293,7 +288,6 @@ pub fn create_request_permissions_tool(description: String) -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 

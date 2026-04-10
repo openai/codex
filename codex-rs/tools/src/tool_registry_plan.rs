@@ -14,7 +14,7 @@ use crate::ToolsConfig;
 use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
-use crate::collect_tool_search_app_infos;
+use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
 use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;

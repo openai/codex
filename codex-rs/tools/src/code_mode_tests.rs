@@ -7,7 +7,6 @@ use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
-use crate::ToolOrigin;
 use crate::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -36,7 +35,6 @@ fn augment_tool_spec_for_code_mode_augments_function_tools() {
                 },
                 "required": ["ok"],
             })),
-            origin: ToolOrigin::Native,
         })),
         ToolSpec::Function(ResponsesApiTool {
             name: "lookup_order".to_string(),
@@ -64,7 +62,6 @@ declare const tools: { lookup_order(args: { order_id: string; }): Promise<{ ok: 
                 },
                 "required": ["ok"],
             })),
-            origin: ToolOrigin::Native,
         })
     );
 }
@@ -119,7 +116,6 @@ declare const tools: { apply_patch(input: string): Promise<unknown>; };
             kind: codex_code_mode::CodeModeToolKind::Freeform,
             input_schema: None,
             output_schema: None,
-            origin: codex_code_mode::ToolOrigin::Native,
         })
     );
 }
@@ -180,7 +176,6 @@ fn create_wait_tool_matches_expected_spec() {
                     ),
                 ]), Some(vec!["cell_id".to_string()]), Some(false.into())),
             output_schema: None,
-            origin: ToolOrigin::Native,
         })
     );
 }
@@ -193,7 +188,6 @@ fn create_code_mode_tool_matches_expected_spec() {
         kind: codex_code_mode::CodeModeToolKind::Function,
         input_schema: None,
         output_schema: None,
-        origin: codex_code_mode::ToolOrigin::Native,
     }];
 
     assert_eq!(

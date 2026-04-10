@@ -1,6 +1,5 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
-use crate::ToolOrigin;
 use crate::ToolSpec;
 use std::collections::BTreeMap;
 
@@ -37,7 +36,6 @@ pub fn create_list_dir_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["dir_path".to_string()]), Some(false.into())),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 
@@ -93,7 +91,6 @@ pub fn create_test_sync_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 

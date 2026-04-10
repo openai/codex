@@ -7,7 +7,6 @@ use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
-use crate::ToolOrigin;
 use crate::create_tools_json_for_responses_api;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
@@ -31,7 +30,6 @@ fn tool_spec_name_covers_all_variants() {
                 /*additional_properties*/ None
             ),
             output_schema: None,
-            origin: ToolOrigin::Native,
         })
         .name(),
         "lookup_order"
@@ -98,7 +96,6 @@ fn configured_tool_spec_name_delegates_to_tool_spec() {
                     /*additional_properties*/ None
                 ),
                 output_schema: None,
-                origin: ToolOrigin::Native,
             }),
             /*supports_parallel_tool_calls*/ true,
         )
@@ -149,7 +146,6 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
                 /*additional_properties*/ None
             ),
             output_schema: None,
-            origin: ToolOrigin::Native,
         })])
         .expect("serialize tools"),
         vec![json!({

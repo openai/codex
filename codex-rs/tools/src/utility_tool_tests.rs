@@ -43,7 +43,6 @@ fn list_dir_tool_matches_expected_spec() {
                     ),
                 ]), Some(vec!["dir_path".to_string()]), Some(false.into())),
             output_schema: None,
-            origin: ToolOrigin::Native,
         })
     );
 }
@@ -104,7 +103,6 @@ fn test_sync_tool_matches_expected_spec() {
                     ),
                 ]), /*required*/ None, Some(false.into())),
             output_schema: None,
-            origin: ToolOrigin::Native,
         })
     );
 }

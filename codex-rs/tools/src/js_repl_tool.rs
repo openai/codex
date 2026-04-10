@@ -2,7 +2,6 @@ use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
-use crate::ToolOrigin;
 use crate::ToolSpec;
 use std::collections::BTreeMap;
 
@@ -48,7 +47,6 @@ pub fn create_js_repl_reset_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(false.into())),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 

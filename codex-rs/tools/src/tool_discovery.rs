@@ -2,7 +2,6 @@ use crate::JsonSchema;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
-use crate::ToolOrigin;
 use crate::ToolSearchOutputTool;
 use crate::ToolSpec;
 use crate::mcp_tool_to_deferred_responses_api_tool;
@@ -349,7 +348,6 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
             Some(false.into()),
         ),
         output_schema: None,
-        origin: ToolOrigin::Native,
     })
 }
 

@@ -7,7 +7,6 @@ pub use description::CODE_MODE_PRAGMA_PREFIX;
 pub use description::CodeModeToolKind;
 pub use description::ToolDefinition;
 pub use description::ToolNamespaceDescription;
-pub use description::ToolOrigin;
 pub use description::augment_tool_definition;
 pub use description::build_exec_tool_description;
 pub use description::build_wait_tool_description;

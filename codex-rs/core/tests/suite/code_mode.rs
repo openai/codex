@@ -2285,7 +2285,7 @@ text(JSON.stringify(tool));
                 "exec tool declaration:\n",
                 "```ts\n",
                 "declare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): ",
-                "Promise<mcp_result<{ echo: string; env: string | null; }>>; };\n",
+                "Promise<CallToolResult<{ echo: string; env: string | null; }>>; };\n",
                 "```",
             ),
         })
