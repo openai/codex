@@ -1,6 +1,7 @@
 use super::*;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
+use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -323,6 +324,151 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
 
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "nested-thread");
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\n\
+         export PIP_PROXY='http://127.0.0.1:8080'\n\
+         export HTTP_PROXY='http://127.0.0.1:8080'\n\
+         export http_proxy='http://127.0.0.1:8080'\n\
+         export GIT_SSH_COMMAND='ssh -o ProxyCommand=stale'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s\\n%s\\n%s\\n%s' \"$PIP_PROXY\" \"$HTTP_PROXY\" \"$http_proxy\" \"$GIT_SSH_COMMAND\""
+            .to_string(),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env(PROXY_ACTIVE_ENV_KEY, "1")
+        .env("PIP_PROXY", "http://127.0.0.1:4321")
+        .env("HTTP_PROXY", "http://127.0.0.1:4321")
+        .env("http_proxy", "http://127.0.0.1:4321")
+        .env("GIT_SSH_COMMAND", "ssh -o ProxyCommand=fresh")
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "http://127.0.0.1:4321\n\
+         http://127.0.0.1:4321\n\
+         http://127.0.0.1:4321\n\
+         ssh -o ProxyCommand=fresh"
+    );
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_keeps_user_proxy_env_when_proxy_inactive() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport HTTP_PROXY='http://user.proxy:8080'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s' \"$HTTP_PROXY\"".to_string(),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "http://user.proxy:8080"
+    );
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_live_env_when_snapshot_proxy_active() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        format!(
+            "# Snapshot file\n\
+             export {PROXY_ACTIVE_ENV_KEY}='1'\n\
+             export PIP_PROXY='http://127.0.0.1:8080'\n\
+             export HTTP_PROXY='http://127.0.0.1:8080'\n"
+        ),
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if [ \"${{PIP_PROXY+x}}\" = x ]; then printf 'pip:%s\\n' \"$PIP_PROXY\"; else printf 'pip:unset\\n'; fi; \
+             printf 'http:%s\\n' \"$HTTP_PROXY\"; \
+             if [ \"${{{PROXY_ACTIVE_ENV_KEY}+x}}\" = x ]; then printf 'active:%s' \"${PROXY_ACTIVE_ENV_KEY}\"; else printf 'active:unset'; fi"
+        ),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &HashMap::new(),
+        &HashMap::from([(
+            "HTTP_PROXY".to_string(),
+            "http://user.proxy:8080".to_string(),
+        )]),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env("HTTP_PROXY", "http://user.proxy:8080")
+        .env_remove("PIP_PROXY")
+        .env_remove(PROXY_ACTIVE_ENV_KEY)
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "pip:unset\nhttp:http://user.proxy:8080\nactive:unset"
+    );
 }
 
 #[test]

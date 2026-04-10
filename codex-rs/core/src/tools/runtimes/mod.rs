@@ -8,6 +8,8 @@ use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::path_utils;
 use crate::shell::Shell;
 use crate::tools::sandboxing::ToolError;
+use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
+use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -102,6 +104,9 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
+    let (proxy_captures, proxy_exports) = build_proxy_env_exports();
+    let override_captures = join_shell_blocks([override_captures, proxy_captures]);
+    let override_exports = join_shell_blocks([override_exports, proxy_exports]);
     let rewritten_script = if override_exports.is_empty() {
         format!(
             "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
@@ -118,10 +123,35 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
 fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
     let mut keys = explicit_env_overrides
         .keys()
+        .map(String::as_str)
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
     keys.sort_unstable();
 
+    build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
+}
+
+fn build_proxy_env_exports() -> (String, String) {
+    let mut keys = PROXY_ENV_KEYS
+        .iter()
+        .copied()
+        .filter(|key| is_valid_shell_variable_name(key))
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+
+    let (captures, restores) =
+        build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
+    let key = PROXY_ACTIVE_ENV_KEY;
+    (
+        format!("{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
+        format!(
+            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi"
+        ),
+    )
+}
+
+fn build_override_exports_for_keys(variable_prefix: &str, keys: &[&str]) -> (String, String) {
     if keys.is_empty() {
         return (String::new(), String::new());
     }
@@ -130,9 +160,9 @@ fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (
         .iter()
         .enumerate()
         .map(|(idx, key)| {
-            format!(
-                "__CODEX_SNAPSHOT_OVERRIDE_SET_{idx}=\"${{{key}+x}}\"\n__CODEX_SNAPSHOT_OVERRIDE_{idx}=\"${{{key}-}}\""
-            )
+            let set_var = format!("{variable_prefix}_SET_{idx}");
+            let value_var = format!("{variable_prefix}_{idx}");
+            format!("{set_var}=\"${{{key}+x}}\"\n{value_var}=\"${{{key}-}}\"")
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -140,14 +170,24 @@ fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (
         .iter()
         .enumerate()
         .map(|(idx, key)| {
+            let set_var = format!("{variable_prefix}_SET_{idx}");
+            let value_var = format!("{variable_prefix}_{idx}");
             format!(
-                "if [ -n \"${{__CODEX_SNAPSHOT_OVERRIDE_SET_{idx}}}\" ]; then export {key}=\"${{__CODEX_SNAPSHOT_OVERRIDE_{idx}}}\"; else unset {key}; fi"
+                "if [ -n \"${{{set_var}}}\" ]; then export {key}=\"${{{value_var}}}\"; else unset {key}; fi"
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     (captures, restores)
+}
+
+fn join_shell_blocks(blocks: impl IntoIterator<Item = String>) -> String {
+    blocks
+        .into_iter()
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn is_valid_shell_variable_name(name: &str) -> bool {
