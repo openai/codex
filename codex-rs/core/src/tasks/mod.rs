@@ -236,7 +236,7 @@ impl Session {
         self.start_task(turn_context, input, task).await;
     }
 
-    pub(crate) async fn start_task<T: SessionTask>(
+    async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
