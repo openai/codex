@@ -6877,7 +6877,7 @@ impl ChatWidget {
         id: String,
         turn_id: String,
         review: codex_app_server_protocol::GuardianApprovalReview,
-        decision_source: Option<codex_app_server_protocol::GuardianApprovalReviewDecisionSource>,
+        decision_source: Option<codex_app_server_protocol::AutoReviewDecisionSource>,
         action: GuardianApprovalReviewAction,
     ) {
         self.on_guardian_assessment(GuardianAssessmentEvent {
@@ -6930,7 +6930,7 @@ impl ChatWidget {
             }),
             rationale: review.rationale,
             decision_source: decision_source.map(|source| match source {
-                codex_app_server_protocol::GuardianApprovalReviewDecisionSource::Agent => {
+                codex_app_server_protocol::AutoReviewDecisionSource::Agent => {
                     GuardianAssessmentDecisionSource::Agent
                 }
             }),

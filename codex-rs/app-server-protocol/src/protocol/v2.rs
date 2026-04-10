@@ -4560,11 +4560,11 @@ pub enum GuardianApprovalReviewStatus {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Source that produced a terminal guardian approval review decision.
-pub enum GuardianApprovalReviewDecisionSource {
+pub enum AutoReviewDecisionSource {
     Agent,
 }
 
-impl From<CoreGuardianAssessmentDecisionSource> for GuardianApprovalReviewDecisionSource {
+impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
     fn from(value: CoreGuardianAssessmentDecisionSource) -> Self {
         match value {
             CoreGuardianAssessmentDecisionSource::Agent => Self::Agent,
@@ -5371,7 +5371,7 @@ pub struct ItemGuardianApprovalReviewCompletedNotification {
     /// because the review is about the network call, not the command execution.
     /// Therefore, target_item_id is set to None for network policy reviews.
     pub target_item_id: Option<String>,
-    pub decision_source: GuardianApprovalReviewDecisionSource,
+    pub decision_source: AutoReviewDecisionSource,
     pub review: GuardianApprovalReview,
     pub action: GuardianApprovalReviewAction,
 }

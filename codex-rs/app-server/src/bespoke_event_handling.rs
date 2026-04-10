@@ -2922,7 +2922,7 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use codex_app_server_protocol::GuardianApprovalReviewDecisionSource;
+    use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
@@ -3153,10 +3153,7 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.review_id, "review-2");
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
-                assert_eq!(
-                    payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
-                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(
                     payload.review.risk_level,
@@ -3206,10 +3203,7 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.review_id, "review-3");
                 assert_eq!(payload.target_item_id, None);
-                assert_eq!(
-                    payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
-                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.user_authorization, None);
@@ -3456,10 +3450,7 @@ mod tests {
                     payload.target_item_id.as_deref(),
                     Some("cmd-guardian-approved")
                 );
-                assert_eq!(
-                    payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
-                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::Approved
@@ -3526,10 +3517,7 @@ mod tests {
                     payload.target_item_id.as_deref(),
                     Some("cmd-guardian-denied")
                 );
-                assert_eq!(
-                    payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
-                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
             }
             other => bail!("unexpected message: {other:?}"),

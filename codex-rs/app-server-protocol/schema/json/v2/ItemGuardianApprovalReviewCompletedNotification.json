@@ -1,6 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AutoReviewDecisionSource": {
+      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+      "enum": [
+        "agent"
+      ],
+      "type": "string"
+    },
     "GuardianApprovalReview": {
       "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
       "properties": {
@@ -209,13 +216,6 @@
         }
       ]
     },
-    "GuardianApprovalReviewDecisionSource": {
-      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
-      "enum": [
-        "agent"
-      ],
-      "type": "string"
-    },
     "GuardianApprovalReviewStatus": {
       "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
       "enum": [
@@ -269,7 +269,7 @@
       "$ref": "#/definitions/GuardianApprovalReviewAction"
     },
     "decisionSource": {
-      "$ref": "#/definitions/GuardianApprovalReviewDecisionSource"
+      "$ref": "#/definitions/AutoReviewDecisionSource"
     },
     "review": {
       "$ref": "#/definitions/GuardianApprovalReview"

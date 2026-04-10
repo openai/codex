@@ -24,6 +24,7 @@ pub(super) use codex_app_server_protocol::AdditionalFileSystemPermissions as App
 pub(super) use codex_app_server_protocol::AdditionalNetworkPermissions as AppServerAdditionalNetworkPermissions;
 pub(super) use codex_app_server_protocol::AdditionalPermissionProfile as AppServerAdditionalPermissionProfile;
 pub(super) use codex_app_server_protocol::AppSummary;
+pub(super) use codex_app_server_protocol::AutoReviewDecisionSource as AppServerGuardianApprovalReviewDecisionSource;
 pub(super) use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 pub(super) use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 pub(super) use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
@@ -36,7 +37,6 @@ pub(super) use codex_app_server_protocol::ErrorNotification;
 pub(super) use codex_app_server_protocol::FileUpdateChange;
 pub(super) use codex_app_server_protocol::GuardianApprovalReview;
 pub(super) use codex_app_server_protocol::GuardianApprovalReviewAction as AppServerGuardianApprovalReviewAction;
-pub(super) use codex_app_server_protocol::GuardianApprovalReviewDecisionSource as AppServerGuardianApprovalReviewDecisionSource;
 pub(super) use codex_app_server_protocol::GuardianApprovalReviewStatus;
 pub(super) use codex_app_server_protocol::GuardianCommandSource as AppServerGuardianCommandSource;
 pub(super) use codex_app_server_protocol::GuardianRiskLevel as AppServerGuardianRiskLevel;

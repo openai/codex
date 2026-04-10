@@ -16,7 +16,7 @@ use crate::protocol::v2::CommandExecutionSource;
 use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::FileUpdateChange;
 use crate::protocol::v2::GuardianApprovalReview;
-use crate::protocol::v2::GuardianApprovalReviewDecisionSource;
+use crate::protocol::v2::AutoReviewDecisionSource;
 use crate::protocol::v2::GuardianApprovalReviewStatus;
 use crate::protocol::v2::ItemGuardianApprovalReviewCompletedNotification;
 use crate::protocol::v2::ItemGuardianApprovalReviewStartedNotification;
@@ -257,8 +257,8 @@ pub fn guardian_auto_approval_review_notification(
                     target_item_id: assessment.target_item_id.clone(),
                     decision_source: assessment
                         .decision_source
-                        .map(GuardianApprovalReviewDecisionSource::from)
-                        .unwrap_or(GuardianApprovalReviewDecisionSource::Agent),
+                        .map(AutoReviewDecisionSource::from)
+                        .unwrap_or(AutoReviewDecisionSource::Agent),
                     review,
                     action,
                 },

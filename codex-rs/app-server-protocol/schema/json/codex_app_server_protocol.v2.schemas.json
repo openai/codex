@@ -802,6 +802,13 @@
         }
       ]
     },
+    "AutoReviewDecisionSource": {
+      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+      "enum": [
+        "agent"
+      ],
+      "type": "string"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -5170,13 +5177,6 @@
         }
       ]
     },
-    "GuardianApprovalReviewDecisionSource": {
-      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
-      "enum": [
-        "agent"
-      ],
-      "type": "string"
-    },
     "GuardianApprovalReviewStatus": {
       "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
       "enum": [
@@ -5515,7 +5515,7 @@
           "$ref": "#/definitions/GuardianApprovalReviewAction"
         },
         "decisionSource": {
-          "$ref": "#/definitions/GuardianApprovalReviewDecisionSource"
+          "$ref": "#/definitions/AutoReviewDecisionSource"
         },
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
