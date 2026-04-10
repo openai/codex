@@ -71,6 +71,8 @@ use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
+const V2_STEERING_ACKNOWLEDGEMENT: &str =
+    "This was sent to steer the previous background agent task.";
 
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
@@ -329,6 +331,8 @@ impl RealtimeE2eHarness {
         read_notification(&mut self.mcp, method).await
     }
 
+    /// Returns the nth JSON message app-server wrote to the fake Realtime API
+    /// sideband websocket.
     async fn sideband_outbound_request(&self, request_index: usize) -> Value {
         self.realtime_server
             .wait_for_request(/*connection_index*/ 0, request_index)
@@ -1204,6 +1208,169 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     Ok(())
 }
 
+/// Regression coverage for Realtime V2's single-active-response rule.
+///
+/// The Realtime API rejects a new `response.create` while a default response is
+/// still active, so the input task should queue the second create and flush it
+/// only after the server sends `response.done` for the active response.
+#[tokio::test]
+async fn webrtc_v2_queues_text_response_create_while_response_is_active() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Phase 1: script a server-side response that becomes active after the first
+    // user text turn, then finishes only after a later audio input.
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V2,
+        no_main_loop_responses(),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_v2_response_queue")],
+            vec![],
+            vec![
+                json!({
+                    "type": "response.created",
+                    "response": { "id": "resp_active" }
+                }),
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "active response started"
+                }),
+            ],
+            vec![],
+            vec![json!({
+                "type": "response.done",
+                "response": { "id": "resp_active" }
+            })],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+
+    // From here on, `sideband_outbound_request(n)` reads outbound messages to
+    // the fake Realtime API sideband websocket. These are not client-facing
+    // notifications; they are the protocol frames app-server sends upstream.
+    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+
+    // Phase 2: send the first text turn. It is safe to emit `response.create`
+    // immediately because no default response is active yet.
+    let thread_id = started.started.thread_id.clone();
+    harness.append_text(thread_id.clone(), "first").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "first",
+    );
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
+    let transcript = harness
+        .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+            "thread/realtime/transcriptUpdated",
+        )
+        .await?;
+    assert_eq!(transcript.text, "active response started");
+
+    // Phase 3: send a second text turn while `resp_active` is still open. The
+    // user message must reach realtime, but `response.create` must not be sent
+    // yet or the Realtime API rejects it as an active-response conflict.
+    harness.append_text(thread_id.clone(), "second").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 3).await,
+        "second",
+    );
+
+    // Phase 4: the audio input causes the scripted sideband stream to send
+    // `response.done`, which clears the active response and flushes the queued
+    // `response.create` for the second text turn.
+    harness.append_audio(thread_id).await?;
+
+    // This is the negative check: if the second text turn had emitted
+    // `response.create` immediately, request 4 would be that create instead of
+    // the audio append.
+    let audio = harness.sideband_outbound_request(/*request_index*/ 4).await;
+    assert_eq!(audio["type"], "input_audio_buffer.append");
+    assert_eq!(audio["audio"], "BQYH");
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 5).await);
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+/// Regression coverage for the same queued `response.create` path when the
+/// active Realtime V2 response is cancelled instead of completed.
+///
+/// `response.cancelled` should clear the active-response guard exactly like
+/// `response.done`, so a text turn queued during the active response still gets
+/// one deferred `response.create`.
+#[tokio::test]
+async fn webrtc_v2_flushes_queued_text_response_create_when_response_is_cancelled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Phase 1: script a server-side response that becomes active after the first
+    // text turn, then is cancelled only after a later audio input.
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V2,
+        no_main_loop_responses(),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_v2_response_cancel_queue")],
+            vec![],
+            vec![json!({
+                "type": "response.created",
+                "response": { "id": "resp_cancelled" }
+            })],
+            vec![],
+            vec![json!({
+                "type": "response.cancelled",
+                "response": { "id": "resp_cancelled" }
+            })],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+
+    // Phase 2: send the first text turn. It is safe to emit `response.create`
+    // immediately because no default response is active yet.
+    let thread_id = started.started.thread_id.clone();
+    harness.append_text(thread_id.clone(), "first").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "first",
+    );
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
+
+    // Phase 3: send a second text turn while `resp_cancelled` is still open.
+    // The user message must reach realtime, but `response.create` stays queued.
+    harness.append_text(thread_id.clone(), "second").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 3).await,
+        "second",
+    );
+
+    // Phase 4: the audio input causes the scripted sideband stream to send
+    // `response.cancelled`, which clears the active response and flushes the
+    // queued `response.create` for the second text turn.
+    harness.append_audio(thread_id).await?;
+
+    // This is the negative check: if the second text turn had emitted
+    // `response.create` immediately, request 4 would be that create instead of
+    // the audio append.
+    let audio = harness.sideband_outbound_request(/*request_index*/ 4).await;
+    assert_eq!(audio["type"], "input_audio_buffer.append");
+    assert_eq!(audio["audio"], "BQYH");
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 5).await);
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+/// Regression coverage for the Realtime V2 background-agent final-output path.
+///
+/// Once the background agent finishes, app-server sends the final function-call
+/// output to realtime and then requests a new `response.create` so realtime can
+/// react to that final output.
 #[tokio::test]
 async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_output() -> Result<()>
 {
@@ -1223,6 +1390,7 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
             ],
             vec![],
             vec![],
+            vec![],
         ])]),
     )
     .await?;
@@ -1240,8 +1408,8 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
-    // Phase 3: assert the delegated prompt went to Responses and the result returned as exactly one
-    // v2 function-call output event on the sideband.
+    // Phase 3: assert the delegated prompt went to Responses and the result
+    // returned as exactly one v2 function-call output event on the sideband.
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
@@ -1258,6 +1426,99 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
         1
+    );
+
+    // Phase 4: after the final function-call output, realtime needs an explicit
+    // `response.create` to produce the next user-visible response.
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 3).await);
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+/// Regression coverage for Realtime V2 steering while a background-agent task is
+/// already active.
+///
+/// The second background-agent tool call is treated as guidance for the active
+/// task. App-server acknowledges that steering message to realtime and then
+/// emits `response.create` so realtime can speak that acknowledgement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webrtc_v2_background_agent_steering_ack_requests_response_create() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Phase 1: gate the delegated Responses turn from the first tool call so
+    // the background-agent handoff stays active while realtime sends a second
+    // tool call that should steer the active task.
+    let main_loop_responses_server = responses::start_mock_server().await;
+    let (gate_completed_tx, gate_completed_rx) = mpsc::channel();
+    let gated_response = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "first task finished"),
+        responses::ev_completed("resp-1"),
+    ]);
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(GatedSseResponse {
+            gate_rx: Mutex::new(Some(gate_completed_rx)),
+            response: gated_response,
+        })
+        .expect(2)
+        .mount(&main_loop_responses_server)
+        .await;
+
+    let mut harness = RealtimeE2eHarness::new_with_main_loop_responses_server(
+        RealtimeTestVersion::V2,
+        main_loop_responses_server,
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v2_steering_ack"),
+                v2_background_agent_tool_call("call_active", "start a task"),
+                v2_background_agent_tool_call("call_steer", "steer the active task"),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+    let turn_started = harness
+        .read_notification::<TurnStartedNotification>("turn/started")
+        .await?;
+    assert_eq!(turn_started.thread_id, harness.thread_id);
+
+    // Phase 2: the second tool call happens while `call_active` is still
+    // running, so app-server sends a steering acknowledgement as a function-call
+    // output for the second call.
+    assert_v2_function_call_output(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "call_steer",
+        V2_STEERING_ACKNOWLEDGEMENT,
+    );
+
+    // Phase 3: realtime needs a `response.create` after the steering
+    // acknowledgement so it can surface that acknowledgement to the user.
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
+
+    // Phase 4: release the gated delegated turn. Codex should then continue
+    // the same run with the steering text included in the follow-up Responses
+    // request, proving realtime did not merely acknowledge and drop it.
+    let _ = gate_completed_tx.send(());
+    let turn_completed = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+    assert_eq!(turn_completed.thread_id, harness.thread_id);
+
+    let requests = harness.main_loop_responses_requests().await?;
+    assert_eq!(requests.len(), 2);
+    assert!(
+        response_request_contains_text(&requests[1], "steer the active task"),
+        "follow-up Responses request should contain steering prompt: {}",
+        requests[1]
     );
 
     harness.shutdown().await;
@@ -1710,6 +1971,32 @@ fn assert_v2_progress_update(request: &Value, expected_text: &str) {
                     "text": format!("{expected_text}\n\nUpdate from background agent (task hasn't finished yet):")
                 }]
             }
+        })
+    );
+}
+
+fn assert_v2_user_text_item(request: &Value, expected_text: &str) {
+    assert_eq!(
+        request,
+        &json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": expected_text
+                }]
+            }
+        })
+    );
+}
+
+fn assert_v2_response_create(request: &Value) {
+    assert_eq!(
+        request,
+        &json!({
+            "type": "response.create"
         })
     );
 }
