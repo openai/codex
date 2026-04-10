@@ -6587,13 +6587,25 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    if let Some(candidate) = sess
+    let prefix_candidate = sess
         .take_ready_prefix_compact(&turn_context.model_info.slug)
-        .await
-        && apply_prefix_compact_candidate(sess, turn_context, initial_context_injection, candidate)
+        .await;
+    if let Some(candidate) = prefix_candidate {
+        if apply_prefix_compact_candidate(sess, turn_context, initial_context_injection, candidate)
             .await?
-    {
-        return Ok(());
+        {
+            return Ok(());
+        }
+        debug!(
+            turn_id = %turn_context.sub_id,
+            "prefix compaction candidate is stale; running foreground auto-compaction"
+        );
+    } else if turn_context.features.enabled(Feature::PrefixCompaction) {
+        debug!(
+            turn_id = %turn_context.sub_id,
+            model_slug = %turn_context.model_info.slug,
+            "prefix compaction candidate is not ready; running foreground auto-compaction"
+        );
     }
 
     sess.abandon_prefix_compact().await;
@@ -6626,6 +6638,14 @@ async fn apply_prefix_compact_candidate(
     if current_items.len() < candidate.base_history.len()
         || current_items[..candidate.base_history.len()] != candidate.base_history
     {
+        debug!(
+            turn_id = %turn_context.sub_id,
+            generation = candidate.generation,
+            model_slug = %candidate.model_slug,
+            current_history_len = current_items.len(),
+            base_history_len = candidate.base_history.len(),
+            "prefix compaction candidate no longer matches current history"
+        );
         return Ok(false);
     }
 
@@ -6672,6 +6692,12 @@ async fn apply_prefix_compact_candidate(
     sess.recompute_token_usage(turn_context).await;
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
+    debug!(
+        turn_id = %turn_context.sub_id,
+        generation = candidate.generation,
+        model_slug = %candidate.model_slug,
+        "applied prefix compaction candidate"
+    );
     Ok(true)
 }
 
@@ -6721,9 +6747,26 @@ async fn maybe_start_prefix_compact(
         .begin_prefix_compact(turn_context.model_info.slug.clone())
         .await
     else {
+        trace!(
+            turn_id = %turn_context.sub_id,
+            total_usage_tokens,
+            prefix_compact_limit,
+            auto_compact_limit,
+            "prefix compaction already running or ready"
+        );
         return;
     };
 
+    debug!(
+        turn_id = %turn_context.sub_id,
+        generation = start.generation,
+        model_slug = %start.model_slug,
+        total_usage_tokens,
+        prefix_compact_limit,
+        auto_compact_limit,
+        base_history_len = start.base_history.len(),
+        "starting background prefix compaction"
+    );
     spawn_prefix_compact_task(Arc::clone(sess), Arc::clone(turn_context), start);
 }
 
@@ -6746,6 +6789,14 @@ fn spawn_prefix_compact_task(
         .await;
         match compacted {
             Ok(replacement_prefix) => {
+                debug!(
+                    turn_id = %turn_context.sub_id,
+                    generation,
+                    model_slug = %model_slug,
+                    base_history_len = base_history.len(),
+                    replacement_prefix_len = replacement_prefix.len(),
+                    "background prefix compaction ready"
+                );
                 sess.finish_prefix_compact(PrefixCompactCandidate {
                     generation,
                     model_slug,
@@ -6755,7 +6806,12 @@ fn spawn_prefix_compact_task(
                 .await;
             }
             Err(err) => {
-                tracing::debug!(turn_id = %turn_context.sub_id, "prefix compaction failed: {err:#}");
+                debug!(
+                    turn_id = %turn_context.sub_id,
+                    generation,
+                    model_slug = %model_slug,
+                    "prefix compaction failed: {err:#}"
+                );
                 sess.fail_prefix_compact(generation).await;
             }
         }
