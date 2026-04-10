@@ -64,6 +64,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
 
         let super::config::HookEvents {
             pre_tool_use,
+            permission_request,
             post_tool_use,
             session_start,
             user_prompt_submit,
@@ -74,6 +75,10 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
             (
                 codex_protocol::protocol::HookEventName::PreToolUse,
                 pre_tool_use,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::PermissionRequest,
+                permission_request,
             ),
             (
                 codex_protocol::protocol::HookEventName::PostToolUse,

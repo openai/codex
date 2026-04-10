@@ -23,6 +23,7 @@ use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::Sandboxable;
@@ -44,6 +45,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
     pub command: Vec<String>,
+    pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
@@ -195,6 +197,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn exec_approval_requirement(&self, req: &ShellRequest) -> Option<ExecApprovalRequirement> {
         Some(req.exec_approval_requirement.clone())
+    }
+
+    fn permission_request_payload(&self, req: &ShellRequest) -> Option<PermissionRequestPayload> {
+        Some(PermissionRequestPayload::bash(req.hook_command.clone()))
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {

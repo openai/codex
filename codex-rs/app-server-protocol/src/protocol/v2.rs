@@ -380,7 +380,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
     }
 );
 
