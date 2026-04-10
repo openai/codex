@@ -21,6 +21,7 @@ use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::compact_remote::run_remote_prefix_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
@@ -297,6 +298,8 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
+use crate::state::PrefixCompactCandidate;
+use crate::state::PrefixCompactStart;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::tasks::GhostSnapshotTask;
@@ -332,6 +335,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::MessagePhase;
@@ -3889,6 +3893,37 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn begin_prefix_compact(
+        &self,
+        model_slug: String,
+    ) -> Option<PrefixCompactStart> {
+        let mut state = self.state.lock().await;
+        state.begin_prefix_compact(model_slug)
+    }
+
+    pub(crate) async fn finish_prefix_compact(&self, candidate: PrefixCompactCandidate) {
+        let mut state = self.state.lock().await;
+        state.finish_prefix_compact(candidate);
+    }
+
+    pub(crate) async fn fail_prefix_compact(&self, generation: u64) {
+        let mut state = self.state.lock().await;
+        state.fail_prefix_compact(generation);
+    }
+
+    pub(crate) async fn abandon_prefix_compact(&self) {
+        let mut state = self.state.lock().await;
+        state.abandon_prefix_compact();
+    }
+
+    pub(crate) async fn take_ready_prefix_compact(
+        &self,
+        model_slug: &str,
+    ) -> Option<PrefixCompactCandidate> {
+        let mut state = self.state.lock().await;
+        state.take_ready_prefix_compact(model_slug)
+    }
+
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
         state.reference_context_item()
@@ -6042,6 +6077,13 @@ pub(crate) async fn run_turn(
     if pre_sampling_compacted && let Some(mut client_session) = prewarmed_client_session.take() {
         client_session.reset_websocket_session();
     }
+    maybe_start_prefix_compact(
+        &sess,
+        &turn_context,
+        sess.get_total_token_usage().await,
+        auto_compact_limit,
+    )
+    .await;
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
@@ -6372,6 +6414,14 @@ pub(crate) async fn run_turn(
                     continue;
                 }
 
+                maybe_start_prefix_compact(
+                    &sess,
+                    &turn_context,
+                    total_usage_tokens,
+                    auto_compact_limit,
+                )
+                .await;
+
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
                     let stop_hook_permission_mode = match turn_context.approval_policy.value() {
@@ -6600,6 +6650,28 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
+    let prefix_candidate = sess
+        .take_ready_prefix_compact(&turn_context.model_info.slug)
+        .await;
+    if let Some(candidate) = prefix_candidate {
+        if apply_prefix_compact_candidate(sess, turn_context, initial_context_injection, candidate)
+            .await?
+        {
+            return Ok(());
+        }
+        debug!(
+            turn_id = %turn_context.sub_id,
+            "prefix compaction candidate is stale; running foreground auto-compaction"
+        );
+    } else if turn_context.features.enabled(Feature::PrefixCompaction) {
+        debug!(
+            turn_id = %turn_context.sub_id,
+            model_slug = %turn_context.model_info.slug,
+            "prefix compaction candidate is not ready; running foreground auto-compaction"
+        );
+    }
+
+    sess.abandon_prefix_compact().await;
     if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
@@ -6616,6 +6688,197 @@ async fn run_auto_compact(
         .await?;
     }
     Ok(())
+}
+
+async fn apply_prefix_compact_candidate(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
+    candidate: PrefixCompactCandidate,
+) -> CodexResult<bool> {
+    let current_history = sess.clone_history().await;
+    let current_items = current_history.raw_items();
+    if current_items.len() < candidate.base_history.len()
+        || current_items[..candidate.base_history.len()] != candidate.base_history
+    {
+        debug!(
+            turn_id = %turn_context.sub_id,
+            generation = candidate.generation,
+            model_slug = %candidate.model_slug,
+            current_history_len = current_items.len(),
+            base_history_len = candidate.base_history.len(),
+            "prefix compaction candidate no longer matches current history"
+        );
+        return Ok(false);
+    }
+
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new_prefix());
+    sess.emit_turn_item_started(turn_context, &compaction_item)
+        .await;
+
+    let mut new_history = candidate.replacement_prefix;
+    new_history.extend(
+        current_items[candidate.base_history.len()..]
+            .iter()
+            .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
+            .cloned(),
+    );
+
+    if matches!(
+        initial_context_injection,
+        InitialContextInjection::BeforeLastUserMessage
+    ) {
+        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        new_history = compact::insert_initial_context_before_last_real_user_or_summary(
+            new_history,
+            initial_context,
+        );
+    }
+
+    new_history.extend(
+        current_items
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+            .cloned(),
+    );
+
+    let reference_context_item = match initial_context_injection {
+        InitialContextInjection::DoNotInject => None,
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+    };
+    let compacted_item = CompactedItem {
+        message: String::new(),
+        replacement_history: Some(new_history.clone()),
+    };
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await;
+    sess.recompute_token_usage(turn_context).await;
+    sess.emit_turn_item_completed(turn_context, compaction_item)
+        .await;
+    debug!(
+        turn_id = %turn_context.sub_id,
+        generation = candidate.generation,
+        model_slug = %candidate.model_slug,
+        "applied prefix compaction candidate"
+    );
+    Ok(true)
+}
+
+fn prefix_compact_token_limit(
+    auto_compact_limit: i64,
+    configured_threshold_percent: Option<i64>,
+) -> Option<i64> {
+    if auto_compact_limit == i64::MAX || auto_compact_limit <= 1 {
+        return None;
+    }
+    let threshold_percent = configured_threshold_percent.unwrap_or(60);
+    if threshold_percent <= 0 {
+        return None;
+    }
+
+    let token_limit = ((auto_compact_limit as i128) * (threshold_percent as i128)) / 100;
+    let token_limit = i64::try_from(token_limit).unwrap_or(i64::MAX);
+    let token_limit = token_limit.clamp(1, auto_compact_limit.saturating_sub(1));
+    Some(token_limit)
+}
+
+async fn maybe_start_prefix_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    total_usage_tokens: i64,
+    auto_compact_limit: i64,
+) {
+    if !turn_context.features.enabled(Feature::PrefixCompaction) {
+        return;
+    }
+
+    if !should_use_remote_compact_task(&turn_context.provider) {
+        return;
+    }
+
+    let Some(prefix_compact_limit) = prefix_compact_token_limit(
+        auto_compact_limit,
+        turn_context.config.prefix_compaction.threshold_percent,
+    ) else {
+        return;
+    };
+    if total_usage_tokens < prefix_compact_limit || total_usage_tokens >= auto_compact_limit {
+        return;
+    }
+
+    let Some(start) = sess
+        .begin_prefix_compact(turn_context.model_info.slug.clone())
+        .await
+    else {
+        trace!(
+            turn_id = %turn_context.sub_id,
+            total_usage_tokens,
+            prefix_compact_limit,
+            auto_compact_limit,
+            "prefix compaction already running or ready"
+        );
+        return;
+    };
+
+    debug!(
+        turn_id = %turn_context.sub_id,
+        generation = start.generation,
+        model_slug = %start.model_slug,
+        total_usage_tokens,
+        prefix_compact_limit,
+        auto_compact_limit,
+        base_history_len = start.base_history.len(),
+        "starting background prefix compaction"
+    );
+    spawn_prefix_compact_task(Arc::clone(sess), Arc::clone(turn_context), start);
+}
+
+fn spawn_prefix_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    start: PrefixCompactStart,
+) {
+    tokio::spawn(async move {
+        let PrefixCompactStart {
+            generation,
+            model_slug,
+            base_history,
+        } = start;
+        let compacted = run_remote_prefix_compact_task(
+            Arc::clone(&sess),
+            Arc::clone(&turn_context),
+            base_history.clone(),
+        )
+        .await;
+        match compacted {
+            Ok(replacement_prefix) => {
+                debug!(
+                    turn_id = %turn_context.sub_id,
+                    generation,
+                    model_slug = %model_slug,
+                    base_history_len = base_history.len(),
+                    replacement_prefix_len = replacement_prefix.len(),
+                    "background prefix compaction ready"
+                );
+                sess.finish_prefix_compact(PrefixCompactCandidate {
+                    generation,
+                    model_slug,
+                    base_history,
+                    replacement_prefix,
+                })
+                .await;
+            }
+            Err(err) => {
+                debug!(
+                    turn_id = %turn_context.sub_id,
+                    generation,
+                    model_slug = %model_slug,
+                    "prefix compaction failed: {err:#}"
+                );
+                sess.fail_prefix_compact(generation).await;
+            }
+        }
+    });
 }
 
 fn collect_explicit_app_ids_from_skill_items(

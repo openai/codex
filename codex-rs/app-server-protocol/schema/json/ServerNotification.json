@@ -917,6 +917,16 @@
     "ContextCompactedNotification": {
       "description": "Deprecated: Use `ContextCompaction` item type instead.",
       "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextCompactionKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         },
@@ -929,6 +939,13 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "ContextCompactionKind": {
+      "enum": [
+        "classic",
+        "prefix"
+      ],
+      "type": "string"
     },
     "CreditsSnapshot": {
       "properties": {
@@ -3286,6 +3303,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ContextCompactionKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "enum": [

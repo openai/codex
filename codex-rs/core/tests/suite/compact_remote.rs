@@ -2,9 +2,13 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc as StdArc;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -35,7 +39,16 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use wiremock::Mock;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
+
+fn enable_prefix_compaction(config: &mut codex_core::config::Config) {
+    let _ = config.features.enable(Feature::PrefixCompaction);
+    let _ = config.features.disable(Feature::ToolSuggest);
+}
 
 fn approx_token_count(text: &str) -> i64 {
     i64::try_from(text.len().saturating_add(3) / 4).unwrap_or(i64::MAX)
@@ -80,6 +93,70 @@ fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     vec![ResponseItem::Compaction {
         encrypted_content: summary_with_prefix(summary),
     }]
+}
+
+async fn wait_for_response_requests(mock_response: &responses::ResponseMock, count: usize) {
+    for _ in 0..100 {
+        if mock_response.requests().len() >= count {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "expected at least {count} request(s), got {}",
+        mock_response.requests().len()
+    );
+}
+
+async fn wait_for_json_request_count(
+    requests: &StdArc<StdMutex<Vec<serde_json::Value>>>,
+    count: usize,
+) {
+    for _ in 0..100 {
+        if requests.lock().expect("request lock poisoned").len() >= count {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "expected at least {count} request(s), got {}",
+        requests.lock().expect("request lock poisoned").len()
+    );
+}
+
+#[derive(Clone, Debug)]
+struct PrefixRaceCompactResponder {
+    requests: StdArc<StdMutex<Vec<serde_json::Value>>>,
+}
+
+impl Respond for PrefixRaceCompactResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body = request
+            .body_json::<serde_json::Value>()
+            .expect("compact request body should be JSON");
+        let prefix_mode = body
+            .get("prefix_mode")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        self.requests
+            .lock()
+            .expect("request lock poisoned")
+            .push(body);
+
+        let summary = if prefix_mode {
+            "PREFIX_STALE_SUMMARY"
+        } else {
+            "NORMAL_FALLBACK_SUMMARY"
+        };
+        let response = ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(json!({ "output": compacted_summary_only_output(summary) }));
+        if prefix_mode {
+            response.set_delay(Duration::from_secs(5))
+        } else {
+            response
+        }
+    }
 }
 
 fn remote_realtime_test_codex_builder(
@@ -1046,6 +1123,419 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     assert_eq!(started_item.id, completed_item.id);
     assert!(legacy_event);
     assert_eq!(compact_mock.requests().len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefix_compact_feature_disabled_by_default_does_not_start_background_compact() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(1_000);
+                config.model_auto_compact_token_limit = Some(800);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    responses::mount_sse_sequence(
+        harness.server(),
+        vec![sse(vec![
+            responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+            responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 650),
+        ])],
+    )
+    .await;
+
+    let compact_requests = StdArc::new(StdMutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .respond_with(PrefixRaceCompactResponder {
+            requests: StdArc::clone(&compact_requests),
+        })
+        .mount(harness.server())
+        .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "FIRST_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_requests
+            .lock()
+            .expect("request lock poisoned")
+            .len(),
+        0
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefix_compact_uses_configured_threshold_percent() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(1_000);
+                config.model_auto_compact_token_limit = Some(800);
+                config.prefix_compaction.threshold_percent = Some(90);
+                enable_prefix_compaction(config);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 650),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "SECOND_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-2", /*total_tokens*/ 750),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_requests = StdArc::new(StdMutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .respond_with(PrefixRaceCompactResponder {
+            requests: StdArc::clone(&compact_requests),
+        })
+        .mount(harness.server())
+        .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "FIRST_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(
+        compact_requests
+            .lock()
+            .expect("request lock poisoned")
+            .len(),
+        0
+    );
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "SECOND_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_json_request_count(&compact_requests, /*count*/ 1).await;
+
+    let compact_requests = compact_requests
+        .lock()
+        .expect("request lock poisoned")
+        .clone();
+    assert_eq!(compact_requests.len(), 1);
+    assert_eq!(compact_requests[0]["prefix_mode"], json!(true));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(1_000);
+                config.model_auto_compact_token_limit = Some(800);
+                enable_prefix_compaction(config);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 650),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "SECOND_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-2", /*total_tokens*/ 850),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m3", "THIRD_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-3", /*total_tokens*/ 200),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        json!({ "output": compacted_summary_only_output("PREFIX_READY_SUMMARY") }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "FIRST_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_response_requests(&compact_mock, /*count*/ 1).await;
+    assert_eq!(
+        compact_mock.single_request().body_json()["prefix_mode"],
+        json!(true)
+    );
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "SECOND_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "THIRD_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "ready prefix compact should replace the foreground compact request"
+    );
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let third_request_body = requests[2].body_json().to_string();
+    assert!(third_request_body.contains("PREFIX_READY_SUMMARY"));
+    assert!(!third_request_body.contains("FIRST_REMOTE_USER"));
+    assert!(third_request_body.contains("SECOND_REMOTE_USER"));
+    assert!(third_request_body.contains("THIRD_REMOTE_USER"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn running_prefix_compact_is_abandoned_when_auto_compact_fires() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(1_000);
+                config.model_auto_compact_token_limit = Some(800);
+                enable_prefix_compaction(config);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 650),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "SECOND_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-2", /*total_tokens*/ 850),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m3", "THIRD_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-3", /*total_tokens*/ 200),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_requests = StdArc::new(StdMutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .respond_with(PrefixRaceCompactResponder {
+            requests: StdArc::clone(&compact_requests),
+        })
+        .up_to_n_times(2)
+        .expect(2)
+        .mount(harness.server())
+        .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "FIRST_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_json_request_count(&compact_requests, /*count*/ 1).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "SECOND_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "THIRD_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_requests = compact_requests
+        .lock()
+        .expect("request lock poisoned")
+        .clone();
+    assert_eq!(compact_requests.len(), 2);
+    assert_eq!(compact_requests[0]["prefix_mode"], json!(true));
+    assert!(compact_requests[1].get("prefix_mode").is_none());
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let third_request_body = requests[2].body_json().to_string();
+    assert!(third_request_body.contains("NORMAL_FALLBACK_SUMMARY"));
+    assert!(!third_request_body.contains("PREFIX_STALE_SUMMARY"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn running_prefix_compact_started_on_follow_up_boundary_is_abandoned_when_auto_compact_fires()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(1_000);
+                config.model_auto_compact_token_limit = Some(800);
+                enable_prefix_compaction(config);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_function_call("call-prefix-mid-turn-1", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 650),
+            ]),
+            sse(vec![
+                responses::ev_function_call("call-prefix-mid-turn-2", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("resp-2", /*total_tokens*/ 850),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m3", "THIRD_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-3", /*total_tokens*/ 200),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_requests = StdArc::new(StdMutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .respond_with(PrefixRaceCompactResponder {
+            requests: StdArc::clone(&compact_requests),
+        })
+        .up_to_n_times(2)
+        .expect(2)
+        .mount(harness.server())
+        .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "FIRST_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_requests = compact_requests
+        .lock()
+        .expect("request lock poisoned")
+        .clone();
+    assert_eq!(compact_requests.len(), 2);
+    assert_eq!(compact_requests[0]["prefix_mode"], json!(true));
+    assert!(compact_requests[1].get("prefix_mode").is_none());
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let third_request_body = requests[2].body_json().to_string();
+    assert!(third_request_body.contains("NORMAL_FALLBACK_SUMMARY"));
+    assert!(!third_request_body.contains("PREFIX_STALE_SUMMARY"));
 
     Ok(())
 }

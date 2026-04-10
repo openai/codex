@@ -3763,6 +3763,16 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Deprecated: Use `ContextCompaction` item type instead.",
       "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextCompactionKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         },
@@ -3776,6 +3786,13 @@
       ],
       "title": "ContextCompactedNotification",
       "type": "object"
+    },
+    "ContextCompactionKind": {
+      "enum": [
+        "classic",
+        "prefix"
+      ],
+      "type": "string"
     },
     "CreditsSnapshot": {
       "properties": {
@@ -11403,6 +11420,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ContextCompactionKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "enum": [

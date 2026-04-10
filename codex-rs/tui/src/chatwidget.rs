@@ -2213,15 +2213,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message));
-    }
-
-    fn on_context_compacted(&mut self) {
+    fn on_context_compacted(&mut self, prefix_compacted: bool) {
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
+        let message = if prefix_compacted {
+            "Context prefix compacted"
+        } else {
+            "Context compacted"
+        };
         self.add_to_history(history_cell::new_info_event(
-            "Context compacted".to_owned(),
+            message.to_owned(),
             /*hint*/ None,
         ));
         self.request_redraw();
@@ -6354,8 +6355,13 @@ impl ChatWidget {
             ThreadItem::ExitedReviewMode { .. } => {
                 self.exit_review_mode_after_item();
             }
-            ThreadItem::ContextCompaction { .. } => {
-                self.on_agent_message("Context compacted".to_owned());
+            ThreadItem::ContextCompaction { kind, .. } => {
+                if from_replay {
+                    self.on_context_compacted(matches!(
+                        kind,
+                        Some(codex_app_server_protocol::ContextCompactionKind::Prefix)
+                    ));
+                }
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -6688,7 +6694,12 @@ impl ChatWidget {
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
-            ServerNotification::ContextCompacted(_) => self.on_context_compacted(),
+            ServerNotification::ContextCompacted(notification) => {
+                self.on_context_compacted(matches!(
+                    notification.kind,
+                    Some(codex_app_server_protocol::ContextCompactionKind::Prefix)
+                ))
+            }
         }
     }
 
@@ -7016,7 +7027,7 @@ impl ChatWidget {
                 // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
                 // including thread-snapshot replay, and forward
                 // ItemCompleted(TurnItem::AgentMessage(_)) instead.
-                self.on_agent_message(message)
+                self.finalize_completed_assistant_message(Some(&message))
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 if !message.is_empty() {
@@ -7163,7 +7174,10 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_context_compacted(),
+            EventMsg::ContextCompacted(event) => self.on_context_compacted(matches!(
+                event.kind,
+                Some(codex_protocol::protocol::ContextCompactionKind::Prefix)
+            )),
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,

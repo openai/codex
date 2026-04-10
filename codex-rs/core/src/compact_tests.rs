@@ -1,4 +1,7 @@
 use super::*;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
+use codex_model_provider_info::create_oss_provider_with_base_url;
 use pretty_assertions::assert_eq;
 
 async fn process_compacted_history_with_test_session(
@@ -18,6 +21,29 @@ async fn process_compacted_history_with_test_session(
     )
     .await;
     (refreshed, initial_context)
+}
+
+#[test]
+fn remote_compact_task_supports_openai_provider() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+
+    assert!(should_use_remote_compact_task(&provider));
+}
+
+#[test]
+fn remote_compact_task_supports_local_codex_backend_provider() {
+    let provider =
+        create_oss_provider_with_base_url("http://localhost:8061/api/codex", WireApi::Responses);
+
+    assert!(should_use_remote_compact_task(&provider));
+}
+
+#[test]
+fn remote_compact_task_ignores_generic_openai_compatible_provider() {
+    let provider =
+        create_oss_provider_with_base_url("http://localhost:8082/v1", WireApi::Responses);
+
+    assert!(!should_use_remote_compact_task(&provider));
 }
 
 #[test]

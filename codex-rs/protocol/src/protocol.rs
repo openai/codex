@@ -2029,8 +2029,38 @@ pub struct ModelRerouteEvent {
     pub reason: ModelRerouteReason,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ContextCompactionKind {
+    #[default]
+    Classic,
+    Prefix,
+}
+
+impl ContextCompactionKind {
+    pub fn is_classic(&self) -> bool {
+        matches!(self, Self::Classic)
+    }
+
+    pub fn default_classic_option() -> Option<Self> {
+        Some(Self::Classic)
+    }
+
+    pub fn is_classic_option(kind: &Option<Self>) -> bool {
+        kind.as_ref().is_none_or(Self::is_classic)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ContextCompactedEvent;
+pub struct ContextCompactedEvent {
+    #[serde(
+        default = "ContextCompactionKind::default_classic_option",
+        skip_serializing_if = "ContextCompactionKind::is_classic_option"
+    )]
+    #[ts(optional)]
+    pub kind: Option<ContextCompactionKind>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
@@ -3837,6 +3867,26 @@ mod tests {
             .get_writable_roots_with_cwd(cwd)
             .iter()
             .any(|root| root.is_path_writable(path))
+    }
+
+    #[test]
+    fn context_compacted_event_defaults_to_classic_kind() {
+        let event: ContextCompactedEvent =
+            serde_json::from_value(json!({})).expect("event should deserialize");
+        assert_eq!(event.kind, Some(ContextCompactionKind::Classic));
+
+        let serialized = serde_json::to_value(&event).expect("event should serialize");
+        assert_eq!(serialized, json!({}));
+    }
+
+    #[test]
+    fn context_compacted_event_serializes_prefix_kind() {
+        let event = ContextCompactedEvent {
+            kind: Some(ContextCompactionKind::Prefix),
+        };
+
+        let serialized = serde_json::to_value(&event).expect("event should serialize");
+        assert_eq!(serialized, json!({ "kind": "prefix" }));
     }
 
     #[test]
