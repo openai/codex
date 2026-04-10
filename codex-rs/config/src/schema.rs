@@ -25,6 +25,15 @@ pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
         if feature.id == codex_features::Feature::Artifact {
             continue;
         }
+        if feature.id == codex_features::Feature::MultiAgentV2 {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::MultiAgentV2ConfigToml,
+                >>(),
+            );
+            continue;
+        }
         validation
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());

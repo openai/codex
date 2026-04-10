@@ -51,7 +51,7 @@ fn shell_env() -> HashMap<String, String> {
 fn test_exec_request(
     turn: &TurnContext,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     env: HashMap<String, String>,
 ) -> ExecRequest {
     let windows_sandbox_private_desktop = false;
@@ -87,7 +87,9 @@ async fn exec_command_with_tty(
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    let cwd = workdir.unwrap_or_else(|| turn.cwd.clone().to_path_buf());
+    let cwd = workdir
+        .as_ref()
+        .map_or_else(|| turn.cwd.clone(), |workdir| turn.cwd.join(workdir));
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
 
@@ -502,7 +504,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-lc".to_string(), "exit 17".to_string()],
-        PathBuf::from("/tmp"),
+        turn.cwd.clone(),
         shell_env(),
     );
 
@@ -544,7 +546,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-i".to_string()],
-        PathBuf::from("/tmp"),
+        remote_test_env.cwd().clone(),
         shell_env(),
     );
 
@@ -598,7 +600,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-lc".to_string(), "echo ok".to_string()],
-        PathBuf::from("/tmp"),
+        turn.cwd.clone(),
         shell_env(),
     );
 

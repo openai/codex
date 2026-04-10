@@ -283,6 +283,7 @@ impl AgentControl {
                     .analytics_events_client,
                 client_metadata,
                 new_thread.thread_id,
+                /*parent_thread_id*/ None,
                 thread_config,
                 subagent_source.clone(),
             );
@@ -361,7 +362,7 @@ impl AgentControl {
                 .session
                 .ensure_rollout_materialized()
                 .await;
-            parent_thread.codex.session.flush_rollout().await;
+            parent_thread.codex.session.flush_rollout().await?;
         }
 
         let rollout_path = parent_thread
@@ -662,7 +663,7 @@ impl AgentControl {
         let state = self.upgrade()?;
         let result = if let Ok(thread) = state.get_thread(agent_id).await {
             thread.codex.session.ensure_rollout_materialized().await;
-            thread.codex.session.flush_rollout().await;
+            thread.codex.session.flush_rollout().await?;
             if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
                 Ok(String::new())
             } else {
@@ -728,6 +729,15 @@ impl AgentControl {
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         self.state.agent_metadata_for_thread(agent_id)
+    }
+
+    pub(crate) async fn list_live_agent_subtree_thread_ids(
+        &self,
+        agent_id: ThreadId,
+    ) -> CodexResult<Vec<ThreadId>> {
+        let mut thread_ids = vec![agent_id];
+        thread_ids.extend(self.live_thread_spawn_descendants(agent_id).await?);
+        Ok(thread_ids)
     }
 
     pub(crate) async fn get_agent_config_snapshot(

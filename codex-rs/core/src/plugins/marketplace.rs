@@ -310,20 +310,18 @@ fn discover_marketplace_paths_from_roots(
     for root in additional_roots {
         // Curated marketplaces can now come from an HTTP-downloaded directory that is not a git
         // checkout, so check the root directly before falling back to repo-root discovery.
-        if let Ok(path) = root.join(MARKETPLACE_RELATIVE_PATH)
-            && path.as_path().is_file()
-            && !paths.contains(&path)
-        {
+        let path = root.join(MARKETPLACE_RELATIVE_PATH);
+        if path.as_path().is_file() && !paths.contains(&path) {
             paths.push(path);
             continue;
         }
         if let Some(repo_root) = get_git_repo_root(root.as_path())
             && let Ok(repo_root) = AbsolutePathBuf::try_from(repo_root)
-            && let Ok(path) = repo_root.join(MARKETPLACE_RELATIVE_PATH)
-            && path.as_path().is_file()
-            && !paths.contains(&path)
         {
-            paths.push(path);
+            let path = repo_root.join(MARKETPLACE_RELATIVE_PATH);
+            if path.as_path().is_file() && !paths.contains(&path) {
+                paths.push(path);
+            }
         }
     }
 
@@ -381,12 +379,7 @@ fn resolve_plugin_source_path(
 
             // `marketplace.json` lives under `<root>/.agents/plugins/`, but local plugin paths
             // are resolved relative to `<root>`, not relative to the `plugins/` directory.
-            marketplace_root_dir(marketplace_path)?
-                .join(relative_source_path)
-                .map_err(|err| MarketplaceError::InvalidMarketplaceFile {
-                    path: marketplace_path.to_path_buf(),
-                    message: format!("plugin source path must resolve to an absolute path: {err}"),
-                })
+            Ok(marketplace_root_dir(marketplace_path)?.join(relative_source_path))
         }
     }
 }

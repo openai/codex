@@ -55,12 +55,9 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 "msg-guardian",
                 &serde_json::json!({
                     "risk_level": "low",
-                    "risk_score": 5,
+                    "user_authorization": "high",
+                    "outcome": "allow",
                     "rationale": "The request only widens permissions for a benign local echo command.",
-                    "evidence": [{
-                        "message": "The planned command is an `echo hi` smoke test.",
-                        "why": "This is low-risk and does not attempt destructive or exfiltrating behavior.",
-                    }],
                 })
                 .to_string(),
             ),
@@ -125,7 +122,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         expiration: expiration_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
@@ -439,6 +436,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
+        analytics_events_client: None,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         skills_manager,

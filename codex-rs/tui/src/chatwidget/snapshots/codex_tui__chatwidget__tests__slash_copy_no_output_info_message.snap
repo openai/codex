@@ -1,5 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 145
 expression: rendered
 ---
-• `/copy` is unavailable before the first Codex output or right after a rollback.
+■ No agent response to copy

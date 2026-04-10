@@ -9,8 +9,8 @@ use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
 use codex_core::find_archived_thread_path_by_id_str;
+use codex_core::find_thread_meta_by_name_str;
 use codex_core::find_thread_path_by_id_str;
-use codex_core::find_thread_path_by_name_str;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::SessionSource;
@@ -173,7 +173,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             thread_id,
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -197,9 +197,10 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
         ),
     )?;
 
-    let found = find_thread_path_by_name_str(home.path(), thread_name).await?;
+    let found = find_thread_meta_by_name_str(home.path(), thread_name).await?;
 
-    let path = found.expect("expected rollout path to be found");
+    let (path, session_meta) = found.expect("expected rollout path to be found");
+    assert_eq!(session_meta.meta.id, thread_id);
     assert!(path.exists());
     let contents = std::fs::read_to_string(&path)?;
     assert!(contents.contains(&thread_id.to_string()));

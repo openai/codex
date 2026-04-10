@@ -251,6 +251,7 @@ fn build_test_processor(
         session_source: SessionSource::VSCode,
         auth_manager,
         rpc_transport: AppServerRpcTransport::Stdio,
+        remote_control_handle: None,
     });
     (processor, outgoing_rx)
 }
@@ -605,6 +606,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                         text: "hello".to_string(),
                         text_elements: Vec::new(),
                     }],
+                    responsesapi_client_metadata: None,
                     cwd: None,
                     approval_policy: None,
                     sandbox_policy: None,

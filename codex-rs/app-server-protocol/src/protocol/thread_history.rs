@@ -520,6 +520,7 @@ impl ThreadHistoryBuilder {
                 Some(McpToolCallResult {
                     content: value.content.clone(),
                     structured_content: value.structured_content.clone(),
+                    meta: value.meta.clone(),
                 }),
                 None,
             ),
@@ -1167,6 +1168,7 @@ mod tests {
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::items::build_hook_prompt_message;
+    use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
@@ -1862,6 +1864,67 @@ mod tests {
     }
 
     #[test]
+    fn reconstructs_mcp_tool_result_meta_from_persisted_completion_events() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+                call_id: "mcp-1".into(),
+                invocation: McpInvocation {
+                    server: "docs".into(),
+                    tool: "lookup".into(),
+                    arguments: Some(serde_json::json!({"id":"123"})),
+                },
+                duration: Duration::from_millis(8),
+                result: Ok(CallToolResult {
+                    content: vec![serde_json::json!({
+                        "type": "text",
+                        "text": "result"
+                    })],
+                    structured_content: Some(serde_json::json!({"id":"123"})),
+                    is_error: Some(false),
+                    meta: Some(serde_json::json!({
+                        "ui/resourceUri": "ui://widget/lookup.html"
+                    })),
+                }),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::McpToolCall {
+                id: "mcp-1".into(),
+                server: "docs".into(),
+                tool: "lookup".into(),
+                status: McpToolCallStatus::Completed,
+                arguments: serde_json::json!({"id":"123"}),
+                result: Some(McpToolCallResult {
+                    content: vec![serde_json::json!({
+                        "type": "text",
+                        "text": "result"
+                    })],
+                    structured_content: Some(serde_json::json!({"id":"123"})),
+                    meta: Some(serde_json::json!({
+                        "ui/resourceUri": "ui://widget/lookup.html"
+                    })),
+                }),
+                error: None,
+                duration_ms: Some(8),
+            }
+        );
+    }
+
+    #[test]
     fn reconstructs_dynamic_tool_items_from_request_and_response_events() {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
@@ -2025,12 +2088,14 @@ mod tests {
                 local_images: Vec::new(),
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: "guardian-exec".into(),
+                id: "review-guardian-exec".into(),
+                target_item_id: Some("guardian-exec".into()),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "command",
                     "source": "shell",
@@ -2040,12 +2105,16 @@ mod tests {
                 .expect("guardian action"),
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: "guardian-exec".into(),
+                id: "review-guardian-exec".into(),
+                target_item_id: Some("guardian-exec".into()),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::Denied,
-                risk_score: Some(97),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("Would delete user data.".into()),
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: serde_json::from_value(serde_json::json!({
                     "type": "command",
                     "source": "shell",
@@ -2098,12 +2167,14 @@ mod tests {
                 local_images: Vec::new(),
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: "guardian-execve".into(),
+                id: "review-guardian-execve".into(),
+                target_item_id: Some("guardian-execve".into()),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "execve",
                     "source": "shell",

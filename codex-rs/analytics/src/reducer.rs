@@ -2,6 +2,7 @@ use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
 use crate::events::CodexAppUsedEventRequest;
+use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
@@ -12,14 +13,18 @@ use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
+use crate::events::codex_compaction_event_params;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
 use crate::events::plugin_state_event_type;
+use crate::events::subagent_parent_thread_id;
+use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexCompactionEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
@@ -40,11 +45,42 @@ use std::path::Path;
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
     connections: HashMap<u64, ConnectionState>,
+    thread_connections: HashMap<String, u64>,
+    thread_metadata: HashMap<String, ThreadMetadataState>,
 }
 
 struct ConnectionState {
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
+}
+
+#[derive(Clone)]
+struct ThreadMetadataState {
+    thread_source: Option<&'static str>,
+    subagent_source: Option<String>,
+    parent_thread_id: Option<String>,
+}
+
+impl ThreadMetadataState {
+    fn from_session_source(session_source: &SessionSource) -> Self {
+        let (subagent_source, parent_thread_id) = match session_source {
+            SessionSource::SubAgent(subagent_source) => (
+                Some(subagent_source_name(subagent_source)),
+                subagent_parent_thread_id(subagent_source),
+            ),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::Unknown => (None, None),
+        };
+        Self {
+            thread_source: thread_source_name(session_source),
+            subagent_source,
+            parent_thread_id,
+        }
+    }
 }
 
 impl AnalyticsReducer {
@@ -80,6 +116,9 @@ impl AnalyticsReducer {
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
+                }
+                CustomAnalyticsFact::Compaction(input) => {
+                    self.ingest_compaction(*input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -254,26 +293,73 @@ impl AnalyticsReducer {
             _ => return,
         };
         let thread_source: SessionSource = thread.source.into();
+        let thread_id = thread.id;
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
+        let thread_metadata = ThreadMetadataState::from_session_source(&thread_source);
+        self.thread_connections
+            .insert(thread_id.clone(), connection_id);
+        self.thread_metadata
+            .insert(thread_id.clone(), thread_metadata.clone());
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
                 event_params: ThreadInitializedEventParams {
-                    thread_id: thread.id,
+                    thread_id,
                     app_server_client: connection_state.app_server_client.clone(),
                     runtime: connection_state.runtime.clone(),
                     model,
                     ephemeral: thread.ephemeral,
-                    thread_source: thread_source_name(&thread_source),
+                    thread_source: thread_metadata.thread_source,
                     initialization_mode,
-                    subagent_source: None,
-                    parent_thread_id: None,
+                    subagent_source: thread_metadata.subagent_source,
+                    parent_thread_id: thread_metadata.parent_thread_id,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },
         ));
+    }
+
+    fn ingest_compaction(&mut self, input: CodexCompactionEvent, out: &mut Vec<TrackEventRequest>) {
+        let Some(connection_id) = self.thread_connections.get(&input.thread_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping compaction analytics event: missing thread connection metadata"
+            );
+            return;
+        };
+        let Some(connection_state) = self.connections.get(connection_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                connection_id,
+                "dropping compaction analytics event: missing connection metadata"
+            );
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(&input.thread_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping compaction analytics event: missing thread lifecycle metadata"
+            );
+            return;
+        };
+        out.push(TrackEventRequest::Compaction(Box::new(
+            CodexCompactionEventRequest {
+                event_type: "codex_compaction_event",
+                event_params: codex_compaction_event_params(
+                    input,
+                    connection_state.app_server_client.clone(),
+                    connection_state.runtime.clone(),
+                    thread_metadata.thread_source,
+                    thread_metadata.subagent_source.clone(),
+                    thread_metadata.parent_thread_id.clone(),
+                ),
+            },
+        )));
     }
 }
 

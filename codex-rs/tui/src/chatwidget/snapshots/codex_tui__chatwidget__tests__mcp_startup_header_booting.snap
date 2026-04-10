@@ -1,6 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
-expression: terminal.backend()
+source: tui/src/chatwidget/tests/mcp_startup.rs
+expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
 "• Booting MCP server: alpha (0s • esc to interrupt)                             "
@@ -8,4 +8,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.3-codex default · 100% left · /tmp/project                              "
+"  gpt-5.3-codex default · /tmp/project                                          "

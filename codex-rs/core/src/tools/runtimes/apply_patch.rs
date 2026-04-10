@@ -1,13 +1,13 @@
 //! Apply Patch runtime: executes verified patches under the orchestrator.
 //!
 //! Assumes `apply_patch` verification/approval happened upstream. Reuses that
-//! decision to avoid re-prompting, builds the self-invocation command for
-//! `codex --codex-run-as-apply-patch`, and runs under the current
-//! `SandboxAttempt` with a minimal environment.
+//! decision to avoid re-prompting, applies through the remote filesystem when
+//! the turn uses a remote environment, or builds the self-invocation command
+//! for `codex --codex-run-as-apply-patch` and runs it under the current
+//! `SandboxAttempt` with a minimal environment for local turns.
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
@@ -22,6 +22,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -32,6 +33,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -58,7 +60,7 @@ impl ApplyPatchRuntime {
     ) -> GuardianApprovalRequest {
         GuardianApprovalRequest::ApplyPatch {
             id: call_id.to_string(),
-            cwd: req.action.cwd.clone(),
+            cwd: req.action.cwd.to_path_buf(),
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         }
@@ -144,13 +146,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let retry_reason = ctx.retry_reason.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
+        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if req.permissions_preapproved && retry_reason.is_none() {
                 return ReviewDecision::Approved;
             }
-            if routes_approval_to_guardian(turn) {
+            if let Some(review_id) = guardian_review_id {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                return review_approval_request(session, turn, action, retry_reason).await;
+                return review_approval_request(session, turn, review_id, action, retry_reason)
+                    .await;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -211,6 +215,32 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
+        if let Some(environment) = ctx.turn.environment.as_ref().filter(|env| env.is_remote()) {
+            let started_at = Instant::now();
+            let fs = environment.get_filesystem();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = codex_apply_patch::apply_patch(
+                &req.action.patch,
+                &req.action.cwd,
+                &mut stdout,
+                &mut stderr,
+                fs.as_ref(),
+            )
+            .await;
+            let stdout = String::from_utf8_lossy(&stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&stderr).into_owned();
+            let exit_code = if result.is_ok() { 0 } else { 1 };
+            return Ok(ExecToolCallOutput {
+                exit_code,
+                stdout: StreamOutput::new(stdout.clone()),
+                stderr: StreamOutput::new(stderr.clone()),
+                aggregated_output: StreamOutput::new(format!("{stdout}{stderr}")),
+                duration: started_at.elapsed(),
+                timed_out: false,
+            });
+        }
+
         #[cfg(target_os = "windows")]
         let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
         #[cfg(not(target_os = "windows"))]

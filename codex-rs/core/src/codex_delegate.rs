@@ -39,6 +39,7 @@ use crate::codex::TurnContext;
 use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
@@ -77,6 +78,7 @@ pub(crate) async fn run_codex_thread_interactive(
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
+        analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::from_environment(
             parent_ctx.environment.as_deref(),
@@ -104,6 +106,7 @@ pub(crate) async fn run_codex_thread_interactive(
             &parent_session.services.analytics_events_client,
             client_metadata,
             codex.session.conversation_id,
+            Some(parent_session.conversation_id),
             thread_config,
             subagent_source,
         );
@@ -185,6 +188,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     io.submit(Op::UserInput {
         items: input,
         final_output_json_schema,
+        responsesapi_client_metadata: None,
     })
     .await?;
 
@@ -456,6 +460,7 @@ async fn handle_exec_approval(
         let review_rx = spawn_guardian_review(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
+            new_guardian_review_id(),
             GuardianApprovalRequest::Shell {
                 id: call_id.clone(),
                 command,
@@ -528,64 +533,61 @@ async fn handle_patch_approval(
     } = event;
     let approval_id = call_id.clone();
     let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
-        let maybe_files = changes
+        let files = changes
             .keys()
-            .map(|path| parent_ctx.cwd.join(path).ok())
-            .collect::<Option<Vec<_>>>();
-        if let Some(files) = maybe_files {
-            let review_cancel = cancel_token.child_token();
-            let patch = changes
-                .iter()
-                .map(|(path, change)| match change {
-                    codex_protocol::protocol::FileChange::Add { content } => {
-                        format!("*** Add File: {}\n{}", path.display(), content)
+            .map(|path| parent_ctx.cwd.join(path))
+            .collect::<Vec<_>>();
+        let review_cancel = cancel_token.child_token();
+        let patch = changes
+            .iter()
+            .map(|(path, change)| match change {
+                codex_protocol::protocol::FileChange::Add { content } => {
+                    format!("*** Add File: {}\n{}", path.display(), content)
+                }
+                codex_protocol::protocol::FileChange::Delete { content } => {
+                    format!("*** Delete File: {}\n{}", path.display(), content)
+                }
+                codex_protocol::protocol::FileChange::Update {
+                    unified_diff,
+                    move_path,
+                } => {
+                    if let Some(move_path) = move_path {
+                        format!(
+                            "*** Update File: {}\n*** Move to: {}\n{}",
+                            path.display(),
+                            move_path.display(),
+                            unified_diff
+                        )
+                    } else {
+                        format!("*** Update File: {}\n{}", path.display(), unified_diff)
                     }
-                    codex_protocol::protocol::FileChange::Delete { content } => {
-                        format!("*** Delete File: {}\n{}", path.display(), content)
-                    }
-                    codex_protocol::protocol::FileChange::Update {
-                        unified_diff,
-                        move_path,
-                    } => {
-                        if let Some(move_path) = move_path {
-                            format!(
-                                "*** Update File: {}\n*** Move to: {}\n{}",
-                                path.display(),
-                                move_path.display(),
-                                unified_diff
-                            )
-                        } else {
-                            format!("*** Update File: {}\n{}", path.display(), unified_diff)
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let review_rx = spawn_guardian_review(
-                Arc::clone(parent_session),
-                Arc::clone(parent_ctx),
-                GuardianApprovalRequest::ApplyPatch {
-                    id: approval_id.clone(),
-                    cwd: parent_ctx.cwd.to_path_buf(),
-                    files,
-                    patch,
-                },
-                reason.clone(),
-                review_cancel.clone(),
-            );
-            Some(
-                await_approval_with_cancel(
-                    async move { review_rx.await.unwrap_or_default() },
-                    parent_session,
-                    &approval_id,
-                    cancel_token,
-                    Some(&review_cancel),
-                )
-                .await,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let review_rx = spawn_guardian_review(
+            Arc::clone(parent_session),
+            Arc::clone(parent_ctx),
+            new_guardian_review_id(),
+            GuardianApprovalRequest::ApplyPatch {
+                id: approval_id.clone(),
+                cwd: parent_ctx.cwd.to_path_buf(),
+                files,
+                patch,
+            },
+            reason.clone(),
+            review_cancel.clone(),
+        );
+        Some(
+            await_approval_with_cancel(
+                async move { review_rx.await.unwrap_or_default() },
+                parent_session,
+                &approval_id,
+                cancel_token,
+                Some(&review_cancel),
             )
-        } else {
-            None
-        }
+            .await,
+        )
     } else {
         None
     };
@@ -687,6 +689,7 @@ async fn maybe_auto_review_mcp_request_user_input(
     let review_rx = spawn_guardian_review(
         Arc::clone(parent_session),
         Arc::clone(parent_ctx),
+        new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
         review_cancel.clone(),
@@ -730,6 +733,7 @@ async fn maybe_auto_review_mcp_request_user_input(
 fn spawn_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
@@ -746,6 +750,7 @@ fn spawn_guardian_review(
         let decision = runtime.block_on(review_approval_request_with_cancel(
             &session,
             &turn,
+            review_id,
             request,
             retry_reason,
             cancel_token,

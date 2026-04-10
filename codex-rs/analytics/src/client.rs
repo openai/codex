@@ -178,6 +178,12 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_compaction(&self, event: crate::facts::CodexCompactionEvent) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
+            Box::new(event),
+        )));
+    }
+
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {

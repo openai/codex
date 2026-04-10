@@ -111,7 +111,8 @@ struct WebsocketState {
 }
 
 pub(crate) struct RemoteControlWebsocket {
-    remote_control_target: RemoteControlTarget,
+    remote_control_url: String,
+    remote_control_target: Option<RemoteControlTarget>,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
     shutdown_token: CancellationToken,
@@ -122,15 +123,24 @@ pub(crate) struct RemoteControlWebsocket {
     state: Arc<Mutex<WebsocketState>>,
     server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
     used_rx: watch::Receiver<usize>,
+    enabled_rx: watch::Receiver<bool>,
+}
+
+enum ConnectOutcome {
+    Connected(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
+    Disabled,
+    Shutdown,
 }
 
 impl RemoteControlWebsocket {
     pub(crate) fn new(
-        remote_control_target: RemoteControlTarget,
+        remote_control_url: String,
+        remote_control_target: Option<RemoteControlTarget>,
         state_db: Option<Arc<StateRuntime>>,
         auth_manager: Arc<AuthManager>,
         transport_event_tx: mpsc::Sender<TransportEvent>,
         shutdown_token: CancellationToken,
+        enabled_rx: watch::Receiver<bool>,
     ) -> Self {
         let shutdown_token = shutdown_token.child_token();
         let (server_event_tx, server_event_rx) = mpsc::channel(super::CHANNEL_CAPACITY);
@@ -140,6 +150,7 @@ impl RemoteControlWebsocket {
         let auth_recovery = auth_manager.unauthorized_recovery();
 
         Self {
+            remote_control_url,
             remote_control_target,
             state_db,
             auth_manager,
@@ -155,6 +166,7 @@ impl RemoteControlWebsocket {
             })),
             server_event_rx: Arc::new(Mutex::new(server_event_rx)),
             used_rx,
+            enabled_rx,
         }
     }
 
@@ -174,13 +186,18 @@ impl RemoteControlWebsocket {
         };
 
         loop {
+            if !self.wait_until_enabled().await {
+                break;
+            }
+
             let shutdown_token = self.shutdown_token.child_token();
             let websocket_connection = match self
                 .connect(&shutdown_token, app_server_client_name.as_deref())
                 .await
             {
-                Some(websocket_connection) => websocket_connection,
-                None => break,
+                ConnectOutcome::Connected(websocket_connection) => *websocket_connection,
+                ConnectOutcome::Disabled => continue,
+                ConnectOutcome::Shutdown => break,
             };
 
             self.run_connection(websocket_connection, shutdown_token)
@@ -208,50 +225,93 @@ impl RemoteControlWebsocket {
         }
     }
 
+    async fn wait_until_enabled(&mut self) -> bool {
+        tokio::select! {
+            _ = self.shutdown_token.cancelled() => false,
+            enabled = self.enabled_rx.wait_for(|enabled| *enabled) => enabled.is_ok(),
+        }
+    }
+
     async fn connect(
         &mut self,
         shutdown_token: &CancellationToken,
         app_server_client_name: Option<&str>,
-    ) -> Option<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+    ) -> ConnectOutcome {
+        let remote_control_target = match self.remote_control_target.as_ref() {
+            Some(remote_control_target) => remote_control_target.clone(),
+            None => match super::protocol::normalize_remote_control_url(&self.remote_control_url) {
+                Ok(remote_control_target) => {
+                    self.remote_control_target = Some(remote_control_target.clone());
+                    remote_control_target
+                }
+                Err(err) => {
+                    warn!("remote control is enabled but the URL is invalid: {err}");
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => return ConnectOutcome::Shutdown,
+                        changed = self.enabled_rx.wait_for(|enabled| !*enabled) => {
+                            if changed.is_err() {
+                                return ConnectOutcome::Shutdown;
+                            }
+                            return ConnectOutcome::Disabled;
+                        }
+                    }
+                }
+            },
+        };
+
         loop {
             let subscribe_cursor = self.state.lock().await.subscribe_cursor.clone();
-            tokio::select! {
-                _ = shutdown_token.cancelled() => return None,
+            let connect_result = tokio::select! {
+                _ = shutdown_token.cancelled() => return ConnectOutcome::Shutdown,
+                changed = self.enabled_rx.wait_for(|enabled| !*enabled) => {
+                    if changed.is_err() {
+                        return ConnectOutcome::Shutdown;
+                    }
+                    return ConnectOutcome::Disabled;
+                }
                 connect_result = connect_remote_control_websocket(
-                    &self.remote_control_target,
+                    &remote_control_target,
                     self.state_db.as_deref(),
                     &self.auth_manager,
                     &mut self.auth_recovery,
                     &mut self.enrollment,
                     subscribe_cursor.as_deref(),
                     app_server_client_name,
-                ) => {
-                    match connect_result {
-                        Ok((websocket_connection, response)) => {
-                            self.reconnect_attempt = 0;
-                            self.auth_recovery = self.auth_manager.unauthorized_recovery();
-                            info!(
-                                "connected to app-server remote control websocket: {}, {}",
-                                self.remote_control_target.websocket_url,
-                                format_headers(response.headers())
-                            );
-                            return Some(websocket_connection);
-                        }
-                        Err(err) => {
-                            let reconnect_delay = if err.kind() == ErrorKind::WouldBlock {
-                                info!("{err}");
-                                REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL
-                            } else {
-                                warn!("{err}");
-                                let reconnect_delay = backoff(self.reconnect_attempt);
-                                self.reconnect_attempt += 1;
-                                reconnect_delay
-                            };
-                            tokio::select! {
-                                _ = shutdown_token.cancelled() => return None,
-                                _ = tokio::time::sleep(reconnect_delay) => {}
+                ) => connect_result,
+            };
+
+            match connect_result {
+                Ok((websocket_connection, response)) => {
+                    self.reconnect_attempt = 0;
+                    self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                    info!(
+                        "connected to app-server remote control websocket: {}, {}",
+                        remote_control_target.websocket_url,
+                        format_headers(response.headers())
+                    );
+                    return ConnectOutcome::Connected(Box::new(websocket_connection));
+                }
+                Err(err) => {
+                    let reconnect_delay = if err.kind() == ErrorKind::WouldBlock {
+                        REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL
+                    } else {
+                        warn!(
+                            "failed to connect to app-server remote control websocket: {}, err: {}",
+                            remote_control_target.websocket_url, err
+                        );
+                        let reconnect_delay = backoff(self.reconnect_attempt);
+                        self.reconnect_attempt += 1;
+                        reconnect_delay
+                    };
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => return ConnectOutcome::Shutdown,
+                        changed = self.enabled_rx.wait_for(|enabled| !*enabled) => {
+                            if changed.is_err() {
+                                return ConnectOutcome::Shutdown;
                             }
+                            return ConnectOutcome::Disabled;
                         }
+                        _ = tokio::time::sleep(reconnect_delay) => {}
                     }
                 }
             }
@@ -282,8 +342,10 @@ impl RemoteControlWebsocket {
             shutdown_token.clone(),
         ));
 
+        let mut enabled_rx = self.enabled_rx.clone();
         tokio::select! {
             _ = shutdown_token.cancelled() => {}
+            _ = enabled_rx.wait_for(|enabled| !*enabled) => shutdown_token.cancel(),
             _ = join_set.join_next() => shutdown_token.cancel(),
         }
 
@@ -869,13 +931,10 @@ mod tests {
     }
 
     fn remote_control_url_for_listener(listener: &TcpListener) -> String {
-        format!(
-            "http://localhost:{}/backend-api/",
-            listener
-                .local_addr()
-                .expect("listener should have a local addr")
-                .port()
-        )
+        let addr = listener
+            .local_addr()
+            .expect("listener should have a local addr");
+        format!("http://{addr}/backend-api/")
     }
 
     fn remote_control_auth_dot_json(access_token: &str) -> AuthDotJson {
@@ -979,14 +1038,6 @@ mod tests {
         let remote_control_url = remote_control_url_for_listener(&listener);
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
-        let server_task = tokio::spawn(async move {
-            let (stream, request_line) = accept_http_request(&listener).await;
-            assert_eq!(
-                request_line,
-                "GET /backend-api/wham/remote/control/server HTTP/1.1"
-            );
-            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
-        });
         let codex_home = TempDir::new().expect("temp dir should create");
         save_auth(
             codex_home.path(),
@@ -1013,6 +1064,15 @@ mod tests {
             AuthCredentialsStoreMode::File,
         )
         .expect("fresh auth should save");
+
+        let server_task = tokio::spawn(async move {
+            let (stream, request_line) = accept_http_request(&listener).await;
+            assert_eq!(
+                request_line,
+                "GET /backend-api/wham/remote/control/server HTTP/1.1"
+            );
+            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
+        });
 
         let err = connect_remote_control_websocket(
             &remote_control_target,
@@ -1124,15 +1184,18 @@ mod tests {
         let (transport_event_tx, transport_event_rx) = mpsc::channel(1);
         drop(transport_event_rx);
         let shutdown_token = CancellationToken::new();
+        let (_enabled_tx, enabled_rx) = watch::channel(true);
         let websocket_task = tokio::spawn({
             let shutdown_token = shutdown_token.clone();
             async move {
                 RemoteControlWebsocket::new(
-                    remote_control_target,
+                    remote_control_url,
+                    Some(remote_control_target),
                     /*state_db*/ None,
                     remote_control_auth_manager(),
                     transport_event_tx,
                     shutdown_token,
+                    enabled_rx,
                 )
                 .run(/*app_server_client_name_rx*/ None)
                 .await

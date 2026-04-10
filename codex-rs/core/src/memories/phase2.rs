@@ -156,6 +156,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
                 &session.services.analytics_events_client,
                 client_metadata,
                 thread_id,
+                /*parent_thread_id*/ None,
                 thread_config,
                 SubAgentSource::MemoryConsolidation,
             );

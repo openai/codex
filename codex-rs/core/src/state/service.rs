@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::RolloutRecorder;
@@ -6,6 +7,7 @@ use crate::agent::AgentControl;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
+use crate::guardian::GuardianRejection;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
@@ -17,7 +19,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_exec_server::Environment;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
-use codex_mcp::mcp_connection_manager::McpConnectionManager;
+use codex_mcp::McpConnectionManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_rollout::state_db::StateDbHandle;
@@ -46,6 +48,7 @@ pub(crate) struct SessionServices {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
+    pub(crate) guardian_rejections: Mutex<HashMap<String, GuardianRejection>>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,

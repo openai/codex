@@ -6,13 +6,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::AuthProvider;
+use codex_api::Compression;
 use codex_api::Provider;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
-use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
+use codex_client::RequestBody;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
@@ -126,7 +127,7 @@ fn provider(name: &str) -> Provider {
         base_url: "https://example.com/v1".to_string(),
         query_params: None,
         headers: HeaderMap::new(),
-        retry: codex_api::provider::RetryConfig {
+        retry: codex_api::RetryConfig {
             max_attempts: 1,
             base_delay: Duration::from_millis(1),
             retry_429: false,
@@ -266,7 +267,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
-        instructions: Some("Say hi".into()),
+        instructions: "Say hi".into(),
         input: Vec::new(),
         tools: Vec::new(),
         tool_choice: "auto".into(),
@@ -278,6 +279,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         service_tier: None,
         prompt_cache_key: None,
         text: None,
+        client_metadata: None,
     };
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
 
@@ -302,7 +304,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
 
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
-        instructions: Some("Say hi".into()),
+        instructions: "Say hi".into(),
         input: vec![ResponseItem::Message {
             id: Some("msg_1".into()),
             role: "user".into(),
@@ -320,6 +322,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
         service_tier: None,
         prompt_cache_key: None,
         text: None,
+        client_metadata: None,
     };
 
     let mut extra_headers = HeaderMap::new();
@@ -361,6 +364,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let input_id = req
         .body
         .as_ref()
+        .and_then(RequestBody::json)
         .and_then(|body| body.get("input"))
         .and_then(|input| input.get(0))
         .and_then(|item| item.get("id"))

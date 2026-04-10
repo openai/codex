@@ -6,8 +6,8 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_otel::metrics::names::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
-use codex_otel::metrics::names::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
+use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
+use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
 use reqwest::Client;
 use serde::Deserialize;
 use tempfile::TempDir;
@@ -451,7 +451,7 @@ fn emit_curated_plugins_startup_sync_counter(
     transport: &'static str,
     status: &'static str,
 ) {
-    let Some(metrics) = codex_otel::metrics::global() else {
+    let Some(metrics) = codex_otel::global() else {
         return;
     };
     let tags = [("transport", transport), ("status", status)];
