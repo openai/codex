@@ -153,8 +153,17 @@ async fn resolve_queue_thread_id(codex_home: &Path, target: &str) -> anyhow::Res
         return Ok(thread_id.to_string());
     }
 
-    let thread_ids = codex_core::find_thread_ids_by_name(codex_home, target).await?;
-    match thread_ids.as_slice() {
+    let mut active_thread_ids = Vec::new();
+    for thread_id in codex_core::find_thread_ids_by_name(codex_home, target).await? {
+        if codex_core::find_thread_path_by_id_str(codex_home, &thread_id.to_string())
+            .await?
+            .is_some()
+        {
+            active_thread_ids.push(thread_id);
+        }
+    }
+
+    match active_thread_ids.as_slice() {
         [] => anyhow::bail!("no thread named `{target}`"),
         [thread_id] => Ok(thread_id.to_string()),
         _ => anyhow::bail!("more than one thread is named `{target}`; use a thread id instead"),
@@ -175,6 +184,20 @@ mod tests {
     use crate::Subcommand;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    fn write_test_rollout(codex_home: &Path, thread_id: ThreadId) {
+        let sessions_dir = codex_home
+            .join("sessions")
+            .join("2026")
+            .join("04")
+            .join("10");
+        std::fs::create_dir_all(&sessions_dir).expect("create sessions dir");
+        std::fs::write(
+            sessions_dir.join(format!("rollout-2026-04-10T12-00-00-{thread_id}.jsonl")),
+            "",
+        )
+        .expect("write rollout");
+    }
 
     #[test]
     fn queue_command_parses_immediate_message() {
@@ -343,6 +366,7 @@ mod tests {
     async fn queue_thread_resolves_thread_name() {
         let temp = TempDir::new().expect("tempdir");
         let thread_id = ThreadId::new();
+        write_test_rollout(temp.path(), thread_id);
         codex_core::append_thread_name(temp.path(), thread_id, "named-thread")
             .await
             .expect("append thread name");
@@ -359,18 +383,7 @@ mod tests {
     async fn queue_thread_id_requires_existing_thread() {
         let temp = TempDir::new().expect("tempdir");
         let thread_id = ThreadId::new();
-        let sessions_dir = temp
-            .path()
-            .join("sessions")
-            .join("2026")
-            .join("04")
-            .join("10");
-        std::fs::create_dir_all(&sessions_dir).expect("create sessions dir");
-        std::fs::write(
-            sessions_dir.join(format!("rollout-2026-04-10T12-00-00-{thread_id}.jsonl")),
-            "",
-        )
-        .expect("write rollout");
+        write_test_rollout(temp.path(), thread_id);
 
         assert_eq!(
             resolve_queue_thread_id(temp.path(), &thread_id.to_string())
@@ -394,6 +407,8 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         let first = ThreadId::new();
         let second = ThreadId::new();
+        write_test_rollout(temp.path(), first);
+        write_test_rollout(temp.path(), second);
         codex_core::append_thread_name(temp.path(), first, "same")
             .await
             .expect("append first name");
@@ -414,6 +429,38 @@ mod tests {
                 .expect_err("ambiguous name should fail")
                 .to_string(),
             "more than one thread is named `same`; use a thread id instead"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_thread_name_ignores_names_without_rollouts() {
+        let temp = TempDir::new().expect("tempdir");
+        let stale = ThreadId::new();
+        let active = ThreadId::new();
+        write_test_rollout(temp.path(), active);
+        codex_core::append_thread_name(temp.path(), stale, "same")
+            .await
+            .expect("append stale name");
+        codex_core::append_thread_name(temp.path(), stale, "stale")
+            .await
+            .expect("append stale-only name");
+        codex_core::append_thread_name(temp.path(), active, "same")
+            .await
+            .expect("append active name");
+
+        assert_eq!(
+            resolve_queue_thread_id(temp.path(), "same")
+                .await
+                .expect("resolve"),
+            active.to_string()
+        );
+
+        assert_eq!(
+            resolve_queue_thread_id(temp.path(), "stale")
+                .await
+                .expect_err("stale name should fail")
+                .to_string(),
+            "no thread named `stale`"
         );
     }
 }
