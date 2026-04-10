@@ -204,6 +204,7 @@ impl Session {
             timer,
             context,
             deleted_one_shot_timer,
+            ..
         }) = self.claim_next_timer_for_delivery().await
         else {
             return false;
@@ -531,7 +532,7 @@ impl Session {
                     "failed to claim timer {} in sqlite: {err}",
                     claimed.timer.id
                 );
-                return true;
+                return false;
             }
         };
         let thread_id = self.thread_id_string();
@@ -548,7 +549,12 @@ impl Session {
                 return false;
             };
             state_db
-                .claim_recurring_thread_timer(&thread_id, &claimed.timer.id, &params)
+                .claim_recurring_thread_timer(
+                    &thread_id,
+                    &claimed.timer.id,
+                    claimed.previous_last_run_at,
+                    &params,
+                )
                 .await
         };
         match result {

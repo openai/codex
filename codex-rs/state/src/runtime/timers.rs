@@ -158,6 +158,7 @@ WHERE thread_id = ?
         &self,
         thread_id: &str,
         id: &str,
+        expected_last_run_at: Option<i64>,
         params: &ThreadTimerUpdateParams,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
@@ -174,6 +175,10 @@ SET trigger_json = ?,
 WHERE thread_id = ?
   AND id = ?
   AND pending_run = 1
+  AND (
+    (last_run_at IS NULL AND ? IS NULL)
+    OR last_run_at = ?
+  )
             "#,
         )
         .bind(params.trigger_json.as_str())
@@ -186,6 +191,8 @@ WHERE thread_id = ?
         .bind(i64::from(params.pending_run))
         .bind(thread_id)
         .bind(id)
+        .bind(expected_last_run_at)
+        .bind(expected_last_run_at)
         .execute(self.pool.as_ref())
         .await?;
         Ok(result.rows_affected() > 0)
@@ -374,13 +381,13 @@ ORDER BY name
 
         assert!(
             runtime
-                .claim_recurring_thread_timer("thread-1", "timer-1", &update)
+                .claim_recurring_thread_timer("thread-1", "timer-1", None, &update)
                 .await
                 .expect("claim recurring timer")
         );
         assert!(
             !runtime
-                .claim_recurring_thread_timer("thread-1", "timer-1", &update)
+                .claim_recurring_thread_timer("thread-1", "timer-1", None, &update)
                 .await
                 .expect("claim recurring timer again")
         );
@@ -396,5 +403,47 @@ ORDER BY name
         assert_eq!(timers[0].next_run_at, Some(120));
         assert_eq!(timers[0].last_run_at, Some(110));
         assert!(!timers[0].pending_run);
+    }
+
+    #[tokio::test]
+    async fn recurring_idle_claim_rejects_stale_last_run_at_even_when_pending_stays_true() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.pending_run = true;
+        params.last_run_at = Some(100);
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create pending timer");
+        let update = ThreadTimerUpdateParams {
+            trigger_json: params.trigger_json.clone(),
+            content: params.content.clone(),
+            instructions: params.instructions.clone(),
+            meta_json: params.meta_json.clone(),
+            delivery: params.delivery.clone(),
+            next_run_at: Some(120),
+            last_run_at: Some(110),
+            pending_run: true,
+        };
+
+        assert!(
+            runtime
+                .claim_recurring_thread_timer("thread-1", "timer-1", Some(100), &update)
+                .await
+                .expect("claim recurring idle timer")
+        );
+        assert!(
+            !runtime
+                .claim_recurring_thread_timer("thread-1", "timer-1", Some(100), &update)
+                .await
+                .expect("claim recurring idle timer again")
+        );
+        let timers = runtime
+            .list_thread_timers("thread-1")
+            .await
+            .expect("list timers");
+        assert_eq!(timers.len(), 1);
+        assert_eq!(timers[0].last_run_at, Some(110));
+        assert!(timers[0].pending_run);
     }
 }
