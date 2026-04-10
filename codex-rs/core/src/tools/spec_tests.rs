@@ -53,6 +53,20 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
     }
 }
 
+fn mcp_tool_info(tool: rmcp::model::Tool) -> ToolInfo {
+    ToolInfo {
+        server_name: "test_server".to_string(),
+        callable_name: tool.name.to_string(),
+        callable_namespace: "mcp__test_server__".to_string(),
+        server_instructions: None,
+        tool,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
+}
+
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
     let slug = name.replace(' ', "-").to_lowercase();
     DiscoverableTool::Connector(Box::new(AppInfo {
@@ -182,7 +196,7 @@ fn multi_agent_v2_spawn_agent_description(tools_config: &ToolsConfig) -> String 
     let (tools, _) = build_specs(
         tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -208,15 +222,14 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
 /// Builds the tool registry builder while collecting tool specs for later serialization.
 fn build_specs(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
-    app_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     build_specs_with_discoverable_tools(
         config,
         mcp_tools,
-        app_tools,
-        /*tool_namespaces*/ None,
+        deferred_mcp_tools,
         /*discoverable_tools*/ None,
         dynamic_tools,
     )
@@ -267,7 +280,7 @@ fn get_memory_requires_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -300,8 +313,7 @@ fn assert_model_tools(
         &tools_config,
         ToolRouterParams {
             mcp_tools: None,
-            tool_namespaces: None,
-            app_tools: None,
+            deferred_mcp_tools: None,
             discoverable_tools: None,
             dynamic_tools: &[],
         },
@@ -562,7 +574,7 @@ fn test_build_specs_default_shell_present() {
     let (tools, _) = build_specs(
         &tools_config,
         Some(HashMap::new()),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -708,8 +720,7 @@ fn tool_suggest_requires_apps_and_plugins_features() {
         let (tools, _) = build_specs_with_discoverable_tools(
             &tools_config,
             /*mcp_tools*/ None,
-            /*app_tools*/ None,
-            /*tool_namespaces*/ None,
+            /*deferred_mcp_tools*/ None,
             discoverable_tools.clone(),
             &[],
         )
@@ -725,7 +736,7 @@ fn tool_suggest_requires_apps_and_plugins_features() {
 }
 
 #[test]
-fn search_tool_description_handles_no_enabled_apps() {
+fn search_tool_description_handles_no_enabled_mcp_tools() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -755,7 +766,7 @@ fn search_tool_description_handles_no_enabled_apps() {
     };
 
     assert!(description.contains("None currently enabled."));
-    assert!(!description.contains("{{app_descriptions}}"));
+    assert!(!description.contains("{{source_descriptions}}"));
 }
 
 #[test]
@@ -783,8 +794,8 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
             "mcp__codex_apps__calendar_create_event".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "_create_event".to_string(),
-                tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                callable_name: "_create_event".to_string(),
+                callable_namespace: "mcp__codex_apps__calendar".to_string(),
                 server_instructions: None,
                 tool: mcp_tool(
                     "calendar_create_event",
@@ -810,7 +821,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
 }
 
 #[test]
-fn search_tool_registers_namespaced_app_tool_aliases() {
+fn search_tool_registers_namespaced_mcp_tool_aliases() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -835,8 +846,8 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 ToolInfo {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "_create_event".to_string(),
-                    tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                    callable_name: "_create_event".to_string(),
+                    callable_namespace: "mcp__codex_apps__calendar".to_string(),
                     server_instructions: None,
                     tool: mcp_tool(
                         "calendar-create-event",
@@ -853,8 +864,8 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                 "mcp__codex_apps__calendar_list_events".to_string(),
                 ToolInfo {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "_list_events".to_string(),
-                    tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                    callable_name: "_list_events".to_string(),
+                    callable_namespace: "mcp__codex_apps__calendar".to_string(),
                     server_instructions: None,
                     tool: mcp_tool(
                         "calendar-list-events",
@@ -867,15 +878,31 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                     plugin_display_names: Vec::new(),
                 },
             ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                ToolInfo {
+                    server_name: "rmcp".to_string(),
+                    callable_name: "echo".to_string(),
+                    callable_namespace: "mcp__rmcp__".to_string(),
+                    server_instructions: None,
+                    tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
+                    connector_id: None,
+                    connector_name: None,
+                    connector_description: None,
+                    plugin_display_names: Vec::new(),
+                },
+            ),
         ])),
         &[],
     )
     .build();
 
-    let alias = tool_handler_key("_create_event", Some("mcp__codex_apps__calendar"));
+    let app_alias = tool_handler_key("_create_event", Some("mcp__codex_apps__calendar"));
+    let mcp_alias = tool_handler_key("echo", Some("mcp__rmcp__"));
 
     assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, /*namespace*/ None));
-    assert!(registry.has_handler(alias.as_str(), /*namespace*/ None));
+    assert!(registry.has_handler(app_alias.as_str(), /*namespace*/ None));
+    assert!(registry.has_handler(mcp_alias.as_str(), /*namespace*/ None));
 }
 
 #[test]
@@ -900,7 +927,7 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
         &tools_config,
         Some(HashMap::from([(
             "dash/search".to_string(),
-            mcp_tool(
+            mcp_tool_info(mcp_tool(
                 "search",
                 "Search docs",
                 serde_json::json!({
@@ -909,9 +936,9 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
                         "query": {"description": "search query"}
                     }
                 }),
-            ),
+            )),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -960,16 +987,16 @@ fn test_mcp_tool_preserves_integer_schema() {
         &tools_config,
         Some(HashMap::from([(
             "dash/paginate".to_string(),
-            mcp_tool(
+            mcp_tool_info(mcp_tool(
                 "paginate",
                 "Pagination",
                 serde_json::json!({
                     "type": "object",
                     "properties": {"page": {"type": "integer"}}
                 }),
-            ),
+            )),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -1019,16 +1046,16 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
         &tools_config,
         Some(HashMap::from([(
             "dash/tags".to_string(),
-            mcp_tool(
+            mcp_tool_info(mcp_tool(
                 "tags",
                 "Tags",
                 serde_json::json!({
                     "type": "object",
                     "properties": {"tags": {"type": "array"}}
                 }),
-            ),
+            )),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -1080,7 +1107,7 @@ fn test_mcp_tool_anyof_defaults_to_string() {
         &tools_config,
         Some(HashMap::from([(
             "dash/value".to_string(),
-            mcp_tool(
+            mcp_tool_info(mcp_tool(
                 "value",
                 "AnyOf Value",
                 serde_json::json!({
@@ -1089,9 +1116,9 @@ fn test_mcp_tool_anyof_defaults_to_string() {
                         "value": {"anyOf": [{"type": "string"}, {"type": "number"}]}
                     }
                 }),
-            ),
+            )),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();
@@ -1145,7 +1172,7 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         &tools_config,
         Some(HashMap::from([(
             "test_server/do_something_cool".to_string(),
-            mcp_tool(
+            mcp_tool_info(mcp_tool(
                 "do_something_cool",
                 "Do something cool",
                 serde_json::json!({
@@ -1171,9 +1198,9 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
                         }
                     }
                 }),
-            ),
+            )),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     )
     .build();

@@ -26,23 +26,23 @@ fn mcp_tool(name: &str, description: &str) -> Tool {
 }
 
 #[test]
-fn create_tool_search_tool_deduplicates_and_renders_enabled_apps() {
+fn create_tool_search_tool_deduplicates_and_renders_enabled_sources() {
     assert_eq!(
         create_tool_search_tool(
             &[
-                ToolSearchAppInfo {
+                ToolSearchSourceInfo {
                     name: "Google Drive".to_string(),
                     description: Some(
                         "Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work."
                             .to_string(),
                     ),
                 },
-                ToolSearchAppInfo {
+                ToolSearchSourceInfo {
                     name: "Google Drive".to_string(),
                     description: None,
                 },
-                ToolSearchAppInfo {
-                    name: "Slack".to_string(),
+                ToolSearchSourceInfo {
+                    name: "docs".to_string(),
                     description: None,
                 },
             ],
@@ -50,7 +50,7 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_apps() {
         ),
         ToolSpec::ToolSearch {
             execution: "client".to_string(),
-            description: "# Apps (Connectors) tool discovery\n\nSearches over apps/connectors tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to all the tools of the following apps/connectors:\n- Google Drive: Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work.\n- Slack\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required tools and load them for the apps mentioned above. For the apps mentioned above, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates` for tool discovery.".to_string(),
+            description: "# MCP tool discovery\n\nSearches over MCP tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following MCP servers/connectors:\n- Google Drive: Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work.\n- docs\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required MCP tools. For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates`.".to_string(),
             parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "limit".to_string(),
@@ -61,7 +61,7 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_apps() {
                     ),
                     (
                         "query".to_string(),
-                        JsonSchema::string(Some("Search query for apps tools.".to_string()),),
+                        JsonSchema::string(Some("Search query for MCP tools.".to_string()),),
                     ),
                 ]), Some(vec!["query".to_string()]), Some(false.into())),
         }
@@ -141,9 +141,11 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
     let calendar_create_event = mcp_tool("calendar-create-event", "Create a calendar event.");
     let gmail_read_email = mcp_tool("gmail-read-email", "Read an email.");
     let calendar_list_events = mcp_tool("calendar-list-events", "List calendar events.");
+    let docs_search = mcp_tool("search", "Search docs.");
 
     let tools = collect_tool_search_output_tools([
         ToolSearchResultSource {
+            server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__calendar",
             tool_name: "_create_event",
             tool: &calendar_create_event,
@@ -151,6 +153,7 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
             connector_description: Some("Plan events"),
         },
         ToolSearchResultSource {
+            server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__gmail",
             tool_name: "_read_email",
             tool: &gmail_read_email,
@@ -158,11 +161,20 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
             connector_description: Some("Read mail"),
         },
         ToolSearchResultSource {
+            server_name: "codex_apps",
             tool_namespace: "mcp__codex_apps__calendar",
             tool_name: "_list_events",
             tool: &calendar_list_events,
             connector_name: Some("Calendar"),
             connector_description: Some("Plan events"),
+        },
+        ToolSearchResultSource {
+            server_name: "docs",
+            tool_namespace: "mcp__docs__",
+            tool_name: "search",
+            tool: &docs_search,
+            connector_name: None,
+            connector_description: None,
         },
     ])
     .expect("collect tool search output tools");
@@ -216,6 +228,22 @@ fn collect_tool_search_output_tools_groups_results_by_namespace() {
                     output_schema: None,
                 })],
             }),
+            ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                name: "mcp__docs__".to_string(),
+                description: "Tools from the docs MCP server.".to_string(),
+                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                    name: "search".to_string(),
+                    description: "Search docs.".to_string(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: JsonSchema::object(
+                        Default::default(),
+                        /*required*/ None,
+                        /*additional_properties*/ None
+                    ),
+                    output_schema: None,
+                })],
+            }),
         ],
     );
 }
@@ -225,6 +253,7 @@ fn collect_tool_search_output_tools_falls_back_to_connector_name_description() {
     let gmail_batch_read_email = mcp_tool("gmail-batch-read-email", "Read multiple emails.");
 
     let tools = collect_tool_search_output_tools([ToolSearchResultSource {
+        server_name: "codex_apps",
         tool_namespace: "mcp__codex_apps__gmail",
         tool_name: "_batch_read_email",
         tool: &gmail_batch_read_email,

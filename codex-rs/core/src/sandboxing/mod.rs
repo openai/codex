@@ -10,7 +10,7 @@ ExecRequest for execution.
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::StdoutStream;
-use crate::exec::WindowsRestrictedTokenFilesystemOverlay;
+use crate::exec::WindowsSandboxFilesystemOverrides;
 use crate::exec::execute_exec_request;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
@@ -47,8 +47,7 @@ pub struct ExecRequest {
     pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
-    pub(crate) windows_restricted_token_filesystem_overlay:
-        Option<WindowsRestrictedTokenFilesystemOverlay>,
+    pub(crate) windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     pub arg0: Option<String>,
 }
 
@@ -82,7 +81,7 @@ impl ExecRequest {
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-            windows_restricted_token_filesystem_overlay: None,
+            windows_sandbox_filesystem_overrides: None,
             arg0,
         }
     }
@@ -131,7 +130,7 @@ impl ExecRequest {
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-            windows_restricted_token_filesystem_overlay: None,
+            windows_sandbox_filesystem_overrides: None,
             arg0,
         }
     }

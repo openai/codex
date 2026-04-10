@@ -25,6 +25,7 @@ use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
+use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -33,7 +34,7 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::render_skills_section;
-use crate::rollout::session_index;
+use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills_load_input_from_config;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -74,9 +75,7 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
-use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
-use codex_mcp::filter_non_codex_apps_mcp_tools_only;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
@@ -323,7 +322,6 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
@@ -442,8 +440,6 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
-const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
-
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -763,8 +759,11 @@ impl Codex {
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
-        self.session.steer_input(input, expected_turn_id).await
+        self.session
+            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .await
     }
 
     pub(crate) async fn set_app_server_client_info(
@@ -1094,6 +1093,26 @@ fn local_time_context() -> (String, String) {
             "Etc/UTC".to_string(),
         ),
     }
+}
+
+async fn thread_title_from_state_db(
+    state_db: Option<&state_db::StateDbHandle>,
+    codex_home: &Path,
+    conversation_id: ThreadId,
+) -> Option<String> {
+    if let Some(metadata) = state_db
+        && let Some(metadata) = metadata.get_thread(conversation_id).await.ok().flatten()
+    {
+        let title = metadata.title.trim();
+        if !title.is_empty() && metadata.first_user_message.as_deref().map(str::trim) != Some(title)
+        {
+            return Some(title.to_string());
+        }
+    }
+    find_thread_name_by_id(codex_home, &conversation_id)
+        .await
+        .ok()
+        .flatten()
 }
 
 #[derive(Clone)]
@@ -1882,19 +1901,12 @@ impl Session {
             tx
         };
         let thread_name =
-            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id)
+            thread_title_from_state_db(state_db_ctx.as_ref(), &config.codex_home, conversation_id)
                 .instrument(info_span!(
                     "session_init.thread_name_lookup",
                     otel.name = "session_init.thread_name_lookup",
                 ))
-                .await
-            {
-                Ok(name) => name,
-                Err(err) => {
-                    warn!("Failed to read session index for thread name: {err}");
-                    None
-                }
-            };
+                .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
@@ -2251,6 +2263,7 @@ impl Session {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             },
         )
         .await;
@@ -3733,6 +3746,7 @@ impl Session {
         // stays isolated as its own top-level developer message for guardian subagents.
         if !separate_guardian_developer_message
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
+            && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
         }
@@ -3847,6 +3861,7 @@ impl Session {
         // subagent sees a distinct, easy-to-audit instruction block.
         if separate_guardian_developer_message
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
+            && !developer_instructions.is_empty()
             && let Some(guardian_developer_message) =
                 crate::context_manager::updates::build_developer_update_item(vec![
                     developer_instructions.to_string(),
@@ -4123,6 +4138,7 @@ impl Session {
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
@@ -4159,6 +4175,15 @@ impl Session {
                 });
             }
             None => return Err(SteerInputError::NoActiveTurn(input)),
+        }
+
+        if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
+            && let Some((_, active_task)) = active_turn.tasks.first()
+        {
+            active_task
+                .turn_context
+                .turn_metadata_state
+                .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
@@ -4850,7 +4875,6 @@ mod handlers {
 
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::RolloutRecorder;
-    use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
@@ -4932,7 +4956,7 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let (items, updates) = match op {
+        let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -4973,17 +4997,20 @@ mod handlers {
                         app_server_client_name: None,
                         app_server_client_version: None,
                     },
+                    None,
                 )
             }
             Op::UserInput {
                 items,
                 final_output_json_schema,
+                responsesapi_client_metadata,
             } => (
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
                     ..Default::default()
                 },
+                responsesapi_client_metadata,
             ),
             _ => unreachable!(),
         };
@@ -4995,11 +5022,20 @@ mod handlers {
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         match sess
-            .steer_input(items.clone(), /*expected_turn_id*/ None)
+            .steer_input(
+                items.clone(),
+                /*expected_turn_id*/ None,
+                responsesapi_client_metadata.clone(),
+            )
             .await
         {
             Ok(_) => current_context.session_telemetry.user_prompt(&items),
             Err(SteerInputError::NoActiveTurn(items)) => {
+                if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
+                    current_context
+                        .turn_metadata_state
+                        .set_responsesapi_client_metadata(responsesapi_client_metadata);
+                }
                 current_context.session_telemetry.user_prompt(&items);
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
@@ -5530,13 +5566,25 @@ mod handlers {
         .await;
     }
 
-    /// Persists the thread name in the session index, updates in-memory state, and emits
-    /// a `ThreadNameUpdated` event on success.
-    ///
-    /// This appends the name to `CODEX_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
-    /// current `thread_id`, then updates `SessionConfiguration::thread_name`.
-    ///
-    /// Returns an error event if the name is empty or session persistence is disabled.
+    async fn persist_thread_name_update(
+        sess: &Arc<Session>,
+        event: ThreadNameUpdatedEvent,
+    ) -> anyhow::Result<EventMsg> {
+        let msg = EventMsg::ThreadNameUpdated(event);
+        let item = RolloutItem::EventMsg(msg.clone());
+        let recorder = {
+            let guard = sess.services.rollout.lock().await;
+            guard.clone()
+        }
+        .ok_or_else(|| anyhow::anyhow!("Session persistence is disabled; cannot rename thread."))?;
+        recorder.persist().await?;
+        recorder.record_items(std::slice::from_ref(&item)).await?;
+        recorder.flush().await?;
+        Ok(msg)
+    }
+
+    /// Persists the thread name in the rollout and state database, updates in-memory state, and
+    /// emits a `ThreadNameUpdated` event on success.
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
         let Some(name) = crate::util::normalize_thread_name(&name) else {
             let event = Event {
@@ -5550,47 +5598,33 @@ mod handlers {
             return;
         };
 
-        let persistence_enabled = {
-            let rollout = sess.services.rollout.lock().await;
-            rollout.is_some()
-        };
-        if !persistence_enabled {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "Session persistence is disabled; cannot rename thread.".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
+        let updated = ThreadNameUpdatedEvent {
+            thread_id: sess.conversation_id,
+            thread_name: Some(name.clone()),
         };
 
-        if let Err(e) = sess.try_ensure_rollout_materialized().await {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: format!("Failed to set thread name: {e}"),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
-        }
+        let msg = match persist_thread_name_update(sess, updated).await {
+            Ok(msg) => msg,
+            Err(err) => {
+                warn!("Failed to persist thread name update to rollout: {err}");
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event_raw(event).await;
+                return;
+            }
+        };
 
-        let codex_home = sess.codex_home().await;
-        if let Err(e) =
-            session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
+        if let Some(state_db) = sess.services.state_db.as_deref()
+            && let Err(err) = state_db
+                .update_thread_title(sess.conversation_id, &name)
+                .await
         {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: format!("Failed to set thread name: {e}"),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
+            warn!("Failed to update thread title in state db: {err}");
         }
 
         {
@@ -5598,14 +5632,14 @@ mod handlers {
             state.session_configuration.thread_name = Some(name.clone());
         }
 
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
-                thread_id: sess.conversation_id,
-                thread_name: Some(name),
-            }),
-        })
-        .await;
+        let codex_home = sess.codex_home().await;
+        if let Err(err) =
+            crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
+        {
+            warn!("Failed to update legacy thread name index: {err}");
+        }
+
+        sess.deliver_event_raw(Event { id: sub_id, msg }).await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -6146,6 +6180,11 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    // Pending input is drained into history before building the next model request.
+    // However, we defer that drain until after sampling in two cases:
+    // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
+    // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
+    let mut can_drain_pending_input = input.is_empty();
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -6155,7 +6194,11 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = sess.get_pending_input().await;
+        let pending_input = if can_drain_pending_input {
+            sess.get_pending_input().await
+        } else {
+            Vec::new()
+        };
 
         let mut blocked_pending_input = false;
         let mut blocked_pending_input_contexts = Vec::new();
@@ -6229,9 +6272,12 @@ pub(crate) async fn run_turn(
         {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
-                    needs_follow_up,
+                    needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
+                can_drain_pending_input = true;
+                let has_pending_input = sess.has_pending_input().await;
+                let needs_follow_up = model_needs_follow_up || has_pending_input;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -6244,6 +6290,8 @@ pub(crate) async fn run_turn(
                     estimated_token_count = ?estimated_token_count,
                     auto_compact_limit,
                     token_limit_reached,
+                    model_needs_follow_up,
+                    has_pending_input,
                     needs_follow_up,
                     "post sampling token usage"
                 );
@@ -6261,6 +6309,7 @@ pub(crate) async fn run_turn(
                         return None;
                     }
                     client_session.reset_websocket_session();
+                    can_drain_pending_input = !model_needs_follow_up;
                     continue;
                 }
 
@@ -6637,35 +6686,6 @@ fn connector_inserted_in_messages(
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
-fn filter_codex_apps_mcp_tools(
-    mcp_tools: &HashMap<String, McpToolInfo>,
-    connectors: &[connectors::AppInfo],
-    config: &Config,
-) -> HashMap<String, McpToolInfo> {
-    let allowed: HashSet<&str> = connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect();
-
-    mcp_tools
-        .iter()
-        .filter(|(_, tool)| {
-            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-                return false;
-            }
-            let Some(connector_id) = codex_apps_connector_id(tool) else {
-                return false;
-            };
-            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
-        })
-        .map(|(name, tool)| (name.clone(), tool.clone()))
-        .collect()
-}
-
-fn codex_apps_connector_id(tool: &McpToolInfo) -> Option<&str> {
-    tool.connector_id.as_deref()
-}
-
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
@@ -6852,7 +6872,7 @@ pub(crate) async fn built_tools(
 ) -> CodexResult<Arc<ToolRouter>> {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
-    let mut mcp_tools = mcp_connection_manager
+    let all_mcp_tools = mcp_connection_manager
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
@@ -6867,7 +6887,7 @@ pub(crate) async fn built_tools(
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
-        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&mcp_tools));
+        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
     let accessible_connectors_with_enabled_state =
         accessible_connectors.as_ref().map(|connectors| {
             connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
@@ -6913,59 +6933,34 @@ pub(crate) async fn built_tools(
         None
     };
 
-    let app_tools = connectors.as_ref().map(|connectors| {
-        filter_codex_apps_mcp_tools(&mcp_tools, connectors, &turn_context.config)
-    });
-
-    if let Some(connectors) = connectors.as_ref() {
+    let explicitly_enabled = if let Some(connectors) = connectors.as_ref() {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
 
-        let explicitly_enabled = filter_connectors_for_input(
+        filter_connectors_for_input(
             connectors,
             input,
             &effective_explicitly_enabled_connectors,
             &skill_name_counts_lower,
-        );
-
-        let mut selected_mcp_tools = filter_non_codex_apps_mcp_tools_only(&mcp_tools);
-        selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
-            &mcp_tools,
-            explicitly_enabled.as_ref(),
-            &turn_context.config,
-        ));
-
-        mcp_tools = selected_mcp_tools;
-    }
-
-    // Expose app tools directly when tool_search is disabled, or when tool_search
-    // is enabled but the accessible app tool set stays below the direct-exposure threshold.
-    let expose_app_tools_directly = !turn_context.tools_config.search_tool
-        || app_tools
-            .as_ref()
-            .is_some_and(|tools| tools.len() < DIRECT_APP_TOOL_EXPOSURE_THRESHOLD);
-    if expose_app_tools_directly && let Some(app_tools) = app_tools.as_ref() {
-        mcp_tools.extend(app_tools.clone());
-    }
-    let app_tools = if expose_app_tools_directly {
-        None
+        )
     } else {
-        app_tools
+        Vec::new()
     };
-    let mcp_tool_router_inputs =
-        has_mcp_servers.then(|| crate::tools::router::map_mcp_tool_infos(&mcp_tools));
+    let mcp_tool_exposure = build_mcp_tool_exposure(
+        &all_mcp_tools,
+        connectors.as_deref(),
+        explicitly_enabled.as_slice(),
+        &turn_context.config,
+        &turn_context.tools_config,
+    );
+    let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: mcp_tool_router_inputs
-                .as_ref()
-                .map(|inputs| inputs.mcp_tools.clone()),
-            tool_namespaces: mcp_tool_router_inputs
-                .as_ref()
-                .map(|inputs| inputs.tool_namespaces.clone()),
-            app_tools,
+            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            mcp_tools: direct_mcp_tools,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
@@ -7768,8 +7763,6 @@ async fn try_run_sampling_request(
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
-
-                needs_follow_up |= sess.has_pending_input().await;
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,

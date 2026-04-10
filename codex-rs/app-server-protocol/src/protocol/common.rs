@@ -388,6 +388,7 @@ client_request_definitions! {
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
+        inspect_params: true,
         response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {

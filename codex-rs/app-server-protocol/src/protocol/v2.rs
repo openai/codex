@@ -4034,6 +4034,10 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optional turn-scoped Responses API client metadata.
+    #[experimental("turn/start.responsesapiClientMetadata")]
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -4144,12 +4148,18 @@ pub struct TurnStartResponse {
     pub turn: Turn,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnSteerParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optional turn-scoped Responses API client metadata.
+    #[experimental("turn/steer.responsesapiClientMetadata")]
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     /// Required active turn id precondition. The request fails when it does not
     /// match the currently active turn.
     pub expected_turn_id: String,
@@ -8422,6 +8432,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            responsesapi_client_metadata: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
