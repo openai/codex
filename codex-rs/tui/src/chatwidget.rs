@@ -25,6 +25,10 @@
 //! the final answer. During streaming we hide the status row to avoid duplicate
 //! progress indicators; once commentary completes and stream queues drain, we
 //! re-show it so users still see turn-in-progress state between output bursts.
+//!
+//! Slash-command parsing lives in the bottom-pane composer, but slash-command acceptance lives
+//! here. That split lets the composer stage a recall entry before clearing input while this module
+//! decides whether dispatch accepted the command and therefore whether Up-arrow should recall it.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -5197,6 +5201,12 @@ impl ChatWidget {
         self.last_agent_markdown.as_deref()
     }
 
+    /// Dispatch a bare slash command and resolve its staged local-history entry.
+    ///
+    /// The composer stages history before returning `InputResult::Command`; this wrapper is the
+    /// point where that staged entry is either committed or discarded. Calling `dispatch_command`
+    /// directly from input handling would leave the composer without an authoritative accept/reject
+    /// decision for recall.
     fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
         if self.dispatch_command(cmd) {
             self.bottom_pane.record_pending_slash_command_history();
@@ -5205,6 +5215,12 @@ impl ChatWidget {
         }
     }
 
+    /// Dispatch an inline slash command and resolve its staged local-history entry.
+    ///
+    /// Inline command arguments may later be prepared through the normal submission pipeline, but
+    /// local command recall still tracks the original command invocation. Treating this wrapper as
+    /// the only input-result entry point avoids double-recording accepted commands and avoids
+    /// recalling rejected ones.
     fn handle_slash_command_with_args_dispatch(
         &mut self,
         cmd: SlashCommand,
@@ -5218,6 +5234,12 @@ impl ChatWidget {
         }
     }
 
+    /// Run a bare slash command and report whether it should be locally recallable.
+    ///
+    /// Returning `true` means the command was accepted by the application layer, even if its work is
+    /// asynchronous or only opens another UI. Returning `false` means the command was unavailable,
+    /// rejected, or only produced a usage/error response; returning `true` from those paths would
+    /// make Up-arrow recall a command that did not actually run.
     fn dispatch_command(&mut self, cmd: SlashCommand) -> bool {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -5587,6 +5609,12 @@ impl ChatWidget {
         }
     }
 
+    /// Run an inline slash command and report whether it should be locally recallable.
+    ///
+    /// This method returns the same acceptance boolean as [`Self::dispatch_command`]. Branches that
+    /// prepare arguments should pass `record_history: false` to the composer because the staged
+    /// slash-command entry is the recall record; using the normal submission-history path as well
+    /// would make a single command appear twice during Up-arrow navigation.
     fn dispatch_command_with_args(
         &mut self,
         cmd: SlashCommand,

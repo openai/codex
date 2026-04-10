@@ -29,6 +29,11 @@
 //! Recalled entries move the cursor to end-of-line so repeated Up/Down presses keep shell-like
 //! history traversal semantics instead of dropping to column 0.
 //!
+//! Slash commands are staged for local history instead of being recorded immediately. The
+//! composer can tell that input parsed as a command, but only `ChatWidget` knows whether the
+//! command was accepted, so command recall is a two-phase handoff: stage here, then record or
+//! discard after dispatch.
+//!
 //! # Submission and Prompt Expansion
 //!
 //! `Enter` submits immediately. `Tab` requests queuing while a task is running; if no task is
@@ -228,7 +233,16 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
     },
+    /// A bare slash command parsed by the composer.
+    ///
+    /// Callers that dispatch this variant are also responsible for resolving any pending local
+    /// command-history entry that the composer staged before clearing the visible input.
     Command(SlashCommand),
+    /// An inline slash command and its trimmed argument text.
+    ///
+    /// The `TextElement` ranges are rebased into the argument string, while any pending local
+    /// command-history entry still represents the original command invocation that should be
+    /// committed only if dispatch accepts it.
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
     None,
 }
@@ -311,6 +325,11 @@ pub(crate) struct ChatComposer {
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
     selected_remote_image_index: Option<usize>,
+    /// Slash-command draft awaiting an application-level accept/reject decision.
+    ///
+    /// This slot is intentionally separate from `ChatComposerHistory` because parse success is not
+    /// enough to make a command recallable. `ChatWidget` must resolve it after dispatch; otherwise
+    /// a rejected command could reappear on Up-arrow as if it had run.
     pending_slash_command_history: Option<HistoryEntry>,
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
@@ -1065,10 +1084,20 @@ impl ChatComposer {
         std::mem::take(&mut self.recent_submission_mention_bindings)
     }
 
+    /// Drop the staged slash-command draft without adding it to local recall.
+    ///
+    /// Call this when `ChatWidget` rejects or no-ops a slash command after the composer has already
+    /// cleared the input. Forgetting to discard after rejection leaves stale staged state that a
+    /// later accepted command could accidentally record.
     pub(crate) fn discard_pending_slash_command_history(&mut self) {
         self.pending_slash_command_history = None;
     }
 
+    /// Commit the staged slash-command draft to local Up-arrow recall.
+    ///
+    /// Call this only after command dispatch has accepted the command. Calling it before dispatch
+    /// would make parseable-but-rejected commands recallable; calling it more than once is harmless
+    /// because the pending slot is consumed on the first call.
     pub(crate) fn record_pending_slash_command_history(&mut self) {
         if let Some(entry) = self.pending_slash_command_history.take() {
             self.history.record_local_submission(entry);
@@ -2340,6 +2369,10 @@ impl ChatComposer {
     /// not consume user input. Once a command is accepted, this helper performs the usual
     /// submission preparation (paste expansion, element trimming) and rebases element ranges from
     /// full-text offsets to command-arg offsets.
+    ///
+    /// Callers that already staged slash-command history should normally pass `false` for
+    /// `record_history`; otherwise a command such as `/plan investigate` would be entered into
+    /// local recall through both the slash-command path and the message-submission path.
     pub(crate) fn prepare_inline_args_submission(
         &mut self,
         record_history: bool,
@@ -2370,14 +2403,28 @@ impl ChatComposer {
         true
     }
 
+    /// Stage the current slash-command text for later local recall.
+    ///
+    /// Staging snapshots the rich composer state before the textarea is cleared, but it does not
+    /// decide whether the command should be recallable. A caller that stages history and then
+    /// bypasses the `ChatWidget` dispatch wrappers can leave the pending slot unresolved.
     fn stage_slash_command_history(&mut self) {
         self.stage_slash_command_history_text(self.textarea.text().trim().to_string());
     }
 
+    /// Stage a popup-selected command using its canonical command text.
+    ///
+    /// Popup filtering text can be partial, so recording the selected command avoids recalling
+    /// `/di` after the user actually accepted `/diff`.
     fn stage_selected_slash_command_history(&mut self, cmd: SlashCommand) {
         self.stage_slash_command_history_text(format!("/{}", cmd.command()));
     }
 
+    /// Store the provided command text and the current composer adornments in the pending slot.
+    ///
+    /// The pending entry intentionally has the same shape as other local history entries so recall
+    /// can rehydrate attachments, mention bindings, and pending paste placeholders if command
+    /// workflows start carrying those through in the future.
     fn stage_slash_command_history_text(&mut self, text: String) {
         self.pending_slash_command_history = Some(HistoryEntry {
             text,
