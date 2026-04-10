@@ -77,7 +77,6 @@ pub(crate) async fn run_codex_thread_interactive(
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
-        analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::from_environment(
             parent_ctx.environment.as_deref(),
