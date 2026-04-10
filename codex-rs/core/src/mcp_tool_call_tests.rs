@@ -822,18 +822,13 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
         .await,
         McpToolApprovalDecision::Accept
     );
-    session
-        .services
-        .guardian_rejection_rationales
-        .lock()
-        .await
-        .insert(
-            "review-id".to_string(),
-            crate::guardian::GuardianRejection {
-                rationale: "too risky".to_string(),
-                source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
-            },
-        );
+    session.services.guardian_rejections.lock().await.insert(
+        "review-id".to_string(),
+        crate::guardian::GuardianRejection {
+            rationale: "too risky".to_string(),
+            source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+        },
+    );
     let denial = mcp_tool_approval_decision_from_guardian(
         session.as_ref(),
         "review-id",

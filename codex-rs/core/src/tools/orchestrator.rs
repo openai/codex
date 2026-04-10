@@ -116,6 +116,7 @@ impl ToolOrchestrator {
         let otel_user = ToolDecisionSource::User;
         let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
         let otel_cfg = ToolDecisionSource::Config;
+        let use_guardian = routes_approval_to_guardian(turn_ctx);
 
         // 1) Approval
         let mut already_approved = false;
@@ -131,8 +132,7 @@ impl ToolOrchestrator {
                 return Err(ToolError::Rejected(reason));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
-                let guardian_review_id =
-                    routes_approval_to_guardian(turn_ctx).then(new_guardian_review_id);
+                let guardian_review_id = use_guardian.then(new_guardian_review_id);
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
@@ -142,7 +142,7 @@ impl ToolOrchestrator {
                     network_approval_context: None,
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
-                let otel_source = if routes_approval_to_guardian(turn_ctx) {
+                let otel_source = if use_guardian {
                     otel_automated_reviewer.clone()
                 } else {
                     otel_user.clone()
@@ -287,8 +287,7 @@ impl ToolOrchestrator {
                     .should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
-                    let guardian_review_id =
-                        routes_approval_to_guardian(turn_ctx).then(new_guardian_review_id);
+                    let guardian_review_id = use_guardian.then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
@@ -299,7 +298,7 @@ impl ToolOrchestrator {
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
-                    let otel_source = if routes_approval_to_guardian(turn_ctx) {
+                    let otel_source = if use_guardian {
                         otel_automated_reviewer
                     } else {
                         otel_user

@@ -1254,7 +1254,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         "denial rationale should not fall back to the generic missing payload error"
     );
     {
-        let rationales = session.services.guardian_rejection_rationales.lock().await;
+        let rationales = session.services.guardian_rejections.lock().await;
         assert!(rationales.contains_key("review-shell-guardian-error"));
         assert!(!rationales.contains_key("shell-guardian-error"));
     }

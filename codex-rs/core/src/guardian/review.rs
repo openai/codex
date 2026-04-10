@@ -11,9 +11,7 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
-use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -47,7 +45,7 @@ pub(crate) fn new_guardian_review_id() -> String {
 pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &str) -> String {
     let rejection = session
         .services
-        .guardian_rejection_rationales
+        .guardian_rejections
         .lock()
         .await
         .remove(review_id)
@@ -70,11 +68,6 @@ pub(super) enum GuardianReviewOutcome {
     Completed(anyhow::Result<GuardianAssessment>),
     TimedOut,
     Aborted,
-}
-
-enum GuardianReviewSelection {
-    Review(GuardianReviewOutcome),
-    ExternalCancel,
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -159,40 +152,15 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let review_cancel = CancellationToken::new();
-    let mut review_task = tokio::spawn(run_guardian_review_session(
+    let outcome = run_guardian_review_session(
         session.clone(),
         turn.clone(),
         request,
         retry_reason,
         schema,
-        Some(review_cancel.clone()),
-    ));
-    let external_cancelled = async {
-        if let Some(cancel_token) = external_cancel.as_ref() {
-            cancel_token.cancelled().await;
-        } else {
-            std::future::pending::<()>().await;
-        }
-    };
-    tokio::pin!(external_cancelled);
-    let selection = tokio::select! {
-        result = &mut review_task => {
-            GuardianReviewSelection::Review(guardian_review_task_result(result))
-        }
-        _ = &mut external_cancelled => GuardianReviewSelection::ExternalCancel,
-    };
-
-    let outcome = match selection {
-        GuardianReviewSelection::Review(outcome) => outcome,
-        GuardianReviewSelection::ExternalCancel => {
-            review_cancel.cancel();
-            if let Err(err) = review_task.await {
-                warn!("guardian review task failed after external cancellation: {err}");
-            }
-            GuardianReviewOutcome::Aborted
-        }
-    };
+        external_cancel,
+    )
+    .await;
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
@@ -259,7 +227,7 @@ async fn run_guardian_review(
         GuardianAssessmentStatus::Denied
     };
     {
-        let mut rationales = session.services.guardian_rejection_rationales.lock().await;
+        let mut rationales = session.services.guardian_rejections.lock().await;
         if approved {
             rationales.remove(&review_id);
         } else {
@@ -291,17 +259,6 @@ async fn run_guardian_review(
         ReviewDecision::Approved
     } else {
         ReviewDecision::Denied
-    }
-}
-
-fn guardian_review_task_result(
-    result: Result<GuardianReviewOutcome, JoinError>,
-) -> GuardianReviewOutcome {
-    match result {
-        Ok(outcome) => outcome,
-        Err(err) => GuardianReviewOutcome::Completed(Err(anyhow::anyhow!(
-            "guardian review task failed: {err}"
-        ))),
     }
 }
 
