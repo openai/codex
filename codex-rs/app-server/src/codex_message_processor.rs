@@ -5628,6 +5628,10 @@ impl CodexMessageProcessor {
                 let _ = ctx
                     .mark_archived(thread_id, archived_path.as_path(), Utc::now())
                     .await;
+                let thread_id_str = thread_id.to_string();
+                if let Err(err) = ctx.delete_thread_delivery_state(&thread_id_str).await {
+                    warn!("failed to delete delivery state for archived thread {thread_id}: {err}");
+                }
             }
             Ok(())
         }
