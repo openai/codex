@@ -318,7 +318,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_only_prompt_guides_all_tools_search_for_deferred_app_tools() -> Result<()> {
+async fn code_mode_only_guides_all_tools_search_and_calls_deferred_app_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -327,8 +327,34 @@ async fn code_mode_only_prompt_guides_all_tools_search_for_deferred_app_tools() 
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"
+const tool = ALL_TOOLS.find(
+  ({ name }) => name === "mcp__codex_apps__calendar_timezone_option_99"
+);
+if (!tool) {
+  text(JSON.stringify({ found: false }));
+} else {
+  const result = await tools[tool.name]({ timezone: "UTC" });
+  text(JSON.stringify({
+    found: true,
+    isError: Boolean(result.isError),
+    text: result.content?.[0]?.text ?? "",
+  }));
+}
+"#,
+            ),
             ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let follow_up_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
         ]),
     )
     .await;
@@ -400,6 +426,23 @@ async fn code_mode_only_prompt_guides_all_tools_search_for_deferred_app_tools() 
         .expect("exec description should be present");
     assert!(exec_description.contains("filter `ALL_TOOLS` by `name` and `description`"));
     assert!(!exec_description.contains("calendar_timezone_option_99"));
+
+    let request = follow_up_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode_only deferred app tool call failed unexpectedly: {output}"
+    );
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "found": true,
+            "isError": false,
+            "text": "called calendar_timezone_option_99 for  at  with ",
+        })
+    );
 
     Ok(())
 }

@@ -16,6 +16,7 @@ use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::router::ResolvedMcpToolCall;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
@@ -50,6 +51,15 @@ impl ToolCallRuntime {
 
     pub(crate) fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
         self.router.find_spec(tool_name)
+    }
+
+    pub(crate) async fn resolve_mcp_tool_call(
+        &self,
+        tool_name: &str,
+    ) -> Option<ResolvedMcpToolCall> {
+        self.router
+            .resolve_mcp_tool_call(self.session.as_ref(), tool_name)
+            .await
     }
 
     #[instrument(level = "trace", skip_all)]
