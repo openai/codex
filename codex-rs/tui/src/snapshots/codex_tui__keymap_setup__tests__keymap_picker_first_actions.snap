@@ -4,6 +4,7 @@ expression: snapshot
 ---
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t
 Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g
+Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o
 Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound
 Edit Previous Message | esc | Chat edit_previous_message Edit Previous Message Begin or advance edit-previous-message when the composer is empty. esc
 Confirm Edit Previous Message | enter | Chat confirm_edit_previous_message Confirm Edit Previous Message Confirm the selected previous message to edit. enter
@@ -13,4 +14,3 @@ Toggle Shortcuts | ?, shift-? | Composer toggle_shortcuts Toggle Shortcuts Show 
 Insert Newline | ctrl-j, ctrl-m, enter, shift-enter | Editor insert_newline Insert Newline Insert a newline in the editor. ctrl-j, ctrl-m, enter, shift-enter
 Move Left | left, ctrl-b | Editor move_left Move Left Move the cursor left. left, ctrl-b
 Move Right | right, ctrl-f | Editor move_right Move Right Move the cursor right. right, ctrl-f
-Move Up | up, ctrl-p | Editor move_up Move Up Move the cursor up. up, ctrl-p
