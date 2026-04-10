@@ -2819,9 +2819,14 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "codex-git-utils",
  "codex-protocol",
+ "codex-rollout",
+ "codex-state",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

@@ -1,0 +1,761 @@
+use std::path::Path;
+use std::path::PathBuf;
+
+use async_trait::async_trait;
+use chrono::Utc;
+use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadNameUpdatedEvent;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::RolloutConfig;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::RolloutRecorderParams;
+use codex_rollout::SESSIONS_SUBDIR;
+use codex_rollout::StateDbHandle;
+use codex_rollout::append_rollout_item_to_path;
+use codex_rollout::append_thread_name;
+use codex_rollout::find_archived_thread_path_by_id_str;
+use codex_rollout::find_thread_meta_by_name_str;
+use codex_rollout::find_thread_path_by_id_str;
+use codex_rollout::rollout_date_parts;
+
+mod helpers;
+mod read;
+mod recorder;
+
+use self::helpers::checked_rollout_file_name;
+use self::helpers::display_error;
+use self::helpers::dynamic_tools_from_items;
+use self::helpers::edge_status_to_state;
+use self::helpers::io_error;
+use self::helpers::memory_mode_from_items;
+use self::helpers::parse_cursor_param;
+use self::helpers::rollout_sort_key;
+use self::helpers::serialize_cursor;
+use self::helpers::source_to_state_string;
+use self::recorder::RolloutThreadRecorder;
+
+use crate::AppendThreadItemsParams;
+use crate::ArchiveThreadParams;
+use crate::CreateThreadParams;
+use crate::DynamicToolsParams;
+use crate::FindThreadByNameParams;
+use crate::FindThreadSpawnByPathParams;
+use crate::ListThreadSpawnEdgesParams;
+use crate::ListThreadsParams;
+use crate::LoadThreadHistoryParams;
+use crate::ReadThreadParams;
+use crate::ResolveLegacyPathParams;
+use crate::ResumeThreadRecorderParams;
+use crate::SetThreadMemoryModeParams;
+use crate::SetThreadNameParams;
+use crate::StoredThread;
+use crate::StoredThreadHistory;
+use crate::ThreadMemoryModeParams;
+use crate::ThreadMetadataPatch;
+use crate::ThreadPage;
+use crate::ThreadRecorder;
+use crate::ThreadSpawnEdge;
+use crate::ThreadSpawnEdgeStatus;
+use crate::ThreadStore;
+use crate::ThreadStoreError;
+use crate::ThreadStoreResult;
+use crate::UpdateThreadMetadataParams;
+
+/// Local filesystem implementation of [`ThreadStore`] backed by rollout JSONL files.
+///
+/// This adapter intentionally delegates to the existing rollout and SQLite state helpers so the
+/// first concrete implementation preserves today's local storage behavior.
+#[derive(Clone)]
+pub struct LocalThreadStore {
+    pub(crate) config: RolloutConfig,
+    state_db: Option<StateDbHandle>,
+}
+
+impl LocalThreadStore {
+    /// Create a local store using rollout configuration. SQLite state is opened lazily if it
+    /// already exists.
+    pub fn new(config: RolloutConfig) -> Self {
+        Self {
+            config,
+            state_db: None,
+        }
+    }
+
+    /// Create a local store and initialize the local SQLite state database.
+    pub async fn with_state_db(config: RolloutConfig) -> Self {
+        let state_db = codex_rollout::state_db::init(&config).await;
+        Self { config, state_db }
+    }
+
+    /// Create a local store from an existing state runtime.
+    pub fn with_state_runtime(config: RolloutConfig, state_db: StateDbHandle) -> Self {
+        Self {
+            config,
+            state_db: Some(state_db),
+        }
+    }
+
+    pub(crate) async fn state_db(&self) -> Option<StateDbHandle> {
+        match &self.state_db {
+            Some(state_db) => Some(state_db.clone()),
+            None => codex_rollout::state_db::get_state_db(&self.config).await,
+        }
+    }
+
+    fn request_config(
+        &self,
+        cwd: PathBuf,
+        model_provider: String,
+        memory_mode: Option<&str>,
+    ) -> RolloutConfig {
+        RolloutConfig {
+            codex_home: self.config.codex_home.clone(),
+            sqlite_home: self.config.sqlite_home.clone(),
+            cwd,
+            model_provider_id: model_provider,
+            generate_memories: memory_mode != Some("disabled"),
+        }
+    }
+
+    pub(crate) async fn find_path(
+        &self,
+        thread_id: ThreadId,
+        include_archived: bool,
+    ) -> ThreadStoreResult<(PathBuf, bool)> {
+        let state_db = self.state_db().await;
+        let archived_only = (!include_archived).then_some(false);
+        if let Some(path) = codex_rollout::state_db::find_rollout_path_by_id(
+            state_db.as_deref(),
+            thread_id,
+            archived_only,
+            "local_thread_store_find_path",
+        )
+        .await
+        {
+            let archived = path.starts_with(self.archived_root());
+            return Ok((path, archived));
+        }
+
+        match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await {
+            Ok(Some(path)) => return Ok((path, false)),
+            Ok(None) => {}
+            Err(err) => return Err(io_error(err)),
+        }
+
+        if include_archived {
+            match find_archived_thread_path_by_id_str(
+                &self.config.codex_home,
+                &thread_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(path)) => return Ok((path, true)),
+                Ok(None) => {}
+                Err(err) => return Err(io_error(err)),
+            }
+        }
+
+        Err(ThreadStoreError::ThreadNotFound { thread_id })
+    }
+
+    pub(crate) fn sessions_root(&self) -> PathBuf {
+        self.config.codex_home.join(SESSIONS_SUBDIR)
+    }
+
+    pub(crate) fn archived_root(&self) -> PathBuf {
+        self.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR)
+    }
+}
+
+#[async_trait]
+impl ThreadStore for LocalThreadStore {
+    async fn create_thread(
+        &self,
+        params: CreateThreadParams,
+    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>> {
+        let CreateThreadParams {
+            thread_id,
+            forked_from_id,
+            source,
+            cwd,
+            model_provider,
+            base_instructions,
+            dynamic_tools,
+            memory_mode,
+            event_persistence_mode,
+            ..
+        } = params;
+        let config = self.request_config(cwd, model_provider, memory_mode.as_deref());
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(
+                thread_id,
+                forked_from_id,
+                source,
+                base_instructions,
+                dynamic_tools,
+                event_persistence_mode.into(),
+            ),
+            self.state_db().await,
+            None,
+        )
+        .await
+        .map_err(io_error)?;
+        Ok(Box::new(RolloutThreadRecorder {
+            thread_id,
+            inner: recorder,
+        }))
+    }
+
+    async fn resume_thread_recorder(
+        &self,
+        params: ResumeThreadRecorderParams,
+    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>> {
+        let (path, _) = self
+            .find_path(params.thread_id, params.include_archived)
+            .await?;
+        let recorder = RolloutRecorder::new(
+            &self.config,
+            RolloutRecorderParams::resume(path, params.event_persistence_mode.into()),
+            self.state_db().await,
+            None,
+        )
+        .await
+        .map_err(io_error)?;
+        Ok(Box::new(RolloutThreadRecorder {
+            thread_id: params.thread_id,
+            inner: recorder,
+        }))
+    }
+
+    async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
+        let (path, archived) = self.find_path(params.thread_id, true).await?;
+        for item in &params.items {
+            append_rollout_item_to_path(path.as_path(), item)
+                .await
+                .map_err(io_error)?;
+        }
+        let state_db = self.state_db().await;
+        codex_rollout::state_db::apply_rollout_items(
+            state_db.as_deref(),
+            path.as_path(),
+            self.config.model_provider_id.as_str(),
+            None,
+            params.items.as_slice(),
+            "local_thread_store_append_items",
+            params.new_thread_memory_mode.as_deref(),
+            params.updated_at,
+        )
+        .await;
+        codex_rollout::state_db::read_repair_rollout_path(
+            state_db.as_deref(),
+            Some(params.thread_id),
+            Some(archived),
+            path.as_path(),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn load_history(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreResult<StoredThreadHistory> {
+        let (path, _) = self
+            .find_path(params.thread_id, params.include_archived)
+            .await?;
+        let (items, thread_id, _) = RolloutRecorder::load_rollout_items(path.as_path())
+            .await
+            .map_err(io_error)?;
+        let thread_id = thread_id.unwrap_or(params.thread_id);
+        Ok(StoredThreadHistory { thread_id, items })
+    }
+
+    async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
+        let (path, archived) = self
+            .find_path(params.thread_id, params.include_archived)
+            .await?;
+        self.stored_thread_from_path(path.as_path(), archived, params.include_history)
+            .await
+    }
+
+    async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
+        let mut cursor = parse_cursor_param(params.cursor.as_deref())?;
+        let mut last_cursor = cursor.clone();
+        let requested_page_size = params.page_size.max(1);
+        let sort_key = rollout_sort_key(params.sort_key);
+        let allowed_sources = if params.allowed_sources.is_empty() {
+            codex_rollout::INTERACTIVE_SESSION_SOURCES.clone()
+        } else {
+            params.allowed_sources
+        };
+        let model_providers = params
+            .model_providers
+            .filter(|providers| !providers.is_empty());
+        let mut items = Vec::with_capacity(requested_page_size);
+        let mut scanned = 0usize;
+        let mut next_cursor = None;
+
+        while items.len() < requested_page_size {
+            let page_size = requested_page_size.saturating_sub(items.len());
+            let page = if params.archived {
+                RolloutRecorder::list_archived_threads(
+                    &self.config,
+                    page_size,
+                    cursor.as_ref(),
+                    sort_key,
+                    allowed_sources.as_slice(),
+                    model_providers.as_deref(),
+                    self.config.model_provider_id.as_str(),
+                    params.search_term.as_deref(),
+                )
+                .await
+            } else {
+                RolloutRecorder::list_threads(
+                    &self.config,
+                    page_size,
+                    cursor.as_ref(),
+                    sort_key,
+                    allowed_sources.as_slice(),
+                    model_providers.as_deref(),
+                    self.config.model_provider_id.as_str(),
+                    params.search_term.as_deref(),
+                )
+                .await
+            }
+            .map_err(io_error)?;
+
+            scanned = scanned.saturating_add(page.num_scanned_files);
+            for item in page.items {
+                if params
+                    .cwd
+                    .as_ref()
+                    .is_none_or(|expected_cwd| item.cwd.as_ref() == Some(expected_cwd))
+                {
+                    items.push(
+                        self.stored_thread_from_thread_item(item, params.archived)
+                            .await?,
+                    );
+                }
+                if items.len() >= requested_page_size {
+                    break;
+                }
+            }
+
+            next_cursor = serialize_cursor(page.next_cursor.as_ref())?;
+            if items.len() >= requested_page_size {
+                break;
+            }
+
+            match page.next_cursor {
+                Some(cursor_val) => {
+                    if last_cursor.as_ref() == Some(&cursor_val) {
+                        next_cursor = None;
+                        break;
+                    }
+                    last_cursor = Some(cursor_val.clone());
+                    cursor = Some(cursor_val);
+                }
+                None => break,
+            }
+        }
+
+        Ok(ThreadPage {
+            items,
+            next_cursor,
+            scanned: Some(scanned),
+        })
+    }
+
+    async fn find_thread_by_name(
+        &self,
+        params: FindThreadByNameParams,
+    ) -> ThreadStoreResult<Option<StoredThread>> {
+        let state_db = self.state_db().await;
+        if let Some(ctx) = state_db.as_deref() {
+            let allowed_sources = params
+                .allowed_sources
+                .iter()
+                .map(source_to_state_string)
+                .collect::<Vec<_>>();
+            let metadata = ctx
+                .find_thread_by_exact_title(
+                    params.name.as_str(),
+                    allowed_sources.as_slice(),
+                    params.model_providers.as_deref(),
+                    !params.include_archived,
+                    params.cwd.as_deref(),
+                )
+                .await
+                .map_err(display_error)?;
+            if let Some(metadata) = metadata {
+                return self
+                    .stored_thread_from_state_metadata(metadata, false)
+                    .await
+                    .map(Some);
+            }
+        }
+
+        let Some((path, meta)) =
+            find_thread_meta_by_name_str(&self.config.codex_home, params.name.as_str())
+                .await
+                .map_err(io_error)?
+        else {
+            return Ok(None);
+        };
+        if params
+            .cwd
+            .as_ref()
+            .is_some_and(|expected_cwd| &meta.meta.cwd != expected_cwd)
+        {
+            return Ok(None);
+        }
+        if !params.allowed_sources.is_empty() && !params.allowed_sources.contains(&meta.meta.source)
+        {
+            return Ok(None);
+        }
+        if let Some(providers) = params.model_providers.as_ref()
+            && !providers.is_empty()
+            && !meta
+                .meta
+                .model_provider
+                .as_ref()
+                .is_some_and(|provider| providers.contains(provider))
+        {
+            return Ok(None);
+        }
+        self.stored_thread_from_path(path.as_path(), false, false)
+            .await
+            .map(Some)
+    }
+
+    async fn set_thread_name(&self, params: SetThreadNameParams) -> ThreadStoreResult<()> {
+        let (path, _) = self.find_path(params.thread_id, false).await?;
+        let item = RolloutItem::EventMsg(EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+            thread_id: params.thread_id,
+            thread_name: Some(params.name.clone()),
+        }));
+        append_rollout_item_to_path(path.as_path(), &item)
+            .await
+            .map_err(io_error)?;
+        append_thread_name(
+            &self.config.codex_home,
+            params.thread_id,
+            params.name.as_str(),
+        )
+        .await
+        .map_err(io_error)?;
+        let state_db = self.state_db().await;
+        codex_rollout::state_db::reconcile_rollout(
+            state_db.as_deref(),
+            path.as_path(),
+            self.config.model_provider_id.as_str(),
+            None,
+            &[],
+            None,
+            None,
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn update_thread_metadata(
+        &self,
+        params: UpdateThreadMetadataParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        let ThreadMetadataPatch { name, git_info } = params.patch;
+        if let Some(name) = name
+            && let Some(name) = name
+        {
+            self.set_thread_name(SetThreadNameParams {
+                thread_id: params.thread_id,
+                owner: params.owner.clone(),
+                name,
+            })
+            .await?;
+        }
+
+        if let Some(git_info) = git_info {
+            let state_db = self.state_db().await;
+            let Some(ctx) = state_db.as_deref() else {
+                return Err(ThreadStoreError::Unavailable {
+                    message: "sqlite state db unavailable for git metadata update".to_string(),
+                });
+            };
+            let (path, archived) = self.find_path(params.thread_id, true).await?;
+            codex_rollout::state_db::reconcile_rollout(
+                Some(ctx),
+                path.as_path(),
+                self.config.model_provider_id.as_str(),
+                None,
+                &[],
+                Some(archived),
+                None,
+            )
+            .await;
+            ctx.update_thread_git_info(
+                params.thread_id,
+                git_info.sha.as_ref().map(|value| value.as_deref()),
+                git_info.branch.as_ref().map(|value| value.as_deref()),
+                git_info.origin_url.as_ref().map(|value| value.as_deref()),
+            )
+            .await
+            .map_err(display_error)?;
+        }
+
+        self.read_after_update(params.thread_id).await
+    }
+
+    async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()> {
+        let (path, _) = self.find_path(params.thread_id, false).await?;
+        let canonical_sessions_dir = tokio::fs::canonicalize(self.sessions_root())
+            .await
+            .map_err(io_error)?;
+        let canonical_path = tokio::fs::canonicalize(path.as_path())
+            .await
+            .map_err(io_error)?;
+        if !canonical_path.starts_with(&canonical_sessions_dir) {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "rollout path `{}` must be in sessions directory",
+                    path.display()
+                ),
+            });
+        }
+        let file_name = checked_rollout_file_name(&canonical_path, params.thread_id)?;
+        let archive_folder = self.archived_root();
+        tokio::fs::create_dir_all(&archive_folder)
+            .await
+            .map_err(io_error)?;
+        let archived_path = archive_folder.join(&file_name);
+        tokio::fs::rename(&canonical_path, &archived_path)
+            .await
+            .map_err(io_error)?;
+        if let Some(ctx) = self.state_db().await {
+            ctx.mark_archived(params.thread_id, archived_path.as_path(), Utc::now())
+                .await
+                .map_err(display_error)?;
+        }
+        Ok(())
+    }
+
+    async fn unarchive_thread(
+        &self,
+        params: ArchiveThreadParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        let (path, _) = self.find_path(params.thread_id, true).await?;
+        let canonical_archived_dir = tokio::fs::canonicalize(self.archived_root())
+            .await
+            .map_err(io_error)?;
+        let canonical_path = tokio::fs::canonicalize(path.as_path())
+            .await
+            .map_err(io_error)?;
+        if !canonical_path.starts_with(&canonical_archived_dir) {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "rollout path `{}` must be in archived directory",
+                    path.display()
+                ),
+            });
+        }
+        let file_name = checked_rollout_file_name(&canonical_path, params.thread_id)?;
+        let Some((year, month, day)) = rollout_date_parts(&file_name) else {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "rollout path `{}` missing filename timestamp",
+                    path.display()
+                ),
+            });
+        };
+        let dest_dir = self.sessions_root().join(year).join(month).join(day);
+        let restored_path = dest_dir.join(&file_name);
+        tokio::fs::create_dir_all(&dest_dir)
+            .await
+            .map_err(io_error)?;
+        tokio::fs::rename(&canonical_path, &restored_path)
+            .await
+            .map_err(io_error)?;
+        if let Some(ctx) = self.state_db().await {
+            ctx.mark_unarchived(params.thread_id, restored_path.as_path())
+                .await
+                .map_err(display_error)?;
+        }
+        self.stored_thread_from_path(restored_path.as_path(), false, false)
+            .await
+    }
+
+    async fn resolve_legacy_path(
+        &self,
+        params: ResolveLegacyPathParams,
+    ) -> ThreadStoreResult<Option<ThreadId>> {
+        if !self.supports_legacy_path(params.path.as_path()) {
+            return Ok(None);
+        }
+        let (_, thread_id, _) = RolloutRecorder::load_rollout_items(params.path.as_path())
+            .await
+            .map_err(io_error)?;
+        Ok(thread_id)
+    }
+
+    async fn dynamic_tools(
+        &self,
+        params: DynamicToolsParams,
+    ) -> ThreadStoreResult<Option<Vec<DynamicToolSpec>>> {
+        let state_db = self.state_db().await;
+        if let Some(tools) = codex_rollout::state_db::get_dynamic_tools(
+            state_db.as_deref(),
+            params.thread_id,
+            "local_thread_store_dynamic_tools",
+        )
+        .await
+        {
+            return Ok(Some(tools));
+        }
+        let history = self
+            .load_history(LoadThreadHistoryParams {
+                thread_id: params.thread_id,
+                owner: params.owner,
+                include_archived: true,
+            })
+            .await?;
+        Ok(dynamic_tools_from_items(&history.items))
+    }
+
+    async fn memory_mode(
+        &self,
+        params: ThreadMemoryModeParams,
+    ) -> ThreadStoreResult<Option<String>> {
+        let state_db = self.state_db().await;
+        if let Some(ctx) = state_db.as_deref() {
+            return ctx
+                .get_thread_memory_mode(params.thread_id)
+                .await
+                .map_err(display_error);
+        }
+        let history = self
+            .load_history(LoadThreadHistoryParams {
+                thread_id: params.thread_id,
+                owner: params.owner,
+                include_archived: true,
+            })
+            .await?;
+        Ok(memory_mode_from_items(&history.items))
+    }
+
+    async fn set_memory_mode(&self, params: SetThreadMemoryModeParams) -> ThreadStoreResult<()> {
+        let state_db = self.state_db().await;
+        let Some(ctx) = state_db.as_deref() else {
+            return Err(ThreadStoreError::Unavailable {
+                message: "sqlite state db unavailable for memory mode update".to_string(),
+            });
+        };
+        ctx.set_thread_memory_mode(params.thread_id, params.memory_mode.as_str())
+            .await
+            .map_err(display_error)?;
+        Ok(())
+    }
+
+    async fn mark_memory_mode_polluted(
+        &self,
+        params: ThreadMemoryModeParams,
+    ) -> ThreadStoreResult<()> {
+        let state_db = self.state_db().await;
+        let Some(ctx) = state_db.as_deref() else {
+            return Err(ThreadStoreError::Unavailable {
+                message: "sqlite state db unavailable for memory mode pollution update".to_string(),
+            });
+        };
+        ctx.mark_thread_memory_mode_polluted(params.thread_id)
+            .await
+            .map_err(display_error)?;
+        Ok(())
+    }
+
+    async fn upsert_thread_spawn_edge(&self, edge: ThreadSpawnEdge) -> ThreadStoreResult<()> {
+        let state_db = self.state_db().await;
+        let Some(ctx) = state_db.as_deref() else {
+            return Err(ThreadStoreError::Unavailable {
+                message: "sqlite state db unavailable for thread-spawn edge update".to_string(),
+            });
+        };
+        ctx.upsert_thread_spawn_edge(
+            edge.parent_thread_id,
+            edge.child_thread_id,
+            edge_status_to_state(edge.status),
+        )
+        .await
+        .map_err(display_error)?;
+        Ok(())
+    }
+
+    async fn list_thread_spawn_edges(
+        &self,
+        params: ListThreadSpawnEdgesParams,
+    ) -> ThreadStoreResult<Vec<ThreadSpawnEdge>> {
+        let state_db = self.state_db().await;
+        let Some(ctx) = state_db.as_deref() else {
+            return Err(ThreadStoreError::Unavailable {
+                message: "sqlite state db unavailable for thread-spawn edge lookup".to_string(),
+            });
+        };
+        let statuses = match params.status {
+            Some(status) => vec![status],
+            None => vec![ThreadSpawnEdgeStatus::Open, ThreadSpawnEdgeStatus::Closed],
+        };
+        let mut edges = Vec::new();
+        let mut parents = vec![params.thread_id];
+        while let Some(parent_thread_id) = parents.pop() {
+            for status in &statuses {
+                let children = ctx
+                    .list_thread_spawn_children_with_status(
+                        parent_thread_id,
+                        edge_status_to_state(*status),
+                    )
+                    .await
+                    .map_err(display_error)?;
+                for child_thread_id in children {
+                    if params.recursive {
+                        parents.push(child_thread_id);
+                    }
+                    edges.push(ThreadSpawnEdge {
+                        parent_thread_id,
+                        child_thread_id,
+                        status: *status,
+                    });
+                }
+            }
+            if !params.recursive {
+                break;
+            }
+        }
+        Ok(edges)
+    }
+
+    async fn find_thread_spawn_by_path(
+        &self,
+        params: FindThreadSpawnByPathParams,
+    ) -> ThreadStoreResult<Option<ThreadId>> {
+        let state_db = self.state_db().await;
+        let Some(ctx) = state_db.as_deref() else {
+            return Err(ThreadStoreError::Unavailable {
+                message: "sqlite state db unavailable for thread-spawn path lookup".to_string(),
+            });
+        };
+        let result = if params.recursive {
+            ctx.find_thread_spawn_descendant_by_path(params.thread_id, params.agent_path.as_str())
+                .await
+        } else {
+            ctx.find_thread_spawn_child_by_path(params.thread_id, params.agent_path.as_str())
+                .await
+        }
+        .map_err(display_error)?;
+        Ok(result)
+    }
+
+    fn supports_legacy_path(&self, path: &Path) -> bool {
+        path.starts_with(self.sessions_root()) || path.starts_with(self.archived_root())
+    }
+}
