@@ -55,6 +55,8 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
+use codex_analytics::ThreadInitializationMode;
+use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -188,6 +190,7 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::environment_context::EnvironmentContext;
+use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
 use codex_config::types::ShellEnvironmentPolicy;
@@ -654,6 +657,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            thread_initialization_mode: ThreadInitializationMode::New,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -1171,6 +1175,7 @@ pub(crate) struct SessionConfiguration {
     app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    thread_initialization_mode: ThreadInitializationMode,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1195,6 +1200,7 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            initialization_mode: self.thread_initialization_mode,
         }
     }
 
@@ -2338,6 +2344,11 @@ impl Session {
                 SessionSource::SubAgent(_)
             )
         };
+        let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
+        {
+            let mut state = self.state.lock().await;
+            state.set_next_turn_is_first(!has_prior_user_turns);
+        }
         match conversation_history {
             InitialHistory::New => {
                 // Defer initial context insertion until the first real turn starts so
@@ -6234,6 +6245,8 @@ pub(crate) async fn run_turn(
             .await;
     }
 
+    track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
+
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
@@ -6535,6 +6548,53 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn track_turn_resolved_config_analytics(
+    sess: &Session,
+    turn_context: &TurnContext,
+    input: &[UserInput],
+) {
+    if !sess.enabled(Feature::GeneralAnalytics) {
+        return;
+    }
+
+    let thread_config = {
+        let state = sess.state.lock().await;
+        state.session_configuration.thread_config_snapshot()
+    };
+    let is_first_turn = {
+        let mut state = sess.state.lock().await;
+        state.take_next_turn_is_first()
+    };
+    sess.services
+        .analytics_events_client
+        .track_turn_resolved_config(TurnResolvedConfigFact {
+            turn_id: turn_context.sub_id.clone(),
+            thread_id: sess.conversation_id.to_string(),
+            num_input_images: input
+                .iter()
+                .filter(|item| {
+                    matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
+                })
+                .count(),
+            submission_type: None,
+            ephemeral: thread_config.ephemeral,
+            session_source: thread_config.session_source,
+            initialization_mode: thread_config.initialization_mode,
+            model: turn_context.model_info.slug.clone(),
+            model_provider: turn_context.config.model_provider_id.clone(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            reasoning_effort: turn_context.reasoning_effort,
+            reasoning_summary: Some(turn_context.reasoning_summary),
+            service_tier: turn_context.config.service_tier,
+            approval_policy: turn_context.approval_policy.value(),
+            approvals_reviewer: turn_context.config.approvals_reviewer,
+            sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
+            collaboration_mode: turn_context.collaboration_mode.mode,
+            personality: turn_context.personality,
+            is_first_turn,
+        });
 }
 
 async fn run_pre_sampling_compact(
