@@ -308,6 +308,7 @@ fn non_empty_ref(ref_name: &str) -> Option<String> {
 }
 
 fn normalize_git_url(url: &str) -> String {
+    let url = url.trim_end_matches('/');
     if url.starts_with("https://github.com/") && !url.ends_with(".git") {
         format!("{url}.git")
     } else {
@@ -513,6 +514,21 @@ mod tests {
         assert_eq!(shorthand, git_url);
         assert_eq!(
             shorthand,
+            MarketplaceSource::Git {
+                url: "https://github.com/owner/repo.git".to_string(),
+                ref_name: None,
+            }
+        );
+    }
+
+    #[test]
+    fn github_url_with_trailing_slash_normalizes_without_extra_path_segment() {
+        assert_eq!(
+            parse_marketplace_source(
+                "https://github.com/owner/repo/",
+                /* explicit_ref */ None
+            )
+            .unwrap(),
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: None,
