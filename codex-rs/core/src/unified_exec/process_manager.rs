@@ -192,6 +192,7 @@ impl UnifiedExecProcessManager {
             cwd.to_path_buf(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
+            request.host_id.clone(),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -208,6 +209,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&process),
                 context,
                 &request.command,
+                request.host_id.clone(),
                 cwd.clone(),
                 start,
                 request.process_id,
@@ -255,6 +257,7 @@ impl UnifiedExecProcessManager {
                     Arc::clone(&context.turn),
                     context.call_id.clone(),
                     request.command.clone(),
+                    request.host_id.clone(),
                     cwd.to_path_buf(),
                     Some(request.process_id.to_string()),
                     Arc::clone(&transcript),
@@ -298,6 +301,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
+                request.host_id.clone(),
                 cwd.to_path_buf(),
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
@@ -526,6 +530,7 @@ impl UnifiedExecProcessManager {
         process: Arc<UnifiedExecProcess>,
         context: &UnifiedExecContext,
         command: &[String],
+        host_id: Option<String>,
         cwd: AbsolutePathBuf,
         started_at: Instant,
         process_id: i32,
@@ -572,6 +577,7 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.turn),
             context.call_id.clone(),
             command.to_vec(),
+            host_id,
             cwd.to_path_buf(),
             process_id,
             transcript,

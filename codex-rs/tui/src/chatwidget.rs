@@ -397,6 +397,7 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
+    host_id: Option<String>,
 }
 
 struct UnifiedExecProcessSummary {
@@ -4319,9 +4320,14 @@ impl ChatWidget {
         if self.suppressed_exec_calls.remove(&ev.call_id) {
             return;
         }
-        let (command, parsed, source) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
-            None => (ev.command.clone(), ev.parsed_cmd.clone(), ev.source),
+        let (command, parsed, source, host_id) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.source, rc.host_id),
+            None => (
+                ev.command.clone(),
+                ev.parsed_cmd.clone(),
+                ev.source,
+                ev.host_id.clone(),
+            ),
         };
         let parsed = self.annotate_skill_reads_in_parsed_cmd(parsed);
         let is_unified_exec_interaction =
@@ -4382,6 +4388,7 @@ impl ChatWidget {
                     command,
                     parsed,
                     source,
+                    host_id,
                     ev.interaction_input.clone(),
                     self.config.animations,
                 );
@@ -4403,6 +4410,7 @@ impl ChatWidget {
                     command,
                     parsed,
                     source,
+                    host_id,
                     ev.interaction_input.clone(),
                     self.config.animations,
                 );
@@ -4550,6 +4558,7 @@ impl ChatWidget {
                 command: ev.command.clone(),
                 parsed_cmd: parsed_cmd.clone(),
                 source: ev.source,
+                host_id: ev.host_id.clone(),
             },
         );
         let is_wait_interaction = matches!(ev.source, ExecCommandSource::UnifiedExecInteraction)
@@ -4583,6 +4592,7 @@ impl ChatWidget {
                 ev.command.clone(),
                 parsed_cmd.clone(),
                 ev.source,
+                ev.host_id.clone(),
                 interaction_input.clone(),
             )
         {
@@ -4596,6 +4606,7 @@ impl ChatWidget {
                 ev.command.clone(),
                 parsed_cmd,
                 ev.source,
+                ev.host_id,
                 interaction_input,
                 self.config.animations,
             )));
@@ -6206,6 +6217,7 @@ impl ChatWidget {
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
                         source: source.to_core(),
+                        host_id: None,
                         interaction_input: None,
                     });
                 } else {
@@ -6221,6 +6233,7 @@ impl ChatWidget {
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
                         source: source.to_core(),
+                        host_id: None,
                         interaction_input: None,
                         stdout: String::new(),
                         stderr: String::new(),
@@ -6792,6 +6805,7 @@ impl ChatWidget {
                         .map(codex_app_server_protocol::CommandAction::into_core)
                         .collect(),
                     source: source.to_core(),
+                    host_id: None,
                     interaction_input: None,
                 });
             }

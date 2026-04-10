@@ -110,6 +110,7 @@ pub(crate) fn spawn_exit_watcher(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
+    host_id: Option<String>,
     cwd: PathBuf,
     process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
@@ -129,6 +130,7 @@ pub(crate) fn spawn_exit_watcher(
                 turn_ref,
                 call_id,
                 command,
+                host_id,
                 cwd,
                 Some(process_id.to_string()),
                 transcript,
@@ -143,6 +145,7 @@ pub(crate) fn spawn_exit_watcher(
                 turn_ref,
                 call_id,
                 command,
+                host_id,
                 cwd,
                 Some(process_id.to_string()),
                 transcript,
@@ -196,6 +199,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
+    host_id: Option<String>,
     cwd: PathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
@@ -223,6 +227,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
+        host_id,
     );
     emitter
         .emit(event_ctx, ToolEventStage::Success(output))
@@ -235,6 +240,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
+    host_id: Option<String>,
     cwd: PathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
@@ -266,6 +272,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
+        host_id,
     );
     emitter
         .emit(

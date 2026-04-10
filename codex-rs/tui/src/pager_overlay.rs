@@ -1012,6 +1012,7 @@ mod tests {
             vec!["bash".into(), "-lc".into(), "ls".into()],
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
             ExecCommandSource::Agent,
+            /*host_id*/ None,
             /*interaction_input*/ None,
             /*animations_enabled*/ true,
         );

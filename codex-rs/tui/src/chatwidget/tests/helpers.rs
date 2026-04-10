@@ -493,6 +493,7 @@ pub(super) fn begin_exec_with_source(
         cwd,
         parsed_cmd,
         source,
+        host_id: None,
         interaction_input,
     };
     chat.handle_codex_event(Event {
@@ -518,6 +519,7 @@ pub(super) fn begin_unified_exec_startup(
         cwd,
         parsed_cmd: Vec::new(),
         source: ExecCommandSource::UnifiedExecStartup,
+        host_id: None,
         interaction_input: None,
     };
     chat.handle_codex_event(Event {
@@ -632,6 +634,7 @@ pub(super) fn end_exec(
         cwd,
         parsed_cmd,
         source,
+        host_id,
         interaction_input,
         process_id,
     } = begin_event;
@@ -645,6 +648,7 @@ pub(super) fn end_exec(
             cwd,
             parsed_cmd,
             source,
+            host_id,
             interaction_input,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),

@@ -414,7 +414,14 @@ impl Environment {
 
         match exec_server_url {
             Some(exec_server_url) => {
-                Self::create_remote(exec_server_url, None, None, None, "codex-environment").await
+                Self::create_remote(
+                    exec_server_url,
+                    /*default_cwd*/ None,
+                    /*default_shell*/ None,
+                    /*ssh_exec_server*/ None,
+                    "codex-environment",
+                )
+                .await
             }
             None => Ok(Self::default()),
         }
@@ -426,9 +433,9 @@ impl Environment {
             HostConnection::ExecServerUrl { url } => {
                 Self::create_remote(
                     url.clone(),
-                    None,
-                    None,
-                    None,
+                    /*default_cwd*/ None,
+                    /*default_shell*/ None,
+                    /*ssh_exec_server*/ None,
                     format!("codex-environment-{}", host_config.id),
                 )
                 .await

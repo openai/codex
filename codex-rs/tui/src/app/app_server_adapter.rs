@@ -922,6 +922,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
                 .map(codex_app_server_protocol::CommandAction::into_core)
                 .collect(),
             source: source.to_core(),
+            host_id: None,
             interaction_input: None,
         }),
     }])
@@ -982,6 +983,7 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
                 .map(codex_app_server_protocol::CommandAction::into_core)
                 .collect(),
             source: source.to_core(),
+            host_id: None,
             interaction_input: None,
             stdout: String::new(),
             stderr: String::new(),

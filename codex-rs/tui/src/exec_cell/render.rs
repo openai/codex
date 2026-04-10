@@ -43,6 +43,7 @@ pub(crate) fn new_active_exec_command(
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
     source: ExecCommandSource,
+    host_id: Option<String>,
     interaction_input: Option<String>,
     animations_enabled: bool,
 ) -> ExecCell {
@@ -53,12 +54,20 @@ pub(crate) fn new_active_exec_command(
             parsed,
             output: None,
             source,
+            host_id,
             start_time: Some(Instant::now()),
             duration: None,
             interaction_input,
         },
         animations_enabled,
     )
+}
+
+fn remote_host_title_suffix(host_id: Option<&str>) -> String {
+    host_id
+        .filter(|host_id| !host_id.trim().is_empty())
+        .map(|host_id| format!(" on {host_id}"))
+        .unwrap_or_default()
 }
 
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
@@ -261,6 +270,8 @@ impl ExecCell {
 
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
+        let host_suffix =
+            remote_host_title_suffix(self.calls.first().and_then(|call| call.host_id.as_deref()));
         out.push(Line::from(vec![
             if self.is_active() {
                 spinner(self.active_start_time(), self.animations_enabled())
@@ -269,9 +280,9 @@ impl ExecCell {
             },
             " ".into(),
             if self.is_active() {
-                "Exploring".bold()
+                format!("Exploring{host_suffix}").bold()
             } else {
-                "Explored".bold()
+                format!("Explored{host_suffix}").bold()
             },
         ]));
 
@@ -375,13 +386,16 @@ impl ExecCell {
         };
         let is_interaction = call.is_unified_exec_interaction();
         let title = if is_interaction {
-            ""
+            String::new()
         } else if self.is_active() {
-            "Running"
+            format!(
+                "Running{}",
+                remote_host_title_suffix(call.host_id.as_deref())
+            )
         } else if call.is_user_shell_command() {
-            "You ran"
+            "You ran".to_string()
         } else {
-            "Ran"
+            format!("Ran{}", remote_host_title_suffix(call.host_id.as_deref()))
         };
 
         let mut header_line = if is_interaction {
@@ -784,6 +798,7 @@ mod tests {
             parsed: Vec::new(),
             output: Some(output),
             source: ExecCommandSource::UserShell,
+            host_id: None,
             start_time: None,
             duration: None,
             interaction_input: None,
@@ -933,6 +948,7 @@ mod tests {
             parsed: Vec::new(),
             output: None,
             source: ExecCommandSource::UserShell,
+            host_id: None,
             start_time: None,
             duration: None,
             interaction_input: None,
@@ -970,6 +986,7 @@ mod tests {
             }],
             output: None,
             source: ExecCommandSource::Agent,
+            host_id: None,
             start_time: None,
             duration: None,
             interaction_input: None,
@@ -1011,6 +1028,7 @@ mod tests {
                 aggregated_output: url.to_string(),
             }),
             source: ExecCommandSource::UserShell,
+            host_id: None,
             start_time: None,
             duration: None,
             interaction_input: None,
@@ -1048,6 +1066,7 @@ mod tests {
                 aggregated_output: url.to_string(),
             }),
             source: ExecCommandSource::Agent,
+            host_id: None,
             start_time: None,
             duration: None,
             interaction_input: None,

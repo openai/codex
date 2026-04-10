@@ -185,12 +185,13 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
-                let environment = resolve_exec_environment(
+                let resolved_environment = resolve_exec_environment(
                     session.as_ref(),
                     turn.as_ref(),
                     args.host_id.as_deref(),
                 )
                 .await?;
+                let environment = resolved_environment.environment;
                 let default_host_cwd = if environment.is_remote() && args.workdir.is_none() {
                     environment
                         .default_cwd()
@@ -232,7 +233,7 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
                 let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
-                let request_host_id = args.host_id.clone();
+                let request_host_id = resolved_environment.host_id;
 
                 let ExecCommandArgs {
                     workdir,
@@ -409,11 +410,16 @@ fn emit_unified_exec_tty_metric(session_telemetry: &SessionTelemetry, tty: bool)
     );
 }
 
+struct ResolvedExecEnvironment {
+    environment: Arc<codex_exec_server::Environment>,
+    host_id: Option<String>,
+}
+
 async fn resolve_exec_environment(
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
     host_id: Option<&str>,
-) -> Result<Arc<codex_exec_server::Environment>, FunctionCallError> {
+) -> Result<ResolvedExecEnvironment, FunctionCallError> {
     let environment = match host_id {
         Some(host_id) => session
             .services
@@ -428,8 +434,28 @@ async fn resolve_exec_environment(
         None => turn.environment.clone(),
     };
 
-    environment.ok_or_else(|| {
+    let environment = environment.ok_or_else(|| {
         FunctionCallError::RespondToModel("unified exec is unavailable in this session".to_string())
+    })?;
+    let host_id = if environment.is_remote() {
+        Some(match host_id {
+            Some(host_id) => host_id.to_string(),
+            None => {
+                let default_host_id = session.services.environment_manager.default_host_id();
+                if default_host_id == codex_exec_server::LOCAL_HOST_ID {
+                    "remote".to_string()
+                } else {
+                    default_host_id
+                }
+            }
+        })
+    } else {
+        None
+    };
+
+    Ok(ResolvedExecEnvironment {
+        environment,
+        host_id,
     })
 }
 
