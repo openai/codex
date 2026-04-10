@@ -675,6 +675,7 @@ impl Codex {
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
+            environment_manager,
             environment,
         )
         .await
@@ -1603,6 +1604,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
+        environment_manager: Arc<EnvironmentManager>,
         environment: Option<Arc<Environment>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -2040,6 +2042,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
+            environment_manager,
             environment,
         };
         services

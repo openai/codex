@@ -36,6 +36,13 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
             )),
         ),
         (
+            "host_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional registered exec host to run the command on; omit for the default host."
+                    .to_string(),
+            )),
+        ),
+        (
             "tty".to_string(),
             JsonSchema::boolean(Some(
                 "Whether to allocate a TTY for the command. Defaults to false (plain pipes); set to true to open a PTY and access TTY process."

@@ -677,6 +677,8 @@ impl UnifiedExecProcessManager {
             .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
+            environment: Arc::clone(&request.environment),
+            host_id: request.host_id.clone(),
             process_id: request.process_id,
             cwd,
             env,

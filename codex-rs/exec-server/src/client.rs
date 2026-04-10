@@ -5,10 +5,13 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use tokio::time::timeout;
+use tokio_tungstenite::client_async;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
 
@@ -187,6 +190,31 @@ impl ExecServerClient {
         .await
     }
 
+    pub async fn connect_websocket_stream<S>(
+        websocket_url: String,
+        stream: S,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let (stream, _) = client_async(websocket_url.as_str(), stream)
+            .await
+            .map_err(|source| ExecServerError::WebSocketConnect {
+                url: websocket_url.clone(),
+                source,
+            })?;
+
+        Self::connect(
+            JsonRpcConnection::from_websocket(
+                stream,
+                format!("exec-server websocket stream {websocket_url}"),
+            ),
+            options,
+        )
+        .await
+    }
+
     pub async fn initialize(
         &self,
         options: ExecServerClientConnectOptions,
@@ -209,7 +237,7 @@ impl ExecServerClient {
                     },
                 )
                 .await?;
-            {
+            if !response.session_id.is_empty() {
                 let mut session_id = self
                     .inner
                     .session_id
