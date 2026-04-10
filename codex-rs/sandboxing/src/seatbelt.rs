@@ -15,15 +15,10 @@ use std::path::PathBuf;
 use tracing::warn;
 use url::Url;
 
-mod network_only;
-
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
 const MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS: &str =
     include_str!("restricted_read_only_platform_defaults.sbpl");
-pub(crate) use network_only::create_network_only_seatbelt_command_args;
-#[cfg(test)]
-use network_only::network_only_policy_for_network;
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the

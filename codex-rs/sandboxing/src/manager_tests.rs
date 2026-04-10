@@ -37,10 +37,8 @@ fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
 }
 
 #[test]
-fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
+fn danger_full_access_skips_platform_sandbox_with_managed_network() {
     let manager = SandboxManager::new();
-    let expected =
-        get_platform_sandbox(/*windows_sandbox_enabled*/ false).unwrap_or(SandboxType::None);
     let sandbox = manager.select_initial(
         &FileSystemSandboxPolicy::unrestricted(),
         NetworkSandboxPolicy::Enabled,
@@ -48,58 +46,7 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
         WindowsSandboxLevel::Disabled,
         /*has_managed_network_requirements*/ true,
     );
-    assert_eq!(sandbox, expected);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn transform_uses_network_only_seatbelt_for_managed_danger_full_access() {
-    let manager = SandboxManager::new();
-    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let exec_request = manager
-        .transform(SandboxTransformRequest {
-            command: SandboxCommand {
-                program: "true".into(),
-                args: Vec::new(),
-                cwd: cwd.clone(),
-                env: HashMap::new(),
-                additional_permissions: None,
-            },
-            policy: &SandboxPolicy::DangerFullAccess,
-            file_system_policy: &FileSystemSandboxPolicy::unrestricted(),
-            network_policy: NetworkSandboxPolicy::Enabled,
-            sandbox: SandboxType::MacosSeatbelt,
-            enforce_managed_network: true,
-            network: None,
-            sandbox_policy_cwd: cwd.as_path(),
-            codex_linux_sandbox_exe: None,
-            use_legacy_landlock: false,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-        })
-        .expect("transform");
-    let policy_index = exec_request
-        .command
-        .iter()
-        .position(|arg| arg == "-p")
-        .expect("seatbelt command should include policy");
-    let policy = exec_request
-        .command
-        .get(policy_index + 1)
-        .expect("seatbelt command should include policy text");
-
-    assert!(
-        policy.starts_with("(version 1)\n(allow default)"),
-        "managed full-access Seatbelt should use the open network-only profile:\n{policy}"
-    );
-    assert!(
-        policy.contains("(deny network-outbound"),
-        "managed full-access Seatbelt should still enforce network restrictions:\n{policy}"
-    );
-    assert!(
-        !policy.contains("(deny default)"),
-        "managed full-access Seatbelt should not use the closed base profile:\n{policy}"
-    );
+    assert_eq!(sandbox, SandboxType::None);
 }
 
 #[test]

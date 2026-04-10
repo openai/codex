@@ -48,6 +48,30 @@ fn full_access_restricted_policy_skips_platform_sandbox_when_network_is_enabled(
 }
 
 #[test]
+fn full_access_policy_skips_platform_sandbox_for_managed_enabled_network() {
+    assert_eq!(
+        should_require_platform_sandbox(
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Enabled,
+            /*has_managed_network_requirements*/ true
+        ),
+        false
+    );
+}
+
+#[test]
+fn full_access_policy_uses_platform_sandbox_for_managed_restricted_network() {
+    assert_eq!(
+        should_require_platform_sandbox(
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Restricted,
+            /*has_managed_network_requirements*/ true
+        ),
+        true
+    );
+}
+
+#[test]
 fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
     let blocked = AbsolutePathBuf::resolve_path_against_base(
         "blocked",

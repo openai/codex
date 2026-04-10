@@ -8,14 +8,10 @@ use crate::policy_transforms::should_require_platform_sandbox;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 #[cfg(target_os = "macos")]
-use crate::seatbelt::create_network_only_seatbelt_command_args;
-#[cfg(target_os = "macos")]
 use crate::seatbelt::create_seatbelt_command_args_for_policies;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
-#[cfg(target_os = "macos")]
-use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
@@ -64,15 +60,6 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     } else {
         None
     }
-}
-
-#[cfg(target_os = "macos")]
-fn should_use_network_only_seatbelt(
-    file_system_policy: &FileSystemSandboxPolicy,
-    enforce_managed_network: bool,
-) -> bool {
-    enforce_managed_network
-        && matches!(file_system_policy.kind, FileSystemSandboxKind::Unrestricted)
 }
 
 #[derive(Debug)]
@@ -214,26 +201,14 @@ impl SandboxManager {
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
                 let command = os_argv_to_strings(argv);
-                let mut args = if should_use_network_only_seatbelt(
+                let mut args = create_seatbelt_command_args_for_policies(
+                    command,
                     &effective_file_system_policy,
+                    effective_network_policy,
+                    sandbox_policy_cwd,
                     enforce_managed_network,
-                ) {
-                    create_network_only_seatbelt_command_args(
-                        command,
-                        effective_network_policy,
-                        enforce_managed_network,
-                        network,
-                    )
-                } else {
-                    create_seatbelt_command_args_for_policies(
-                        command,
-                        &effective_file_system_policy,
-                        effective_network_policy,
-                        sandbox_policy_cwd,
-                        enforce_managed_network,
-                        network,
-                    )
-                };
+                    network,
+                );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);

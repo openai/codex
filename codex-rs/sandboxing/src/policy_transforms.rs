@@ -425,7 +425,12 @@ pub fn should_require_platform_sandbox(
     has_managed_network_requirements: bool,
 ) -> bool {
     if has_managed_network_requirements {
-        return true;
+        // DangerFullAccess should not become a platform sandbox just because a
+        // managed proxy is configured; even open Seatbelt profiles break some
+        // macOS APIs such as launchctl bootstrap.
+        return !network_policy.is_enabled()
+            || !file_system_policy.has_full_disk_read_access()
+            || !file_system_policy.has_full_disk_write_access();
     }
 
     if !network_policy.is_enabled() {
