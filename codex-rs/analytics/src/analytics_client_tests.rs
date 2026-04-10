@@ -303,15 +303,6 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
     }
 }
 
-fn sample_runtime_metadata() -> CodexRuntimeMetadata {
-    CodexRuntimeMetadata {
-        codex_rs_version: "0.1.0".to_string(),
-        runtime_os: "macos".to_string(),
-        runtime_os_version: "15.3.1".to_string(),
-        runtime_arch: "aarch64".to_string(),
-    }
-}
-
 fn sample_turn_steer_request(
     thread_id: &str,
     expected_turn_id: &str,
@@ -467,6 +458,18 @@ async fn ingest_turn_prerequisites(
 ) {
     if include_initialize {
         ingest_initialize(reducer, out).await;
+        reducer
+            .ingest(
+                AnalyticsFact::Response {
+                    connection_id: 7,
+                    response: Box::new(sample_thread_start_response(
+                        "thread-2", /*ephemeral*/ false, "gpt-5",
+                    )),
+                },
+                out,
+            )
+            .await;
+        out.clear();
     }
 
     reducer
