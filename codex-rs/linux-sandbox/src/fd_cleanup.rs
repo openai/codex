@@ -2,31 +2,62 @@
 
 use std::io::ErrorKind;
 
-/// Close helper-inherited descriptors unless they are standard input/output/error
-/// or already close-on-exec.
+const ESCALATE_SOCKET_ENV_VAR: &str = "CODEX_ESCALATE_SOCKET";
+
+/// Close helper-inherited descriptors unless they are standard input/output/error,
+/// already close-on-exec, or known helper IPC.
 ///
 /// The sandboxed command can still create allowed local IPC after exec, but it
 /// must not inherit an already-connected network socket from the launcher.
 pub(crate) fn close_inherited_exec_fds() {
+    let preserved_fd = inherited_fd_to_preserve();
     let fds = match non_stdio_fds_from_proc() {
         Ok(fds) => fds,
         Err(err) if err.kind() == ErrorKind::NotFound => {
-            mark_inherited_exec_fds_cloexec();
+            mark_inherited_exec_fds_cloexec(preserved_fd);
             return;
         }
         Err(err) => panic!("failed to enumerate inherited file descriptors: {err}"),
     };
     for fd in fds {
+        if Some(fd) == preserved_fd {
+            continue;
+        }
         close_fd_if_inheritable(fd);
     }
 }
 
-fn mark_inherited_exec_fds_cloexec() {
+fn inherited_fd_to_preserve() -> Option<libc::c_int> {
+    std::env::var(ESCALATE_SOCKET_ENV_VAR)
+        .ok()
+        .and_then(|fd| fd.parse::<libc::c_int>().ok())
+        .filter(|fd| *fd > libc::STDERR_FILENO)
+}
+
+fn mark_inherited_exec_fds_cloexec(preserved_fd: Option<libc::c_int>) {
+    let start = (libc::STDERR_FILENO + 1) as libc::c_uint;
+    let Some(preserved_fd) = preserved_fd
+        .and_then(|fd| u32::try_from(fd).ok())
+        .filter(|fd| *fd >= start)
+    else {
+        mark_fd_range_cloexec(start, u32::MAX);
+        return;
+    };
+
+    if preserved_fd > start {
+        mark_fd_range_cloexec(start, preserved_fd - 1);
+    }
+    if preserved_fd < u32::MAX {
+        mark_fd_range_cloexec(preserved_fd + 1, u32::MAX);
+    }
+}
+
+fn mark_fd_range_cloexec(first: libc::c_uint, last: libc::c_uint) {
     let result = unsafe {
         libc::syscall(
             libc::SYS_close_range,
-            (libc::STDERR_FILENO + 1) as libc::c_uint,
-            u32::MAX as libc::c_uint,
+            first,
+            last,
             libc::CLOSE_RANGE_CLOEXEC,
         )
     };
