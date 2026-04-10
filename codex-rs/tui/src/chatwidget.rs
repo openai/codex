@@ -854,6 +854,7 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
+    last_turn_id: Option<String>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
@@ -1961,6 +1962,7 @@ impl ChatWidget {
         self.set_skills(/*skills*/ None);
         self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
+        self.last_turn_id = None;
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
@@ -2143,6 +2145,7 @@ impl ChatWidget {
     ) {
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
+            self.last_turn_id.clone(),
             self.app_event_tx.clone(),
             include_logs,
         );
@@ -4827,6 +4830,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            last_turn_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -7072,8 +7076,11 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(event) => {
+                let turn_id = event.turn_id;
+                let model_context_window = event.model_context_window;
+                self.last_turn_id = Some(turn_id);
                 if !is_resume_initial_replay {
-                    self.apply_turn_started_context_window(event.model_context_window);
+                    self.apply_turn_started_context_window(model_context_window);
                     self.on_task_started();
                 }
             }

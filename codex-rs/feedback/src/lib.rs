@@ -338,6 +338,16 @@ pub struct FeedbackSnapshot {
     pub thread_id: String,
 }
 
+pub struct FeedbackUploadOptions<'a> {
+    pub classification: &'a str,
+    pub reason: Option<&'a str>,
+    pub tags: Option<&'a BTreeMap<String, String>>,
+    pub include_logs: bool,
+    pub extra_attachment_paths: &'a [PathBuf],
+    pub session_source: Option<SessionSource>,
+    pub logs_override: Option<Vec<u8>>,
+}
+
 impl FeedbackSnapshot {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -369,16 +379,7 @@ impl FeedbackSnapshot {
     }
 
     /// Upload feedback to Sentry with optional attachments.
-    pub fn upload_feedback(
-        &self,
-        classification: &str,
-        reason: Option<&str>,
-        include_logs: bool,
-        extra_attachment_paths: &[PathBuf],
-        session_source: Option<SessionSource>,
-        logs_override: Option<Vec<u8>>,
-    ) -> Result<()> {
-        use std::collections::BTreeMap;
+    pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
         use std::str::FromStr;
         use std::sync::Arc;
 
@@ -398,13 +399,70 @@ impl FeedbackSnapshot {
             ..Default::default()
         });
 
+        let tags = self.upload_tags(
+            options.classification,
+            options.reason,
+            options.tags,
+            options.session_source.as_ref(),
+        );
+
+        let level = match options.classification {
+            "bug" | "bad_result" | "safety_check" => Level::Error,
+            _ => Level::Info,
+        };
+
+        let mut envelope = Envelope::new();
+        let title = format!(
+            "[{}]: Codex session {}",
+            display_classification(options.classification),
+            self.thread_id
+        );
+
+        let mut event = Event {
+            level,
+            message: Some(title.clone()),
+            tags,
+            ..Default::default()
+        };
+        if let Some(r) = options.reason {
+            use sentry::protocol::Exception;
+            use sentry::protocol::Values;
+
+            event.exception = Values::from(vec![Exception {
+                ty: title,
+                value: Some(r.to_string()),
+                ..Default::default()
+            }]);
+        }
+        envelope.add_item(EnvelopeItem::Event(event));
+
+        for attachment in self.feedback_attachments(
+            options.include_logs,
+            options.extra_attachment_paths,
+            options.logs_override,
+        ) {
+            envelope.add_item(EnvelopeItem::Attachment(attachment));
+        }
+
+        client.send_envelope(envelope);
+        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+        Ok(())
+    }
+
+    fn upload_tags(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        client_tags: Option<&BTreeMap<String, String>>,
+        session_source: Option<&SessionSource>,
+    ) -> BTreeMap<String, String> {
         let cli_version = env!("CARGO_PKG_VERSION");
         let mut tags = BTreeMap::from([
             (String::from("thread_id"), self.thread_id.to_string()),
             (String::from("classification"), classification.to_string()),
             (String::from("cli_version"), cli_version.to_string()),
         ]);
-        if let Some(source) = session_source.as_ref() {
+        if let Some(source) = session_source {
             tags.insert(String::from("session_source"), source.to_string());
         }
         if let Some(r) = reason {
@@ -418,6 +476,16 @@ impl FeedbackSnapshot {
             "session_source",
             "reason",
         ];
+        if let Some(client_tags) = client_tags {
+            for (key, value) in client_tags {
+                if reserved.contains(&key.as_str()) {
+                    continue;
+                }
+                if let Entry::Vacant(entry) = tags.entry(key.clone()) {
+                    entry.insert(value.clone());
+                }
+            }
+        }
         for (key, value) in &self.tags {
             if reserved.contains(&key.as_str()) {
                 continue;
@@ -427,45 +495,7 @@ impl FeedbackSnapshot {
             }
         }
 
-        let level = match classification {
-            "bug" | "bad_result" | "safety_check" => Level::Error,
-            _ => Level::Info,
-        };
-
-        let mut envelope = Envelope::new();
-        let title = format!(
-            "[{}]: Codex session {}",
-            display_classification(classification),
-            self.thread_id
-        );
-
-        let mut event = Event {
-            level,
-            message: Some(title.clone()),
-            tags,
-            ..Default::default()
-        };
-        if let Some(r) = reason {
-            use sentry::protocol::Exception;
-            use sentry::protocol::Values;
-
-            event.exception = Values::from(vec![Exception {
-                ty: title,
-                value: Some(r.to_string()),
-                ..Default::default()
-            }]);
-        }
-        envelope.add_item(EnvelopeItem::Event(event));
-
-        for attachment in
-            self.feedback_attachments(include_logs, extra_attachment_paths, logs_override)
-        {
-            envelope.add_item(EnvelopeItem::Attachment(attachment));
-        }
-
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-        Ok(())
+        tags
     }
 
     fn feedback_attachments(
@@ -696,5 +726,76 @@ mod tests {
         );
         assert_eq!(attachments_without_diagnostics[0].buffer, vec![1]);
         fs::remove_file(extra_path).expect("extra attachment should be removed");
+    }
+
+    #[test]
+    fn upload_tags_include_client_tags_and_preserve_reserved_fields() {
+        let mut tags = BTreeMap::new();
+        tags.insert("thread_id".to_string(), "wrong-thread".to_string());
+        tags.insert("turn_id".to_string(), "wrong-turn".to_string());
+        tags.insert(
+            "classification".to_string(),
+            "wrong-classification".to_string(),
+        );
+        tags.insert("cli_version".to_string(), "wrong-version".to_string());
+        tags.insert("session_source".to_string(), "wrong-source".to_string());
+        tags.insert("reason".to_string(), "wrong-reason".to_string());
+        tags.insert("model".to_string(), "gpt-5".to_string());
+        let snapshot = FeedbackSnapshot {
+            bytes: Vec::new(),
+            tags,
+            feedback_diagnostics: FeedbackDiagnostics::default(),
+            thread_id: "thread-123".to_string(),
+        };
+        let mut client_tags = BTreeMap::new();
+        client_tags.insert("thread_id".to_string(), "wrong-client-thread".to_string());
+        client_tags.insert("turn_id".to_string(), "turn-456".to_string());
+        client_tags.insert(
+            "classification".to_string(),
+            "wrong-client-classification".to_string(),
+        );
+        client_tags.insert(
+            "cli_version".to_string(),
+            "wrong-client-version".to_string(),
+        );
+        client_tags.insert(
+            "session_source".to_string(),
+            "wrong-client-source".to_string(),
+        );
+        client_tags.insert("reason".to_string(), "wrong-client-reason".to_string());
+        client_tags.insert("client_tag".to_string(), "from-client".to_string());
+
+        let upload_tags = snapshot.upload_tags(
+            "bug",
+            Some("actual reason"),
+            Some(&client_tags),
+            Some(&SessionSource::Cli),
+        );
+
+        assert_eq!(
+            upload_tags.get("thread_id").map(String::as_str),
+            Some("thread-123")
+        );
+        assert_eq!(
+            upload_tags.get("turn_id").map(String::as_str),
+            Some("turn-456")
+        );
+        assert_eq!(
+            upload_tags.get("classification").map(String::as_str),
+            Some("bug")
+        );
+        assert_eq!(
+            upload_tags.get("session_source").map(String::as_str),
+            Some("cli")
+        );
+        assert_eq!(
+            upload_tags.get("reason").map(String::as_str),
+            Some("actual reason")
+        );
+        assert_eq!(
+            upload_tags.get("client_tag").map(String::as_str),
+            Some("from-client")
+        );
+        assert_eq!(upload_tags.get("model").map(String::as_str), Some("gpt-5"));
     }
 }
