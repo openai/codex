@@ -192,6 +192,13 @@ mod tests {
     }
 
     #[test]
+    fn queue_without_required_args_is_subcommand_error() {
+        let err = MultitoolCli::try_parse_from(["codex", "queue"])
+            .expect_err("queue should be parsed as a subcommand, not as an interactive prompt");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn queue_rejects_legacy_content_flag() {
         assert!(
             MultitoolCli::try_parse_from([
