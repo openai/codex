@@ -255,3 +255,32 @@ async fn marketplace_add_sparse_flag_parses_before_and_after_source() -> Result<
 
     Ok(())
 }
+
+#[tokio::test]
+async fn marketplace_add_rejects_ref_for_local_directory() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "local ref")?;
+
+    codex_command(codex_home.path())?
+        .args([
+            "marketplace",
+            "add",
+            "--ref",
+            "main",
+            source.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "--ref can only be used with git marketplace sources",
+        ));
+
+    assert!(
+        !marketplace_install_root(codex_home.path())
+            .join("debug")
+            .exists()
+    );
+
+    Ok(())
+}

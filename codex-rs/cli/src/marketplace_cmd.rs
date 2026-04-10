@@ -91,8 +91,13 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         sparse_paths,
     } = args;
 
+    let has_explicit_ref = ref_name.is_some();
     let source = parse_marketplace_source(&source, ref_name)?;
-    if !sparse_paths.is_empty() && !matches!(source, MarketplaceSource::Git { .. }) {
+    let source_is_git = matches!(source, MarketplaceSource::Git { .. });
+    if has_explicit_ref && !source_is_git {
+        bail!("--ref can only be used with git marketplace sources");
+    }
+    if !sparse_paths.is_empty() && !source_is_git {
         bail!("--sparse can only be used with git marketplace sources");
     }
 
@@ -281,12 +286,6 @@ fn parse_marketplace_source(
         return Ok(MarketplaceSource::Git { url, ref_name });
     }
 
-    if base_source.starts_with("http://") || base_source.starts_with("https://") {
-        bail!(
-            "URL marketplace manifests are not supported yet; pass a git repository URL or a local marketplace directory"
-        );
-    }
-
     bail!("invalid marketplace source format: {source}");
 }
 
@@ -340,8 +339,7 @@ fn is_ssh_git_url(source: &str) -> bool {
 }
 
 fn is_http_git_url(source: &str) -> bool {
-    (source.starts_with("http://") || source.starts_with("https://"))
-        && (source.ends_with(".git") || source.starts_with("https://github.com/"))
+    source.starts_with("http://") || source.starts_with("https://")
 }
 
 fn looks_like_github_shorthand(source: &str) -> bool {
@@ -517,6 +515,21 @@ mod tests {
             shorthand,
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
+                ref_name: None,
+            }
+        );
+    }
+
+    #[test]
+    fn non_github_https_source_parses_as_git_url() {
+        assert_eq!(
+            parse_marketplace_source(
+                "https://gitlab.com/owner/repo",
+                /* explicit_ref */ None
+            )
+            .unwrap(),
+            MarketplaceSource::Git {
+                url: "https://gitlab.com/owner/repo".to_string(),
                 ref_name: None,
             }
         );

@@ -14,7 +14,7 @@ pub(super) fn clone_git_source(
 ) -> Result<()> {
     let destination = destination.to_string_lossy().to_string();
     if sparse_paths.is_empty() {
-        run_git(&["clone", url, destination.as_str()], None)?;
+        run_git(&["clone", url, destination.as_str()], /*cwd*/ None)?;
         if let Some(ref_name) = ref_name {
             run_git(&["checkout", ref_name], Some(Path::new(&destination)))?;
         }
@@ -29,7 +29,7 @@ pub(super) fn clone_git_source(
             url,
             destination.as_str(),
         ],
-        None,
+        /*cwd*/ None,
     )?;
     let mut sparse_args = vec!["sparse-checkout", "set"];
     sparse_args.extend(sparse_paths.iter().map(String::as_str));
