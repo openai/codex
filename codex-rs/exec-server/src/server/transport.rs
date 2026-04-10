@@ -1,5 +1,5 @@
+use std::io::Write as _;
 use std::net::SocketAddr;
-
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tracing::warn;
@@ -64,6 +64,7 @@ async fn run_websocket_listener(
     let processor = ConnectionProcessor::new(runtime_paths);
     tracing::info!("codex-exec-server listening on ws://{local_addr}");
     println!("ws://{local_addr}");
+    std::io::stdout().flush()?;
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
