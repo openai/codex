@@ -32,12 +32,12 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-pub(crate) const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
-pub(crate) const END_PATCH_MARKER: &str = "*** End Patch";
-pub(crate) const ADD_FILE_MARKER: &str = "*** Add File: ";
-pub(crate) const DELETE_FILE_MARKER: &str = "*** Delete File: ";
-pub(crate) const UPDATE_FILE_MARKER: &str = "*** Update File: ";
-pub(crate) const MOVE_TO_MARKER: &str = "*** Move to: ";
+const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
+const END_PATCH_MARKER: &str = "*** End Patch";
+const ADD_FILE_MARKER: &str = "*** Add File: ";
+const DELETE_FILE_MARKER: &str = "*** Delete File: ";
+const UPDATE_FILE_MARKER: &str = "*** Update File: ";
+const MOVE_TO_MARKER: &str = "*** Move to: ";
 const EOF_MARKER: &str = "*** End of File";
 const CHANGE_CONTEXT_MARKER: &str = "@@ ";
 const EMPTY_CHANGE_CONTEXT_MARKER: &str = "@@";
@@ -133,6 +133,7 @@ pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
     parse_patch_text(patch, mode)
 }
 
+#[derive(Clone, Copy)]
 enum ParseMode {
     /// Parse the patch text argument as is.
     Strict,
@@ -207,16 +208,9 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
     let mut remaining_lines = &lines[1..body_end_index];
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
-        let parsed_hunk = parse_one_hunk(remaining_lines, line_number);
-        let (hunk, hunk_lines) = match parsed_hunk {
-            Ok(parsed) => parsed,
-            Err(err) if matches!(mode, ParseMode::Streaming) => {
-                if hunks.is_empty() {
-                    return Err(err);
-                }
-                break;
-            }
-            Err(err) => return Err(err),
+        let (hunk, hunk_lines) = match parse_one_hunk(remaining_lines, line_number, mode)? {
+            HunkParse::Complete(hunk, hunk_lines) => (hunk, hunk_lines),
+            HunkParse::Incomplete => break,
         };
         hunks.push(hunk);
         line_number += hunk_lines;
@@ -301,9 +295,19 @@ fn check_start_and_end_lines_strict(
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum HunkParse {
+    Complete(Hunk, usize),
+    Incomplete,
+}
+
 /// Attempts to parse a single hunk from the start of lines.
 /// Returns the parsed hunk and the number of lines parsed (or a ParseError).
-fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), ParseError> {
+fn parse_one_hunk(
+    lines: &[&str],
+    line_number: usize,
+    mode: ParseMode,
+) -> Result<HunkParse, ParseError> {
     // Be tolerant of case mismatches and extra padding around marker strings.
     let first_line = lines[0].trim();
     if let Some(path) = first_line.strip_prefix(ADD_FILE_MARKER) {
@@ -319,7 +323,7 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
                 break;
             }
         }
-        return Ok((
+        return Ok(HunkParse::Complete(
             AddFile {
                 path: PathBuf::from(path),
                 contents,
@@ -328,7 +332,7 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
         ));
     } else if let Some(path) = first_line.strip_prefix(DELETE_FILE_MARKER) {
         // Delete File
-        return Ok((
+        return Ok(HunkParse::Complete(
             DeleteFile {
                 path: PathBuf::from(path),
             },
@@ -363,24 +367,37 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
                 break;
             }
 
-            let (chunk, chunk_lines) = parse_update_file_chunk(
+            let parsed_chunk = parse_update_file_chunk(
                 remaining_lines,
                 line_number + parsed_lines,
                 chunks.is_empty(),
-            )?;
+            );
+            let (chunk, chunk_lines) = match parsed_chunk {
+                Ok(parsed) => parsed,
+                Err(err) if matches!(mode, ParseMode::Streaming) => {
+                    if chunks.is_empty() {
+                        return Ok(HunkParse::Incomplete);
+                    }
+                    break;
+                }
+                Err(err) => return Err(err),
+            };
             chunks.push(chunk);
             parsed_lines += chunk_lines;
             remaining_lines = &remaining_lines[chunk_lines..]
         }
 
         if chunks.is_empty() {
+            if matches!(mode, ParseMode::Streaming) {
+                return Ok(HunkParse::Incomplete);
+            }
             return Err(InvalidHunkError {
                 message: format!("Update file hunk for path '{path}' is empty"),
                 line_number,
             });
         }
 
-        return Ok((
+        return Ok(HunkParse::Complete(
             UpdateFile {
                 path: PathBuf::from(path),
                 move_path: move_path.map(PathBuf::from),
@@ -390,12 +407,23 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
         ));
     }
 
+    if matches!(mode, ParseMode::Streaming) && is_partial_hunk_header(first_line) {
+        return Ok(HunkParse::Incomplete);
+    }
+
     Err(InvalidHunkError {
         message: format!(
             "'{first_line}' is not a valid hunk header. Valid hunk headers: '*** Add File: {{path}}', '*** Delete File: {{path}}', '*** Update File: {{path}}'"
         ),
         line_number,
     })
+}
+
+fn is_partial_hunk_header(line: &str) -> bool {
+    !line.is_empty()
+        && [ADD_FILE_MARKER, DELETE_FILE_MARKER, UPDATE_FILE_MARKER]
+            .iter()
+            .any(|marker| marker.starts_with(line))
 }
 
 fn parse_update_file_chunk(
@@ -647,6 +675,17 @@ fn test_parse_patch_text_streaming_mode_omits_end_marker() {
         parse_patch_text(
             "*** Begin Patch\n*** Delete File: gone.txt",
             ParseMode::Strict
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn test_parse_patch_text_streaming_mode_rejects_invalid_hunk_after_complete_hunk() {
+    assert!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Add File: src/one.txt\n+one\nnot a hunk",
+            ParseMode::Streaming
         )
         .is_err()
     );
@@ -1018,12 +1057,16 @@ fn test_parse_patch_lenient() {
 #[test]
 fn test_parse_one_hunk() {
     assert_eq!(
-        parse_one_hunk(&["bad"], /*line_number*/ 234),
+        parse_one_hunk(&["bad"], /*line_number*/ 234, ParseMode::Strict),
         Err(InvalidHunkError {
             message: "'bad' is not a valid hunk header. \
             Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'".to_string(),
             line_number: 234
         })
+    );
+    assert_eq!(
+        parse_one_hunk(&["*** Update"], /*line_number*/ 234, ParseMode::Streaming),
+        Ok(HunkParse::Incomplete)
     );
     // Other edge cases are already covered by tests above/below.
 }
