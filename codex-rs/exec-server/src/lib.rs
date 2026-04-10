@@ -15,6 +15,7 @@ mod remote_file_system;
 mod remote_process;
 mod rpc;
 mod runtime_paths;
+mod sandboxed_file_system;
 mod server;
 
 pub use client::ExecServerClient;
@@ -29,6 +30,7 @@ pub use file_system::CreateDirectoryOptions;
 pub use file_system::ExecutorFileSystem;
 pub use file_system::FileMetadata;
 pub use file_system::FileSystemResult;
+pub use file_system::FileSystemSandboxContext;
 pub use file_system::ReadDirectoryEntry;
 pub use file_system::RemoveOptions;
 pub use fs_helper::CODEX_FS_HELPER_ARG1;

@@ -7,8 +7,8 @@ use tokio::io;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
-use crate::ExecutorFileSystem;
 use crate::ExecServerRuntimePaths;
+use crate::ExecutorFileSystem;
 use crate::FileMetadata;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
@@ -167,7 +167,10 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self.file_system.read_directory(path, /*sandbox*/ None).await;
+            return self
+                .file_system
+                .read_directory(path, /*sandbox*/ None)
+                .await;
         };
         let response = self
             .run_sandboxed(
@@ -228,7 +231,12 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
             return self
                 .file_system
-                .copy(source_path, destination_path, options, /*sandbox*/ None)
+                .copy(
+                    source_path,
+                    destination_path,
+                    options,
+                    /*sandbox*/ None,
+                )
                 .await;
         };
         self.run_sandboxed(

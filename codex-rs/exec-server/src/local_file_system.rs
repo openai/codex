@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::protocol::FileSystemPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
@@ -18,6 +20,12 @@ use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum AccessPathMode {
+    ResolveAll,
+    PreserveLeaf,
+}
 
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem) });
