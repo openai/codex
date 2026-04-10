@@ -6,7 +6,7 @@ import subprocess
 import threading
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, TypeVar
 
@@ -48,6 +48,58 @@ from .retry import retry_on_overload
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
 RUNTIME_PKG_NAME = "codex-cli-bin"
+GLOBAL_NOTIFICATION_BACKLOG_LIMIT = 512
+
+
+@dataclass(slots=True)
+class _PendingRequest:
+    event: threading.Event = field(default_factory=threading.Event)
+    result: JsonValue | None = None
+    error: BaseException | None = None
+
+
+class _BufferedNotificationStream:
+    def __init__(self, *, maxlen: int | None = None) -> None:
+        self._condition = threading.Condition()
+        self._items: deque[Notification] = (
+            deque(maxlen=maxlen) if maxlen is not None else deque()
+        )
+        self._closed = False
+        self._error: BaseException | None = None
+
+    def push(self, notification: Notification) -> None:
+        with self._condition:
+            if self._closed:
+                return
+            self._items.append(notification)
+            self._condition.notify_all()
+
+    def pop(self) -> Notification:
+        with self._condition:
+            while not self._items and not self._closed:
+                self._condition.wait()
+
+            if self._items:
+                return self._items.popleft()
+
+            if self._error is not None:
+                raise self._error
+
+            raise TransportClosedError("notification stream is closed")
+
+    def close(self, error: BaseException | None = None) -> None:
+        with self._condition:
+            self._closed = True
+            self._error = error
+            self._condition.notify_all()
+
+    def is_closed(self) -> bool:
+        with self._condition:
+            return self._closed
+
+    def is_drained(self) -> bool:
+        with self._condition:
+            return self._closed and not self._items
 
 
 def _params_dict(
@@ -144,12 +196,21 @@ class AppServerClient:
         self.config = config or AppServerConfig()
         self._approval_handler = approval_handler or self._default_approval_handler
         self._proc: subprocess.Popen[str] | None = None
-        self._lock = threading.Lock()
-        self._turn_consumer_lock = threading.Lock()
-        self._active_turn_consumer: str | None = None
-        self._pending_notifications: deque[Notification] = deque()
+        self._write_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._pending_notifications = _BufferedNotificationStream(
+            maxlen=GLOBAL_NOTIFICATION_BACKLOG_LIMIT
+        )
+        self._pending_requests: dict[str, _PendingRequest] = {}
+        self._turn_streams: dict[tuple[str, str], _BufferedNotificationStream] = {}
+        self._turn_starting_by_thread_id: set[str] = set()
+        self._active_turn_by_thread_id: dict[str, str] = {}
+        self._active_turn_consumers: set[tuple[str, str]] = set()
+        self._active_turn_stream_count = 0
+        self._transport_error: BaseException | None = None
         self._stderr_lines: deque[str] = deque(maxlen=400)
         self._stderr_thread: threading.Thread | None = None
+        self._reader_thread: threading.Thread | None = None
 
     def __enter__(self) -> "AppServerClient":
         self.start()
@@ -161,6 +222,7 @@ class AppServerClient:
     def start(self) -> None:
         if self._proc is not None:
             return
+        self._reset_transport_state()
 
         if self.config.launch_args_override is not None:
             args = list(self.config.launch_args_override)
@@ -188,13 +250,14 @@ class AppServerClient:
         )
 
         self._start_stderr_drain_thread()
+        self._start_reader_thread()
 
     def close(self) -> None:
         if self._proc is None:
             return
         proc = self._proc
         self._proc = None
-        self._active_turn_consumer = None
+        self._finish_transport(TransportClosedError("app-server closed"))
 
         if proc.stdin:
             proc.stdin.close()
@@ -206,6 +269,8 @@ class AppServerClient:
 
         if self._stderr_thread and self._stderr_thread.is_alive():
             self._stderr_thread.join(timeout=0.5)
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=0.5)
 
     def initialize(self) -> InitializeResponse:
         result = self.request(
@@ -239,67 +304,76 @@ class AppServerClient:
 
     def _request_raw(self, method: str, params: JsonObject | None = None) -> JsonValue:
         request_id = str(uuid.uuid4())
-        self._write_message({"id": request_id, "method": method, "params": params or {}})
+        waiter = _PendingRequest()
+        with self._state_lock:
+            if self._transport_error is not None:
+                raise self._transport_error
+            self._pending_requests[request_id] = waiter
 
-        while True:
-            msg = self._read_message()
+        try:
+            self._write_message({"id": request_id, "method": method, "params": params or {}})
+        except BaseException:
+            with self._state_lock:
+                self._pending_requests.pop(request_id, None)
+            raise
 
-            if "method" in msg and "id" in msg:
-                response = self._handle_server_request(msg)
-                self._write_message({"id": msg["id"], "result": response})
-                continue
-
-            if "method" in msg and "id" not in msg:
-                self._pending_notifications.append(
-                    self._coerce_notification(msg["method"], msg.get("params"))
-                )
-                continue
-
-            if msg.get("id") != request_id:
-                continue
-
-            if "error" in msg:
-                err = msg["error"]
-                if isinstance(err, dict):
-                    raise map_jsonrpc_error(
-                        int(err.get("code", -32000)),
-                        str(err.get("message", "unknown")),
-                        err.get("data"),
-                    )
-                raise AppServerError("Malformed JSON-RPC error response")
-
-            return msg.get("result")
+        waiter.event.wait()
+        if waiter.error is not None:
+            raise waiter.error
+        return waiter.result
 
     def notify(self, method: str, params: JsonObject | None = None) -> None:
         self._write_message({"method": method, "params": params or {}})
 
     def next_notification(self) -> Notification:
-        if self._pending_notifications:
-            return self._pending_notifications.popleft()
-
-        while True:
-            msg = self._read_message()
-            if "method" in msg and "id" in msg:
-                response = self._handle_server_request(msg)
-                self._write_message({"id": msg["id"], "result": response})
-                continue
-            if "method" in msg and "id" not in msg:
-                return self._coerce_notification(msg["method"], msg.get("params"))
-
-    def acquire_turn_consumer(self, turn_id: str) -> None:
-        with self._turn_consumer_lock:
-            if self._active_turn_consumer is not None:
+        with self._state_lock:
+            if self._active_turn_stream_count > 0:
                 raise RuntimeError(
-                    "Concurrent turn consumers are not yet supported in the experimental SDK. "
-                    f"Client is already streaming turn {self._active_turn_consumer!r}; "
-                    f"cannot start turn {turn_id!r} until the active consumer finishes."
+                    "next_notification() is incompatible with active turn streaming on the same "
+                    "client. Consume notifications from TurnHandle.stream()/run() instead."
                 )
-            self._active_turn_consumer = turn_id
+        return self._pending_notifications.pop()
 
-    def release_turn_consumer(self, turn_id: str) -> None:
-        with self._turn_consumer_lock:
-            if self._active_turn_consumer == turn_id:
-                self._active_turn_consumer = None
+    def acquire_turn_consumer(self, thread_id: str, turn_id: str) -> None:
+        turn_key = (thread_id, turn_id)
+        with self._state_lock:
+            if turn_key in self._active_turn_consumers:
+                raise RuntimeError(
+                    f"Turn {turn_id!r} is already being streamed on thread {thread_id!r}."
+                )
+            self._active_turn_consumers.add(turn_key)
+            self._active_turn_stream_count += 1
+            self._turn_streams.setdefault(turn_key, _BufferedNotificationStream())
+
+    def release_turn_consumer(self, thread_id: str, turn_id: str) -> None:
+        turn_key = (thread_id, turn_id)
+        with self._state_lock:
+            if turn_key in self._active_turn_consumers:
+                self._active_turn_consumers.remove(turn_key)
+                self._active_turn_stream_count -= 1
+            stream = self._turn_streams.get(turn_key)
+            if stream is not None and stream.is_drained():
+                self._turn_streams.pop(turn_key, None)
+
+    def next_turn_notification(self, thread_id: str, turn_id: str) -> Notification:
+        turn_key = (thread_id, turn_id)
+        with self._state_lock:
+            stream = self._turn_streams.setdefault(turn_key, _BufferedNotificationStream())
+        return stream.pop()
+
+    def assert_can_start_turn(self, thread_id: str) -> None:
+        with self._state_lock:
+            if thread_id in self._turn_starting_by_thread_id:
+                raise RuntimeError(
+                    f"Thread {thread_id!r} is already starting a turn on this client."
+                )
+            active_turn_id = self._active_turn_by_thread_id.get(thread_id)
+            if active_turn_id is not None:
+                raise RuntimeError(
+                    f"Thread {thread_id!r} already has active turn {active_turn_id!r}. "
+                    "Use TurnHandle.steer() or TurnHandle.interrupt() instead of starting "
+                    "another turn on the same thread."
+                )
 
     def thread_start(self, params: V2ThreadStartParams | JsonObject | None = None) -> ThreadStartResponse:
         return self.request("thread/start", _params_dict(params), response_model=ThreadStartResponse)
@@ -356,12 +430,19 @@ class AppServerClient:
         input_items: list[JsonObject] | JsonObject | str,
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
+        self._begin_turn_start(thread_id)
         payload = {
             **_params_dict(params),
             "threadId": thread_id,
             "input": self._normalize_input_items(input_items),
         }
-        return self.request("turn/start", payload, response_model=TurnStartResponse)
+        try:
+            started = self.request("turn/start", payload, response_model=TurnStartResponse)
+        except BaseException:
+            self._cancel_turn_start(thread_id)
+            raise
+        self._finish_turn_start(thread_id, started.turn.id)
+        return started
 
     def turn_interrupt(self, thread_id: str, turn_id: str) -> TurnInterruptResponse:
         return self.request(
@@ -437,21 +518,25 @@ class AppServerClient:
     ) -> Iterator[AgentMessageDeltaNotification]:
         started = self.turn_start(thread_id, text, params=params)
         turn_id = started.turn.id
-        while True:
-            notification = self.next_notification()
-            if (
-                notification.method == "item/agentMessage/delta"
-                and isinstance(notification.payload, AgentMessageDeltaNotification)
-                and notification.payload.turn_id == turn_id
-            ):
-                yield notification.payload
-                continue
-            if (
-                notification.method == "turn/completed"
-                and isinstance(notification.payload, TurnCompletedNotification)
-                and notification.payload.turn.id == turn_id
-            ):
-                break
+        self.acquire_turn_consumer(thread_id, turn_id)
+        try:
+            while True:
+                notification = self.next_turn_notification(thread_id, turn_id)
+                if (
+                    notification.method == "item/agentMessage/delta"
+                    and isinstance(notification.payload, AgentMessageDeltaNotification)
+                    and notification.payload.turn_id == turn_id
+                ):
+                    yield notification.payload
+                    continue
+                if (
+                    notification.method == "turn/completed"
+                    and isinstance(notification.payload, TurnCompletedNotification)
+                    and notification.payload.turn.id == turn_id
+                ):
+                    break
+        finally:
+            self.release_turn_consumer(thread_id, turn_id)
 
     def _coerce_notification(self, method: str, params: object) -> Notification:
         params_dict = params if isinstance(params, dict) else {}
@@ -513,7 +598,7 @@ class AppServerClient:
     def _write_message(self, payload: JsonObject) -> None:
         if self._proc is None or self._proc.stdin is None:
             raise TransportClosedError("app-server is not running")
-        with self._lock:
+        with self._write_lock:
             self._proc.stdin.write(json.dumps(payload) + "\n")
             self._proc.stdin.flush()
 
@@ -535,6 +620,162 @@ class AppServerClient:
         if not isinstance(message, dict):
             raise AppServerError(f"Invalid JSON-RPC payload: {message!r}")
         return message
+
+    def _reset_transport_state(self) -> None:
+        self._pending_notifications = _BufferedNotificationStream(
+            maxlen=GLOBAL_NOTIFICATION_BACKLOG_LIMIT
+        )
+        self._pending_requests = {}
+        self._turn_streams = {}
+        self._turn_starting_by_thread_id = set()
+        self._active_turn_by_thread_id = {}
+        self._active_turn_consumers = set()
+        self._active_turn_stream_count = 0
+        self._transport_error = None
+
+    def _start_reader_thread(self) -> None:
+        def _reader() -> None:
+            try:
+                while True:
+                    msg = self._read_message()
+                    if "method" in msg and "id" in msg:
+                        self._start_server_request_worker(msg)
+                        continue
+                    if "method" in msg and "id" not in msg:
+                        method = msg["method"]
+                        if isinstance(method, str):
+                            self._dispatch_notification(
+                                self._coerce_notification(method, msg.get("params"))
+                            )
+                        continue
+                    self._handle_response_message(msg)
+            except BaseException as exc:  # noqa: BLE001
+                self._finish_transport(exc)
+
+        self._reader_thread = threading.Thread(target=_reader, daemon=True)
+        self._reader_thread.start()
+
+    def _start_server_request_worker(self, msg: dict[str, JsonValue]) -> None:
+        def _resolve() -> None:
+            try:
+                response = self._handle_server_request(msg)
+                self._write_message({"id": msg["id"], "result": response})
+            except BaseException:
+                return
+
+        threading.Thread(target=_resolve, daemon=True).start()
+
+    def _handle_response_message(self, msg: dict[str, JsonValue]) -> None:
+        request_id = msg.get("id")
+        if not isinstance(request_id, str):
+            return
+
+        with self._state_lock:
+            waiter = self._pending_requests.pop(request_id, None)
+
+        if waiter is None:
+            return
+
+        if "error" in msg:
+            err = msg["error"]
+            if isinstance(err, dict):
+                waiter.error = map_jsonrpc_error(
+                    int(err.get("code", -32000)),
+                    str(err.get("message", "unknown")),
+                    err.get("data"),
+                )
+            else:
+                waiter.error = AppServerError("Malformed JSON-RPC error response")
+        else:
+            waiter.result = msg.get("result")
+        waiter.event.set()
+
+    def _dispatch_notification(self, notification: Notification) -> None:
+        self._pending_notifications.push(notification)
+
+        turn_key = self._turn_key_for_notification(notification)
+        if turn_key is None:
+            return
+
+        thread_id, turn_id = turn_key
+        close_stream = False
+        with self._state_lock:
+            stream = self._turn_streams.setdefault(turn_key, _BufferedNotificationStream())
+            if notification.method == "turn/started":
+                self._turn_starting_by_thread_id.discard(thread_id)
+                self._active_turn_by_thread_id[thread_id] = turn_id
+            elif notification.method == "turn/completed":
+                self._turn_starting_by_thread_id.discard(thread_id)
+                if self._active_turn_by_thread_id.get(thread_id) == turn_id:
+                    self._active_turn_by_thread_id.pop(thread_id, None)
+                close_stream = True
+
+        stream.push(notification)
+        if close_stream:
+            stream.close()
+
+    def _turn_key_for_notification(self, notification: Notification) -> tuple[str, str] | None:
+        payload = notification.payload
+        thread_id = getattr(payload, "thread_id", None)
+        turn_id = getattr(payload, "turn_id", None)
+        if isinstance(thread_id, str) and isinstance(turn_id, str):
+            return thread_id, turn_id
+
+        turn = getattr(payload, "turn", None)
+        nested_turn_id = getattr(turn, "id", None)
+        if isinstance(thread_id, str) and isinstance(nested_turn_id, str):
+            return thread_id, nested_turn_id
+
+        return None
+
+    def _begin_turn_start(self, thread_id: str) -> None:
+        with self._state_lock:
+            active_turn_id = self._active_turn_by_thread_id.get(thread_id)
+            if active_turn_id is not None:
+                raise RuntimeError(
+                    f"Thread {thread_id!r} already has active turn {active_turn_id!r}. "
+                    "Use TurnHandle.steer() or TurnHandle.interrupt() instead of starting "
+                    "another turn on the same thread."
+                )
+            if thread_id in self._turn_starting_by_thread_id:
+                raise RuntimeError(
+                    f"Thread {thread_id!r} is already starting a turn on this client."
+                )
+            self._turn_starting_by_thread_id.add(thread_id)
+
+    def _cancel_turn_start(self, thread_id: str) -> None:
+        with self._state_lock:
+            self._turn_starting_by_thread_id.discard(thread_id)
+
+    def _finish_turn_start(self, thread_id: str, turn_id: str) -> None:
+        turn_key = (thread_id, turn_id)
+        with self._state_lock:
+            self._turn_starting_by_thread_id.discard(thread_id)
+            stream = self._turn_streams.setdefault(turn_key, _BufferedNotificationStream())
+            if not stream.is_closed():
+                self._active_turn_by_thread_id[thread_id] = turn_id
+
+    def _finish_transport(self, error: BaseException) -> None:
+        with self._state_lock:
+            if self._transport_error is not None:
+                return
+            self._transport_error = error
+            pending_requests = list(self._pending_requests.values())
+            self._pending_requests.clear()
+            turn_streams = list(self._turn_streams.values())
+            self._turn_streams.clear()
+            self._turn_starting_by_thread_id.clear()
+            self._active_turn_by_thread_id.clear()
+            self._active_turn_consumers.clear()
+            self._active_turn_stream_count = 0
+
+        for waiter in pending_requests:
+            waiter.error = error
+            waiter.event.set()
+
+        self._pending_notifications.close(error)
+        for stream in turn_streams:
+            stream.close(error)
 
 
 def default_codex_home() -> str:

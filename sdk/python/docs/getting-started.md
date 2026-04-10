@@ -43,7 +43,8 @@ What happened:
 - `thread.run("...")` started a turn, consumed events until completion, and returned the final assistant response plus collected items and usage.
 - `result.final_response` is `None` when no final-answer or phase-less assistant message item completes for the turn.
 - use `thread.turn(...)` when you need a `TurnHandle` for streaming, steering, interrupting, or turn IDs/status
-- one client can have only one active turn consumer (`thread.run(...)`, `TurnHandle.stream()`, or `TurnHandle.run()`) at a time in the current experimental build
+- one client can run turns concurrently across different thread IDs in the current experimental build
+- one thread can have only one active turn at a time on a given client; start a second same-thread turn only after the first completes, or use `steer()` on the existing `TurnHandle`
 
 ## 3) Continue the same thread (multi-turn)
 

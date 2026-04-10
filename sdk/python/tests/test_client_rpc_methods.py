@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Any
 
 from codex_app_server.client import AppServerClient, _params_dict
-from codex_app_server.generated.v2_all import ThreadListParams, ThreadTokenUsageUpdatedNotification
+from codex_app_server.generated.v2_all import (
+    AgentMessageDeltaNotification,
+    ThreadListParams,
+    ThreadTokenUsageUpdatedNotification,
+    TurnCompletedNotification,
+)
 from codex_app_server.models import UnknownNotification
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,3 +98,58 @@ def test_invalid_notification_payload_falls_back_to_unknown() -> None:
 
     assert event.method == "thread/tokenUsage/updated"
     assert isinstance(event.payload, UnknownNotification)
+
+
+def test_client_routes_interleaved_turn_notifications_to_matching_turn_queues() -> None:
+    client = AppServerClient()
+    first = client._coerce_notification(
+        "item/agentMessage/delta",
+        {
+            "delta": "first",
+            "itemId": "item-1",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+        },
+    )
+    second = client._coerce_notification(
+        "item/agentMessage/delta",
+        {
+            "delta": "second",
+            "itemId": "item-2",
+            "threadId": "thread-2",
+            "turnId": "turn-2",
+        },
+    )
+
+    client._dispatch_notification(first)  # type: ignore[attr-defined]
+    client._dispatch_notification(second)  # type: ignore[attr-defined]
+
+    first_turn = client.next_turn_notification("thread-1", "turn-1")
+    second_turn = client.next_turn_notification("thread-2", "turn-2")
+
+    assert isinstance(first_turn.payload, AgentMessageDeltaNotification)
+    assert first_turn.payload.delta == "first"
+    assert isinstance(second_turn.payload, AgentMessageDeltaNotification)
+    assert second_turn.payload.delta == "second"
+
+
+def test_next_notification_still_returns_turn_notifications_without_active_streams() -> None:
+    client = AppServerClient()
+    completed = client._coerce_notification(
+        "turn/completed",
+        {
+            "threadId": "thread-1",
+            "turn": {
+                "id": "turn-1",
+                "items": [],
+                "status": "completed",
+            },
+        },
+    )
+
+    client._dispatch_notification(completed)  # type: ignore[attr-defined]
+    event = client.next_notification()
+
+    assert event.method == "turn/completed"
+    assert isinstance(event.payload, TurnCompletedNotification)
+    assert event.payload.turn.id == "turn-1"
