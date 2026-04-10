@@ -3,6 +3,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_core::plugins::validate_marketplace_root;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -29,8 +30,13 @@ pub(super) fn installed_marketplace_root_for_source(
     install_metadata: &MarketplaceInstallMetadata,
 ) -> Result<Option<PathBuf>> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
-    let Ok(config) = std::fs::read_to_string(&config_path) else {
-        return Ok(None);
+    let config = match std::fs::read_to_string(&config_path) {
+        Ok(config) => config,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to read user config {}", config_path.display()));
+        }
     };
     let config: toml::Value = toml::from_str(&config)
         .with_context(|| format!("failed to parse user config {}", config_path.display()))?;
@@ -116,4 +122,38 @@ fn config_sparse_paths(marketplace: &toml::Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn installed_marketplace_root_for_source_propagates_config_read_errors() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        std::fs::create_dir(&config_path)?;
+
+        let install_root = codex_home.path().join("marketplaces");
+        let source = MarketplaceSource::LocalDirectory {
+            path: codex_home.path().join("source"),
+        };
+        let install_metadata = MarketplaceInstallMetadata::from_source(&source, &[]);
+
+        let err = installed_marketplace_root_for_source(
+            codex_home.path(),
+            &install_root,
+            &install_metadata,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!("failed to read user config {}", config_path.display())
+        );
+
+        Ok(())
+    }
 }

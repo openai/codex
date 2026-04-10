@@ -181,6 +181,47 @@ async fn marketplace_add_rejects_same_name_from_different_source() -> Result<()>
     Ok(())
 }
 
+#[tokio::test]
+async fn marketplace_add_rolls_back_install_when_config_write_fails() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "rollback")?;
+
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(&config_path, "")?;
+    let original_permissions = std::fs::metadata(&config_path)?.permissions();
+    let mut read_only_permissions = original_permissions.clone();
+    read_only_permissions.set_readonly(true);
+    std::fs::set_permissions(&config_path, read_only_permissions)?;
+
+    let output = codex_command(codex_home.path())?
+        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .output()?;
+
+    std::fs::set_permissions(&config_path, original_permissions)?;
+
+    assert!(
+        !output.status.success(),
+        "command unexpectedly succeeded: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("failed to add marketplace `debug` to user config.toml"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !marketplace_install_root(codex_home.path())
+            .join("debug")
+            .exists(),
+        "installed marketplace should be rolled back when config.toml cannot be persisted"
+    );
+
+    Ok(())
+}
+
 fn assert_marketplace_config(
     codex_home: &Path,
     marketplace_name: &str,

@@ -182,7 +182,15 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     }
     ops::replace_marketplace_root(&staged_root, &destination)
         .with_context(|| format!("failed to install marketplace at {}", destination.display()))?;
-    record_added_marketplace(&codex_home, &marketplace_name, &install_metadata)?;
+    if let Err(err) = record_added_marketplace(&codex_home, &marketplace_name, &install_metadata) {
+        if let Err(rollback_err) = fs::rename(&destination, &staged_root) {
+            bail!(
+                "{err}; additionally failed to roll back installed marketplace at {}: {rollback_err}",
+                destination.display()
+            );
+        }
+        return Err(err);
+    }
 
     println!(
         "Added marketplace `{marketplace_name}` from {}.",
