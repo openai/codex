@@ -10,7 +10,6 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::CommandAction;
@@ -75,16 +74,12 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         Some(5000),
         "call-zsh-fork",
     )?;
-    let no_op_response = responses::sse(vec![
-        responses::ev_response_created("resp-2"),
-        responses::ev_completed("resp-2"),
-    ]);
-    // Interrupting after the shell item starts can race with the follow-up
-    // model request that reports the aborted tool call. This test only cares
-    // that zsh-fork launches the expected command, so allow one extra no-op
-    // `/responses` POST instead of asserting an exact request count.
-    let server =
-        create_mock_responses_server_sequence_unchecked(vec![response, no_op_response]).await;
+    let server = responses::start_mock_server().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .respond_with(responses::sse_response(response))
+        .mount(&server)
+        .await;
     create_config_toml(
         &codex_home,
         &server.uri(),
@@ -494,8 +489,19 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     // subcommand-decline flow. This test is about approval/decline behavior in
     // the zsh fork, not exact model request count, so allow an extra request
     // and return a harmless no-op response if it arrives.
-    let server =
-        create_mock_responses_server_sequence_unchecked(vec![response, no_op_response]).await;
+    let server = responses::start_mock_server().await;
+    let _initial_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, "remove both files"),
+        response,
+    )
+    .await;
+    let _follow_up = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, "call-zsh-fork-subcommand-decline"),
+        no_op_response,
+    )
+    .await;
     create_config_toml(
         &codex_home,
         &server.uri(),
@@ -744,6 +750,12 @@ async fn create_zsh_test_mcp_process(codex_home: &Path, zdotdir: &Path) -> Resul
     McpProcess::new_with_env(codex_home, &[("ZDOTDIR", Some(zdotdir.as_str()))]).await
 }
 
+fn body_contains(req: &wiremock::Request, text: &str) -> bool {
+    String::from_utf8(req.body.clone())
+        .ok()
+        .is_some_and(|body| body.contains(text))
+}
+
 fn create_config_toml(
     codex_home: &Path,
     server_uri: &str,
@@ -751,7 +763,10 @@ fn create_config_toml(
     feature_flags: &BTreeMap<Feature, bool>,
     zsh_path: &Path,
 ) -> std::io::Result<()> {
-    let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
+    let mut features = BTreeMap::from([
+        (Feature::EnableRequestCompression, false),
+        (Feature::RemoteModels, false),
+    ]);
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
     }
