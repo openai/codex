@@ -128,9 +128,9 @@ fn tool_search_is_under_development_and_disabled_by_default() {
 }
 
 #[test]
-fn general_analytics_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::GeneralAnalytics.default_enabled(), false);
+fn general_analytics_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::Stable);
+    assert_eq!(Feature::GeneralAnalytics.default_enabled(), true);
 }
 
 #[test]
