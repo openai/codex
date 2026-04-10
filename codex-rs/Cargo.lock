@@ -2823,6 +2823,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-thread-store"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "codex-protocol",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
