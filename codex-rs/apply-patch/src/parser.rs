@@ -1065,7 +1065,11 @@ fn test_parse_one_hunk() {
         })
     );
     assert_eq!(
-        parse_one_hunk(&["*** Update"], /*line_number*/ 234, ParseMode::Streaming),
+        parse_one_hunk(
+            &["*** Update"],
+            /*line_number*/ 234,
+            ParseMode::Streaming
+        ),
         Ok(HunkParse::Incomplete)
     );
     // Other edge cases are already covered by tests above/below.
