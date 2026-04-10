@@ -487,10 +487,10 @@ fn append_read_only_subpath_args(
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
 ) {
-    if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
+    if let Some(target) = canonical_target_for_symlink_in_path(subpath, allowed_write_paths) {
         args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
+        args.push(path_to_string(&target));
+        args.push(path_to_string(&target));
         return;
     }
 
@@ -518,11 +518,14 @@ fn append_unreadable_root_args(
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
-    if let Some(symlink_path) = find_symlink_in_path(unreadable_root, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
-        return Ok(());
+    if let Some(target) = canonical_target_for_symlink_in_path(unreadable_root, allowed_write_paths)
+    {
+        return append_existing_unreadable_path_args(
+            args,
+            preserved_files,
+            &target,
+            allowed_write_paths,
+        );
     }
 
     if !unreadable_root.exists() {
@@ -536,6 +539,20 @@ fn append_unreadable_root_args(
         return Ok(());
     }
 
+    append_existing_unreadable_path_args(
+        args,
+        preserved_files,
+        unreadable_root,
+        allowed_write_paths,
+    )
+}
+
+fn append_existing_unreadable_path_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    unreadable_root: &Path,
+    allowed_write_paths: &[PathBuf],
+) -> Result<()> {
     if unreadable_root.is_dir() {
         let mut writable_descendants: Vec<&Path> = allowed_write_paths
             .iter()
@@ -585,12 +602,10 @@ fn is_within_allowed_write_paths(path: &Path, allowed_write_paths: &[PathBuf]) -
         .any(|root| path.starts_with(root))
 }
 
-/// Find the first symlink along `target_path` that is also under a writable root.
-///
-/// This blocks symlink replacement attacks where a protected path is a symlink
-/// inside a writable root (e.g., `.codex -> ./decoy`). In that case we mount
-/// `/dev/null` on the symlink itself to prevent rewiring it.
-fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> Option<PathBuf> {
+fn canonical_target_for_symlink_in_path(
+    target_path: &Path,
+    allowed_write_paths: &[PathBuf],
+) -> Option<PathBuf> {
     let mut current = PathBuf::new();
 
     for component in target_path.components() {
@@ -617,7 +632,7 @@ fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> 
         if metadata.file_type().is_symlink()
             && is_within_allowed_write_paths(&current, allowed_write_paths)
         {
-            return Some(current);
+            return fs::canonicalize(&current).ok();
         }
     }
 
@@ -868,7 +883,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn protected_symlinked_directory_subpaths_mask_symlink_inode() {
+    fn protected_symlinked_directory_subpaths_bind_target_read_only() {
         let temp_dir = TempDir::new().expect("temp dir");
         let root = temp_dir.path().join("root");
         let agents_target = root.join("agents-target");
@@ -886,17 +901,15 @@ mod tests {
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
 
-        assert!(
-            args.args
-                .windows(3)
-                .any(|window| { window == ["--ro-bind", "/dev/null", agents_link_str.as_str()] })
-        );
-        assert!(
-            !args
-                .args
-                .iter()
-                .any(|arg| arg == agents_target_str.as_str())
-        );
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--ro-bind",
+                    agents_target_str.as_str(),
+                    agents_target_str.as_str(),
+                ]
+        }));
+        assert!(!args.args.iter().any(|arg| arg == agents_link_str.as_str()));
     }
 
     #[cfg(unix)]
@@ -931,10 +944,23 @@ mod tests {
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
 
-        assert!(args.args.windows(3).any(|window| {
-            window == ["--ro-bind", "/dev/null", real_linked_private_str.as_str()]
+        assert!(args.args.windows(6).any(|window| {
+            window
+                == [
+                    "--perms",
+                    "000",
+                    "--tmpfs",
+                    outside_str.as_str(),
+                    "--remount-ro",
+                    outside_str.as_str(),
+                ]
         }));
-        assert!(!args.args.iter().any(|arg| arg == outside_str.as_str()));
+        assert!(
+            !args
+                .args
+                .iter()
+                .any(|arg| arg == real_linked_private_str.as_str())
+        );
     }
 
     #[test]
