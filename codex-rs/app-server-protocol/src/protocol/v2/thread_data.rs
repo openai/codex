@@ -152,7 +152,9 @@ pub struct Thread {
 #[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
-    /// Thread items currently included in this turn payload.
+    /// Thread items currently included in this turn payload. `turn/completed`
+    /// includes terminal turn items when they are still available from the live
+    /// thread listener; other lightweight responses may leave this empty.
     pub items: Vec<ThreadItem>,
     /// Describes how much of `items` has been loaded for this turn.
     #[serde(default)]
