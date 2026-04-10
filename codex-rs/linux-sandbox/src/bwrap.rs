@@ -287,7 +287,7 @@ fn create_filesystem_args(
     for writable_root in &writable_roots {
         let root = writable_root.root.as_path();
         allowed_write_paths.push(root.to_path_buf());
-        if let Some(target) = symlink_target(root) {
+        if let Some(target) = canonical_target_if_symlinked_path(root) {
             allowed_write_paths.push(target);
         }
     }
@@ -326,7 +326,7 @@ fn create_filesystem_args(
 
     for writable_root in &sorted_writable_roots {
         let root = writable_root.root.as_path();
-        let symlink_target = symlink_target(root);
+        let symlink_target = canonical_target_if_symlinked_path(root);
         // If a denied ancestor was already masked, recreate any missing mount
         // target parents before binding the narrower writable descendant.
         if let Some(masking_root) = unreadable_roots
@@ -410,16 +410,37 @@ fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
 
-fn symlink_target(root: &Path) -> Option<PathBuf> {
-    let meta = fs::symlink_metadata(root).ok()?;
-    if !meta.file_type().is_symlink() {
-        return None;
+fn canonical_target_if_symlinked_path(path: &Path) -> Option<PathBuf> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        use std::path::Component;
+        match component {
+            Component::RootDir => {
+                current.push(Path::new("/"));
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                current.pop();
+                continue;
+            }
+            Component::Normal(part) => current.push(part),
+            Component::Prefix(_) => continue,
+        }
+
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(_) => return None,
+        };
+        if metadata.file_type().is_symlink() {
+            let target = fs::canonicalize(path).ok()?;
+            if target.as_path() == path {
+                return None;
+            }
+            return Some(target);
+        }
     }
-    let target = fs::canonicalize(root).ok()?;
-    if target.as_path() == root {
-        return None;
-    }
-    Some(target)
+    None
 }
 
 fn remap_paths_for_symlink_target(paths: Vec<PathBuf>, root: &Path, target: &Path) -> Vec<PathBuf> {
@@ -798,6 +819,84 @@ mod tests {
                     real_blocked_str.as_str(),
                 ]
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_under_symlinked_ancestors_bind_real_target() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let logical_home = temp_dir.path().join("home");
+        let real_codex = temp_dir.path().join("real-codex");
+        let logical_codex = logical_home.join(".codex");
+        let real_memories = real_codex.join("memories");
+        let logical_memories = logical_codex.join("memories");
+        std::fs::create_dir_all(&logical_home).expect("create logical home");
+        std::fs::create_dir_all(&real_memories).expect("create memories dir");
+        std::os::unix::fs::symlink(&real_codex, &logical_codex)
+            .expect("create symlinked codex home");
+
+        let logical_memories_root =
+            AbsolutePathBuf::from_absolute_path(&logical_memories).expect("absolute memories");
+        let real_memories_str = path_to_string(&real_memories);
+        let logical_memories_str = path_to_string(&logical_memories);
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: logical_memories_root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--bind",
+                    real_memories_str.as_str(),
+                    real_memories_str.as_str(),
+                ]
+        }));
+        assert!(!args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--bind",
+                    logical_memories_str.as_str(),
+                    logical_memories_str.as_str(),
+                ]
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_symlinked_directory_subpaths_mask_symlink_inode() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let root = temp_dir.path().join("root");
+        let agents_target = root.join("agents-target");
+        let agents_link = root.join(".agents");
+        std::fs::create_dir_all(&agents_target).expect("create agents target");
+        std::os::unix::fs::symlink(&agents_target, &agents_link).expect("create symlinked .agents");
+
+        let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
+        let agents_link_str = path_to_string(&agents_link);
+        let agents_target_str = path_to_string(&agents_target);
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: root },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--ro-bind", "/dev/null", agents_link_str.as_str()] })
+        );
+        assert!(
+            !args
+                .args
+                .iter()
+                .any(|arg| arg == agents_target_str.as_str())
+        );
     }
 
     #[cfg(unix)]
