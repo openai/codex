@@ -20,6 +20,7 @@ use crate::pending_input::GeneratedMessageInput;
 use crate::pending_input::PendingInputItem;
 use crate::timers::ClaimedTimer;
 use crate::timers::CreateTimer;
+use crate::timers::IdleRecurringTimerPolicy;
 use crate::timers::PersistedTimer;
 use crate::timers::RestoredTimerTask;
 use crate::timers::TIMER_FIRED_BACKGROUND_EVENT_PREFIX;
@@ -194,18 +195,31 @@ impl Session {
     }
 
     pub(crate) async fn maybe_start_pending_timer(self: &Arc<Self>) {
-        if !self.try_start_pending_timer().await {
-            self.maybe_start_pending_message().await;
+        if self
+            .try_start_pending_timer(IdleRecurringTimerPolicy::IncludeOnlyNeverRun)
+            .await
+        {
+            return;
         }
+        if self.maybe_start_pending_message().await {
+            return;
+        }
+        self.try_start_pending_timer(IdleRecurringTimerPolicy::IncludeAll)
+            .await;
     }
 
-    async fn try_start_pending_timer(self: &Arc<Self>) -> bool {
+    async fn try_start_pending_timer(
+        self: &Arc<Self>,
+        idle_recurring_timer_policy: IdleRecurringTimerPolicy,
+    ) -> bool {
         let Some(ClaimedTimer {
             timer,
             context,
             deleted_one_shot_timer,
             ..
-        }) = self.claim_next_timer_for_delivery().await
+        }) = self
+            .claim_next_timer_for_delivery(idle_recurring_timer_policy)
+            .await
         else {
             return false;
         };
@@ -237,9 +251,9 @@ impl Session {
         true
     }
 
-    async fn maybe_start_pending_message(self: &Arc<Self>) {
+    async fn maybe_start_pending_message(self: &Arc<Self>) -> bool {
         let Some((input_item, delivery)) = self.claim_next_message_for_delivery().await else {
-            return;
+            return false;
         };
 
         match delivery {
@@ -260,6 +274,7 @@ impl Session {
             }
         }
         *self.timer_start_in_progress.lock().await = false;
+        true
     }
 
     async fn claim_next_message_for_delivery(
@@ -349,7 +364,10 @@ impl Session {
         }
     }
 
-    async fn claim_next_timer_for_delivery(self: &Arc<Self>) -> Option<ClaimedTimer> {
+    async fn claim_next_timer_for_delivery(
+        self: &Arc<Self>,
+        idle_recurring_timer_policy: IdleRecurringTimerPolicy,
+    ) -> Option<ClaimedTimer> {
         if !self.timers_feature_enabled() {
             return None;
         }
@@ -377,6 +395,7 @@ impl Session {
             Utc::now(),
             can_after_turn,
             active_turn_is_regular,
+            idle_recurring_timer_policy,
         );
         let Some(claimed) = claimed else {
             *self.timer_start_in_progress.lock().await = false;

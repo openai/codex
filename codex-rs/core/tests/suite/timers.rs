@@ -311,6 +311,109 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "timer turn"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "queued turn"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "next timer turn"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Timers)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+        config
+            .features
+            .enable(Feature::QueuedMessages)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.session_id.to_string();
+    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+        thread_id,
+        "external".to_string(),
+        "queued hello".to_string(),
+        /*instructions*/ None,
+        "{}".to_string(),
+        TimerDelivery::AfterTurn.as_str().to_string(),
+        Utc::now().timestamp(),
+    ))
+    .await?;
+
+    test.codex
+        .create_timer(
+            ThreadTimerTrigger::Delay {
+                seconds: 0,
+                repeat: Some(true),
+            },
+            MessagePayload {
+                content: "keep going".to_string(),
+                instructions: None,
+                meta: Default::default(),
+            },
+            TimerDelivery::AfterTurn,
+        )
+        .await
+        .map_err(|err| anyhow!("{err}"))?;
+
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(20),
+    )
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(20),
+    )
+    .await;
+
+    let requests = mock.requests();
+    assert!(
+        requests.len() >= 2,
+        "expected timer and queued-message turns to run"
+    );
+    assert!(
+        requests[0]
+            .message_input_texts("user")
+            .iter()
+            .any(|message| message.contains("<content>\nTimer fired: keep going\n</content>"))
+    );
+    assert!(
+        requests[1]
+            .message_input_texts("user")
+            .iter()
+            .any(|message| message.contains("<content>\nqueued hello\n</content>"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queued_messages_feature_disabled_leaves_messages_queued() -> Result<()> {
     let server = start_mock_server().await;
     let mock = mount_sse_once(
