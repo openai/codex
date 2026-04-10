@@ -7,6 +7,8 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
 use codex_protocol::protocol::RealtimeResponseCancelled;
+use codex_protocol::protocol::RealtimeResponseCreated;
+use codex_protocol::protocol::RealtimeResponseDone;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
@@ -47,29 +49,38 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
         "conversation.item.done" => parse_conversation_item_done_event(&parsed),
-        "response.created" => Some(RealtimeEvent::ConversationItemAdded(parsed)),
+        "response.created" => Some(RealtimeEvent::ResponseCreated(RealtimeResponseCreated {
+            response_id: parse_response_event_response_id(&parsed),
+        })),
         "response.cancelled" => Some(RealtimeEvent::ResponseCancelled(
             RealtimeResponseCancelled {
-                response_id: parsed
-                    .get("response")
-                    .and_then(Value::as_object)
-                    .and_then(|response| response.get("id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| {
-                        parsed
-                            .get("response_id")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    }),
+                response_id: parse_response_event_response_id(&parsed),
             },
         )),
+        "response.done" => Some(RealtimeEvent::ResponseDone(RealtimeResponseDone {
+            response_id: parse_response_event_response_id(&parsed),
+        })),
         "error" => parse_error_event(&parsed),
         _ => {
             debug!("received unsupported realtime v2 event type: {message_type}, data: {payload}");
             None
         }
     }
+}
+
+fn parse_response_event_response_id(parsed: &Value) -> Option<String> {
+    parsed
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            parsed
+                .get("response_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
 }
 
 fn parse_output_audio_delta_event(parsed: &Value) -> Option<RealtimeEvent> {

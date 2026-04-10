@@ -1205,6 +1205,70 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
 }
 
 #[tokio::test]
+async fn webrtc_v2_queues_text_response_create_while_response_is_active() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V2,
+        no_main_loop_responses(),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_v2_response_queue")],
+            vec![],
+            vec![
+                json!({
+                    "type": "response.created",
+                    "response": { "id": "resp_active" }
+                }),
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "active response started"
+                }),
+            ],
+            vec![],
+            vec![json!({
+                "type": "response.done",
+                "response": { "id": "resp_active" }
+            })],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+
+    let thread_id = started.started.thread_id.clone();
+    harness.append_text(thread_id.clone(), "first").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "first",
+    );
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
+    let transcript = harness
+        .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+            "thread/realtime/transcriptUpdated",
+        )
+        .await?;
+    assert_eq!(transcript.text, "active response started");
+
+    harness.append_text(thread_id.clone(), "second").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 3).await,
+        "second",
+    );
+
+    harness.append_audio(thread_id).await?;
+    let audio = harness.sideband_outbound_request(/*request_index*/ 4).await;
+    assert_eq!(audio["type"], "input_audio_buffer.append");
+    assert_eq!(audio["audio"], "BQYH");
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 5).await);
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_output() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -1710,6 +1774,32 @@ fn assert_v2_progress_update(request: &Value, expected_text: &str) {
                     "text": format!("{expected_text}\n\nUpdate from background agent (task hasn't finished yet):")
                 }]
             }
+        })
+    );
+}
+
+fn assert_v2_user_text_item(request: &Value, expected_text: &str) {
+    assert_eq!(
+        request,
+        &json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": expected_text
+                }]
+            }
+        })
+    );
+}
+
+fn assert_v2_response_create(request: &Value) {
+    assert_eq!(
+        request,
+        &json!({
+            "type": "response.create"
         })
     );
 }
