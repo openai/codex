@@ -248,7 +248,6 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         Arc::new(codex_exec_server::EnvironmentManager::new(
             /*exec_server_url*/ None,
         )),
-        /*analytics_events_client*/ None,
     );
     let thread_1 = manager
         .start_thread(config.clone())
