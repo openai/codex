@@ -1932,19 +1932,29 @@ struct TurnCompletionMetadata {
 async fn emit_turn_completed_with_status(
     conversation_id: ThreadId,
     event_turn_id: String,
+    turn_snapshot: Option<Turn>,
     turn_completion_metadata: TurnCompletionMetadata,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    let turn = turn_snapshot.unwrap_or_else(|| Turn {
+        id: event_turn_id.clone(),
+        items: vec![],
+        error: None,
+        status: turn_completion_metadata.status.clone(),
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    });
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
             id: event_turn_id,
-            items: vec![],
-            error: turn_completion_metadata.error,
+            items: turn.items,
+            error: turn_completion_metadata.error.or(turn.error),
             status: turn_completion_metadata.status,
-            started_at: turn_completion_metadata.started_at,
-            completed_at: turn_completion_metadata.completed_at,
-            duration_ms: turn_completion_metadata.duration_ms,
+            started_at: turn_completion_metadata.started_at.or(turn.started_at),
+            completed_at: turn_completion_metadata.completed_at.or(turn.completed_at),
+            duration_ms: turn_completion_metadata.duration_ms.or(turn.duration_ms),
         },
     };
     outgoing
@@ -2127,12 +2137,23 @@ pub(crate) async fn maybe_emit_hook_prompt_item_completed(
         .await;
 }
 
+#[cfg(test)]
 async fn find_and_remove_turn_summary(
     _conversation_id: ThreadId,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) -> TurnSummary {
     let mut state = thread_state.lock().await;
     std::mem::take(&mut state.turn_summary)
+}
+
+async fn find_turn_completion_state(
+    event_turn_id: &str,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) -> (TurnSummary, Option<Turn>) {
+    let mut state = thread_state.lock().await;
+    let turn_summary = std::mem::take(&mut state.turn_summary);
+    let turn_snapshot = state.completion_turn_snapshot(event_turn_id);
+    (turn_summary, turn_snapshot)
 }
 
 async fn handle_turn_complete(
@@ -2142,7 +2163,8 @@ async fn handle_turn_complete(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let (turn_summary, turn_snapshot) =
+        find_turn_completion_state(&event_turn_id, thread_state).await;
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
@@ -2152,6 +2174,7 @@ async fn handle_turn_complete(
     emit_turn_completed_with_status(
         conversation_id,
         event_turn_id,
+        turn_snapshot,
         TurnCompletionMetadata {
             status,
             error,
@@ -2171,11 +2194,13 @@ async fn handle_turn_interrupted(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let (turn_summary, turn_snapshot) =
+        find_turn_completion_state(&event_turn_id, thread_state).await;
 
     emit_turn_completed_with_status(
         conversation_id,
         event_turn_id,
+        turn_snapshot,
         TurnCompletionMetadata {
             status: TurnStatus::Interrupted,
             error: None,
@@ -2927,6 +2952,7 @@ mod tests {
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+    use codex_protocol::models::MessagePhase;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
@@ -3767,6 +3793,13 @@ mod tests {
                     collaboration_mode_kind: Default::default(),
                 },
             ));
+            state.track_current_turn_event(&EventMsg::AgentMessage(
+                codex_protocol::protocol::AgentMessageEvent {
+                    message: "done".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ));
             state.track_current_turn_event(&EventMsg::TurnComplete(turn_complete_event(
                 &event_turn_id,
             )));
@@ -3784,12 +3817,23 @@ mod tests {
         let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
-                assert_eq!(n.turn.id, event_turn_id);
-                assert_eq!(n.turn.status, TurnStatus::Completed);
-                assert_eq!(n.turn.error, None);
-                assert_eq!(n.turn.started_at, Some(42));
-                assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));
-                assert_eq!(n.turn.duration_ms, Some(TEST_TURN_DURATION_MS));
+                assert_eq!(
+                    n.turn,
+                    Turn {
+                        id: event_turn_id,
+                        items: vec![ThreadItem::AgentMessage {
+                            id: "item-1".to_string(),
+                            text: "done".to_string(),
+                            phase: Some(MessagePhase::FinalAnswer),
+                            memory_citation: None,
+                        }],
+                        status: TurnStatus::Completed,
+                        error: None,
+                        started_at: Some(42),
+                        completed_at: Some(TEST_TURN_COMPLETED_AT),
+                        duration_ms: Some(TEST_TURN_DURATION_MS),
+                    }
+                );
             }
             other => bail!("unexpected message: {other:?}"),
         }

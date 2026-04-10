@@ -1105,9 +1105,9 @@ async fn maybe_backfill_turn_completed_items(
     notification: &mut ServerNotification,
 ) {
     // In-process delivery may drop non-terminal item notifications under backpressure while still
-    // guaranteeing `turn/completed`. Because app-server currently emits that completion with an
-    // empty `turn.items`, exec does one last `thread/read` here so human/json output can recover
-    // the final message and reconcile any still-running items before shutdown.
+    // guaranteeing `turn/completed`. App-server now tries to include terminal turn items directly
+    // on that notification, but exec keeps this bounded `thread/read` fallback for older or
+    // degraded paths that still arrive with an empty `turn.items`.
     if !should_backfill_turn_completed_items(thread_ephemeral, notification) {
         return;
     }

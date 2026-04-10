@@ -7,9 +7,10 @@ import type { TurnStatus } from "./TurnStatus";
 
 export type Turn = { id: string, 
 /**
- * Only populated on a `thread/resume` or `thread/fork` response.
- * For all other responses and notifications returning a Turn,
- * the items field will be an empty list.
+ * Populated on history-bearing responses such as `thread/resume` and `thread/fork`.
+ * The `turn/completed` notification also includes the terminal turn items when they are
+ * still available from the live thread listener. Other responses and notifications may
+ * still return an empty list to keep payloads small.
  */
 items: Array<ThreadItem>, status: TurnStatus, 
 /**

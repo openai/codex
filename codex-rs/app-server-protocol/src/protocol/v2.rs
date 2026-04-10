@@ -3752,9 +3752,10 @@ impl From<CoreTokenUsage> for TokenUsageBreakdown {
 #[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
-    /// Only populated on a `thread/resume` or `thread/fork` response.
-    /// For all other responses and notifications returning a Turn,
-    /// the items field will be an empty list.
+    /// Populated on history-bearing responses such as `thread/resume` and `thread/fork`.
+    /// The `turn/completed` notification also includes the terminal turn items when they are
+    /// still available from the live thread listener. Other responses and notifications may
+    /// still return an empty list to keep payloads small.
     pub items: Vec<ThreadItem>,
     pub status: TurnStatus,
     /// Only populated when the Turn's status is failed.

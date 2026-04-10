@@ -323,6 +323,33 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
 }
 
 #[test]
+fn should_backfill_turn_completed_items_skips_notifications_with_items() {
+    let notification =
+        ServerNotification::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-1".to_string(),
+                items: vec![AppServerThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "finished".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        });
+
+    assert!(!should_backfill_turn_completed_items(
+        /*thread_ephemeral*/ false,
+        &notification
+    ));
+}
+
+#[test]
 fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
     let value = canceled_mcp_server_elicitation_response()
         .expect("mcp elicitation cancel response should serialize");
