@@ -497,6 +497,15 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Base URL for agent identity registration requests.
+    pub agent_identity_base_url: String,
+
+    /// Base URL for minting human biscuits used by agent identity registration requests.
+    pub agent_identity_biscuit_base_url: String,
+
+    /// Target URL used when minting the human biscuit for agent identity registration.
+    pub agent_identity_biscuit_target_url: String,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
 
@@ -2116,6 +2125,15 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            agent_identity_base_url: cfg
+                .agent_identity_base_url
+                .unwrap_or("https://auth.openai.com/api/accounts".to_string()),
+            agent_identity_biscuit_base_url: cfg
+                .agent_identity_biscuit_base_url
+                .unwrap_or_default(),
+            agent_identity_biscuit_target_url: cfg
+                .agent_identity_biscuit_target_url
+                .unwrap_or("https://api.openai.com/v1/responses".to_string()),
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
