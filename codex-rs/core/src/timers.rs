@@ -80,6 +80,7 @@ pub(crate) struct ClaimedTimer {
     pub(crate) timer: ThreadTimer,
     pub(crate) context: TimerInvocationContext,
     pub(crate) deleted_one_shot_timer: bool,
+    pub(crate) previous_last_run_at: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -397,12 +398,17 @@ impl TimersState {
         } = runtime;
         let is_recurring = timer.trigger.is_recurring();
         let deleted_one_shot_timer = !is_recurring;
+        let previous_last_run_at = timer.last_run_at;
         if deleted_one_shot_timer {
             if let Some(cancel) = timer_cancel.as_ref() {
                 cancel.cancel();
             }
         } else {
-            timer.last_run_at = Some(now.timestamp());
+            timer.last_run_at = Some(
+                previous_last_run_at
+                    .map(|previous| now.timestamp().max(previous.saturating_add(1)))
+                    .unwrap_or_else(|| now.timestamp()),
+            );
             let pending_run = timer.trigger.is_idle_recurring();
             self.timers.insert(
                 timer.id.clone(),
@@ -425,6 +431,7 @@ impl TimersState {
                 queued_at: now.timestamp(),
             },
             deleted_one_shot_timer,
+            previous_last_run_at,
         })
     }
 }
