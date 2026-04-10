@@ -51,7 +51,6 @@ pub use test_sync::TestSyncHandler;
 pub use timers::CreateTimerHandler;
 pub use timers::DeleteTimerHandler;
 pub use timers::ListTimersHandler;
-pub use timers::QueueMessageHandler;
 pub use tool_search::ToolSearchHandler;
 pub use tool_suggest::ToolSuggestHandler;
 pub use unified_exec::UnifiedExecHandler;

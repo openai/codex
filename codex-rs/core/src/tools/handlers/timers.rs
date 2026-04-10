@@ -1,7 +1,7 @@
 //! Built-in tool handlers for thread-local persistent timer management.
 //!
-//! These handlers bridge timer and queued-message tool calls onto the current
-//! thread session's timer registry.
+//! These handlers bridge timer tool calls onto the current thread session's
+//! timer registry.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -31,21 +31,6 @@ struct CreateTimerArgs {
 #[derive(Deserialize)]
 struct DeleteTimerArgs {
     id: String,
-}
-
-#[derive(Deserialize)]
-struct QueueMessageArgs {
-    thread_id: String,
-    content: String,
-    instructions: Option<String>,
-    #[serde(default)]
-    meta: BTreeMap<String, String>,
-    #[serde(default = "default_delivery")]
-    delivery: TimerDelivery,
-}
-
-fn default_delivery() -> TimerDelivery {
-    TimerDelivery::AfterTurn
 }
 
 pub struct CreateTimerHandler;
@@ -82,42 +67,6 @@ impl ToolHandler for CreateTimerHandler {
             .map_err(FunctionCallError::RespondToModel)?;
         let content = serde_json::to_string(&timer).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize create_timer response: {err}"))
-        })?;
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
-    }
-}
-
-pub struct QueueMessageHandler;
-
-impl ToolHandler for QueueMessageHandler {
-    type Output = FunctionToolOutput;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolPayload::Function { arguments } = invocation.payload else {
-            return Err(FunctionCallError::RespondToModel(
-                "queue_message received unsupported payload".to_string(),
-            ));
-        };
-        let args: QueueMessageArgs = parse_arguments(&arguments)?;
-        let message = invocation
-            .session
-            .queue_message_to_thread(
-                args.thread_id,
-                MessagePayload {
-                    content: args.content,
-                    instructions: args.instructions,
-                    meta: args.meta,
-                },
-                args.delivery,
-            )
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
-        let content = serde_json::to_string(&message).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize queue_message response: {err}"))
         })?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }

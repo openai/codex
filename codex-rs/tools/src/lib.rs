@@ -90,7 +90,6 @@ pub use responses_api::mcp_tool_to_responses_api_tool;
 pub use responses_api::tool_definition_to_responses_api_tool;
 pub use timer_tool::create_delete_timer_tool;
 pub use timer_tool::create_list_timers_tool;
-pub use timer_tool::create_queue_message_tool;
 pub use timer_tool::create_timer_tool;
 pub use tool_config::ShellCommandBackendConfig;
 pub use tool_config::ToolUserShellType;
