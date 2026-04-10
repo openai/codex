@@ -275,7 +275,7 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
             process_id.as_str(),
             shell_argv(
                 "sleep 0.05; printf 'first\\n'; sleep 0.05; printf 'second\\n'",
-                "echo first && ping -n 2 127.0.0.1 >NUL && echo second",
+                "echo first&&ping -n 2 127.0.0.1 >NUL&&echo second",
             ),
         ))
         .await
