@@ -18,6 +18,9 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
+use crate::request_serialization::QueuedInitializedRequest;
+use crate::request_serialization::RequestSerializationQueueKey;
+use crate::request_serialization::RequestSerializationQueues;
 use crate::transport::AppServerTransport;
 use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
@@ -167,6 +170,7 @@ pub(crate) struct MessageProcessor {
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
     rpc_transport: AppServerRpcTransport,
     remote_control_handle: Option<RemoteControlHandle>,
+    request_serialization_queues: RequestSerializationQueues,
 }
 
 #[derive(Debug)]
@@ -344,6 +348,7 @@ impl MessageProcessor {
             config_warnings: Arc::new(config_warnings),
             rpc_transport,
             remote_control_handle,
+            request_serialization_queues: RequestSerializationQueues::default(),
         }
     }
 
@@ -726,19 +731,43 @@ impl MessageProcessor {
             );
         }
 
+        let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
         let device_key_requests_allowed = session.allows_device_key_requests();
-        Arc::clone(self)
-            .handle_initialized_client_request(
-                connection_request_id,
-                codex_request,
-                request_context,
-                app_server_client_name,
-                client_version,
-                device_key_requests_allowed,
-            )
-            .await
+        let error_request_id = connection_request_id.clone();
+        let processor = Arc::clone(self);
+        let span = request_context.span();
+        let request = QueuedInitializedRequest::new(
+            async move {
+                let result = processor
+                    .handle_initialized_client_request(
+                        connection_request_id,
+                        codex_request,
+                        request_context,
+                        app_server_client_name,
+                        client_version,
+                        device_key_requests_allowed,
+                    )
+                    .await;
+                if let Err(error) = result {
+                    processor.outgoing.send_error(error_request_id, error).await;
+                }
+            }
+            .instrument(span),
+        );
+
+        if let Some(scope) = serialization_scope {
+            let key = RequestSerializationQueueKey::from_scope(connection_id, scope);
+            self.request_serialization_queues
+                .enqueue(key, request)
+                .await;
+        } else {
+            tokio::spawn(async move {
+                request.run().await;
+            });
+        }
+        Ok(())
     }
 
     async fn handle_initialized_client_request(
