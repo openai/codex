@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
@@ -39,7 +40,7 @@ pub(crate) enum ResolvedAppServerRequest {
         id: String,
     },
     UserInput {
-        id: String,
+        call_id: String,
     },
     McpElicitation {
         server_name: String,
@@ -52,7 +53,7 @@ pub(super) struct PendingAppServerRequests {
     exec_approvals: HashMap<String, AppServerRequestId>,
     file_change_approvals: HashMap<String, AppServerRequestId>,
     permissions_approvals: HashMap<String, AppServerRequestId>,
-    user_inputs: HashMap<String, AppServerRequestId>,
+    user_inputs: HashMap<String, VecDeque<PendingUserInputRequest>>,
     mcp_requests: HashMap<McpLegacyRequestKey, AppServerRequestId>,
 }
 
@@ -90,7 +91,12 @@ impl PendingAppServerRequests {
             }
             ServerRequest::ToolRequestUserInput { request_id, params } => {
                 self.user_inputs
-                    .insert(params.turn_id.clone(), request_id.clone());
+                    .entry(params.turn_id.clone())
+                    .or_default()
+                    .push_back(PendingUserInputRequest {
+                        item_id: params.item_id.clone(),
+                        request_id: request_id.clone(),
+                    });
                 None
             }
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
@@ -185,11 +191,10 @@ impl PendingAppServerRequests {
                 })
                 .transpose()?,
             AppCommandView::UserInputAnswer { id, response } => self
-                .user_inputs
-                .remove(id)
-                .map(|request_id| {
+                .pop_user_input_request_for_turn(id)
+                .map(|pending| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
+                        request_id: pending.request_id,
                         result: serde_json::to_value(
                             serde_json::from_value::<ToolRequestUserInputResponse>(
                                 serde_json::to_value(response).map_err(|err| {
@@ -280,13 +285,10 @@ impl PendingAppServerRequests {
             return Some(ResolvedAppServerRequest::PermissionsApproval { id });
         }
 
-        if let Some(id) = self
-            .user_inputs
-            .iter()
-            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
-        {
-            self.user_inputs.remove(&id);
-            return Some(ResolvedAppServerRequest::UserInput { id });
+        if let Some(pending) = self.remove_user_input_request(request_id) {
+            return Some(ResolvedAppServerRequest::UserInput {
+                call_id: pending.item_id,
+            });
         }
 
         if let Some(key) = self
@@ -303,6 +305,48 @@ impl PendingAppServerRequests {
 
         None
     }
+
+    fn pop_user_input_request_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<PendingUserInputRequest> {
+        let pending = self
+            .user_inputs
+            .get_mut(turn_id)
+            .and_then(VecDeque::pop_front);
+        if self
+            .user_inputs
+            .get(turn_id)
+            .is_some_and(VecDeque::is_empty)
+        {
+            self.user_inputs.remove(turn_id);
+        }
+        pending
+    }
+
+    fn remove_user_input_request(
+        &mut self,
+        request_id: &AppServerRequestId,
+    ) -> Option<PendingUserInputRequest> {
+        let (turn_id, index) = self.user_inputs.iter().find_map(|(turn_id, queue)| {
+            queue
+                .iter()
+                .position(|pending| &pending.request_id == request_id)
+                .map(|index| (turn_id.clone(), index))
+        })?;
+        let queue = self.user_inputs.get_mut(&turn_id)?;
+        let removed = queue.remove(index);
+        if queue.is_empty() {
+            self.user_inputs.remove(&turn_id);
+        }
+        removed
+    }
+}
+
+#[derive(Debug)]
+struct PendingUserInputRequest {
+    item_id: String,
+    request_id: AppServerRequestId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -365,6 +409,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[test]
@@ -708,5 +753,63 @@ mod tests {
                 request_id: McpRequestId::Integer(12),
             })
         );
+    }
+
+    #[test]
+    fn resolve_notification_returns_resolved_user_input_item_id() {
+        let mut pending = PendingAppServerRequests::default();
+        pending.note_server_request(&ServerRequest::ToolRequestUserInput {
+            request_id: AppServerRequestId::Integer(8),
+            params: ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "tool-1".to_string(),
+                questions: Vec::new(),
+            },
+        });
+
+        assert_eq!(
+            pending.resolve_notification(&AppServerRequestId::Integer(8)),
+            Some(ResolvedAppServerRequest::UserInput {
+                call_id: "tool-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn same_turn_user_input_answers_resolve_app_server_requests_fifo() {
+        let mut pending = PendingAppServerRequests::default();
+        for (request_id, item_id) in [(8, "tool-1"), (9, "tool-2")] {
+            pending.note_server_request(&ServerRequest::ToolRequestUserInput {
+                request_id: AppServerRequestId::Integer(request_id),
+                params: ToolRequestUserInputParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: item_id.to_string(),
+                    questions: Vec::new(),
+                },
+            });
+        }
+
+        let response = codex_protocol::request_user_input::RequestUserInputResponse {
+            answers: HashMap::new(),
+        };
+        let first_response = pending
+            .take_resolution(&Op::UserInputAnswer {
+                id: "turn-1".to_string(),
+                response: response.clone(),
+            })
+            .expect("user input response should serialize")
+            .expect("first user input request should be pending");
+        let second_response = pending
+            .take_resolution(&Op::UserInputAnswer {
+                id: "turn-1".to_string(),
+                response,
+            })
+            .expect("user input response should serialize")
+            .expect("second user input request should be pending");
+
+        assert_eq!(first_response.request_id, AppServerRequestId::Integer(8));
+        assert_eq!(second_response.request_id, AppServerRequestId::Integer(9));
     }
 }
