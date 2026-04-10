@@ -113,17 +113,6 @@ pub(crate) struct GuardianReviewEventRequest {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum GuardianReviewTrigger {
-    Shell,
-    UnifiedExec,
-    Execve,
-    ApplyPatch,
-    NetworkAccess,
-    McpToolCall,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum GuardianReviewDecision {
     Approved,
     Denied,
@@ -142,7 +131,7 @@ pub enum GuardianReviewTerminalStatus {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum GuardianReviewFailureKind {
+pub enum GuardianReviewFailureReason {
     Timeout,
     Cancelled,
     PromptBuildError,
@@ -153,7 +142,7 @@ pub enum GuardianReviewFailureKind {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianReviewSessionKind {
-    TrunkSpawned,
+    TrunkNew,
     TrunkReused,
     EphemeralForked,
 }
@@ -252,14 +241,13 @@ pub struct GuardianReviewEventParams {
     pub turn_id: String,
     pub review_id: String,
     pub target_item_id: String,
-    pub trigger: GuardianReviewTrigger,
     pub retry_reason: Option<String>,
     pub approval_request_source: GuardianApprovalRequestSource,
     pub reviewed_action: GuardianReviewedAction,
     pub reviewed_action_truncated: bool,
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
-    pub failure_kind: Option<GuardianReviewFailureKind>,
+    pub failure_reason: Option<GuardianReviewFailureReason>,
     pub risk_level: Option<GuardianReviewRiskLevel>,
     pub user_authorization: Option<GuardianReviewUserAuthorization>,
     pub outcome: Option<GuardianReviewOutcome>,
