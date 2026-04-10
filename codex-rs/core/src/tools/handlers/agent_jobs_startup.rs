@@ -27,6 +27,19 @@ pub(super) struct StartupTasks {
     launching_items: HashMap<TaskId, LaunchingJobItem>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct StartupDrainResult {
+    pub(super) progressed: bool,
+    pub(super) agent_limit_reached: bool,
+}
+
+impl StartupDrainResult {
+    fn merge(&mut self, other: Self) {
+        self.progressed |= other.progressed;
+        self.agent_limit_reached |= other.agent_limit_reached;
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SchedulerOccupancy {
     pub(super) active_items: usize,
@@ -160,23 +173,23 @@ pub(super) async fn drain_ready_startups(
     job_id: &str,
     active_items: &mut HashMap<ThreadId, ActiveJobItem>,
     startup_tasks: &mut StartupTasks,
-) -> anyhow::Result<bool> {
-    let mut progressed = false;
-    while let Some(result) = startup_tasks.starting_items.try_join_next_with_id() {
+) -> anyhow::Result<StartupDrainResult> {
+    let mut drain_result = StartupDrainResult::default();
+    while let Some(join_result) = startup_tasks.starting_items.try_join_next_with_id() {
         let starting_items_len = startup_tasks.starting_items.len();
-        handle_worker_startup_result(
+        let startup_result = handle_worker_startup_result(
             session.clone(),
             db.clone(),
             job_id,
             active_items,
             startup_tasks,
-            result,
+            join_result,
             starting_items_len,
         )
         .await?;
-        progressed = true;
+        drain_result.merge(startup_result);
     }
-    Ok(progressed)
+    Ok(drain_result)
 }
 
 pub(super) async fn wait_for_startup_or_status_change(
@@ -290,7 +303,7 @@ async fn handle_worker_startup_result(
     startup_tasks: &mut StartupTasks,
     result: Result<(TaskId, WorkerStartup), JoinError>,
     starting_items_len: usize,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<StartupDrainResult> {
     match result {
         Ok((task_id, startup)) => {
             startup_tasks.launching_items.remove(&task_id);
@@ -316,7 +329,10 @@ async fn handle_worker_startup_result(
                             thread_id = %thread_id,
                             "agent job worker startup finished after item left running state"
                         );
-                        return Ok(());
+                        return Ok(StartupDrainResult {
+                            progressed: true,
+                            agent_limit_reached: false,
+                        });
                     }
 
                     let item_id = startup.item_id;
@@ -342,6 +358,10 @@ async fn handle_worker_startup_result(
                         starting_items = starting_items_len,
                         "agent job worker startup completed"
                     );
+                    Ok(StartupDrainResult {
+                        progressed: true,
+                        agent_limit_reached: false,
+                    })
                 }
                 Err(CodexErr::AgentLimitReached { .. }) => {
                     let _ = db
@@ -357,6 +377,10 @@ async fn handle_worker_startup_result(
                         starting_items = starting_items_len,
                         "agent job worker startup hit agent limit"
                     );
+                    Ok(StartupDrainResult {
+                        progressed: true,
+                        agent_limit_reached: true,
+                    })
                 }
                 Err(err) => {
                     let error_message = format!("failed to spawn worker: {err}");
@@ -373,13 +397,17 @@ async fn handle_worker_startup_result(
                         error = %err,
                         "agent job worker startup failed"
                     );
+                    Ok(StartupDrainResult {
+                        progressed: true,
+                        agent_limit_reached: false,
+                    })
                 }
             }
         }
         Err(join_error) => {
             let task_id = join_error.id();
             let Some(item) = startup_tasks.launching_items.remove(&task_id) else {
-                return Ok(());
+                return Ok(StartupDrainResult::default());
             };
             let error_message = format!("worker startup task failed: {join_error}");
             let _ = db
@@ -391,18 +419,30 @@ async fn handle_worker_startup_result(
                 error = %join_error,
                 "agent job worker startup task exited unexpectedly"
             );
+            Ok(StartupDrainResult {
+                progressed: true,
+                agent_limit_reached: false,
+            })
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigBuilder;
+    use crate::thread_manager::ThreadManager;
+    use codex_exec_server::EnvironmentManager;
+    use codex_login::CodexAuth;
+    use codex_state::AgentJobCreateParams;
+    use codex_state::AgentJobItemCreateParams;
+    use codex_state::AgentJobItemStatus;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use tempfile::TempDir;
     use tokio::sync::Barrier;
     use tokio::time::timeout;
 
@@ -451,5 +491,109 @@ mod tests {
         }
         outputs.sort();
         assert_eq!(outputs, vec!["item-0", "item-1", "item-2"]);
+    }
+
+    #[tokio::test]
+    async fn drain_ready_startups_reports_agent_limit_and_requeues_item() -> anyhow::Result<()> {
+        let home = TempDir::new()?;
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?;
+
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        );
+        let root = manager.start_thread(config.clone()).await?;
+        let session = root.thread.codex.session.clone();
+
+        let db =
+            codex_state::StateRuntime::init(config.codex_home.clone(), "test-provider".to_string())
+                .await?;
+        let job_id = "job-1".to_string();
+        let item_id = "item-1".to_string();
+        db.create_agent_job(
+            &AgentJobCreateParams {
+                id: job_id.clone(),
+                name: "test-job".to_string(),
+                instruction: "Return a result".to_string(),
+                auto_export: true,
+                max_runtime_seconds: None,
+                output_schema_json: None,
+                input_headers: vec!["path".to_string()],
+                input_csv_path: "/tmp/in.csv".to_string(),
+                output_csv_path: "/tmp/out.csv".to_string(),
+            },
+            &[AgentJobItemCreateParams {
+                item_id: item_id.clone(),
+                row_index: 0,
+                source_id: None,
+                row_json: json!({"path":"file-1"}),
+            }],
+        )
+        .await?;
+        db.mark_agent_job_running(job_id.as_str()).await?;
+
+        let mut startup_tasks = StartupTasks::default();
+        let task_item_id = item_id.clone();
+        spawn_tracked_startup_task(
+            &mut startup_tasks,
+            item_id.clone(),
+            Instant::now(),
+            async move {
+                WorkerStartup {
+                    item_id: task_item_id,
+                    started_at: Instant::now(),
+                    spawn_latency: Duration::ZERO,
+                    result: Err(CodexErr::AgentLimitReached { max_threads: 1 }),
+                }
+            },
+        );
+
+        let mut active_items = HashMap::new();
+        let outcome = timeout(Duration::from_secs(1), async {
+            loop {
+                let outcome = drain_ready_startups(
+                    session.clone(),
+                    db.clone(),
+                    job_id.as_str(),
+                    &mut active_items,
+                    &mut startup_tasks,
+                )
+                .await?;
+                if outcome.progressed {
+                    break Ok::<StartupDrainResult, anyhow::Error>(outcome);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+
+        assert_eq!(
+            outcome,
+            StartupDrainResult {
+                progressed: true,
+                agent_limit_reached: true,
+            }
+        );
+        assert!(active_items.is_empty());
+        assert!(startup_tasks.is_empty());
+
+        let item = db
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Pending);
+        assert_eq!(item.assigned_thread_id, None);
+
+        let report = manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+        assert_eq!(report.submit_failed, Vec::new());
+        assert_eq!(report.timed_out, Vec::new());
+        Ok(())
     }
 }

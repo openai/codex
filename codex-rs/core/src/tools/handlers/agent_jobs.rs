@@ -122,6 +122,10 @@ fn request_live_agent_shutdown(
     });
 }
 
+fn should_wait_for_scheduler_change(progressed: bool, agent_limit_reached: bool) -> bool {
+    !progressed || agent_limit_reached
+}
+
 struct JobProgressEmitter {
     started_at: Instant,
     last_emit_at: Instant,
@@ -635,6 +639,7 @@ async fn run_agent_job_loop(
     let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
     loop {
         let mut progressed = false;
+        let mut agent_limit_reached = false;
 
         if !cancel_requested && db.is_agent_job_cancelled(job_id.as_str()).await? {
             cancel_requested = true;
@@ -646,17 +651,16 @@ async fn run_agent_job_loop(
                 .await;
         }
 
-        if startup::drain_ready_startups(
+        let startup_result = startup::drain_ready_startups(
             session.clone(),
             db.clone(),
             job_id.as_str(),
             &mut active_items,
             &mut starting_items,
         )
-        .await?
-        {
-            progressed = true;
-        }
+        .await?;
+        progressed |= startup_result.progressed;
+        agent_limit_reached |= startup_result.agent_limit_reached;
 
         let scheduler_progress = db.get_agent_job_progress(job_id.as_str()).await?;
         if slots::reclaim_inactive_active_items(
@@ -704,6 +708,7 @@ async fn run_agent_job_loop(
         }
 
         if !cancel_requested
+            && !agent_limit_reached
             && active_items.len() + starting_items.len() < options.max_concurrency
             && startup::launch_pending_items(
                 session.clone(),
@@ -723,17 +728,16 @@ async fn run_agent_job_loop(
             progressed = true;
         }
 
-        if startup::drain_ready_startups(
+        let startup_result = startup::drain_ready_startups(
             session.clone(),
             db.clone(),
             job_id.as_str(),
             &mut active_items,
             &mut starting_items,
         )
-        .await?
-        {
-            progressed = true;
-        }
+        .await?;
+        progressed |= startup_result.progressed;
+        agent_limit_reached |= startup_result.agent_limit_reached;
 
         if startup::reap_stale_startups(
             db.clone(),
@@ -785,7 +789,7 @@ async fn run_agent_job_loop(
             if terminal_in_db && active_items.is_empty() && starting_items.is_empty() {
                 break;
             }
-            if !progressed {
+            if should_wait_for_scheduler_change(progressed, agent_limit_reached) {
                 startup::wait_for_startup_or_status_change(
                     session.clone(),
                     db.clone(),
