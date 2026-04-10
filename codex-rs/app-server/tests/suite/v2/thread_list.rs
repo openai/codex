@@ -14,6 +14,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadSortDirection;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -1234,6 +1235,110 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let ids_page2: Vec<_> = page2.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids_page2, vec![id_c.as_str()]);
     assert_eq!(cursor2, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let id_old = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let id_watermark = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T10-00-00", &id_old).as_path(),
+        "2025-02-02T00:00:00Z",
+    )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T11-00-00", &id_watermark).as_path(),
+        "2025-02-03T00:00:00Z",
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse {
+        data: page1,
+        backwards_cursor,
+        ..
+    } = {
+        let request_id = mcp
+            .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                cursor: None,
+                limit: Some(1),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                sort_direction: Some(ThreadSortDirection::Desc),
+                model_providers: Some(vec!["mock_provider".to_string()]),
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                search_term: None,
+            })
+            .await?;
+        let resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        to_response::<ThreadListResponse>(resp)?
+    };
+    let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_page1, vec![id_watermark.as_str()]);
+    let backwards_cursor = backwards_cursor.expect("expected backwardsCursor on first page");
+
+    let id_new = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T12-00-00",
+        "2025-02-01T12:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T12-00-00", &id_new).as_path(),
+        "2025-02-04T00:00:00Z",
+    )?;
+
+    let ThreadListResponse {
+        data: delta_page, ..
+    } = {
+        let request_id = mcp
+            .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                cursor: Some(backwards_cursor),
+                limit: Some(10),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                sort_direction: Some(ThreadSortDirection::Asc),
+                model_providers: Some(vec!["mock_provider".to_string()]),
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                search_term: None,
+            })
+            .await?;
+        let resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        to_response::<ThreadListResponse>(resp)?
+    };
+    let ids_delta: Vec<_> = delta_page.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_delta, vec![id_new.as_str()]);
 
     Ok(())
 }

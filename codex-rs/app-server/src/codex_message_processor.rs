@@ -3461,7 +3461,7 @@ impl CodexMessageProcessor {
             .loaded_statuses_for_threads(status_ids)
             .await;
 
-        let data = threads
+        let data: Vec<_> = threads
             .into_iter()
             .map(|(conversation_id, mut thread)| {
                 thread.name = names.get(&conversation_id).cloned();
@@ -3471,7 +3471,14 @@ impl CodexMessageProcessor {
                 thread
             })
             .collect();
-        let response = ThreadListResponse { data, next_cursor };
+        let backwards_cursor = data
+            .first()
+            .and_then(|thread| thread_cursor_for_sort_key(thread, core_sort_key));
+        let response = ThreadListResponse {
+            data,
+            next_cursor,
+            backwards_cursor,
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -9129,6 +9136,19 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         name: None,
         turns: Vec::new(),
     }
+}
+
+fn thread_cursor_for_sort_key(thread: &Thread, sort_key: CoreThreadSortKey) -> Option<String> {
+    let timestamp = match sort_key {
+        CoreThreadSortKey::CreatedAt => thread.created_at,
+        CoreThreadSortKey::UpdatedAt => thread.updated_at,
+    };
+    let timestamp = DateTime::<Utc>::from_timestamp(timestamp, /*nsecs*/ 0)?;
+    Some(format!(
+        "{}|{}",
+        timestamp.to_rfc3339_opts(SecondsFormat::Secs, true),
+        thread.id
+    ))
 }
 
 #[cfg(test)]

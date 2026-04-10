@@ -8,4 +8,9 @@ export type ThreadListResponse = { data: Array<Thread>,
  * Opaque cursor to pass to the next call to continue after the last item.
  * if None, there are no more items to return.
  */
-nextCursor: string | null, };
+nextCursor: string | null, 
+/**
+ * Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+ * if None, the page was empty.
+ */
+backwardsCursor: string | null, };
