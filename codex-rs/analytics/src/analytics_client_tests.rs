@@ -6,9 +6,14 @@ use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::CodexToolCallEventParams;
+use crate::events::CodexToolCallEventRequest;
 use crate::events::ThreadInitializationMode;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ToolCallFinalReviewOutcome;
+use crate::events::ToolCallTerminalStatus;
+use crate::events::ToolKind;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_plugin_metadata;
@@ -34,12 +39,18 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::CommandExecutionSource;
+use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -111,6 +122,50 @@ fn sample_thread_resume_response(thread_id: &str, ephemeral: bool, model: &str) 
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
             reasoning_effort: None,
         },
+    }
+}
+
+fn sample_initialize_fact(connection_id: u64) -> AnalyticsFact {
+    AnalyticsFact::Initialize {
+        connection_id,
+        params: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-tui".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: false,
+                opt_out_notification_methods: None,
+            }),
+        },
+        product_client_id: DEFAULT_ORIGINATOR.to_string(),
+        runtime: CodexRuntimeMetadata {
+            codex_rs_version: "0.99.0".to_string(),
+            runtime_os: "linux".to_string(),
+            runtime_os_version: "24.04".to_string(),
+            runtime_arch: "x86_64".to_string(),
+        },
+        rpc_transport: AppServerRpcTransport::Websocket,
+    }
+}
+
+fn sample_command_execution_item(
+    status: CommandExecutionStatus,
+    exit_code: Option<i32>,
+    duration_ms: Option<i64>,
+) -> ThreadItem {
+    ThreadItem::CommandExecution {
+        id: "tool-call-1".to_string(),
+        command: "echo hi".to_string(),
+        cwd: PathBuf::from("/tmp"),
+        process_id: None,
+        source: CommandExecutionSource::Agent,
+        status,
+        command_actions: Vec::new(),
+        aggregated_output: None,
+        exit_code,
+        duration_ms,
     }
 }
 
@@ -346,6 +401,89 @@ fn thread_initialized_event_serializes_expected_shape() {
     );
 }
 
+#[test]
+fn tool_call_event_serializes_expected_shape() {
+    let event = TrackEventRequest::ToolCall(CodexToolCallEventRequest {
+        event_type: "codex_tool_call_event",
+        event_params: CodexToolCallEventParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            tool_call_id: "tool-call-1".to_string(),
+            app_server_client: CodexAppServerClientMetadata {
+                product_client_id: "codex_tui".to_string(),
+                client_name: Some("codex-tui".to_string()),
+                client_version: Some("1.2.3".to_string()),
+                rpc_transport: AppServerRpcTransport::Websocket,
+                experimental_api_enabled: Some(true),
+            },
+            runtime: CodexRuntimeMetadata {
+                codex_rs_version: "0.99.0".to_string(),
+                runtime_os: "macos".to_string(),
+                runtime_os_version: "15.3.1".to_string(),
+                runtime_arch: "aarch64".to_string(),
+            },
+            tool_name: "shell".to_string(),
+            tool_kind: ToolKind::Shell,
+            started_at: 123,
+            completed_at: Some(125),
+            duration_ms: Some(2000),
+            execution_started: true,
+            review_count: 0,
+            guardian_review_count: 0,
+            user_review_count: 0,
+            final_review_outcome: ToolCallFinalReviewOutcome::NotNeeded,
+            terminal_status: ToolCallTerminalStatus::Completed,
+            failure_kind: None,
+            exit_code: Some(0),
+            requested_additional_permissions: false,
+            requested_network_access: false,
+            retry_count: 0,
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize tool call event");
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_tool_call_event",
+            "event_params": {
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "tool_call_id": "tool-call-1",
+                "app_server_client": {
+                    "product_client_id": "codex_tui",
+                    "client_name": "codex-tui",
+                    "client_version": "1.2.3",
+                    "rpc_transport": "websocket",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.99.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "tool_name": "shell",
+                "tool_kind": "shell",
+                "started_at": 123,
+                "completed_at": 125,
+                "duration_ms": 2000,
+                "execution_started": true,
+                "review_count": 0,
+                "guardian_review_count": 0,
+                "user_review_count": 0,
+                "final_review_outcome": "not_needed",
+                "terminal_status": "completed",
+                "failure_kind": null,
+                "exit_code": 0,
+                "requested_additional_permissions": false,
+                "requested_network_access": false,
+                "retry_count": 0
+            }
+        })
+    );
+}
+
 #[tokio::test]
 async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialized() {
     let mut reducer = AnalyticsReducer::default();
@@ -353,7 +491,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_start_response(
                     "thread-no-client",
@@ -397,7 +535,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_resume_response(
                     "thread-1", /*ephemeral*/ true, "gpt-5",
@@ -447,6 +585,75 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(payload[0]["event_params"]["thread_source"], "user");
     assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
     assert_eq!(payload[0]["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[tokio::test]
+async fn item_lifecycle_notifications_publish_basic_tool_call_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(sample_initialize_fact(/*connection_id*/ 7), &mut events)
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification {
+                connection_id: 7,
+                notification: Box::new(ServerNotification::ItemStarted(ItemStartedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item: sample_command_execution_item(
+                        CommandExecutionStatus::InProgress,
+                        /*exit_code*/ None,
+                        /*duration_ms*/ None,
+                    ),
+                })),
+            },
+            &mut events,
+        )
+        .await;
+    assert!(events.is_empty(), "tool event should emit on completion");
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification {
+                connection_id: 7,
+                notification: Box::new(ServerNotification::ItemCompleted(
+                    ItemCompletedNotification {
+                        thread_id: "thread-1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        item: sample_command_execution_item(
+                            CommandExecutionStatus::Completed,
+                            Some(0),
+                            Some(42),
+                        ),
+                    },
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_tool_call_event");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
+    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-1");
+    assert_eq!(payload[0]["event_params"]["tool_call_id"], "tool-call-1");
+    assert_eq!(payload[0]["event_params"]["tool_name"], "shell");
+    assert_eq!(payload[0]["event_params"]["tool_kind"], "shell");
+    assert_eq!(payload[0]["event_params"]["terminal_status"], "completed");
+    assert_eq!(
+        payload[0]["event_params"]["failure_kind"],
+        serde_json::Value::Null
+    );
+    assert_eq!(payload[0]["event_params"]["exit_code"], 0);
+    assert_eq!(payload[0]["event_params"]["duration_ms"], 42);
+    assert_eq!(payload[0]["event_params"]["execution_started"], true);
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["client_name"],
+        "codex-tui"
+    );
 }
 
 #[test]
