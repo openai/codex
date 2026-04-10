@@ -419,7 +419,9 @@ impl RealtimeWebsocketEvents {
             }
             RealtimeEvent::SessionUpdated { .. }
             | RealtimeEvent::AudioOut(_)
+            | RealtimeEvent::ResponseCreated(_)
             | RealtimeEvent::ResponseCancelled(_)
+            | RealtimeEvent::ResponseDone(_)
             | RealtimeEvent::ConversationItemAdded(_)
             | RealtimeEvent::ConversationItemDone { .. }
             | RealtimeEvent::Error(_) => {}
@@ -724,6 +726,8 @@ mod tests {
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
     use codex_protocol::protocol::RealtimeResponseCancelled;
+    use codex_protocol::protocol::RealtimeResponseCreated;
+    use codex_protocol::protocol::RealtimeResponseDone;
     use codex_protocol::protocol::RealtimeVoice;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
@@ -868,7 +872,7 @@ mod tests {
             "item": {
                 "id": "item_123",
                 "type": "function_call",
-                "name": "codex",
+                "name": "background_agent",
                 "call_id": "call_123",
                 "arguments": "{\"prompt\":\"delegate this\"}"
             }
@@ -982,14 +986,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_realtime_v2_response_done_handoff_event() {
+    fn parse_realtime_v2_response_done_event() {
         let payload = json!({
             "type": "response.done",
             "response": {
                 "output": [{
                     "id": "item_123",
                     "type": "function_call",
-                    "name": "codex",
+                    "name": "background_agent",
                     "call_id": "call_123",
                     "arguments": "{\"prompt\":\"delegate from done\"}"
                 }]
@@ -999,11 +1003,8 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
-                handoff_id: "call_123".to_string(),
-                item_id: "item_123".to_string(),
-                input_transcript: "delegate from done".to_string(),
-                active_transcript: Vec::new(),
+            Some(RealtimeEvent::ResponseDone(RealtimeResponseDone {
+                response_id: None
             }))
         );
     }
@@ -1018,10 +1019,9 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::ConversationItemAdded(json!({
-                "type": "response.created",
-                "response": {"id": "resp_created_1"}
-            })))
+            Some(RealtimeEvent::ResponseCreated(RealtimeResponseCreated {
+                response_id: Some("resp_created_1".to_string())
+            }))
         );
     }
 
@@ -1288,7 +1288,7 @@ mod tests {
             assert_eq!(fourth_json["handoff_id"], "handoff_1");
             assert_eq!(
                 fourth_json["output_text"],
-                "\"Agent Final Message\":\n\nhello from codex"
+                "\"Agent Final Message\":\n\nhello from background agent"
             );
 
             ws.send(Message::Text(
@@ -1412,7 +1412,7 @@ mod tests {
         connection
             .send_conversation_handoff_append(
                 "handoff_1".to_string(),
-                "hello from codex".to_string(),
+                "hello from background agent".to_string(),
             )
             .await
             .expect("send handoff");
@@ -1498,7 +1498,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn realtime_v2_session_update_includes_codex_tool_and_handoff_output_item() {
+    async fn realtime_v2_session_update_includes_background_agent_tool_and_handoff_output_item() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("local addr");
 
@@ -1558,7 +1558,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["tools"][0]["name"],
-                Value::String("codex".to_string())
+                Value::String("background_agent".to_string())
             );
             assert_eq!(
                 first_json["session"]["tools"][0]["parameters"]["required"],

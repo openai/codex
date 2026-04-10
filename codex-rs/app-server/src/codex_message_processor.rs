@@ -1,4 +1,5 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
 use crate::config_api::apply_runtime_feature_enablement;
@@ -115,6 +116,8 @@ use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
@@ -183,6 +186,7 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
+use codex_app_server_protocol::WorkspaceRole;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
@@ -199,6 +203,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
+use codex_core::WorkspaceRole as CoreWorkspaceRole;
 use codex_core::append_thread_name;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -485,6 +490,96 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
 }
 
+async fn resolve_workspace_role_and_owner_for_auth(
+    chatgpt_base_url: &str,
+    auth: Option<&CodexAuth>,
+) -> (Option<WorkspaceRole>, Option<bool>) {
+    let ownership =
+        codex_core::resolve_workspace_role_and_owner_for_auth(chatgpt_base_url, auth).await;
+    (
+        ownership.workspace_role.map(workspace_role_to_v2),
+        ownership.is_workspace_owner,
+    )
+}
+
+fn workspace_role_to_v2(role: CoreWorkspaceRole) -> WorkspaceRole {
+    match role {
+        CoreWorkspaceRole::AccountOwner => WorkspaceRole::AccountOwner,
+        CoreWorkspaceRole::AccountAdmin => WorkspaceRole::AccountAdmin,
+        CoreWorkspaceRole::StandardUser => WorkspaceRole::StandardUser,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AuthIdentity {
+    auth_mode: AuthMode,
+    account_id: Option<String>,
+    account_email: Option<String>,
+    chatgpt_user_id: Option<String>,
+}
+
+fn auth_identity(auth: &CodexAuth) -> AuthIdentity {
+    AuthIdentity {
+        auth_mode: auth.api_auth_mode(),
+        account_id: auth.get_account_id(),
+        account_email: auth.get_account_email(),
+        chatgpt_user_id: auth.get_chatgpt_user_id(),
+    }
+}
+
+fn cached_workspace_role_and_owner_for_auth(
+    auth: Option<&CodexAuth>,
+) -> (Option<WorkspaceRole>, Option<bool>) {
+    (None, auth.and_then(CodexAuth::is_workspace_owner))
+}
+
+fn account_updated_notification_for_auth(
+    auth: Option<&CodexAuth>,
+    workspace_role: Option<WorkspaceRole>,
+    is_workspace_owner: Option<bool>,
+) -> AccountUpdatedNotification {
+    AccountUpdatedNotification {
+        auth_mode: auth.map(CodexAuth::api_auth_mode),
+        plan_type: auth.and_then(CodexAuth::account_plan_type),
+        workspace_role,
+        is_workspace_owner,
+    }
+}
+
+fn spawn_live_workspace_role_update_for_auth(
+    outgoing: Arc<OutgoingMessageSender>,
+    auth_manager: Arc<AuthManager>,
+    chatgpt_base_url: String,
+    auth: Option<CodexAuth>,
+) {
+    let Some(auth) = auth.filter(CodexAuth::is_chatgpt_auth) else {
+        return;
+    };
+    let expected_identity = auth_identity(&auth);
+
+    tokio::spawn(async move {
+        let (workspace_role, is_workspace_owner) =
+            resolve_workspace_role_and_owner_for_auth(&chatgpt_base_url, Some(&auth)).await;
+        let Some(workspace_role) = workspace_role else {
+            return;
+        };
+
+        let current_auth = auth_manager.auth_cached();
+        if current_auth.as_ref().map(auth_identity) != Some(expected_identity) {
+            return;
+        }
+
+        let payload = account_updated_notification_for_auth(
+            current_auth.as_ref(),
+            Some(workspace_role),
+            is_workspace_owner,
+        );
+        outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(payload))
+            .await;
+    });
+}
+
 impl CodexMessageProcessor {
     pub(crate) fn handle_config_mutation(&self) {
         self.clear_plugin_related_caches();
@@ -497,10 +592,18 @@ impl CodexMessageProcessor {
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
-        AccountUpdatedNotification {
-            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-        }
+        let (workspace_role, is_workspace_owner) =
+            cached_workspace_role_and_owner_for_auth(auth.as_ref());
+        account_updated_notification_for_auth(auth.as_ref(), workspace_role, is_workspace_owner)
+    }
+
+    fn spawn_live_workspace_role_update(&self, auth: Option<CodexAuth>) {
+        spawn_live_workspace_role_update_for_auth(
+            self.outgoing.clone(),
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            auth,
+        );
     }
 
     async fn load_thread(
@@ -782,6 +885,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadAddCreditsNudgeEmail { request_id, params } => {
+                self.thread_add_credits_nudge_email(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
@@ -1103,6 +1210,7 @@ impl CodexMessageProcessor {
                         self.current_account_updated_notification(),
                     ))
                     .await;
+                self.spawn_live_workspace_role_update(self.auth_manager.auth_cached());
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -1128,7 +1236,7 @@ impl CodexMessageProcessor {
             });
         }
 
-        let mut opts = LoginServerOptions {
+        let opts = LoginServerOptions {
             open_browser: false,
             ..LoginServerOptions::new(
                 config.codex_home.clone(),
@@ -1138,11 +1246,15 @@ impl CodexMessageProcessor {
             )
         };
         #[cfg(debug_assertions)]
-        if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
-            && !issuer.trim().is_empty()
-        {
-            opts.issuer = issuer;
-        }
+        let opts = {
+            let mut opts = opts;
+            if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
+                && !issuer.trim().is_empty()
+            {
+                opts.issuer = issuer;
+            }
+            opts
+        };
 
         Ok(opts)
     }
@@ -1223,7 +1335,7 @@ impl CodexMessageProcessor {
                             replace_cloud_requirements_loader(
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
-                                chatgpt_base_url,
+                                chatgpt_base_url.clone(),
                                 codex_home,
                             );
                             sync_default_client_residency_requirement(
@@ -1232,17 +1344,27 @@ impl CodexMessageProcessor {
                             )
                             .await;
 
-                            // Notify clients with the actual current auth mode.
+                            // Notify clients with the actual current auth mode immediately; the
+                            // live workspace role is fetched below without delaying this update.
                             let auth = auth_manager.auth_cached();
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                            };
+                            let (workspace_role, is_workspace_owner) =
+                                cached_workspace_role_and_owner_for_auth(auth.as_ref());
+                            let payload_v2 = account_updated_notification_for_auth(
+                                auth.as_ref(),
+                                workspace_role,
+                                is_workspace_owner,
+                            );
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
                                     payload_v2,
                                 ))
                                 .await;
+                            spawn_live_workspace_role_update_for_auth(
+                                outgoing_clone.clone(),
+                                auth_manager.clone(),
+                                chatgpt_base_url.clone(),
+                                auth,
+                            );
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -1337,7 +1459,7 @@ impl CodexMessageProcessor {
                             replace_cloud_requirements_loader(
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
-                                chatgpt_base_url,
+                                chatgpt_base_url.clone(),
                                 codex_home,
                             );
                             sync_default_client_residency_requirement(
@@ -1347,15 +1469,24 @@ impl CodexMessageProcessor {
                             .await;
 
                             let auth = auth_manager.auth_cached();
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                            };
+                            let (workspace_role, is_workspace_owner) =
+                                cached_workspace_role_and_owner_for_auth(auth.as_ref());
+                            let payload_v2 = account_updated_notification_for_auth(
+                                auth.as_ref(),
+                                workspace_role,
+                                is_workspace_owner,
+                            );
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
                                     payload_v2,
                                 ))
                                 .await;
+                            spawn_live_workspace_role_update_for_auth(
+                                outgoing_clone.clone(),
+                                auth_manager.clone(),
+                                chatgpt_base_url.clone(),
+                                auth,
+                            );
                         }
 
                         let mut guard = active_login.lock().await;
@@ -1504,6 +1635,7 @@ impl CodexMessageProcessor {
                 self.current_account_updated_notification(),
             ))
             .await;
+        self.spawn_live_workspace_role_update(self.auth_manager.auth_cached());
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
@@ -1541,6 +1673,8 @@ impl CodexMessageProcessor {
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
                     plan_type: None,
+                    workspace_role: None,
+                    is_workspace_owner: None,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -1639,13 +1773,16 @@ impl CodexMessageProcessor {
         if !requires_openai_auth {
             let response = GetAccountResponse {
                 account: None,
+                workspace_role: None,
+                is_workspace_owner: None,
                 requires_openai_auth,
             };
             self.outgoing.send_response(request_id, response).await;
             return;
         }
 
-        let account = match self.auth_manager.auth_cached() {
+        let auth = self.auth_manager.auth_cached();
+        let account = match auth.as_ref() {
             Some(auth) => match auth.auth_mode() {
                 CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
                 CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
@@ -1672,12 +1809,17 @@ impl CodexMessageProcessor {
             },
             None => None,
         };
+        let (workspace_role, is_workspace_owner) =
+            cached_workspace_role_and_owner_for_auth(auth.as_ref());
 
         let response = GetAccountResponse {
             account,
+            workspace_role,
+            is_workspace_owner,
             requires_openai_auth,
         };
         self.outgoing.send_response(request_id, response).await;
+        self.spawn_live_workspace_role_update(auth);
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
@@ -1695,6 +1837,11 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => {
+                tracing::warn!(
+                    ?request_id,
+                    error = %error.message,
+                    "account/rateLimits/read request failed"
+                );
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -3395,6 +3542,40 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_add_credits_nudge_email(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadAddCreditsNudgeEmailParams,
+    ) {
+        let ThreadAddCreditsNudgeEmailParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::SendAddCreditsNudgeEmail)
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadAddCreditsNudgeEmailResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to request add-credits nudge email: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
     async fn thread_list(&self, request_id: ConnectionRequestId, params: ThreadListParams) {
         let ThreadListParams {
             cursor,
@@ -3706,9 +3887,18 @@ impl CodexMessageProcessor {
         self.command_exec_manager
             .connection_closed(connection_id)
             .await;
-        self.thread_state_manager
+        let thread_ids_with_no_subscribers = self
+            .thread_state_manager
             .remove_connection(connection_id)
             .await;
+        for thread_id in thread_ids_with_no_subscribers {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                self.finalize_thread_teardown(thread_id).await;
+                continue;
+            };
+            self.unload_thread_without_subscribers(thread_id, thread)
+                .await;
+        }
     }
 
     pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
@@ -5414,6 +5604,66 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn unload_thread_without_subscribers(
+        &self,
+        thread_id: ThreadId,
+        thread: Arc<CodexThread>,
+    ) {
+        // This connection was the last subscriber. Only now do we unload the thread.
+        info!("thread {thread_id} has no subscribers; shutting down");
+        let should_start_unload_task = self.pending_thread_unloads.lock().await.insert(thread_id);
+
+        // Any pending app-server -> client requests for this thread can no longer be
+        // answered; cancel their callbacks before shutdown/unload.
+        self.outgoing
+            .cancel_requests_for_thread(thread_id, /*error*/ None)
+            .await;
+        self.thread_state_manager
+            .remove_thread_state(thread_id)
+            .await;
+
+        if !should_start_unload_task {
+            return;
+        }
+
+        let outgoing = self.outgoing.clone();
+        let pending_thread_unloads = self.pending_thread_unloads.clone();
+        let thread_manager = self.thread_manager.clone();
+        let thread_watch_manager = self.thread_watch_manager.clone();
+        tokio::spawn(async move {
+            match Self::wait_for_thread_shutdown(&thread).await {
+                ThreadShutdownResult::Complete => {
+                    if thread_manager.remove_thread(&thread_id).await.is_none() {
+                        info!("thread {thread_id} was already removed before teardown finalized");
+                        thread_watch_manager
+                            .remove_thread(&thread_id.to_string())
+                            .await;
+                        pending_thread_unloads.lock().await.remove(&thread_id);
+                        return;
+                    }
+                    thread_watch_manager
+                        .remove_thread(&thread_id.to_string())
+                        .await;
+                    let notification = ThreadClosedNotification {
+                        thread_id: thread_id.to_string(),
+                    };
+                    outgoing
+                        .send_server_notification(ServerNotification::ThreadClosed(notification))
+                        .await;
+                    pending_thread_unloads.lock().await.remove(&thread_id);
+                }
+                ThreadShutdownResult::SubmitFailed => {
+                    pending_thread_unloads.lock().await.remove(&thread_id);
+                    warn!("failed to submit Shutdown to thread {thread_id}");
+                }
+                ThreadShutdownResult::TimedOut => {
+                    pending_thread_unloads.lock().await.remove(&thread_id);
+                    warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
+                }
+            }
+        });
+    }
+
     async fn thread_unsubscribe(
         &self,
         request_id: ConnectionRequestId,
@@ -5461,58 +5711,8 @@ impl CodexMessageProcessor {
         }
 
         if !self.thread_state_manager.has_subscribers(thread_id).await {
-            // This connection was the last subscriber. Only now do we unload the thread.
-            info!("thread {thread_id} has no subscribers; shutting down");
-            self.pending_thread_unloads.lock().await.insert(thread_id);
-            // Any pending app-server -> client requests for this thread can no longer be
-            // answered; cancel their callbacks before shutdown/unload.
-            self.outgoing
-                .cancel_requests_for_thread(thread_id, /*error*/ None)
+            self.unload_thread_without_subscribers(thread_id, thread)
                 .await;
-            self.thread_state_manager
-                .remove_thread_state(thread_id)
-                .await;
-
-            let outgoing = self.outgoing.clone();
-            let pending_thread_unloads = self.pending_thread_unloads.clone();
-            let thread_manager = self.thread_manager.clone();
-            let thread_watch_manager = self.thread_watch_manager.clone();
-            tokio::spawn(async move {
-                match Self::wait_for_thread_shutdown(&thread).await {
-                    ThreadShutdownResult::Complete => {
-                        if thread_manager.remove_thread(&thread_id).await.is_none() {
-                            info!(
-                                "thread {thread_id} was already removed before unsubscribe finalized"
-                            );
-                            thread_watch_manager
-                                .remove_thread(&thread_id.to_string())
-                                .await;
-                            pending_thread_unloads.lock().await.remove(&thread_id);
-                            return;
-                        }
-                        thread_watch_manager
-                            .remove_thread(&thread_id.to_string())
-                            .await;
-                        let notification = ThreadClosedNotification {
-                            thread_id: thread_id.to_string(),
-                        };
-                        outgoing
-                            .send_server_notification(ServerNotification::ThreadClosed(
-                                notification,
-                            ))
-                            .await;
-                        pending_thread_unloads.lock().await.remove(&thread_id);
-                    }
-                    ThreadShutdownResult::SubmitFailed => {
-                        pending_thread_unloads.lock().await.remove(&thread_id);
-                        warn!("failed to submit Shutdown to thread {thread_id}");
-                    }
-                    ThreadShutdownResult::TimedOut => {
-                        pending_thread_unloads.lock().await.remove(&thread_id);
-                        warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
-                    }
-                }
-            });
         }
 
         self.outgoing
@@ -7422,15 +7622,26 @@ impl CodexMessageProcessor {
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
                             .await;
-                        if let EventMsg::RawResponseItem(_) = &event.msg && !raw_events_enabled {
-                            continue;
-                        }
-
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                             outgoing_for_task.clone(),
                             subscribed_connection_ids,
                             conversation_id,
                         );
+
+                        if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
+                            && !raw_events_enabled
+                        {
+                            maybe_emit_hook_prompt_item_completed(
+                                api_version,
+                                conversation_id,
+                                &event.id,
+                                &raw_response_item_event.item,
+                                &thread_outgoing,
+                            )
+                            .await;
+                            continue;
+                        }
+
                         apply_bespoke_event_handling(
                             event.clone(),
                             conversation_id,
@@ -9859,7 +10070,8 @@ mod tests {
             state.lock().await.cancel_tx = Some(cancel_tx);
         }
 
-        manager.remove_connection(connection_a).await;
+        let threads_to_unload = manager.remove_connection(connection_a).await;
+        assert_eq!(threads_to_unload, Vec::<ThreadId>::new());
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx)
                 .await
@@ -9880,7 +10092,8 @@ mod tests {
         let connection = ConnectionId(1);
 
         manager.connection_initialized(connection).await;
-        manager.remove_connection(connection).await;
+        let threads_to_unload = manager.remove_connection(connection).await;
+        assert_eq!(threads_to_unload, Vec::<ThreadId>::new());
 
         assert!(
             manager

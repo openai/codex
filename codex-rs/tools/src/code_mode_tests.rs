@@ -182,7 +182,13 @@ fn create_wait_tool_matches_expected_spec() {
 
 #[test]
 fn create_code_mode_tool_matches_expected_spec() {
-    let enabled_tools = vec![("update_plan".to_string(), "Update the plan".to_string())];
+    let enabled_tools = vec![codex_code_mode::ToolDefinition {
+        name: "update_plan".to_string(),
+        description: "Update the plan".to_string(),
+        kind: codex_code_mode::CodeModeToolKind::Function,
+        input_schema: None,
+        output_schema: None,
+    }];
 
     assert_eq!(
         create_code_mode_tool(

@@ -104,6 +104,7 @@ pub(crate) async fn run_codex_thread_interactive(
             &parent_session.services.analytics_events_client,
             client_metadata,
             codex.session.conversation_id,
+            Some(parent_session.conversation_id),
             thread_config,
             subagent_source,
         );

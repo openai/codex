@@ -80,17 +80,6 @@ impl ClaudeHooksEngine {
             };
         }
 
-        if cfg!(windows) {
-            return Self {
-                handlers: Vec::new(),
-                warnings: vec![
-                    "Disabled `codex_hooks` for this session because `hooks.json` lifecycle hooks are not supported on Windows yet."
-                        .to_string(),
-                ],
-                shell,
-            };
-        }
-
         let _ = schema_loader::generated_hook_schemas();
         let discovered = discovery::discover_handlers(config_layer_stack);
         Self {

@@ -1608,7 +1608,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
 exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult>; };
 ```"#
     );
 }
@@ -1694,7 +1694,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
     assert!(description.contains(
         r#"exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<CallToolResult>; };
 ```"#
     ));
 }
@@ -1769,8 +1769,8 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     assert!(description.starts_with(
         "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
-    assert!(description.contains("### `update_plan` (`update_plan`)"));
-    assert!(description.contains("### `view_image` (`view_image`)"));
+    assert!(description.contains("### `update_plan`"));
+    assert!(description.contains("### `view_image`"));
 }
 
 #[test]
@@ -1804,8 +1804,8 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     assert!(!description.starts_with(
         "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
-    assert!(!description.contains("### `update_plan` (`update_plan`)"));
-    assert!(!description.contains("### `view_image` (`view_image`)"));
+    assert!(!description.contains("### `update_plan`"));
+    assert!(!description.contains("### `view_image`"));
 }
 
 fn model_info() -> ModelInfo {
@@ -1917,6 +1917,78 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
         icons: None,
         meta: None,
     }
+}
+
+#[test]
+fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let mut tool = mcp_tool(
+        "echo",
+        "Echo text",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"}
+            },
+            "required": ["message"],
+            "additionalProperties": false
+        }),
+    );
+    tool.output_schema = Some(std::sync::Arc::new(rmcp::model::object(
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "echo": {"type": "string"},
+                "env": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "null"}
+                    ]
+                }
+            },
+            "required": ["echo", "env"],
+            "additionalProperties": false
+        }),
+    )));
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([("mcp__sample__echo".to_string(), tool)])),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        &find_tool(&tools, "mcp__sample__echo").spec
+    else {
+        panic!("expected function tool");
+    };
+
+    assert_eq!(
+        description,
+        r#"Echo text
+
+exec tool declaration:
+```ts
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+```"#
+    );
 }
 
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {

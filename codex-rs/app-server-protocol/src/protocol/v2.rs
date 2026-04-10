@@ -83,6 +83,7 @@ use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
+use codex_protocol::protocol::SpendControlSnapshot as CoreSpendControlSnapshot;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
@@ -1771,11 +1772,27 @@ pub struct GetAccountParams {
     pub refresh_token: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum WorkspaceRole {
+    #[serde(rename = "account-owner")]
+    #[ts(rename = "account-owner")]
+    AccountOwner,
+    #[serde(rename = "account-admin")]
+    #[ts(rename = "account-admin")]
+    AccountAdmin,
+    #[serde(rename = "standard-user")]
+    #[ts(rename = "standard-user")]
+    StandardUser,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Option<Account>,
+    pub workspace_role: Option<WorkspaceRole>,
+    pub is_workspace_owner: Option<bool>,
     pub requires_openai_auth: bool,
 }
 
@@ -3055,6 +3072,18 @@ pub struct ThreadShellCommandResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadAddCreditsNudgeEmailParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAddCreditsNudgeEmailResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsCleanParams {
     pub thread_id: String,
 }
@@ -3689,6 +3718,8 @@ pub struct Thread {
 pub struct AccountUpdatedNotification {
     pub auth_mode: Option<AuthMode>,
     pub plan_type: Option<PlanType>,
+    pub workspace_role: Option<WorkspaceRole>,
+    pub is_workspace_owner: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6275,6 +6306,24 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AddCreditsNudgeEmailNotification {
+    pub thread_id: String,
+    pub result: AddCreditsNudgeEmailResult,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "status", rename_all = "camelCase")]
+#[ts(tag = "status", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum AddCreditsNudgeEmailResult {
+    Sent,
+    CooldownActive,
+    Failed { message: String },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6284,6 +6333,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub spend_control: Option<SpendControlSnapshot>,
     pub plan_type: Option<PlanType>,
 }
 
@@ -6295,6 +6345,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
+            spend_control: value.spend_control.map(SpendControlSnapshot::from),
             plan_type: value.plan_type,
         }
     }
@@ -6336,6 +6387,21 @@ impl From<CoreCreditsSnapshot> for CreditsSnapshot {
             has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpendControlSnapshot {
+    pub reached: bool,
+}
+
+impl From<CoreSpendControlSnapshot> for SpendControlSnapshot {
+    fn from(value: CoreSpendControlSnapshot) -> Self {
+        Self {
+            reached: value.reached,
         }
     }
 }

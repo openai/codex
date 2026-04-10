@@ -13,7 +13,7 @@ use crate::ToolSpec;
 use crate::ToolsConfig;
 use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
-use crate::collect_code_mode_tool_definitions;
+use crate::collect_code_mode_exec_prompt_tool_definitions;
 use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
 use crate::create_apply_patch_freeform_tool;
@@ -93,17 +93,14 @@ pub fn build_tool_registry_plan(
                 ..params
             },
         );
-        let mut enabled_tools = collect_code_mode_tool_definitions(
+        let mut enabled_tools = collect_code_mode_exec_prompt_tool_definitions(
             nested_plan
                 .specs
                 .iter()
                 .map(|configured_tool| &configured_tool.spec),
-        )
-        .into_iter()
-        .map(|tool| (tool.name, tool.description))
-        .collect::<Vec<_>>();
-        enabled_tools.sort_by(|(left_name, _), (right_name, _)| {
-            compare_code_mode_tool_names(left_name, right_name, &namespace_descriptions)
+        );
+        enabled_tools.sort_by(|left, right| {
+            compare_code_mode_tool_names(&left.name, &right.name, &namespace_descriptions)
         });
         plan.push_spec(
             create_code_mode_tool(

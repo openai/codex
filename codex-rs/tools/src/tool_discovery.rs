@@ -204,16 +204,17 @@ pub fn create_tool_search_tool(
 pub fn collect_tool_search_output_tools<'a>(
     tool_sources: impl IntoIterator<Item = ToolSearchResultSource<'a>>,
 ) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
-    let grouped = tool_sources.into_iter().fold(
-        BTreeMap::<String, Vec<(String, ToolSearchResultSource<'a>)>>::new(),
-        |mut grouped, tool| {
-            grouped
-                .entry(tool.tool_namespace.to_string())
-                .or_default()
-                .push((tool.tool_name.to_string(), tool));
-            grouped
-        },
-    );
+    let mut grouped: Vec<(&'a str, Vec<ToolSearchResultSource<'a>>)> = Vec::new();
+    for tool in tool_sources {
+        if let Some((_, tools)) = grouped
+            .iter_mut()
+            .find(|(tool_namespace, _)| *tool_namespace == tool.tool_namespace)
+        {
+            tools.push(tool);
+        } else {
+            grouped.push((tool.tool_namespace, vec![tool]));
+        }
+    }
 
     let mut results = Vec::with_capacity(grouped.len());
     for (tool_namespace, tools) in grouped {
@@ -222,12 +223,10 @@ pub fn collect_tool_search_output_tools<'a>(
         };
 
         let description = first_tool
-            .1
             .connector_description
             .map(str::to_string)
             .or_else(|| {
                 first_tool
-                    .1
                     .connector_name
                     .map(str::trim)
                     .filter(|connector_name| !connector_name.is_empty())
@@ -236,14 +235,14 @@ pub fn collect_tool_search_output_tools<'a>(
             .or_else(|| {
                 Some(format!(
                     "Tools from the {} MCP server.",
-                    first_tool.1.server_name
+                    first_tool.server_name
                 ))
             });
 
         let tools = tools
             .iter()
             .map(|tool| {
-                mcp_tool_to_deferred_responses_api_tool(tool.0.clone(), tool.1.tool)
+                mcp_tool_to_deferred_responses_api_tool(tool.tool_name.to_string(), tool.tool)
                     .map(ResponsesApiNamespaceTool::Function)
             })
             .collect::<Result<Vec<_>, _>>()?;

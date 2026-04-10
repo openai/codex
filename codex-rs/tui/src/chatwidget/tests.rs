@@ -127,6 +127,7 @@ pub(super) use codex_protocol::parse_command::ParsedCommand;
 pub(super) use codex_protocol::plan_tool::PlanItemArg;
 pub(super) use codex_protocol::plan_tool::StepStatus;
 pub(super) use codex_protocol::plan_tool::UpdatePlanArgs;
+pub(super) use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
 pub(super) use codex_protocol::protocol::AgentMessageDeltaEvent;
 pub(super) use codex_protocol::protocol::AgentMessageEvent;
 pub(super) use codex_protocol::protocol::AgentReasoningDeltaEvent;

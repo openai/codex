@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -26,7 +24,6 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
-use crate::protocol::InitializeResponse;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -74,10 +71,8 @@ enum ProcessEntry {
 }
 
 struct Inner {
-    notifications: RpcNotificationSender,
+    notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
-    initialize_requested: AtomicBool,
-    initialized: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -104,10 +99,8 @@ impl LocalProcess {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
         Self {
             inner: Arc::new(Inner {
-                notifications,
+                notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
-                initialize_requested: AtomicBool::new(false),
-                initialized: AtomicBool::new(false),
             }),
         }
     }
@@ -128,45 +121,19 @@ impl LocalProcess {
         }
     }
 
-    pub(crate) fn initialize(&self) -> Result<InitializeResponse, JSONRPCErrorError> {
-        if self.inner.initialize_requested.swap(true, Ordering::SeqCst) {
-            return Err(invalid_request(
-                "initialize may only be sent once per connection".to_string(),
-            ));
-        }
-        Ok(InitializeResponse {})
-    }
-
-    pub(crate) fn initialized(&self) -> Result<(), String> {
-        if !self.inner.initialize_requested.load(Ordering::SeqCst) {
-            return Err("received `initialized` notification before `initialize`".into());
-        }
-        self.inner.initialized.store(true, Ordering::SeqCst);
-        Ok(())
-    }
-
-    pub(crate) fn require_initialized_for(
-        &self,
-        method_family: &str,
-    ) -> Result<(), JSONRPCErrorError> {
-        if !self.inner.initialize_requested.load(Ordering::SeqCst) {
-            return Err(invalid_request(format!(
-                "client must call initialize before using {method_family} methods"
-            )));
-        }
-        if !self.inner.initialized.load(Ordering::SeqCst) {
-            return Err(invalid_request(format!(
-                "client must send initialized before using {method_family} methods"
-            )));
-        }
-        Ok(())
+    pub(crate) fn set_notification_sender(&self, notifications: Option<RpcNotificationSender>) {
+        let mut notification_sender = self
+            .inner
+            .notifications
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *notification_sender = notifications;
     }
 
     async fn start_process(
         &self,
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>), JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
         let (program, args) = params
             .argv
@@ -277,7 +244,6 @@ impl LocalProcess {
         &self,
         params: ReadParams,
     ) -> Result<ReadResponse, JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
         let _process_id = params.process_id.clone();
         let after_seq = params.after_seq.unwrap_or(0);
         let max_bytes = params.max_bytes.unwrap_or(usize::MAX);
@@ -354,7 +320,6 @@ impl LocalProcess {
         &self,
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
         let _process_id = params.process_id.clone();
         let _input_bytes = params.chunk.0.len();
         let writer_tx = {
@@ -391,7 +356,6 @@ impl LocalProcess {
         &self,
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
-        self.require_initialized_for("exec")?;
         let _process_id = params.process_id.clone();
         let running = {
             let process_map = self.inner.processes.lock().await;
@@ -546,13 +510,10 @@ async fn stream_output(
             }
         };
         output_notify.notify_waiters();
-        if inner
-            .notifications
-            .notify(crate::protocol::EXEC_OUTPUT_DELTA_METHOD, &notification)
-            .await
-            .is_err()
-        {
-            break;
+        if let Some(notifications) = notification_sender(&inner) {
+            let _ = notifications
+                .notify(crate::protocol::EXEC_OUTPUT_DELTA_METHOD, &notification)
+                .await;
         }
     }
 
@@ -584,13 +545,11 @@ async fn watch_exit(
     };
     output_notify.notify_waiters();
     if let Some(notification) = notification
-        && inner
-            .notifications
-            .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
-            .await
-            .is_err()
+        && let Some(notifications) = notification_sender(&inner)
     {
-        return;
+        let _ = notifications
+            .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
+            .await;
     }
 
     maybe_emit_closed(process_id.clone(), Arc::clone(&inner)).await;
@@ -645,10 +604,17 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
         return;
     };
 
-    if inner
+    if let Some(notifications) = notification_sender(&inner) {
+        let _ = notifications
+            .notify(EXEC_CLOSED_METHOD, &notification)
+            .await;
+    }
+}
+
+fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
+    inner
         .notifications
-        .notify(EXEC_CLOSED_METHOD, &notification)
-        .await
-        .is_err()
-    {}
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
