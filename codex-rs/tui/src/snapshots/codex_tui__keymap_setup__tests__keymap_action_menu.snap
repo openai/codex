@@ -1,0 +1,7 @@
+---
+source: tui/src/keymap_setup.rs
+expression: snapshot
+---
+Set new key | Current: ctrl-enter | enabled
+Remove custom binding | Restore the default binding for this action. | enabled
+Cancel | Leave keymap unchanged. | enabled

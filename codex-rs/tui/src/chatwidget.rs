@@ -111,6 +111,7 @@ use codex_chatgpt::connectors;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
+use codex_config::types::TuiKeymap;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::FEATURES;
@@ -354,6 +355,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
+use crate::keymap_setup;
 #[cfg(test)]
 use crate::markdown::append_markdown;
 use crate::render::Insets;
@@ -5782,6 +5784,9 @@ impl ChatWidget {
             SlashCommand::Vim => {
                 self.toggle_vim_mode_and_notify();
             }
+            SlashCommand::Keymap => {
+                self.open_keymap_picker();
+            }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
@@ -8232,6 +8237,62 @@ impl ChatWidget {
             terminal_width,
         );
         self.bottom_pane.show_selection_view(params);
+    }
+
+    fn open_keymap_picker(&mut self) {
+        match RuntimeKeymap::from_config(&self.config.tui_keymap) {
+            Ok(runtime_keymap) => {
+                let params = keymap_setup::build_keymap_picker_params(
+                    &runtime_keymap,
+                    &self.config.tui_keymap,
+                );
+                self.bottom_pane.show_selection_view(params);
+            }
+            Err(err) => {
+                self.add_error_message(format!("Invalid `tui.keymap` configuration: {err}"));
+            }
+        }
+    }
+
+    pub(crate) fn open_keymap_action_menu(
+        &mut self,
+        context: String,
+        action: String,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params = keymap_setup::build_keymap_action_menu_params(
+            context,
+            action,
+            runtime_keymap,
+            &self.config.tui_keymap,
+        );
+        self.bottom_pane.show_selection_view(params);
+    }
+
+    pub(crate) fn open_keymap_capture(
+        &mut self,
+        context: String,
+        action: String,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let view = keymap_setup::build_keymap_capture_view(
+            context,
+            action,
+            runtime_keymap,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn apply_keymap_update(
+        &mut self,
+        keymap_config: TuiKeymap,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        self.config.tui_keymap = keymap_config;
+        self.bottom_pane.set_keymap_bindings(runtime_keymap);
+        self.request_redraw();
     }
 
     fn status_line_context_window_size(&self) -> Option<i64> {
