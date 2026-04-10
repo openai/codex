@@ -860,7 +860,9 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    /// One-shot guard that prevents later user turns from spawning duplicate title requests.
     thread_name_generation_started: AtomicBool,
+    /// Serializes manual and generated thread-name writes through the shared session-index path.
     thread_name_write_lock: Mutex<()>,
 }
 
@@ -4137,6 +4139,12 @@ impl Session {
         });
     }
 
+    /// Claims the one allowed background-title attempt for this session.
+    ///
+    /// A generated name is only useful for persisted, interactive sessions that still
+    /// do not have a name. The name is checked again while committing it, so callers
+    /// may rely on this method only as the spawn gate; it is not the authority that
+    /// decides whether the generated value ultimately wins over `/rename`.
     async fn should_start_thread_name_generation(&self) -> bool {
         let (enabled, source_allows_generation, has_thread_name) = {
             let state = self.state.lock().await;
@@ -4981,6 +4989,11 @@ async fn persist_thread_name_update(
     Ok(msg)
 }
 
+/// Persists a thread name, updates session state, and notifies listeners as one ordered write.
+///
+/// Manual `/rename` passes [`SetThreadNameMode::Always`]. Generated titles pass
+/// [`SetThreadNameMode::IfUnset`] so the state under the write lock can veto a
+/// stale model result after the user has already named the thread.
 async fn commit_thread_name(
     sess: &Arc<Session>,
     sub_id: String,
@@ -5034,6 +5047,11 @@ async fn commit_thread_name(
     Ok(SetThreadNameOutcome::Updated)
 }
 
+/// Returns whether sessions from this entry point should be auto-titled from the first prompt.
+///
+/// Exec sessions and sub-agents usually have an enclosing task that names their
+/// purpose, and generating extra names for them would spend a model request
+/// without improving the interactive session list.
 fn session_source_allows_thread_name_generation(session_source: &SessionSource) -> bool {
     !matches!(
         session_source,
@@ -5083,6 +5101,12 @@ async fn generate_and_set_thread_name(
     .map_err(|err| anyhow::anyhow!("{err:?}"))
 }
 
+/// Runs the title-only model request and returns the raw title candidate.
+///
+/// The response is requested as JSON, but older or non-conforming providers can
+/// still return text. Callers must sanitize the returned string before storing
+/// it; persisting this raw value could leak quotes, markdown, or an overlong
+/// summary into terminal titles and session pickers.
 async fn generate_thread_name(
     sess: &Session,
     request: &ThreadNameGenerationRequest,

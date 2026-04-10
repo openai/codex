@@ -213,7 +213,9 @@ pub struct SessionTitlesToml {
 /// Effective session title settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionTitlesConfig {
+    /// Whether interactive sessions should ask an auxiliary model for a default title.
     pub enabled: bool,
+    /// Optional model override for the title-only background request.
     pub model: Option<String>,
 }
 
