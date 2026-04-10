@@ -9,7 +9,6 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
@@ -130,11 +129,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
-            if routes_approval_to_guardian(turn) {
-                let Some(review_id) = guardian_review_id else {
-                    tracing::warn!("guardian approval missing review id");
-                    return ReviewDecision::Denied;
-                };
+            if let Some(review_id) = guardian_review_id {
                 return review_approval_request(
                     session,
                     turn,

@@ -393,14 +393,7 @@ impl CoreShellActionProvider {
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
-                if routes_approval_to_guardian(&turn) {
-                    let Some(review_id) = guardian_review_id.clone() else {
-                        tracing::warn!("guardian execve approval missing review id");
-                        return PromptDecision {
-                            decision: ReviewDecision::Denied,
-                            guardian_review_id: None,
-                        };
-                    };
+                if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
                         &turn,
