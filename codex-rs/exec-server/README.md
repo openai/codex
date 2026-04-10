@@ -34,7 +34,7 @@ Each connection follows this sequence:
 1. Send `initialize`.
 2. Wait for the `initialize` response.
 3. Send `initialized`.
-4. Call exec or filesystem RPCs once the follow-up implementation PRs land.
+4. Call process or filesystem RPCs.
 
 If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.
@@ -70,7 +70,7 @@ Handshake acknowledgement notification sent by the client after a successful
 Params are currently ignored. Sending any other notification method is treated
 as an invalid request.
 
-### `command/exec`
+### `process/start`
 
 Starts a new managed process.
 
@@ -85,7 +85,6 @@ Request params:
     "PATH": "/usr/bin:/bin"
   },
   "tty": true,
-  "outputBytesCap": 16384,
   "arg0": null
 }
 ```
@@ -98,31 +97,25 @@ Field definitions:
 - `env`: environment variables passed to the child process.
 - `tty`: when `true`, spawn a PTY-backed interactive process; when `false`,
   spawn a pipe-backed process with closed stdin.
-- `outputBytesCap`: maximum retained stdout/stderr bytes per stream for the
-  in-memory buffer. Defaults to `codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP`.
 - `arg0`: optional argv0 override forwarded to `codex-utils-pty`.
 
 Response:
 
 ```json
 {
-  "processId": "proc-1",
-  "running": true,
-  "exitCode": null,
-  "stdout": null,
-  "stderr": null
+  "processId": "proc-1"
 }
 ```
 
 Behavior notes:
 
 - Reusing an existing `processId` is rejected.
-- PTY-backed processes accept later writes through `command/exec/write`.
+- PTY-backed processes accept later writes through `process/write`.
 - Pipe-backed processes are launched with stdin closed and reject writes.
-- Output is streamed asynchronously via `command/exec/outputDelta`.
-- Exit is reported asynchronously via `command/exec/exited`.
+- Output is streamed asynchronously via `process/output`.
+- Exit is reported asynchronously via `process/exited`.
 
-### `command/exec/write`
+### `process/write`
 
 Writes raw bytes to a running PTY-backed process stdin.
 
@@ -141,7 +134,7 @@ Response:
 
 ```json
 {
-  "accepted": true
+  "status": "accepted"
 }
 ```
 
@@ -150,7 +143,7 @@ Behavior notes:
 - Writes to an unknown `processId` are rejected.
 - Writes to a non-PTY process are rejected because stdin is already closed.
 
-### `command/exec/terminate`
+### `process/terminate`
 
 Terminates a running managed process.
 
@@ -180,7 +173,7 @@ If the process is already unknown or already removed, the server responds with:
 
 ## Notifications
 
-### `command/exec/outputDelta`
+### `process/output`
 
 Streaming output chunk from a running process.
 
@@ -189,6 +182,7 @@ Params:
 ```json
 {
   "processId": "proc-1",
+  "seq": 1,
   "stream": "stdout",
   "chunk": "aGVsbG8K"
 }
@@ -197,10 +191,11 @@ Params:
 Fields:
 
 - `processId`: process identifier
-- `stream`: `"stdout"` or `"stderr"`
+- `seq`: per-process output sequence number
+- `stream`: `"stdout"`, `"stderr"`, or `"pty"`
 - `chunk`: base64-encoded output bytes
 
-### `command/exec/exited`
+### `process/exited`
 
 Final process exit notification.
 
@@ -209,9 +204,42 @@ Params:
 ```json
 {
   "processId": "proc-1",
+  "seq": 2,
   "exitCode": 0
 }
 ```
+
+### `process/closed`
+
+Notification emitted after process output is closed and the process handle is
+removed.
+
+Params:
+
+```json
+{
+  "processId": "proc-1"
+}
+```
+
+## Filesystem RPCs
+
+Filesystem methods use absolute paths and return JSON-RPC errors for invalid
+or unavailable paths:
+
+- `fs/readFile`
+- `fs/writeFile`
+- `fs/createDirectory`
+- `fs/getMetadata`
+- `fs/readDirectory`
+- `fs/remove`
+- `fs/copy`
+
+Each filesystem request accepts an optional `sandbox` object. When `sandbox`
+contains a `ReadOnly` or `WorkspaceWrite` policy, the operation runs in a
+hidden helper process launched from the top-level `codex` executable and
+prepared through the shared sandbox transform path. Helper requests and
+responses are passed over stdin/stdout.
 
 ## Errors
 
@@ -229,6 +257,7 @@ Typical error cases:
 - duplicate `processId`
 - writes to unknown processes
 - writes to non-PTY processes
+- sandbox-denied filesystem operations
 
 ## Rust surface
 
@@ -240,14 +269,12 @@ The crate exports:
 - `RemoteExecServerConnectArgs`
 - protocol structs `InitializeParams` and `InitializeResponse`
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
-- `run_main_with_listen_url()`
-- `run_main_with_listen_url_and_paths()` for callers that already resolved
-  helper paths through the top-level `codex` dispatcher
+- `ExecServerRuntimePaths`
 - `run_main()` for embedding the websocket server
 
-Callers that need sandboxed filesystem RPCs should prefer
-`run_main_with_listen_url_and_paths()`, or run the service through
-`codex exec-server`, so the Codex executable path is available.
+Callers must pass `ExecServerRuntimePaths` to `run_main()`. The top-level
+`codex exec-server` command builds these paths from the `codex` arg0 dispatch
+state.
 
 ## Example session
 
@@ -262,23 +289,24 @@ Initialize:
 Start a process:
 
 ```json
-{"id":2,"method":"command/exec","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"outputBytesCap":4096,"arg0":null}}
-{"id":2,"result":{"processId":"proc-1","running":true,"exitCode":null,"stdout":null,"stderr":null}}
-{"method":"command/exec/outputDelta","params":{"processId":"proc-1","stream":"stdout","chunk":"cmVhZHkK"}}
+{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"arg0":null}}
+{"id":2,"result":{"processId":"proc-1"}}
+{"method":"process/output","params":{"processId":"proc-1","seq":1,"stream":"stdout","chunk":"cmVhZHkK"}}
 ```
 
 Write to the process:
 
 ```json
-{"id":3,"method":"command/exec/write","params":{"processId":"proc-1","chunk":"aGVsbG8K"}}
-{"id":3,"result":{"accepted":true}}
-{"method":"command/exec/outputDelta","params":{"processId":"proc-1","stream":"stdout","chunk":"ZWNobzpoZWxsbwo="}}
+{"id":3,"method":"process/write","params":{"processId":"proc-1","chunk":"aGVsbG8K"}}
+{"id":3,"result":{"status":"accepted"}}
+{"method":"process/output","params":{"processId":"proc-1","seq":2,"stream":"stdout","chunk":"ZWNobzpoZWxsbwo="}}
 ```
 
 Terminate it:
 
 ```json
-{"id":4,"method":"command/exec/terminate","params":{"processId":"proc-1"}}
+{"id":4,"method":"process/terminate","params":{"processId":"proc-1"}}
 {"id":4,"result":{"running":true}}
-{"method":"command/exec/exited","params":{"processId":"proc-1","exitCode":0}}
+{"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0}}
+{"method":"process/closed","params":{"processId":"proc-1"}}
 ```
