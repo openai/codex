@@ -124,6 +124,12 @@ impl CodexThread {
         self.codex.next_event().await
     }
 
+    /// Reports whether input is queued for the active or next turn.
+    #[doc(hidden)]
+    pub async fn has_pending_input(&self) -> bool {
+        self.codex.session.has_pending_input().await
+    }
+
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
     }

@@ -159,6 +159,19 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
         .unwrap_or_else(|err| panic!("submit queue-only agent mail: {err}"));
 }
 
+async fn wait_for_pending_input(codex: &CodexThread) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if codex.has_pending_input().await {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("queued input should be visible before releasing the SSE gate"));
+}
+
 async fn wait_for_reasoning_item_started(codex: &CodexThread) {
     wait_for_event(codex, |event| {
         matches!(
@@ -346,6 +359,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
     wait_for_reasoning_item_started(&codex).await;
 
     submit_queue_only_agent_mail(&codex, "queued child update").await;
+    wait_for_pending_input(&codex).await;
 
     let _ = gate_reasoning_done_tx.send(());
 
@@ -408,6 +422,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
     .await;
 
     submit_queue_only_agent_mail(&codex, "queued child update").await;
+    wait_for_pending_input(&codex).await;
 
     let _ = gate_message_done_tx.send(());
 
