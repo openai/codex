@@ -277,7 +277,7 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
         thread_id,
         "external".to_string(),
         "queued hello".to_string(),
-        None,
+        /*instructions*/ None,
         "{}".to_string(),
         TimerDelivery::AfterTurn.as_str().to_string(),
         Utc::now().timestamp(),
@@ -336,7 +336,7 @@ async fn queued_messages_feature_disabled_leaves_messages_queued() -> Result<()>
         thread_id.clone(),
         "external".to_string(),
         "queued hello".to_string(),
-        None,
+        /*instructions*/ None,
         "{}".to_string(),
         TimerDelivery::AfterTurn.as_str().to_string(),
         Utc::now().timestamp(),
@@ -348,9 +348,11 @@ async fn queued_messages_feature_disabled_leaves_messages_queued() -> Result<()>
 
     assert_eq!(mock.requests().len(), 1);
     assert!(
-        db.claim_next_thread_message(&thread_id, true, true)
-            .await?
-            .is_some()
+        db.claim_next_thread_message(
+            &thread_id, /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
+        )
+        .await?
+        .is_some()
     );
 
     Ok(())
