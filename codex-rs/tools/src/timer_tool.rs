@@ -57,12 +57,6 @@ pub fn create_timer_tool() -> ToolSpec {
             )),
         ),
         (
-            "instructions".to_string(),
-            JsonSchema::string(Some(
-                "Optional extra instructions for the timer message.".to_string(),
-            )),
-        ),
-        (
             "meta".to_string(),
             JsonSchema::object(BTreeMap::new(), None, Some(true.into())),
         ),

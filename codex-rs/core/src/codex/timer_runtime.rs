@@ -98,6 +98,9 @@ fn db_timer_to_persisted_timer(row: codex_state::ThreadTimer) -> Option<Persiste
 
 impl Session {
     pub(crate) async fn list_timers(self: &Arc<Self>) -> Vec<ThreadTimer> {
+        if !self.timers_feature_enabled() {
+            return Vec::new();
+        }
         self.sync_timers_from_db(/*emit_update*/ false).await;
         self.list_timers_from_memory().await
     }
@@ -112,6 +115,9 @@ impl Session {
         payload: MessagePayload,
         delivery: TimerDelivery,
     ) -> Result<ThreadTimer, String> {
+        if !self.timers_feature_enabled() {
+            return Err("timers feature is disabled".to_string());
+        }
         validate_meta(&payload.meta)?;
         self.ensure_rollout_materialized().await;
         let state_db = self.timer_state_db().await?;
@@ -155,6 +161,9 @@ impl Session {
     }
 
     pub(crate) async fn delete_timer(self: &Arc<Self>, id: &str) -> Result<bool, String> {
+        if !self.timers_feature_enabled() {
+            return Err("timers feature is disabled".to_string());
+        }
         self.sync_timers_from_db(/*emit_update*/ false).await;
         let state_db = self.timer_state_db().await?;
         self.start_timer_db_sync_task(state_db.clone());
@@ -255,7 +264,7 @@ impl Session {
     async fn claim_next_message_for_delivery(
         self: &Arc<Self>,
     ) -> Option<(PendingInputItem, TimerDelivery)> {
-        if !self.features.enabled(Feature::TimerScheduler) {
+        if !self.queued_messages_feature_enabled() {
             return None;
         }
         let mut timer_start_in_progress = self.timer_start_in_progress.lock().await;
@@ -340,6 +349,9 @@ impl Session {
     }
 
     async fn claim_next_timer_for_delivery(self: &Arc<Self>) -> Option<ClaimedTimer> {
+        if !self.timers_feature_enabled() {
+            return None;
+        }
         let mut timer_start_in_progress = self.timer_start_in_progress.lock().await;
         if *timer_start_in_progress {
             return None;
@@ -552,19 +564,21 @@ impl Session {
     }
 
     pub(crate) async fn restore_timers_from_db(self: &Arc<Self>) {
-        if !self.features.enabled(Feature::TimerScheduler) {
+        if !self.timer_db_sync_feature_enabled() {
             return;
         }
         let Ok(state_db) = self.timer_state_db().await else {
             return;
         };
         self.start_timer_db_sync_task(state_db);
-        self.sync_timers_from_db(/*emit_update*/ true).await;
+        if self.timers_feature_enabled() {
+            self.sync_timers_from_db(/*emit_update*/ true).await;
+        }
         self.maybe_start_pending_timer().await;
     }
 
     fn start_timer_db_sync_task(self: &Arc<Self>, state_db: state_db::StateDbHandle) {
-        if !self.features.enabled(Feature::TimerScheduler) {
+        if !self.timer_db_sync_feature_enabled() {
             return;
         }
         if self
@@ -623,7 +637,7 @@ impl Session {
     }
 
     async fn sync_timers_from_db(self: &Arc<Self>, emit_update: bool) -> bool {
-        if !self.features.enabled(Feature::TimerScheduler) {
+        if !self.timers_feature_enabled() {
             return false;
         }
         let Ok(state_db) = self.timer_state_db().await else {
@@ -652,6 +666,18 @@ impl Session {
             self.emit_timer_updated_notification().await;
         }
         changed
+    }
+
+    fn timers_feature_enabled(&self) -> bool {
+        self.features.enabled(Feature::Timers)
+    }
+
+    fn queued_messages_feature_enabled(&self) -> bool {
+        self.features.enabled(Feature::QueuedMessages)
+    }
+
+    fn timer_db_sync_feature_enabled(&self) -> bool {
+        self.timers_feature_enabled() || self.queued_messages_feature_enabled()
     }
 
     fn spawn_restored_timer_tasks(self: &Arc<Self>, restored_tasks: Vec<RestoredTimerTask>) {

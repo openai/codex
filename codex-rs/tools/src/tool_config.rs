@@ -147,7 +147,7 @@ impl ToolsConfig {
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
-        let include_timer_scheduler = features.enabled(Feature::TimerScheduler);
+        let include_timers = features.enabled(Feature::Timers);
         let include_default_mode_request_user_input =
             features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
@@ -228,7 +228,7 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
             hide_spawn_agent_metadata: false,
-            timer_scheduler: include_timer_scheduler,
+            timer_scheduler: include_timers,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
             default_mode_request_user_input: include_default_mode_request_user_input,

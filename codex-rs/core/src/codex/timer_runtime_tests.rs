@@ -2,6 +2,7 @@ use super::make_session_and_context_with_rx;
 use crate::messages::MessagePayload;
 use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;
+use codex_features::Feature;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -16,50 +17,79 @@ async fn dropping_session_cancels_timer_tasks() {
 
 #[tokio::test]
 async fn maybe_start_pending_timer_claims_only_one_timer_while_start_is_in_progress() {
-    let (session, _, _) = make_session_and_context_with_rx().await;
+    let (mut session, _, _) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut session)
+        .expect("session should have no other references")
+        .features
+        .enable(Feature::Timers)
+        .expect("test config should allow feature update");
+    let config = {
+        let state = session.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .clone()
+    };
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should open");
     let now = chrono::Utc::now();
+    let trigger = ThreadTimerTrigger::Delay {
+        seconds: 10,
+        repeat: Some(true),
+    };
     {
         let mut timers = session.timers.lock().await;
-        timers
-            .create_timer(
-                crate::timers::CreateTimer {
-                    id: "timer-1".to_string(),
-                    trigger: ThreadTimerTrigger::Delay {
-                        seconds: 10,
-                        repeat: Some(true),
+        for (id, content) in [("timer-1", "first"), ("timer-2", "second")] {
+            timers
+                .create_timer(
+                    crate::timers::CreateTimer {
+                        id: id.to_string(),
+                        trigger: trigger.clone(),
+                        payload: MessagePayload {
+                            content: content.to_string(),
+                            instructions: None,
+                            meta: Default::default(),
+                        },
+                        delivery: TimerDelivery::AfterTurn,
+                        now,
                     },
-                    payload: MessagePayload {
-                        content: "first".to_string(),
-                        instructions: None,
-                        meta: Default::default(),
-                    },
-                    delivery: TimerDelivery::AfterTurn,
-                    now,
-                },
-                /*timer_cancel*/ None,
-            )
-            .expect("first timer should be created");
-        timers
-            .create_timer(
-                crate::timers::CreateTimer {
-                    id: "timer-2".to_string(),
-                    trigger: ThreadTimerTrigger::Delay {
-                        seconds: 10,
-                        repeat: Some(true),
-                    },
-                    payload: MessagePayload {
-                        content: "second".to_string(),
-                        instructions: None,
-                        meta: Default::default(),
-                    },
-                    delivery: TimerDelivery::AfterTurn,
-                    now,
-                },
-                /*timer_cancel*/ None,
-            )
-            .expect("second timer should be created");
-        timers.mark_timer_due("timer-1", now);
-        timers.mark_timer_due("timer-2", now);
+                    /*timer_cancel*/ None,
+                )
+                .expect("timer should be created");
+            timers.mark_timer_due(id, now);
+        }
+    }
+    for timer_id in ["timer-1", "timer-2"] {
+        let persisted_timer = session
+            .timers
+            .lock()
+            .await
+            .persisted_timer(timer_id)
+            .expect("timer should be in memory");
+        let timer = persisted_timer.timer;
+        state_db
+            .create_thread_timer(&codex_state::ThreadTimerCreateParams {
+                id: timer.id,
+                thread_id: session.conversation_id.to_string(),
+                source: "agent".to_string(),
+                client_id: "codex-cli".to_string(),
+                trigger_json: serde_json::to_string(&timer.trigger)
+                    .expect("trigger should serialize"),
+                content: timer.content,
+                instructions: timer.instructions,
+                meta_json: serde_json::to_string(&timer.meta).expect("metadata should serialize"),
+                delivery: timer.delivery.as_str().to_string(),
+                created_at: timer.created_at,
+                next_run_at: timer.next_run_at,
+                last_run_at: timer.last_run_at,
+                pending_run: persisted_timer.pending_run,
+            })
+            .await
+            .expect("timer should be persisted");
     }
 
     let first = Arc::clone(&session);

@@ -21,8 +21,6 @@ use crate::tools::registry::ToolKind;
 struct CreateTimerArgs {
     trigger: ThreadTimerTrigger,
     content: Option<String>,
-    prompt: Option<String>,
-    instructions: Option<String>,
     #[serde(default)]
     meta: BTreeMap<String, String>,
     delivery: TimerDelivery,
@@ -49,7 +47,7 @@ impl ToolHandler for CreateTimerHandler {
             ));
         };
         let args: CreateTimerArgs = parse_arguments(&arguments)?;
-        let content = args.content.or(args.prompt).ok_or_else(|| {
+        let content = args.content.ok_or_else(|| {
             FunctionCallError::RespondToModel("create_timer requires `content`".to_string())
         })?;
         let timer = invocation
@@ -58,7 +56,7 @@ impl ToolHandler for CreateTimerHandler {
                 args.trigger,
                 MessagePayload {
                     content,
-                    instructions: args.instructions,
+                    instructions: None,
                     meta: args.meta,
                 },
                 args.delivery,
