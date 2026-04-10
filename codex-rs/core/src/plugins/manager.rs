@@ -565,9 +565,7 @@ impl PluginsManager {
             self.restriction_product,
         )?;
         let plugin_id = resolved.plugin_id.as_key();
-        // This only forwards the backend mutation before the local install flow. We rely on
-        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
-        // reconcile pass here.
+        // This only forwards the backend mutation before the local install flow.
         codex_core_plugins::remote::enable_remote_plugin(
             &remote_plugin_service_config(config),
             auth,
@@ -655,11 +653,11 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         plugin_id: String,
     ) -> Result<(), PluginUninstallError> {
+        // TODO: Remove this legacy remote-sync path once remote plugins have
+        // their own manager and installed-state API.
         let plugin_id = PluginId::parse(&plugin_id)?;
         let plugin_key = plugin_id.as_key();
-        // This only forwards the backend mutation before the local uninstall flow. We rely on
-        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
-        // reconcile pass here.
+        // This only forwards the backend mutation before the local uninstall flow.
         codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config(config),
             auth,

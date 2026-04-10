@@ -5,6 +5,7 @@ use std::time::Instant;
 use super::ChatWidget;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::ColumnWidthMode;
+use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionRowDisplay;
 use crate::bottom_pane::SelectionTab;
@@ -760,7 +761,6 @@ impl ChatWidget {
             header: plugins_header(
                 "Browse plugins from available marketplaces.".to_string(),
                 format!("Installed {installed} of {total} available plugins."),
-                response.remote_sync_error.as_deref(),
             ),
             items: self.plugin_selection_items(
                 all_entries,
@@ -776,7 +776,6 @@ impl ChatWidget {
             header: plugins_header(
                 "Installed plugins.".to_string(),
                 format!("Showing {installed} installed plugins."),
-                response.remote_sync_error.as_deref(),
             ),
             items: self.plugin_selection_items(
                 installed_entries,
@@ -804,7 +803,6 @@ impl ChatWidget {
             header: plugins_header(
                 "OpenAI Curated marketplace.".to_string(),
                 format!("Installed {curated_installed} of {curated_total} OpenAI Curated plugins."),
-                response.remote_sync_error.as_deref(),
             ),
             items: self.plugin_selection_items(
                 curated_entries,
@@ -848,7 +846,6 @@ impl ChatWidget {
                     format!(
                         "Installed {marketplace_installed} of {marketplace_total} {label} plugins."
                     ),
-                    response.remote_sync_error.as_deref(),
                 ),
                 items: self.plugin_selection_items(
                     entries,
@@ -1047,24 +1044,35 @@ impl ChatWidget {
             let plugin_display_name = display_name.clone();
             let marketplace_path = marketplace.path.clone();
             let plugin_name = plugin.name.clone();
-
-            items.push(SelectionItem {
-                name: display_name,
-                description: Some(description),
-                selected_description: Some(selected_description),
-                search_value: Some(search_value),
-                actions: vec![Box::new(move |tx| {
+            let is_disabled = marketplace_path.is_none();
+            let actions: Vec<SelectionAction> = if let Some(marketplace_path) = marketplace_path {
+                vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenPluginDetailLoading {
                         plugin_display_name: plugin_display_name.clone(),
                     });
                     tx.send(AppEvent::FetchPluginDetail {
                         cwd: cwd.clone(),
                         params: codex_app_server_protocol::PluginReadParams {
-                            marketplace_path: marketplace_path.clone(),
+                            marketplace_path: Some(marketplace_path.clone()),
+                            remote_marketplace_name: None,
                             plugin_name: plugin_name.clone(),
                         },
                     });
-                })],
+                })]
+            } else {
+                Vec::new()
+            };
+            let disabled_reason =
+                is_disabled.then(|| "remote plugin details are not available yet".to_string());
+
+            items.push(SelectionItem {
+                name: display_name,
+                description: Some(description),
+                selected_description: Some(selected_description),
+                search_value: Some(search_value),
+                actions,
+                is_disabled,
+                disabled_reason,
                 ..Default::default()
             });
         }
@@ -1089,20 +1097,11 @@ fn plugin_detail_hint_line() -> Line<'static> {
     Line::from("Press esc to close.")
 }
 
-fn plugins_header(
-    subtitle: String,
-    count_line: String,
-    remote_sync_error: Option<&str>,
-) -> Box<dyn Renderable> {
+fn plugins_header(subtitle: String, count_line: String) -> Box<dyn Renderable> {
     let mut header = ColumnRenderable::new();
     header.push(Line::from("Plugins".bold()));
     header.push(Line::from(subtitle.dim()));
     header.push(Line::from(count_line.dim()));
-    if let Some(remote_sync_error) = remote_sync_error {
-        header.push(Line::from(
-            format!("Using cached marketplace data: {remote_sync_error}").dim(),
-        ));
-    }
     Box::new(header)
 }
 
@@ -1138,7 +1137,10 @@ fn sort_plugin_entries(entries: &mut [(&PluginMarketplaceEntry, &PluginSummary, 
 }
 
 fn marketplace_tab_id(marketplace: &PluginMarketplaceEntry) -> String {
-    format!("marketplace:{}", marketplace.path.display())
+    match marketplace.path.as_ref() {
+        Some(path) => format!("marketplace:{}", path.display()),
+        None => format!("marketplace:{}", marketplace.name),
+    }
 }
 
 fn disambiguate_duplicate_tab_labels(labels: Vec<String>) -> Vec<String> {
