@@ -296,10 +296,10 @@ fn normalize_typescript_fixture_text(text: &str) -> String {
     let mut normalized = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
         if let Some(line) = line.strip_suffix('\n') {
-            normalized.push_str(line.trim_end_matches(|ch| ch == ' ' || ch == '\t'));
+            normalized.push_str(line.trim_end_matches([' ', '\t']));
             normalized.push('\n');
         } else {
-            normalized.push_str(line.trim_end_matches(|ch| ch == ' ' || ch == '\t'));
+            normalized.push_str(line.trim_end_matches([' ', '\t']));
         }
     }
     normalized
