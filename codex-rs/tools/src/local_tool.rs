@@ -54,6 +54,33 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
                 "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
             )),
         ),
+        (
+            "commandSummary".to_string(),
+            JsonSchema {
+                description: Some(
+                    "Optional short prose summaries for non-technical UI: present tense while running and past tense after completion, each 3-10 words.".to_string(),
+                ),
+                ..JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "present".to_string(),
+                            JsonSchema::string(Some(
+                                "Present-tense summary, e.g. \"Pulling most recent code\"."
+                                    .to_string(),
+                            )),
+                        ),
+                        (
+                            "past".to_string(),
+                            JsonSchema::string(Some(
+                                "Past-tense summary, e.g. \"Pulled most recent code\".".to_string(),
+                            )),
+                        ),
+                    ]),
+                    Some(vec!["present".to_string(), "past".to_string()]),
+                    Some(false.into()),
+                )
+            },
+        ),
     ]);
     if options.allow_login_shell {
         properties.insert(

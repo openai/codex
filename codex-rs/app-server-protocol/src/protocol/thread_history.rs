@@ -1791,6 +1791,7 @@ mod tests {
                 }],
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
+                command_summary: None,
                 stdout: String::new(),
                 stderr: String::new(),
                 aggregated_output: "hello world\n".into(),
@@ -1844,6 +1845,7 @@ mod tests {
                 aggregated_output: Some("hello world\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(12),
+                command_summary: None,
             }
         );
         assert_eq!(
@@ -2008,6 +2010,7 @@ mod tests {
                 parsed_cmd: vec![ParsedCommand::Unknown { cmd: "ls".into() }],
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
+                command_summary: None,
                 stdout: String::new(),
                 stderr: "exec command rejected by user".into(),
                 aggregated_output: "exec command rejected by user".into(),
@@ -2056,6 +2059,7 @@ mod tests {
                 aggregated_output: Some("exec command rejected by user".into()),
                 exit_code: Some(-1),
                 duration_ms: Some(0),
+                command_summary: None,
             }
         );
         assert_eq!(
@@ -2141,6 +2145,7 @@ mod tests {
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
+                command_summary: None,
             }
         );
     }
@@ -2200,6 +2205,7 @@ mod tests {
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
+                command_summary: None,
             }
         );
     }
@@ -2248,6 +2254,7 @@ mod tests {
                 }],
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
+                command_summary: None,
                 stdout: "done\n".into(),
                 stderr: String::new(),
                 aggregated_output: "done\n".into(),
@@ -2289,6 +2296,7 @@ mod tests {
                 aggregated_output: Some("done\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(5),
+                command_summary: None,
             }
         );
     }
@@ -2337,6 +2345,7 @@ mod tests {
                 }],
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
+                command_summary: None,
                 stdout: "done\n".into(),
                 stderr: String::new(),
                 aggregated_output: "done\n".into(),

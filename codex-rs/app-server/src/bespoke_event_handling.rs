@@ -1612,6 +1612,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     aggregated_output: None,
                     exit_code: None,
                     duration_ms: None,
+                    command_summary: exec_command_begin_event.command_summary.map(Into::into),
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -1983,6 +1984,7 @@ async fn start_command_execution_item(
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
+                command_summary: None,
             },
         };
         outgoing
@@ -2027,6 +2029,7 @@ async fn complete_command_execution_item(
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
+        command_summary: None,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -3209,6 +3212,7 @@ mod tests {
                         aggregated_output: None,
                         exit_code: None,
                         duration_ms: None,
+                        command_summary: None,
                     }
                 );
             }

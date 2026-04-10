@@ -10,6 +10,7 @@ import type { CollabAgentToolCallStatus } from "./CollabAgentToolCallStatus";
 import type { CommandAction } from "./CommandAction";
 import type { CommandExecutionSource } from "./CommandExecutionSource";
 import type { CommandExecutionStatus } from "./CommandExecutionStatus";
+import type { CommandSummary } from "./CommandSummary";
 import type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 import type { DynamicToolCallStatus } from "./DynamicToolCallStatus";
 import type { FileUpdateChange } from "./FileUpdateChange";
@@ -44,15 +45,19 @@ commandActions: Array<CommandAction>,
 /**
  * The command's output, aggregated from stdout and stderr.
  */
-aggregatedOutput: string | null, 
+aggregatedOutput: string | null,
 /**
  * The command's exit code.
  */
-exitCode: number | null, 
+exitCode: number | null,
 /**
  * The duration of the command execution in milliseconds.
  */
-durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, result: McpToolCallResult | null, error: McpToolCallError | null, 
+durationMs: number | null,
+/**
+ * Optional short prose summaries for non-technical surfaces.
+ */
+commandSummary: CommandSummary | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, result: McpToolCallResult | null, error: McpToolCallError | null,
 /**
  * The duration of the MCP tool call in milliseconds.
  */

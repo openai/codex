@@ -82,6 +82,7 @@ pub fn build_command_execution_approval_request_item(
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
+        command_summary: None,
     }
 }
 
@@ -102,6 +103,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
+        command_summary: payload.command_summary.clone().map(Into::into),
     }
 }
 
@@ -129,6 +131,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
         aggregated_output,
         exit_code: Some(payload.exit_code),
         duration_ms: Some(duration_ms),
+        command_summary: payload.command_summary.clone().map(Into::into),
     }
 }
 
@@ -157,6 +160,7 @@ pub fn build_item_from_guardian_event(
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
+                command_summary: None,
             })
         }
         GuardianAssessmentAction::Execve {
@@ -189,6 +193,7 @@ pub fn build_item_from_guardian_event(
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
+                command_summary: None,
             })
         }
         GuardianAssessmentAction::ApplyPatch { .. }

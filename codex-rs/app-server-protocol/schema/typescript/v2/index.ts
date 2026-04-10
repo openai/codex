@@ -55,6 +55,7 @@ export type { CommandExecutionRequestApprovalParams } from "./CommandExecutionRe
 export type { CommandExecutionRequestApprovalResponse } from "./CommandExecutionRequestApprovalResponse";
 export type { CommandExecutionSource } from "./CommandExecutionSource";
 export type { CommandExecutionStatus } from "./CommandExecutionStatus";
+export type { CommandSummary } from "./CommandSummary";
 export type { Config } from "./Config";
 export type { ConfigBatchWriteParams } from "./ConfigBatchWriteParams";
 export type { ConfigEdit } from "./ConfigEdit";

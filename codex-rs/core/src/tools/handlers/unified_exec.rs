@@ -26,6 +26,7 @@ use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::CommandSummary;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -59,6 +60,8 @@ pub(crate) struct ExecCommandArgs {
     justification: Option<String>,
     #[serde(default)]
     prefix_rule: Option<Vec<String>>,
+    #[serde(default, rename = "commandSummary")]
+    command_summary: Option<CommandSummary>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,6 +220,7 @@ impl ToolHandler for UnifiedExecHandler {
                     additional_permissions,
                     justification,
                     prefix_rule,
+                    command_summary,
                     ..
                 } = args;
 
@@ -325,6 +329,7 @@ impl ToolHandler for UnifiedExecHandler {
                                 .permissions_preapproved,
                             justification,
                             prefix_rule,
+                            command_summary,
                         },
                         &context,
                     )

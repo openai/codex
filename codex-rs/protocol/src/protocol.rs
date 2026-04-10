@@ -2972,6 +2972,14 @@ pub enum ExecCommandStatus {
     Declined,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct CommandSummary {
+    /// Present-tense prose summary, for example "Pulling most recent code".
+    pub present: String,
+    /// Past-tense prose summary, for example "Pulled most recent code".
+    pub past: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
@@ -2994,6 +3002,10 @@ pub struct ExecCommandBeginEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interaction_input: Option<String>,
+    /// Optional short prose summary of the command for non-technical surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command_summary: Option<CommandSummary>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3018,6 +3030,10 @@ pub struct ExecCommandEndEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interaction_input: Option<String>,
+    /// Optional short prose summary of the command for non-technical surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command_summary: Option<CommandSummary>,
 
     /// Captured stdout
     pub stdout: String,

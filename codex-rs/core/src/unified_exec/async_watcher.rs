@@ -19,6 +19,7 @@ use crate::tools::events::ToolEventStage;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::protocol::CommandSummary;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
@@ -114,6 +115,7 @@ pub(crate) fn spawn_exit_watcher(
     process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
+    command_summary: Option<CommandSummary>,
 ) {
     let exit_token = process.cancellation_token();
     let output_drained = process.output_drained_notify();
@@ -134,6 +136,7 @@ pub(crate) fn spawn_exit_watcher(
                 transcript,
                 message,
                 duration,
+                command_summary,
             )
             .await;
         } else {
@@ -149,6 +152,7 @@ pub(crate) fn spawn_exit_watcher(
                 String::new(),
                 exit_code,
                 duration,
+                command_summary,
             )
             .await;
         }
@@ -202,6 +206,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     fallback_output: String,
     exit_code: i32,
     duration: Duration,
+    command_summary: Option<CommandSummary>,
 ) {
     let aggregated_output = resolve_aggregated_output(&transcript, fallback_output).await;
     let output = ExecToolCallOutput {
@@ -223,6 +228,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
+        command_summary,
     );
     emitter
         .emit(event_ctx, ToolEventStage::Success(output))
@@ -240,6 +246,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     transcript: Arc<Mutex<HeadTailBuffer>>,
     message: String,
     duration: Duration,
+    command_summary: Option<CommandSummary>,
 ) {
     let stdout = resolve_aggregated_output(&transcript, String::new()).await;
     let aggregated_output = if stdout.is_empty() {
@@ -266,6 +273,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
+        command_summary,
     );
     emitter
         .emit(

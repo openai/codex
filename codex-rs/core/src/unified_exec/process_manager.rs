@@ -192,6 +192,7 @@ impl UnifiedExecProcessManager {
             cwd.to_path_buf(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
+            request.command_summary.clone(),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -214,6 +215,7 @@ impl UnifiedExecProcessManager {
                 request.tty,
                 network_approval_id,
                 Arc::clone(&transcript),
+                request.command_summary.clone(),
             )
             .await;
         }
@@ -260,6 +262,7 @@ impl UnifiedExecProcessManager {
                     Arc::clone(&transcript),
                     message.clone(),
                     wall_time,
+                    request.command_summary.clone(),
                 )
                 .await;
             }
@@ -304,6 +307,7 @@ impl UnifiedExecProcessManager {
                 text.clone(),
                 exit,
                 wall_time,
+                request.command_summary.clone(),
             )
             .await;
 
@@ -532,6 +536,7 @@ impl UnifiedExecProcessManager {
         tty: bool,
         network_approval_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+        command_summary: Option<codex_protocol::protocol::CommandSummary>,
     ) {
         let entry = ProcessEntry {
             process: Arc::clone(&process),
@@ -576,6 +581,7 @@ impl UnifiedExecProcessManager {
             process_id,
             transcript,
             started_at,
+            command_summary,
         );
     }
 

@@ -6273,6 +6273,23 @@
         ],
         "type": "string"
       },
+      "CommandSummary": {
+        "properties": {
+          "past": {
+            "description": "Past-tense prose summary, for example \"Pulled most recent code\".",
+            "type": "string"
+          },
+          "present": {
+            "description": "Present-tense prose summary, for example \"Pulling most recent code\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "past",
+          "present"
+        ],
+        "type": "object"
+      },
       "Config": {
         "additionalProperties": true,
         "properties": {
@@ -12920,6 +12937,17 @@
                   "$ref": "#/definitions/v2/CommandAction"
                 },
                 "type": "array"
+              },
+              "commandSummary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/CommandSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Optional short prose summaries for non-technical surfaces."
               },
               "cwd": {
                 "description": "The command's working directory.",

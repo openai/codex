@@ -6121,6 +6121,7 @@ impl ChatWidget {
                 aggregated_output,
                 exit_code,
                 duration_ms,
+                command_summary,
             } => {
                 if matches!(
                     status,
@@ -6138,6 +6139,12 @@ impl ChatWidget {
                             .collect(),
                         source: source.to_core(),
                         interaction_input: None,
+                        command_summary: command_summary.map(|summary| {
+                            codex_protocol::protocol::CommandSummary {
+                                present: summary.present,
+                                past: summary.past,
+                            }
+                        }),
                     });
                 } else {
                     let aggregated_output = aggregated_output.unwrap_or_default();
@@ -6153,6 +6160,12 @@ impl ChatWidget {
                             .collect(),
                         source: source.to_core(),
                         interaction_input: None,
+                        command_summary: command_summary.map(|summary| {
+                            codex_protocol::protocol::CommandSummary {
+                                present: summary.present,
+                                past: summary.past,
+                            }
+                        }),
                         stdout: String::new(),
                         stderr: String::new(),
                         aggregated_output: aggregated_output.clone(),
@@ -6712,6 +6725,7 @@ impl ChatWidget {
                         .collect(),
                     source: source.to_core(),
                     interaction_input: None,
+                    command_summary: None,
                 });
             }
             ThreadItem::FileChange { id, changes, .. } => {

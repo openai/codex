@@ -153,6 +153,7 @@ pub(crate) async fn execute_user_shell_command(
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
+                command_summary: None,
             }),
         )
         .await;
@@ -221,6 +222,7 @@ pub(crate) async fn execute_user_shell_command(
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
+                        command_summary: None,
                         stdout: String::new(),
                         stderr: aborted_message.clone(),
                         aggregated_output: aborted_message.clone(),
@@ -245,6 +247,7 @@ pub(crate) async fn execute_user_shell_command(
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
+                        command_summary: None,
                         stdout: output.stdout.text.clone(),
                         stderr: output.stderr.text.clone(),
                         aggregated_output: output.aggregated_output.text.clone(),
@@ -289,6 +292,7 @@ pub(crate) async fn execute_user_shell_command(
                         parsed_cmd,
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
+                        command_summary: None,
                         stdout: exec_output.stdout.text.clone(),
                         stderr: exec_output.stderr.text.clone(),
                         aggregated_output: exec_output.aggregated_output.text.clone(),

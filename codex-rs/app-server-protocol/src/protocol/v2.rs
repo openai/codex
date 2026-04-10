@@ -4392,6 +4392,8 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        /// Optional short prose summaries for non-technical surfaces.
+        command_summary: Option<CommandSummary>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4918,6 +4920,25 @@ pub enum CommandExecutionStatus {
     Completed,
     Failed,
     Declined,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandSummary {
+    /// Present-tense prose summary, for example "Pulling most recent code".
+    pub present: String,
+    /// Past-tense prose summary, for example "Pulled most recent code".
+    pub past: String,
+}
+
+impl From<codex_protocol::protocol::CommandSummary> for CommandSummary {
+    fn from(value: codex_protocol::protocol::CommandSummary) -> Self {
+        Self {
+            present: value.present,
+            past: value.past,
+        }
+    }
 }
 
 impl From<CoreExecCommandStatus> for CommandExecutionStatus {
