@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::io;
@@ -34,6 +36,31 @@ pub struct ReadDirectoryEntry {
     pub is_file: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSystemSandboxContext {
+    pub sandbox_policy: SandboxPolicy,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    pub additional_permissions: Option<PermissionProfile>,
+}
+
+impl FileSystemSandboxContext {
+    pub fn new(sandbox_policy: SandboxPolicy) -> Self {
+        Self {
+            sandbox_policy,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            additional_permissions: None,
+        }
+    }
+
+    pub fn should_run_in_sandbox(&self) -> bool {
+        matches!(
+            self.sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        )
+    }
+}
+
 pub type FileSystemResult<T> = io::Result<T>;
 
 #[async_trait]
@@ -46,19 +73,19 @@ pub trait ExecutorFileSystem: Send + Sync {
         String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
-    async fn read_file_with_sandbox_policy(
+    async fn read_file_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>>;
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
 
-    async fn write_file_with_sandbox_policy(
+    async fn write_file_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()>;
 
     async fn create_directory(
@@ -67,19 +94,19 @@ pub trait ExecutorFileSystem: Send + Sync {
         options: CreateDirectoryOptions,
     ) -> FileSystemResult<()>;
 
-    async fn create_directory_with_sandbox_policy(
+    async fn create_directory_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
         create_directory_options: CreateDirectoryOptions,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()>;
 
     async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata>;
 
-    async fn get_metadata_with_sandbox_policy(
+    async fn get_metadata_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata>;
 
     async fn read_directory(
@@ -87,19 +114,19 @@ pub trait ExecutorFileSystem: Send + Sync {
         path: &AbsolutePathBuf,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
 
-    async fn read_directory_with_sandbox_policy(
+    async fn read_directory_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
 
     async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()>;
 
-    async fn remove_with_sandbox_policy(
+    async fn remove_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
         remove_options: RemoveOptions,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()>;
 
     async fn copy(
@@ -109,11 +136,11 @@ pub trait ExecutorFileSystem: Send + Sync {
         options: CopyOptions,
     ) -> FileSystemResult<()>;
 
-    async fn copy_with_sandbox_policy(
+    async fn copy_with_sandbox(
         &self,
         source_path: &AbsolutePathBuf,
         destination_path: &AbsolutePathBuf,
         copy_options: CopyOptions,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()>;
 }

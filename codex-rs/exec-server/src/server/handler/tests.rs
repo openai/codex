@@ -71,7 +71,7 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
     let handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(outgoing_tx),
-        ExecServerRuntimePaths::default(),
+        ExecServerRuntimePaths::from_current_environment().expect("runtime paths"),
     ));
     let initialize_response = handler
         .initialize(InitializeParams {

@@ -31,8 +31,6 @@ pub use file_system::FileMetadata;
 pub use file_system::FileSystemResult;
 pub use file_system::ReadDirectoryEntry;
 pub use file_system::RemoveOptions;
-pub use fs_helper::CODEX_FS_HELPER_ARG0;
-#[cfg(windows)]
 pub use fs_helper::CODEX_FS_HELPER_ARG1;
 pub use fs_helper_main::main as run_fs_helper_main;
 pub use local_file_system::LOCAL_FS;

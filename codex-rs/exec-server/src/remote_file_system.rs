@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::io;
 use tracing::trace;
@@ -13,6 +12,7 @@ use crate::ExecServerError;
 use crate::ExecutorFileSystem;
 use crate::FileMetadata;
 use crate::FileSystemResult;
+use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::protocol::FsCopyParams;
@@ -46,7 +46,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .client
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
-                sandbox_policy: None,
+                sandbox: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -58,17 +58,17 @@ impl ExecutorFileSystem for RemoteFileSystem {
         })
     }
 
-    async fn read_file_with_sandbox_policy(
+    async fn read_file_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        trace!("remote fs read_file_with_sandbox_policy");
+        trace!("remote fs read_file_with_sandbox");
         let response = self
             .client
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
-                sandbox_policy: sandbox_policy.cloned(),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -86,25 +86,25 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
-                sandbox_policy: None,
+                sandbox: None,
             })
             .await
             .map_err(map_remote_error)?;
         Ok(())
     }
 
-    async fn write_file_with_sandbox_policy(
+    async fn write_file_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        trace!("remote fs write_file_with_sandbox_policy");
+        trace!("remote fs write_file_with_sandbox");
         self.client
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
-                sandbox_policy: sandbox_policy.cloned(),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -121,25 +121,25 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
-                sandbox_policy: None,
+                sandbox: None,
             })
             .await
             .map_err(map_remote_error)?;
         Ok(())
     }
 
-    async fn create_directory_with_sandbox_policy(
+    async fn create_directory_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
         create_directory_options: CreateDirectoryOptions,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        trace!("remote fs create_directory_with_sandbox_policy");
+        trace!("remote fs create_directory_with_sandbox");
         self.client
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(create_directory_options.recursive),
-                sandbox_policy: sandbox_policy.cloned(),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -152,7 +152,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .client
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
-                sandbox_policy: None,
+                sandbox: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -164,17 +164,17 @@ impl ExecutorFileSystem for RemoteFileSystem {
         })
     }
 
-    async fn get_metadata_with_sandbox_policy(
+    async fn get_metadata_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        trace!("remote fs get_metadata_with_sandbox_policy");
+        trace!("remote fs get_metadata_with_sandbox");
         let response = self
             .client
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
-                sandbox_policy: sandbox_policy.cloned(),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -195,7 +195,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .client
             .fs_read_directory(FsReadDirectoryParams {
                 path: path.clone(),
-                sandbox_policy: None,
+                sandbox: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -210,17 +210,17 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .collect())
     }
 
-    async fn read_directory_with_sandbox_policy(
+    async fn read_directory_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        trace!("remote fs read_directory_with_sandbox_policy");
+        trace!("remote fs read_directory_with_sandbox");
         let response = self
             .client
             .fs_read_directory(FsReadDirectoryParams {
                 path: path.clone(),
-                sandbox_policy: sandbox_policy.cloned(),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -242,26 +242,26 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 force: Some(options.force),
-                sandbox_policy: None,
+                sandbox: None,
             })
             .await
             .map_err(map_remote_error)?;
         Ok(())
     }
 
-    async fn remove_with_sandbox_policy(
+    async fn remove_with_sandbox(
         &self,
         path: &AbsolutePathBuf,
         remove_options: RemoveOptions,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        trace!("remote fs remove_with_sandbox_policy");
+        trace!("remote fs remove_with_sandbox");
         self.client
             .fs_remove(FsRemoveParams {
                 path: path.clone(),
                 recursive: Some(remove_options.recursive),
                 force: Some(remove_options.force),
-                sandbox_policy: sandbox_policy.cloned(),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -280,27 +280,27 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
-                sandbox_policy: None,
+                sandbox: None,
             })
             .await
             .map_err(map_remote_error)?;
         Ok(())
     }
 
-    async fn copy_with_sandbox_policy(
+    async fn copy_with_sandbox(
         &self,
         source_path: &AbsolutePathBuf,
         destination_path: &AbsolutePathBuf,
         copy_options: CopyOptions,
-        sandbox_policy: Option<&SandboxPolicy>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        trace!("remote fs copy_with_sandbox_policy");
+        trace!("remote fs copy_with_sandbox");
         self.client
             .fs_copy(FsCopyParams {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: copy_options.recursive,
-                sandbox_policy: sandbox_policy.cloned(),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;

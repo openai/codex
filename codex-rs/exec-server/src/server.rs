@@ -21,7 +21,7 @@ pub async fn run_main_with_listen_url(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     run_main_with_listen_url_and_paths(
         listen_url,
-        ExecServerRuntimePaths::from_current_environment(),
+        ExecServerRuntimePaths::from_current_environment()?,
     )
     .await
 }

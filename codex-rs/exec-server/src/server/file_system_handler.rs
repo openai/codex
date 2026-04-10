@@ -3,23 +3,13 @@ use std::io;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_protocol::protocol::SandboxPolicy;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
-use crate::FileMetadata;
 use crate::RemoveOptions;
-use crate::fs_helper::FsHelperPayload;
-use crate::fs_helper::FsHelperRequest;
-use crate::fs_helper::unexpected_response;
-use crate::fs_sandbox::FileSystemSandboxRunner;
-use crate::local_file_system::LocalFileSystem;
-use crate::local_file_system::enforce_copy_source_read_access;
-use crate::local_file_system::enforce_read_access;
-use crate::local_file_system::enforce_write_access;
-use crate::local_file_system::enforce_write_access_preserving_leaf;
+use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
@@ -38,58 +28,29 @@ use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
+use crate::sandboxed_file_system::SandboxedFileSystem;
 
 #[derive(Clone)]
 pub(crate) struct FileSystemHandler {
-    file_system: LocalFileSystem,
-    sandbox_runner: FileSystemSandboxRunner,
+    file_system: SandboxedFileSystem,
 }
 
 impl FileSystemHandler {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            file_system: LocalFileSystem,
-            sandbox_runner: FileSystemSandboxRunner::new(runtime_paths),
+            file_system: SandboxedFileSystem::new(runtime_paths),
         }
-    }
-
-    async fn run_sandboxed<T>(
-        &self,
-        sandbox_policy: &SandboxPolicy,
-        access_check: io::Result<()>,
-        request: FsHelperRequest,
-        operation: &'static str,
-        decode: impl FnOnce(FsHelperPayload) -> Option<T>,
-    ) -> Result<T, JSONRPCErrorError> {
-        access_check.map_err(map_fs_error)?;
-        let payload = self.sandbox_runner.run(sandbox_policy, request).await?;
-        decode(payload).ok_or_else(|| unexpected_response(operation))
     }
 
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        let bytes = match fs_sandbox_policy(params.sandbox_policy.as_ref()) {
-            Some(sandbox_policy) => {
-                self.run_sandboxed(
-                    sandbox_policy,
-                    enforce_read_access(&params.path, Some(sandbox_policy)),
-                    FsHelperRequest::ReadFile { path: params.path },
-                    "readFile",
-                    |payload| match payload {
-                        FsHelperPayload::ReadFile { data } => Some(data.into_inner()),
-                        _ => None,
-                    },
-                )
-                .await?
-            }
-            None => self
-                .file_system
-                .read_file(&params.path)
-                .await
-                .map_err(map_fs_error)?,
-        };
+        let bytes = self
+            .file_system
+            .read_file_with_sandbox(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
             data_base64: STANDARD.encode(bytes),
         })
@@ -101,32 +62,14 @@ impl FileSystemHandler {
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
             invalid_request(format!(
-                "fs/writeFile requires valid base64 dataBase64: {err}"
+                "{} requires valid base64 dataBase64: {err}",
+                FS_WRITE_FILE_METHOD
             ))
         })?;
-        match fs_sandbox_policy(params.sandbox_policy.as_ref()) {
-            Some(sandbox_policy) => {
-                self.run_sandboxed(
-                    sandbox_policy,
-                    enforce_write_access(&params.path, Some(sandbox_policy)),
-                    FsHelperRequest::WriteFile {
-                        path: params.path,
-                        data: bytes.into(),
-                    },
-                    "writeFile",
-                    |payload| match payload {
-                        FsHelperPayload::WriteFile => Some(()),
-                        _ => None,
-                    },
-                )
-                .await?;
-            }
-            None => self
-                .file_system
-                .write_file(&params.path, bytes)
-                .await
-                .map_err(map_fs_error)?,
-        }
+        self.file_system
+            .write_file_with_sandbox(&params.path, bytes, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
     }
 
@@ -135,29 +78,14 @@ impl FileSystemHandler {
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         let recursive = params.recursive.unwrap_or(true);
-        match fs_sandbox_policy(params.sandbox_policy.as_ref()) {
-            Some(sandbox_policy) => {
-                self.run_sandboxed(
-                    sandbox_policy,
-                    enforce_write_access(&params.path, Some(sandbox_policy)),
-                    FsHelperRequest::CreateDirectory {
-                        path: params.path,
-                        recursive,
-                    },
-                    "createDirectory",
-                    |payload| match payload {
-                        FsHelperPayload::CreateDirectory => Some(()),
-                        _ => None,
-                    },
-                )
-                .await?;
-            }
-            None => self
-                .file_system
-                .create_directory(&params.path, CreateDirectoryOptions { recursive })
-                .await
-                .map_err(map_fs_error)?,
-        }
+        self.file_system
+            .create_directory_with_sandbox(
+                &params.path,
+                CreateDirectoryOptions { recursive },
+                params.sandbox.as_ref(),
+            )
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsCreateDirectoryResponse {})
     }
 
@@ -165,36 +93,11 @@ impl FileSystemHandler {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        let metadata = match fs_sandbox_policy(params.sandbox_policy.as_ref()) {
-            Some(sandbox_policy) => {
-                self.run_sandboxed(
-                    sandbox_policy,
-                    enforce_read_access(&params.path, Some(sandbox_policy)),
-                    FsHelperRequest::GetMetadata { path: params.path },
-                    "getMetadata",
-                    |payload| match payload {
-                        FsHelperPayload::GetMetadata {
-                            is_directory,
-                            is_file,
-                            created_at_ms,
-                            modified_at_ms,
-                        } => Some(FileMetadata {
-                            is_directory,
-                            is_file,
-                            created_at_ms,
-                            modified_at_ms,
-                        }),
-                        _ => None,
-                    },
-                )
-                .await?
-            }
-            None => self
-                .file_system
-                .get_metadata(&params.path)
-                .await
-                .map_err(map_fs_error)?,
-        };
+        let metadata = self
+            .file_system
+            .get_metadata_with_sandbox(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
@@ -207,33 +110,18 @@ impl FileSystemHandler {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
-        let entries = match fs_sandbox_policy(params.sandbox_policy.as_ref()) {
-            Some(sandbox_policy) => {
-                self.run_sandboxed(
-                    sandbox_policy,
-                    enforce_read_access(&params.path, Some(sandbox_policy)),
-                    FsHelperRequest::ReadDirectory { path: params.path },
-                    "readDirectory",
-                    |payload| match payload {
-                        FsHelperPayload::ReadDirectory { entries } => Some(entries),
-                        _ => None,
-                    },
-                )
-                .await?
-            }
-            None => self
-                .file_system
-                .read_directory(&params.path)
-                .await
-                .map_err(map_fs_error)?
-                .into_iter()
-                .map(|entry| FsReadDirectoryEntry {
-                    file_name: entry.file_name,
-                    is_directory: entry.is_directory,
-                    is_file: entry.is_file,
-                })
-                .collect(),
-        };
+        let entries = self
+            .file_system
+            .read_directory_with_sandbox(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?
+            .into_iter()
+            .map(|entry| FsReadDirectoryEntry {
+                file_name: entry.file_name,
+                is_directory: entry.is_directory,
+                is_file: entry.is_file,
+            })
+            .collect();
         Ok(FsReadDirectoryResponse { entries })
     }
 
@@ -243,30 +131,14 @@ impl FileSystemHandler {
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
         let recursive = params.recursive.unwrap_or(true);
         let force = params.force.unwrap_or(true);
-        match fs_sandbox_policy(params.sandbox_policy.as_ref()) {
-            Some(sandbox_policy) => {
-                self.run_sandboxed(
-                    sandbox_policy,
-                    enforce_write_access_preserving_leaf(&params.path, Some(sandbox_policy)),
-                    FsHelperRequest::Remove {
-                        path: params.path,
-                        recursive,
-                        force,
-                    },
-                    "remove",
-                    |payload| match payload {
-                        FsHelperPayload::Remove => Some(()),
-                        _ => None,
-                    },
-                )
-                .await?;
-            }
-            None => self
-                .file_system
-                .remove(&params.path, RemoveOptions { recursive, force })
-                .await
-                .map_err(map_fs_error)?,
-        }
+        self.file_system
+            .remove_with_sandbox(
+                &params.path,
+                RemoveOptions { recursive, force },
+                params.sandbox.as_ref(),
+            )
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsRemoveResponse {})
     }
 
@@ -274,53 +146,18 @@ impl FileSystemHandler {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        match fs_sandbox_policy(params.sandbox_policy.as_ref()) {
-            Some(sandbox_policy) => {
-                let access_check =
-                    enforce_copy_source_read_access(&params.source_path, Some(sandbox_policy))
-                        .and_then(|()| {
-                            enforce_write_access(&params.destination_path, Some(sandbox_policy))
-                        });
-                self.run_sandboxed(
-                    sandbox_policy,
-                    access_check,
-                    FsHelperRequest::Copy {
-                        source_path: params.source_path,
-                        destination_path: params.destination_path,
-                        recursive: params.recursive,
-                    },
-                    "copy",
-                    |payload| match payload {
-                        FsHelperPayload::Copy => Some(()),
-                        _ => None,
-                    },
-                )
-                .await?;
-            }
-            None => self
-                .file_system
-                .copy(
-                    &params.source_path,
-                    &params.destination_path,
-                    CopyOptions {
-                        recursive: params.recursive,
-                    },
-                )
-                .await
-                .map_err(map_fs_error)?,
-        }
+        self.file_system
+            .copy_with_sandbox(
+                &params.source_path,
+                &params.destination_path,
+                CopyOptions {
+                    recursive: params.recursive,
+                },
+                params.sandbox.as_ref(),
+            )
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsCopyResponse {})
-    }
-}
-
-fn fs_sandbox_policy(sandbox_policy: Option<&SandboxPolicy>) -> Option<&SandboxPolicy> {
-    match sandbox_policy {
-        Some(policy @ (SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. })) => {
-            Some(policy)
-        }
-        Some(SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }) | None => {
-            None
-        }
     }
 }
 
@@ -348,7 +185,9 @@ mod tests {
     #[tokio::test]
     async fn no_platform_sandbox_policies_do_not_require_configured_sandbox_helper() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let handler = FileSystemHandler::new(ExecServerRuntimePaths::default());
+        let handler = FileSystemHandler::new(
+            ExecServerRuntimePaths::from_current_environment().expect("runtime paths"),
+        );
 
         for (file_name, sandbox_policy) in [
             ("danger.txt", SandboxPolicy::DangerFullAccess),
@@ -367,7 +206,7 @@ mod tests {
                 .write_file(FsWriteFileParams {
                     path: path.clone(),
                     data_base64: STANDARD.encode("ok"),
-                    sandbox_policy: Some(sandbox_policy.clone()),
+                    sandbox: Some(FileSystemSandboxContext::new(sandbox_policy.clone())),
                 })
                 .await
                 .expect("write file");
@@ -375,7 +214,7 @@ mod tests {
             let response = handler
                 .read_file(FsReadFileParams {
                     path,
-                    sandbox_policy: Some(sandbox_policy),
+                    sandbox: Some(FileSystemSandboxContext::new(sandbox_policy)),
                 })
                 .await
                 .expect("read file");

@@ -11,8 +11,8 @@ It provides:
 - a small protocol module with shared request/response types
 
 This crate owns the transport, protocol, and filesystem/process handlers. The
-top-level `codex` binary owns arg0 dispatch for helper tools such as `codex-fs`
-and `codex-linux-sandbox`.
+top-level `codex` binary owns hidden helper dispatch for sandboxed
+filesystem operations and `codex-linux-sandbox`.
 
 ## Transport
 
@@ -242,12 +242,12 @@ The crate exports:
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
 - `run_main_with_listen_url()`
 - `run_main_with_listen_url_and_paths()` for callers that already resolved
-  helper paths through the top-level `codex` arg0 dispatcher
+  helper paths through the top-level `codex` dispatcher
 - `run_main()` for embedding the websocket server
 
 Callers that need sandboxed filesystem RPCs should prefer
 `run_main_with_listen_url_and_paths()`, or run the service through
-`codex exec-server`, so the `codex-fs` helper path is available.
+`codex exec-server`, so the Codex executable path is available.
 
 ## Example session
 

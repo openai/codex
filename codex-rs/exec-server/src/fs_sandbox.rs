@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -20,6 +18,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::ExecServerRuntimePaths;
+use crate::FileSystemSandboxContext;
+use crate::fs_helper::CODEX_FS_HELPER_ARG1;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_helper::FsHelperResponse;
@@ -27,7 +27,7 @@ use crate::local_file_system::current_sandbox_cwd;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct FileSystemSandboxRunner {
     runtime_paths: ExecServerRuntimePaths,
 }
@@ -39,10 +39,11 @@ impl FileSystemSandboxRunner {
 
     pub(crate) async fn run(
         &self,
-        sandbox_policy: &SandboxPolicy,
+        sandbox: &FileSystemSandboxContext,
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-        let helper_sandbox_policy = sandbox_policy_with_helper_runtime_defaults(sandbox_policy);
+        let helper_sandbox_policy =
+            sandbox_policy_with_helper_runtime_defaults(&sandbox.sandbox_policy);
         let cwd = current_sandbox_cwd().map_err(io_error)?;
         let cwd = AbsolutePathBuf::from_absolute_path(cwd.as_path())
             .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))?;
@@ -56,6 +57,7 @@ impl FileSystemSandboxRunner {
             &file_system_policy,
             network_policy,
             &cwd,
+            sandbox,
         )?;
         let request_json = serde_json::to_vec(&request).map_err(json_error)?;
         run_command(command, request_json).await
@@ -67,22 +69,26 @@ impl FileSystemSandboxRunner {
         file_system_policy: &FileSystemSandboxPolicy,
         network_policy: NetworkSandboxPolicy,
         cwd: &AbsolutePathBuf,
+        sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
-        let helper = self.helper_program()?;
+        let helper = self.helper_program();
         let sandbox_manager = SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
             file_system_policy,
             network_policy,
             SandboxablePreference::Auto,
-            WindowsSandboxLevel::Disabled,
+            sandbox_context.windows_sandbox_level,
             /*has_managed_network_requirements*/ false,
         );
         let command = SandboxCommand {
-            program: helper.clone().into_os_string(),
-            args: Vec::new(),
+            program: helper.as_path().as_os_str().to_owned(),
+            args: vec![CODEX_FS_HELPER_ARG1.to_string()],
             cwd: cwd.clone(),
             env: HashMap::new(),
-            additional_permissions: Some(self.helper_read_permissions(helper.as_path())),
+            additional_permissions: Some(self.helper_permissions(
+                helper.as_path(),
+                sandbox_context.additional_permissions.as_ref(),
+            )),
         };
         sandbox_manager
             .transform(SandboxTransformRequest {
@@ -96,30 +102,28 @@ impl FileSystemSandboxRunner {
                 sandbox_policy_cwd: cwd.as_path(),
                 codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: false,
-                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_level: sandbox_context.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
             })
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))
     }
 
-    fn helper_program(&self) -> Result<PathBuf, JSONRPCErrorError> {
-        let helper = self.runtime_paths.codex_fs_exe.clone().ok_or_else(|| {
-            invalid_request(
-                "filesystem sandbox helper executable is not configured; start exec-server through `codex exec-server`"
-                    .to_string(),
-            )
-        })?;
-        if !helper.is_absolute() {
-            return Err(invalid_request(format!(
-                "filesystem sandbox helper executable must be absolute: {}",
-                helper.display()
-            )));
-        }
-        Ok(helper)
+    fn helper_program(&self) -> &AbsolutePathBuf {
+        &self.runtime_paths.codex_self_exe
     }
 
-    fn helper_read_permissions(&self, helper_path: &Path) -> PermissionProfile {
-        let mut read = Vec::new();
+    fn helper_permissions(
+        &self,
+        helper_path: &Path,
+        additional_permissions: Option<&PermissionProfile>,
+    ) -> PermissionProfile {
+        let mut profile = additional_permissions.cloned().unwrap_or_default();
+        let mut read = profile
+            .file_system
+            .as_ref()
+            .and_then(|permissions| permissions.read.clone())
+            .unwrap_or_default();
+
         for path in [
             Some(helper_path),
             self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
@@ -134,13 +138,11 @@ impl FileSystemSandboxRunner {
             }
         }
 
-        PermissionProfile {
-            network: None,
-            file_system: Some(FileSystemPermissions {
-                read: Some(read),
-                write: None,
-            }),
-        }
+        let file_system = profile
+            .file_system
+            .get_or_insert_with(FileSystemPermissions::default);
+        file_system.read = Some(read);
+        profile
     }
 }
 

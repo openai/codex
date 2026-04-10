@@ -11,9 +11,12 @@ use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::SandboxedFileSystem;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -38,9 +41,11 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
             _server: Some(server),
         })
     } else {
-        let environment = Environment::create(/*exec_server_url*/ None).await?;
+        let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
+        let runtime_paths =
+            ExecServerRuntimePaths::new(codex, /*codex_linux_sandbox_exe*/ None)?;
         Ok(FileSystemContext {
-            file_system: environment.get_filesystem(),
+            file_system: Arc::new(SandboxedFileSystem::new(runtime_paths)),
             _server: None,
         })
     }
@@ -58,18 +63,18 @@ fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
     }
 }
 
-fn read_only_sandbox_policy(readable_root: std::path::PathBuf) -> SandboxPolicy {
-    SandboxPolicy::ReadOnly {
+fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystemSandboxContext {
+    FileSystemSandboxContext::new(SandboxPolicy::ReadOnly {
         access: ReadOnlyAccess::Restricted {
             include_platform_defaults: false,
             readable_roots: vec![absolute_path(readable_root)],
         },
         network_access: false,
-    }
+    })
 }
 
-fn workspace_write_sandbox_policy(writable_root: std::path::PathBuf) -> SandboxPolicy {
-    SandboxPolicy::WorkspaceWrite {
+fn workspace_write_sandbox(writable_root: std::path::PathBuf) -> FileSystemSandboxContext {
+    FileSystemSandboxContext::new(SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![absolute_path(writable_root)],
         read_only_access: ReadOnlyAccess::Restricted {
             include_platform_defaults: false,
@@ -78,7 +83,7 @@ fn workspace_write_sandbox_policy(writable_root: std::path::PathBuf) -> SandboxP
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
-    }
+    })
 }
 
 fn assert_sandbox_denied(error: &std::io::Error) {
@@ -266,7 +271,7 @@ async fn file_system_copy_rejects_directory_without_recursive(use_remote: bool) 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: bool) -> Result<()> {
+async fn file_system_read_with_sandbox_allows_readable_root(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -275,10 +280,10 @@ async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: b
     let file_path = allowed_dir.join("note.txt");
     std::fs::create_dir_all(&allowed_dir)?;
     std::fs::write(&file_path, "sandboxed hello")?;
-    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let sandbox = read_only_sandbox(allowed_dir);
 
     let contents = file_system
-        .read_file_with_sandbox_policy(&absolute_path(file_path), Some(&sandbox_policy))
+        .read_file_with_sandbox(&absolute_path(file_path), Some(&sandbox))
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -289,9 +294,7 @@ async fn file_system_read_with_sandbox_policy_allows_readable_root(use_remote: b
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_write_with_sandbox_rejects_unwritable_path(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -300,12 +303,12 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
     let blocked_path = tmp.path().join("blocked.txt");
     std::fs::create_dir_all(&allowed_dir)?;
 
-    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .write_file_with_sandbox_policy(
+        .write_file_with_sandbox(
             &absolute_path(blocked_path.clone()),
             b"nope".to_vec(),
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
     {
@@ -321,9 +324,7 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_read_with_sandbox_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -336,12 +337,9 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_path = allowed_dir.join("link").join("secret.txt");
-    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .read_file_with_sandbox_policy(
-            &absolute_path(requested_path.clone()),
-            Some(&sandbox_policy),
-        )
+        .read_file_with_sandbox(&absolute_path(requested_path.clone()), Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("read should be blocked"),
@@ -355,7 +353,7 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_with_sandbox_policy_rejects_symlink_parent_dotdot_escape(
+async fn file_system_read_with_sandbox_rejects_symlink_parent_dotdot_escape(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -371,9 +369,9 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_parent_dotdot_esca
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_path = absolute_path(allowed_dir.join("link").join("..").join("secret.txt"));
-    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .read_file_with_sandbox_policy(&requested_path, Some(&sandbox_policy))
+        .read_file_with_sandbox(&requested_path, Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
@@ -387,9 +385,7 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_parent_dotdot_esca
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_write_with_sandbox_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -401,12 +397,12 @@ async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_path = allowed_dir.join("link").join("blocked.txt");
-    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir);
+    let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .write_file_with_sandbox_policy(
+        .write_file_with_sandbox(
             &absolute_path(requested_path.clone()),
             b"nope".to_vec(),
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
     {
@@ -422,7 +418,7 @@ async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_create_directory_with_sandbox_policy_rejects_symlink_escape(
+async fn file_system_create_directory_with_sandbox_rejects_symlink_escape(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -436,12 +432,12 @@ async fn file_system_create_directory_with_sandbox_policy_rejects_symlink_escape
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_path = allowed_dir.join("link").join("created");
-    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir);
+    let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .create_directory_with_sandbox_policy(
+        .create_directory_with_sandbox(
             &absolute_path(requested_path.clone()),
             CreateDirectoryOptions { recursive: false },
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
     {
@@ -457,7 +453,7 @@ async fn file_system_create_directory_with_sandbox_policy_rejects_symlink_escape
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_get_metadata_with_sandbox_policy_rejects_symlink_escape(
+async fn file_system_get_metadata_with_sandbox_rejects_symlink_escape(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -472,12 +468,9 @@ async fn file_system_get_metadata_with_sandbox_policy_rejects_symlink_escape(
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_path = allowed_dir.join("link").join("secret.txt");
-    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .get_metadata_with_sandbox_policy(
-            &absolute_path(requested_path.clone()),
-            Some(&sandbox_policy),
-        )
+        .get_metadata_with_sandbox(&absolute_path(requested_path.clone()), Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("get_metadata should be blocked"),
@@ -491,7 +484,7 @@ async fn file_system_get_metadata_with_sandbox_policy_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_directory_with_sandbox_policy_rejects_symlink_escape(
+async fn file_system_read_directory_with_sandbox_rejects_symlink_escape(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -506,12 +499,9 @@ async fn file_system_read_directory_with_sandbox_policy_rejects_symlink_escape(
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_path = allowed_dir.join("link");
-    let sandbox_policy = read_only_sandbox_policy(allowed_dir);
+    let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .read_directory_with_sandbox_policy(
-            &absolute_path(requested_path.clone()),
-            Some(&sandbox_policy),
-        )
+        .read_directory_with_sandbox(&absolute_path(requested_path.clone()), Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("read_directory should be blocked"),
@@ -525,7 +515,7 @@ async fn file_system_read_directory_with_sandbox_policy_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination(
+async fn file_system_copy_with_sandbox_rejects_symlink_escape_destination(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -540,13 +530,13 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_destination = allowed_dir.join("link").join("copied.txt");
-    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir.clone());
+    let sandbox = workspace_write_sandbox(allowed_dir.clone());
     let error = match file_system
-        .copy_with_sandbox_policy(
+        .copy_with_sandbox(
             &absolute_path(allowed_dir.join("source.txt")),
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
     {
@@ -562,7 +552,7 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_remove_with_sandbox_policy_removes_symlink_not_target(
+async fn file_system_remove_with_sandbox_removes_symlink_not_target(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -578,15 +568,15 @@ async fn file_system_remove_with_sandbox_policy_removes_symlink_not_target(
     let symlink_path = allowed_dir.join("link");
     symlink(&outside_file, &symlink_path)?;
 
-    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir);
+    let sandbox = workspace_write_sandbox(allowed_dir);
     file_system
-        .remove_with_sandbox_policy(
+        .remove_with_sandbox(
             &absolute_path(symlink_path.clone()),
             RemoveOptions {
                 recursive: false,
                 force: false,
             },
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -601,9 +591,7 @@ async fn file_system_remove_with_sandbox_policy_removes_symlink_not_target(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_copy_with_sandbox_policy_preserves_symlink_source(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_copy_with_sandbox_preserves_symlink_source(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -618,13 +606,13 @@ async fn file_system_copy_with_sandbox_policy_preserves_symlink_source(
     std::fs::write(&outside_file, "outside")?;
     symlink(&outside_file, &source_symlink)?;
 
-    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir.clone());
+    let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
-        .copy_with_sandbox_policy(
+        .copy_with_sandbox(
             &absolute_path(source_symlink),
             &absolute_path(copied_symlink.clone()),
             CopyOptions { recursive: false },
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -639,9 +627,7 @@ async fn file_system_copy_with_sandbox_policy_preserves_symlink_source(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_remove_with_sandbox_policy_rejects_symlink_escape(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_remove_with_sandbox_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -655,15 +641,15 @@ async fn file_system_remove_with_sandbox_policy_rejects_symlink_escape(
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_path = allowed_dir.join("link").join("secret.txt");
-    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir);
+    let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .remove_with_sandbox_policy(
+        .remove_with_sandbox(
             &absolute_path(requested_path.clone()),
             RemoveOptions {
                 recursive: false,
                 force: false,
             },
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
     {
@@ -679,7 +665,7 @@ async fn file_system_remove_with_sandbox_policy_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_source(
+async fn file_system_copy_with_sandbox_rejects_symlink_escape_source(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -696,13 +682,13 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_source(
     symlink(&outside_dir, allowed_dir.join("link"))?;
 
     let requested_source = allowed_dir.join("link").join("secret.txt");
-    let sandbox_policy = workspace_write_sandbox_policy(allowed_dir);
+    let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .copy_with_sandbox_policy(
+        .copy_with_sandbox(
             &absolute_path(requested_source.clone()),
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
-            Some(&sandbox_policy),
+            Some(&sandbox),
         )
         .await
     {
