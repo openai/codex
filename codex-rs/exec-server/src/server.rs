@@ -19,7 +19,11 @@ pub async fn run_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
 pub async fn run_main_with_listen_url(
     listen_url: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_main_with_listen_url_and_paths(listen_url, ExecServerRuntimePaths::default()).await
+    run_main_with_listen_url_and_paths(
+        listen_url,
+        ExecServerRuntimePaths::from_current_environment(),
+    )
+    .await
 }
 
 pub async fn run_main_with_listen_url_and_paths(
