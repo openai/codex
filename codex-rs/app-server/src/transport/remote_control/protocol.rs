@@ -25,6 +25,12 @@ pub(super) struct EnrollRemoteServerRequest {
 pub(super) struct EnrollRemoteServerResponse {
     pub(super) server_id: String,
     pub(super) environment_id: String,
+    #[serde(default)]
+    pub(super) remote_control_token: Option<String>,
+    #[serde(default)]
+    pub(super) expires_at: Option<String>,
+    #[serde(default)]
+    pub(super) scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
