@@ -104,6 +104,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     }
 }
@@ -189,6 +190,8 @@ pub(super) async fn make_chatwidget_manual(
         current_collaboration_mode,
         active_collaboration_mask,
         has_chatgpt_account: false,
+        workspace_role: None,
+        is_workspace_owner: None,
         model_catalog,
         session_telemetry,
         session_header: SessionHeader::new(resolved_model.clone()),
@@ -199,6 +202,8 @@ pub(super) async fn make_chatwidget_manual(
         refreshing_status_outputs: Vec::new(),
         next_status_refresh_request_id: 0,
         plan_type: None,
+        notify_workspace_owner_in_flight: false,
+        pending_workspace_owner_notification_prompt: false,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
