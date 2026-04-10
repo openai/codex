@@ -2,6 +2,7 @@ use codex_config::types::McpServerConfig;
 
 mod discoverable;
 mod injection;
+mod installed_marketplaces;
 mod manager;
 mod manifest;
 mod marketplace;
@@ -27,10 +28,11 @@ pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<McpServerConfig>;
 
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
 pub(crate) use injection::build_plugin_injections;
+pub use installed_marketplaces::INSTALLED_MARKETPLACES_DIR;
+pub use installed_marketplaces::marketplace_install_root;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
 pub use manager::ConfiguredMarketplacePlugin;
-pub use manager::INSTALLED_MARKETPLACES_DIR;
 pub use manager::OPENAI_CURATED_MARKETPLACE_NAME;
 pub use manager::PluginDetail;
 pub use manager::PluginInstallError;
@@ -45,7 +47,6 @@ pub use manager::RemotePluginSyncResult;
 pub use manager::installed_plugin_telemetry_metadata;
 pub use manager::load_plugin_apps;
 pub use manager::load_plugin_mcp_servers;
-pub use manager::marketplace_install_root;
 pub use manager::plugin_telemetry_metadata_from_root;
 pub use manifest::PluginManifestInterface;
 pub(crate) use manifest::PluginManifestPaths;

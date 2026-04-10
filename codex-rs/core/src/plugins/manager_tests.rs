@@ -8,6 +8,7 @@ use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::LoadedPlugin;
 use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::PluginLoadOutcome;
+use crate::plugins::marketplace_install_root;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;

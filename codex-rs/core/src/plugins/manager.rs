@@ -2,6 +2,7 @@ use super::LoadedPlugin;
 use super::PluginLoadOutcome;
 use super::PluginManifestPaths;
 use super::curated_plugins_repo_path;
+use super::installed_marketplaces::installed_marketplace_roots_from_config;
 use super::load_plugin_manifest;
 use super::manifest::PluginManifestInterface;
 use super::marketplace::MarketplaceError;
@@ -54,7 +55,6 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::prompt_safe_plugin_description;
-use codex_plugin::validate_plugin_segment;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -80,7 +80,6 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
-pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -1243,54 +1242,6 @@ impl PluginsManager {
         roots.dedup();
         roots
     }
-}
-
-pub fn marketplace_install_root(codex_home: &Path) -> PathBuf {
-    codex_home.join(INSTALLED_MARKETPLACES_DIR)
-}
-
-fn installed_marketplace_roots_from_config(
-    config: &Config,
-    codex_home: &Path,
-) -> Vec<AbsolutePathBuf> {
-    let Some(user_layer) = config.config_layer_stack.get_user_layer() else {
-        return Vec::new();
-    };
-    let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
-        return Vec::new();
-    };
-    let Some(marketplaces) = marketplaces_value.as_table() else {
-        warn!("invalid marketplaces config: expected table");
-        return Vec::new();
-    };
-    let default_install_root = marketplace_install_root(codex_home);
-    let mut roots = marketplaces
-        .iter()
-        .filter_map(|(marketplace_name, marketplace)| {
-            if !marketplace.is_table() {
-                warn!(
-                    marketplace_name,
-                    "ignoring invalid configured marketplace entry"
-                );
-                return None;
-            }
-            if let Err(err) = validate_plugin_segment(marketplace_name, "marketplace name") {
-                warn!(
-                    marketplace_name,
-                    error = %err,
-                    "ignoring invalid configured marketplace name"
-                );
-                return None;
-            }
-            let path = default_install_root.join(marketplace_name);
-            path.join(".agents/plugins/marketplace.json")
-                .is_file()
-                .then_some(path)
-        })
-        .filter_map(|path| AbsolutePathBuf::try_from(path).ok())
-        .collect::<Vec<_>>();
-    roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
-    roots
 }
 
 #[derive(Debug, thiserror::Error)]
