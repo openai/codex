@@ -7,6 +7,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -183,7 +184,9 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
 
     let issuer = mock_server.uri();
     let mut opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
-    opts.forced_chatgpt_workspace_id = Some("org-required".to_string());
+    opts.forced_chatgpt_workspace_id = Some(ForcedChatgptWorkspaceIds::Single(
+        "org-required".to_string(),
+    ));
 
     let err = run_device_code_login(opts)
         .await

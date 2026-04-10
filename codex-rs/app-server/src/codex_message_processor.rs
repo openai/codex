@@ -1576,13 +1576,14 @@ impl CodexMessageProcessor {
             }
         }
 
-        if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && chatgpt_account_id != expected_workspace
+        if let Some(allowed_workspace_ids) = self.config.forced_chatgpt_workspace_id.as_ref()
+            && !allowed_workspace_ids.contains(&chatgpt_account_id)
         {
+            let allowed_description = allowed_workspace_ids.description();
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
-                    "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
+                    "External auth must use {allowed_description}, but received {chatgpt_account_id:?}."
                 ),
                 data: None,
             };

@@ -264,6 +264,57 @@ pub enum ForcedLoginMethod {
     Api,
 }
 
+/// Workspace IDs that ChatGPT auth is allowed to use.
+///
+/// This accepts the historical single-string config form as well as a list of
+/// allowed workspace IDs.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn normalized(self) -> Option<Self> {
+        let ids = match self {
+            Self::Single(id) => vec![id],
+            Self::Multiple(ids) => ids,
+        }
+        .into_iter()
+        .filter_map(|id| {
+            let trimmed = id.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .collect::<Vec<_>>();
+
+        match ids.as_slice() {
+            [] => None,
+            [id] => Some(Self::Single(id.clone())),
+            _ => Some(Self::Multiple(ids)),
+        }
+    }
+
+    pub fn ids(&self) -> &[String] {
+        match self {
+            Self::Single(id) => std::slice::from_ref(id),
+            Self::Multiple(ids) => ids.as_slice(),
+        }
+    }
+
+    pub fn contains(&self, workspace_id: &str) -> bool {
+        self.ids().iter().any(|id| id == workspace_id)
+    }
+
+    pub fn description(&self) -> String {
+        match self.ids() {
+            [] => "a configured workspace".to_string(),
+            [id] => format!("workspace {id}"),
+            ids => format!("one of workspaces {}", ids.join(", ")),
+        }
+    }
+}
+
 const DEFAULT_PROVIDER_AUTH_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS: u64 = 300_000;
 

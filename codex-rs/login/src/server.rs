@@ -36,6 +36,7 @@ use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_utils_template::Template;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
@@ -64,7 +65,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
@@ -73,7 +74,7 @@ impl ServerOptions {
     pub fn new(
         codex_home: PathBuf,
         client_id: String,
-        forced_chatgpt_workspace_id: Option<String>,
+        forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
         Self {
@@ -153,7 +154,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &redirect_uri,
         &pkce,
         &state,
-        opts.forced_chatgpt_workspace_id.as_deref(),
+        opts.forced_chatgpt_workspace_id.as_ref(),
     );
 
     if opts.open_browser {
@@ -333,7 +334,7 @@ async fn process_request(
             {
                 Ok(tokens) => {
                     if let Err(message) = ensure_workspace_allowed(
-                        opts.forced_chatgpt_workspace_id.as_deref(),
+                        opts.forced_chatgpt_workspace_id.as_ref(),
                         &tokens.id_token,
                     ) {
                         eprintln!("Workspace restriction error: {message}");
@@ -471,7 +472,7 @@ fn build_authorize_url(
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
-    forced_chatgpt_workspace_id: Option<&str>,
+    forced_chatgpt_workspace_id: Option<&ForcedChatgptWorkspaceIds>,
 ) -> String {
     let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
@@ -492,8 +493,13 @@ fn build_authorize_url(
         ("state".to_string(), state.to_string()),
         ("originator".to_string(), originator().value),
     ];
-    if let Some(workspace_id) = forced_chatgpt_workspace_id {
-        query.push(("allowed_workspace_id".to_string(), workspace_id.to_string()));
+    if let Some(workspace_ids) = forced_chatgpt_workspace_id {
+        query.extend(
+            workspace_ids
+                .ids()
+                .iter()
+                .map(|workspace_id| ("allowed_workspace_id".to_string(), workspace_id.to_string())),
+        );
     }
     let qs = query
         .into_iter()
@@ -869,10 +875,10 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
 
 /// Validates the ID token against an optional workspace restriction.
 pub(crate) fn ensure_workspace_allowed(
-    expected: Option<&str>,
+    allowed_workspace_ids: Option<&ForcedChatgptWorkspaceIds>,
     id_token: &str,
 ) -> Result<(), String> {
-    let Some(expected) = expected else {
+    let Some(allowed_workspace_ids) = allowed_workspace_ids else {
         return Ok(());
     };
 
@@ -881,10 +887,13 @@ pub(crate) fn ensure_workspace_allowed(
         return Err("Login is restricted to a specific workspace, but the token did not include an chatgpt_account_id claim.".to_string());
     };
 
-    if actual == expected {
+    if allowed_workspace_ids.contains(actual) {
         Ok(())
     } else {
-        Err(format!("Login is restricted to workspace id {expected}."))
+        Err(format!(
+            "Login is restricted to {}.",
+            allowed_workspace_ids.description()
+        ))
     }
 }
 
@@ -1092,9 +1101,14 @@ pub(crate) async fn obtain_api_key(
 }
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+    use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::TokenEndpointErrorDetail;
+    use super::build_authorize_url;
+    use super::ensure_workspace_allowed;
     use super::html_escape;
     use super::is_missing_codex_entitlement_error;
     use super::parse_token_endpoint_error;
@@ -1102,6 +1116,55 @@ mod tests {
     use super::redact_sensitive_url_parts;
     use super::render_login_error_page;
     use super::sanitize_url_for_logging;
+    use crate::pkce::PkceCodes;
+
+    fn workspace_jwt(workspace_id: &str) -> String {
+        let header = json!({"alg": "none", "typ": "JWT"});
+        let payload = json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": workspace_id,
+            }
+        });
+        let encode = |value: serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(&value).expect("jwt part should serialize"))
+        };
+        format!("{}.{}.sig", encode(header), encode(payload))
+    }
+
+    #[test]
+    fn build_authorize_url_repeats_allowed_workspace_id_for_list() {
+        let pkce = PkceCodes {
+            code_verifier: "verifier".to_string(),
+            code_challenge: "challenge".to_string(),
+        };
+        let workspace_ids =
+            ForcedChatgptWorkspaceIds::Multiple(vec!["org_a".to_string(), "org b".to_string()]);
+
+        let url = build_authorize_url(
+            "https://auth.example",
+            "client",
+            "http://localhost/callback",
+            &pkce,
+            "state",
+            Some(&workspace_ids),
+        );
+
+        assert!(url.contains("allowed_workspace_id=org_a"));
+        assert!(url.contains("allowed_workspace_id=org%20b"));
+        assert_eq!(url.matches("allowed_workspace_id=").count(), 2);
+    }
+
+    #[test]
+    fn ensure_workspace_allowed_accepts_any_workspace_from_list() {
+        let workspace_ids = ForcedChatgptWorkspaceIds::Multiple(vec![
+            "org_allowed".to_string(),
+            "org_actual".to_string(),
+        ]);
+
+        ensure_workspace_allowed(Some(&workspace_ids), &workspace_jwt("org_actual"))
+            .expect("listed workspace should be allowed");
+    }
 
     #[test]
     fn parse_token_endpoint_error_prefers_error_description() {

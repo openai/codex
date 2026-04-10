@@ -8,6 +8,7 @@ use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
 
 use base64::Engine;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use pretty_assertions::assert_eq;
@@ -543,7 +544,8 @@ async fn build_config(
         codex_home: codex_home.to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         forced_login_method,
-        forced_chatgpt_workspace_id,
+        forced_chatgpt_workspace_id: forced_chatgpt_workspace_id
+            .map(ForcedChatgptWorkspaceIds::Single),
     }
 }
 
@@ -652,6 +654,37 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     .await;
 
     super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+    assert!(
+        codex_home.path().join("auth.json").exists(),
+        "auth.json should remain when restrictions pass"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_allows_workspace_from_list() {
+    let codex_home = tempdir().unwrap();
+    let _jwt = write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let config = AuthConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        forced_login_method: None,
+        forced_chatgpt_workspace_id: Some(ForcedChatgptWorkspaceIds::Multiple(vec![
+            "org_allowed".to_string(),
+            "org_mine".to_string(),
+        ])),
+    };
+
+    super::enforce_login_restrictions(&config).expect("listed workspace should succeed");
     assert!(
         codex_home.path().join("auth.json").exists(),
         "auth.json should remain when restrictions pass"
