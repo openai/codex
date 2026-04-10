@@ -898,6 +898,18 @@ pub fn new_approval_decision_cell(
             };
             ("✗ ".red(), summary)
         }
+        TimedOut => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "Review ".into(),
+                    "timed out".bold(),
+                    " before codex could run ".into(),
+                    snippet,
+                ],
+            )
+        }
         Abort => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (

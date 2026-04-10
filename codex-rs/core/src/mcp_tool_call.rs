@@ -980,7 +980,7 @@ async fn mcp_tool_approval_decision_from_guardian(
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied => McpToolApprovalDecision::Decline {
+        ReviewDecision::Denied | ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
             message: Some(guardian_rejection_message(sess, review_id).await),
         },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
