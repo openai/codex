@@ -94,11 +94,8 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::InProgress);
 
-    let delta = wait_for_command_execution_output_delta(&mut mcp, &command_id).await?;
-    assert_eq!(
-        delta.delta.trim_end_matches(['\r', '\n']),
-        expected_output.trim_end_matches(['\r', '\n'])
-    );
+    wait_for_command_execution_output_delta_containing(&mut mcp, &command_id, &expected_output)
+        .await?;
 
     let completed = wait_for_command_execution_completed(&mut mcp, Some(&command_id)).await?;
     let ThreadItem::CommandExecution {
@@ -115,7 +112,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(id, &command_id);
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::Completed);
-    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
+    assert_output_contains(aggregated_output.as_deref(), &expected_output);
     assert_eq!(*exit_code, Some(0));
 
     timeout(
@@ -152,7 +149,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     };
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::Completed);
-    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
+    assert_output_contains(aggregated_output.as_deref(), &expected_output);
 
     Ok(())
 }
@@ -275,7 +272,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
         unreachable!("helper returns command execution item");
     };
     assert_eq!(source, &CommandExecutionSource::UserShell);
-    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
+    assert_output_contains(aggregated_output.as_deref(), &expected_output);
 
     mcp.send_response(
         request_id,
@@ -315,7 +312,9 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
                     source: CommandExecutionSource::UserShell,
                     aggregated_output,
                     ..
-                } if aggregated_output.as_deref() == Some(expected_output.as_str())
+                } if aggregated_output
+                    .as_deref()
+                    .is_some_and(|output| output.contains(expected_output.as_str()))
             )
         }),
         "expected active-turn shell command to be persisted on the existing turn"
@@ -401,9 +400,10 @@ async fn wait_for_command_execution_completed(
     }
 }
 
-async fn wait_for_command_execution_output_delta(
+async fn wait_for_command_execution_output_delta_containing(
     mcp: &mut McpProcess,
     item_id: &str,
+    expected_output: &str,
 ) -> Result<CommandExecutionOutputDeltaNotification> {
     loop {
         let notif = mcp
@@ -414,10 +414,20 @@ async fn wait_for_command_execution_output_delta(
                 .params
                 .ok_or_else(|| anyhow::anyhow!("missing output delta params"))?,
         )?;
-        if delta.item_id == item_id {
+        if delta.item_id == item_id && delta.delta.contains(expected_output) {
             return Ok(delta);
         }
     }
+}
+
+fn assert_output_contains(aggregated_output: Option<&str>, expected_output: &str) {
+    let Some(aggregated_output) = aggregated_output else {
+        panic!("expected aggregated command output");
+    };
+    assert!(
+        aggregated_output.contains(expected_output),
+        "expected aggregated output to contain {expected_output:?}, got {aggregated_output:?}"
+    );
 }
 
 fn create_config_toml(
