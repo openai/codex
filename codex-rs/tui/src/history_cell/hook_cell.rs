@@ -37,7 +37,7 @@ enum HookRunState {
         start_time: Instant,
         reveal_deadline: Instant,
     },
-    Running {
+    VisibleRunning {
         start_time: Instant,
         reveal_deadline: Instant,
     },
@@ -45,13 +45,10 @@ enum HookRunState {
         start_time: Instant,
         removal_deadline: Instant,
     },
-    Completed(CompletedHookRun),
-}
-
-#[derive(Debug)]
-struct CompletedHookRun {
-    status: HookRunStatus,
-    entries: Vec<HookOutputEntry>,
+    Completed {
+        status: HookRunStatus,
+        entries: Vec<HookOutputEntry>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,12 +64,21 @@ struct RunningHookGroup {
 }
 
 impl HookCell {
-    pub(crate) fn new(run: HookRunSummary, animations_enabled: bool) -> Self {
+    fn new_active(run: HookRunSummary, animations_enabled: bool) -> Self {
         let mut cell = Self {
             runs: Vec::new(),
             animations_enabled,
         };
         cell.start_run(run);
+        cell
+    }
+
+    fn new_completed(run: HookRunSummary, animations_enabled: bool) -> Self {
+        let mut cell = Self {
+            runs: Vec::new(),
+            animations_enabled,
+        };
+        cell.add_completed_run(run);
         cell
     }
 
@@ -113,6 +119,16 @@ impl HookCell {
         self.runs.iter().any(|run| run.state.is_running_visible())
     }
 
+    pub(crate) fn advance_time(&mut self, now: Instant) -> bool {
+        let old_len = self.runs.len();
+        let mut changed = false;
+        for run in &mut self.runs {
+            changed |= run.state.reveal_if_due(now);
+        }
+        self.runs.retain(|run| !run.state.quiet_linger_expired(now));
+        changed || self.runs.len() != old_len
+    }
+
     pub(crate) fn start_run(&mut self, run: HookRunSummary) {
         let now = Instant::now();
         if let Some(existing) = self.runs.iter_mut().find(|existing| existing.id == run.id) {
@@ -135,7 +151,10 @@ impl HookCell {
             return false;
         };
         if hook_run_is_quiet_success(&run) {
-            if !self.runs[index].start_quiet_linger_after_success() {
+            if !self.runs[index]
+                .state
+                .complete_quiet_success(Instant::now())
+            {
                 self.runs.remove(index);
             }
             return true;
@@ -174,20 +193,6 @@ impl HookCell {
         });
     }
 
-    pub(crate) fn prune_expired_quiet_runs(&mut self, now: Instant) -> bool {
-        let old_len = self.runs.len();
-        self.runs.retain(|run| !run.state.quiet_linger_expired(now));
-        self.runs.len() != old_len
-    }
-
-    pub(crate) fn update_due_visibility(&mut self, now: Instant) -> bool {
-        let mut changed = false;
-        for run in &mut self.runs {
-            changed |= run.state.reveal_if_due(now);
-        }
-        changed
-    }
-
     pub(crate) fn next_timer_deadline(&self) -> Option<Instant> {
         self.runs
             .iter()
@@ -219,27 +224,29 @@ impl HistoryCell for HookCell {
             if !run.state.should_render() {
                 continue;
             }
-            if let Some(key) = run.running_group_key() {
-                match running_group.as_mut() {
-                    Some(group) if group.key == key => {
-                        group.count += 1;
-                        group.start_time =
-                            earliest_instant(group.start_time, run.state.start_time());
-                        continue;
-                    }
-                    Some(group) => {
-                        push_running_hook_group(&mut lines, group, self.animations_enabled);
-                    }
-                    None => {}
+
+            let Some(key) = run.running_group_key() else {
+                if let Some(group) = running_group.take() {
+                    push_running_hook_group(&mut lines, &group, self.animations_enabled);
                 }
-                running_group = Some(RunningHookGroup::new(key, run.state.start_time()));
+                push_hook_line_separator(&mut lines);
+                run.push_display_lines(&mut lines, self.animations_enabled);
+                continue;
+            };
+
+            if let Some(group) = running_group.as_mut()
+                && group.key == key
+            {
+                group.count += 1;
+                group.start_time = earliest_instant(group.start_time, run.state.start_time());
                 continue;
             }
-            if let Some(group) = running_group.take() {
+
+            if let Some(group) =
+                running_group.replace(RunningHookGroup::new(key, run.state.start_time()))
+            {
                 push_running_hook_group(&mut lines, &group, self.animations_enabled);
             }
-            push_hook_line_separator(&mut lines);
-            run.push_display_lines(&mut lines, self.animations_enabled);
         }
         if let Some(group) = running_group {
             push_running_hook_group(&mut lines, &group, self.animations_enabled);
@@ -279,17 +286,6 @@ impl Renderable for HookCell {
 }
 
 impl HookRunCell {
-    fn start_quiet_linger_after_success(&mut self) -> bool {
-        let Some((start_time, removal_deadline)) = self.state.quiet_linger_after_success() else {
-            return false;
-        };
-        self.state = HookRunState::QuietLinger {
-            start_time,
-            removal_deadline,
-        };
-        true
-    }
-
     #[cfg(test)]
     fn expire_quiet_linger_now_for_test(&mut self) {
         if let HookRunState::QuietLinger {
@@ -322,7 +318,7 @@ impl HookRunCell {
     fn push_display_lines(&self, lines: &mut Vec<Line<'static>>, animations_enabled: bool) {
         let label = hook_event_label(self.event_name);
         match &self.state {
-            HookRunState::Running { start_time, .. }
+            HookRunState::VisibleRunning { start_time, .. }
             | HookRunState::QuietLinger { start_time, .. } => {
                 let hook_text = format!("Running {label} hook");
                 push_running_hook_header(
@@ -333,18 +329,18 @@ impl HookRunCell {
                     animations_enabled,
                 );
             }
-            HookRunState::Completed(completed) => {
-                let status = format!("{:?}", completed.status).to_lowercase();
-                let bullet = hook_completed_bullet(completed);
+            HookRunState::Completed { status, entries } => {
+                let status_text = format!("{status:?}").to_lowercase();
+                let bullet = hook_completed_bullet(*status, entries);
                 lines.push(
                     vec![
                         bullet,
                         " ".into(),
-                        format!("{label} hook ({status})").into(),
+                        format!("{label} hook ({status_text})").into(),
                     ]
                     .into(),
                 );
-                for entry in &completed.entries {
+                for entry in entries {
                     lines
                         .push(format!("  {}{}", hook_output_prefix(entry.kind), entry.text).into());
                 }
@@ -363,34 +359,34 @@ impl HookRunState {
     }
 
     fn completed(status: HookRunStatus, entries: Vec<HookOutputEntry>) -> Self {
-        Self::Completed(CompletedHookRun { status, entries })
+        Self::Completed { status, entries }
     }
 
     fn is_active(&self) -> bool {
         match self {
             HookRunState::PendingReveal { .. }
-            | HookRunState::Running { .. }
+            | HookRunState::VisibleRunning { .. }
             | HookRunState::QuietLinger { .. } => true,
-            HookRunState::Completed(_) => false,
+            HookRunState::Completed { .. } => false,
         }
     }
 
     fn should_render(&self) -> bool {
         match self {
-            HookRunState::Running { .. }
+            HookRunState::VisibleRunning { .. }
             | HookRunState::QuietLinger { .. }
-            | HookRunState::Completed(_) => true,
+            | HookRunState::Completed { .. } => true,
             HookRunState::PendingReveal { .. } => false,
         }
     }
 
     fn has_persistent_output(&self) -> bool {
         match self {
-            HookRunState::Completed(completed) => {
-                completed.status != HookRunStatus::Completed || !completed.entries.is_empty()
+            HookRunState::Completed { status, entries } => {
+                *status != HookRunStatus::Completed || !entries.is_empty()
             }
             HookRunState::PendingReveal { .. }
-            | HookRunState::Running { .. }
+            | HookRunState::VisibleRunning { .. }
             | HookRunState::QuietLinger { .. } => false,
         }
     }
@@ -398,16 +394,16 @@ impl HookRunState {
     fn start_time(&self) -> Option<Instant> {
         match self {
             HookRunState::PendingReveal { start_time, .. }
-            | HookRunState::Running { start_time, .. }
+            | HookRunState::VisibleRunning { start_time, .. }
             | HookRunState::QuietLinger { start_time, .. } => Some(*start_time),
-            HookRunState::Completed(_) => None,
+            HookRunState::Completed { .. } => None,
         }
     }
 
     fn is_running_visible(&self) -> bool {
         matches!(
             self,
-            HookRunState::Running { .. } | HookRunState::QuietLinger { .. }
+            HookRunState::VisibleRunning { .. } | HookRunState::QuietLinger { .. }
         )
     }
 
@@ -422,7 +418,7 @@ impl HookRunState {
         if now < *reveal_deadline {
             return false;
         }
-        *self = HookRunState::Running {
+        *self = HookRunState::VisibleRunning {
             start_time: *start_time,
             reveal_deadline: *reveal_deadline,
         };
@@ -437,7 +433,7 @@ impl HookRunState {
             HookRunState::QuietLinger {
                 removal_deadline, ..
             } => Some(*removal_deadline),
-            HookRunState::Running { .. } | HookRunState::Completed(_) => None,
+            HookRunState::VisibleRunning { .. } | HookRunState::Completed { .. } => None,
         }
     }
 
@@ -447,22 +443,30 @@ impl HookRunState {
                 removal_deadline, ..
             } => now >= *removal_deadline,
             HookRunState::PendingReveal { .. }
-            | HookRunState::Running { .. }
-            | HookRunState::Completed(_) => false,
+            | HookRunState::VisibleRunning { .. }
+            | HookRunState::Completed { .. } => false,
         }
     }
 
-    fn quiet_linger_after_success(&self) -> Option<(Instant, Instant)> {
-        let HookRunState::Running {
+    fn complete_quiet_success(&mut self, now: Instant) -> bool {
+        let HookRunState::VisibleRunning {
             start_time,
             reveal_deadline,
             ..
         } = self
         else {
-            return None;
+            return false;
         };
+        let start_time = *start_time;
         let minimum_deadline = *reveal_deadline + QUIET_HOOK_MIN_VISIBLE;
-        (Instant::now() < minimum_deadline).then_some((*start_time, minimum_deadline))
+        if now >= minimum_deadline {
+            return false;
+        }
+        *self = HookRunState::QuietLinger {
+            start_time,
+            removal_deadline: minimum_deadline,
+        };
+        true
     }
 }
 
@@ -535,27 +539,21 @@ fn earliest_instant(left: Option<Instant>, right: Option<Instant>) -> Option<Ins
 }
 
 pub(crate) fn new_active_hook_cell(run: HookRunSummary, animations_enabled: bool) -> HookCell {
-    HookCell::new(run, animations_enabled)
+    HookCell::new_active(run, animations_enabled)
 }
 
 pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: bool) -> HookCell {
-    let mut cell = HookCell {
-        runs: Vec::new(),
-        animations_enabled,
-    };
-    cell.add_completed_run(run);
-    cell
+    HookCell::new_completed(run, animations_enabled)
 }
 
 fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
     run.status == HookRunStatus::Completed && run.entries.is_empty()
 }
 
-fn hook_completed_bullet(completed: &CompletedHookRun) -> Span<'static> {
-    match completed.status {
+fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {
+    match status {
         HookRunStatus::Completed => {
-            if completed
-                .entries
+            if entries
                 .iter()
                 .any(|entry| entry.kind == HookOutputEntryKind::Warning)
             {
@@ -597,15 +595,12 @@ mod tests {
 
     #[test]
     fn completed_hook_with_warning_uses_default_bold_bullet() {
-        let completed = CompletedHookRun {
-            status: HookRunStatus::Completed,
-            entries: vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Warning,
-                text: "Heads up from the hook".to_string(),
-            }],
-        };
+        let entries = vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Warning,
+            text: "Heads up from the hook".to_string(),
+        }];
 
-        let bullet = hook_completed_bullet(&completed);
+        let bullet = hook_completed_bullet(HookRunStatus::Completed, &entries);
 
         assert_eq!(bullet.content.as_ref(), "•");
         assert_eq!(bullet.style.fg, None);

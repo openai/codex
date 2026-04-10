@@ -4045,7 +4045,7 @@ impl ChatWidget {
             return;
         };
         let now = Instant::now();
-        if cell.update_due_visibility(now) || cell.prune_expired_quiet_runs(now) {
+        if cell.advance_time(now) {
             self.bump_active_cell_revision();
         }
         self.finish_active_hook_cell_if_idle();
