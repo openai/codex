@@ -1265,6 +1265,44 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
 }
 
 #[tokio::test]
+async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V2,
+        main_loop_responses(vec![create_final_assistant_message_sse_response(
+            "progress before final",
+        )?]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v2_progress_before_final"),
+                v2_background_agent_tool_call("call_progress_order", "stream progress"),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+
+    let turn_completed = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+    assert_eq!(turn_completed.thread_id, harness.thread_id);
+
+    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_progress_update(&progress, "progress before final");
+
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_function_call_output(&tool_output, "call_progress_order", "progress before final");
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
