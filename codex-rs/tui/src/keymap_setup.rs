@@ -662,7 +662,7 @@ mod tests {
 
         assert_snapshot!(
             "keymap_capture_view",
-            format!("{:?}", render_capture(&view, 80, 8))
+            format!("{:?}", render_capture(&view, /*width*/ 80, /*height*/ 8))
         );
     }
 
