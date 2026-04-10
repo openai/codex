@@ -16,6 +16,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::thread_remember::RememberedContextSource;
 use crate::thread_remember::build_remembered_context;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
@@ -3882,11 +3883,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn thread_remember(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: ThreadRememberParams,
-    ) {
+    async fn thread_remember(&self, request_id: ConnectionRequestId, params: ThreadRememberParams) {
         let ThreadRememberParams {
             thread_id,
             source_thread_ids,
@@ -3969,7 +3966,11 @@ impl CodexMessageProcessor {
                     return;
                 }
             };
-            sources.push((source_thread_id.to_string(), conversation));
+            sources.push(RememberedContextSource {
+                thread_id: source_thread_id.to_string(),
+                title: title_from_state_db(&self.config, *source_thread_id).await,
+                conversation,
+            });
         }
 
         let built_context = build_remembered_context(&sources);
@@ -3979,7 +3980,14 @@ impl CodexMessageProcessor {
         target_thread
             .record_response_item_without_turn(context_item)
             .await;
-        target_thread.flush_rollout().await;
+        if let Err(err) = target_thread.flush_rollout().await {
+            self.send_internal_error(
+                request_id,
+                format!("failed to save remembered context: {err}"),
+            )
+            .await;
+            return;
+        }
 
         let response = ThreadRememberResponse {
             remembered_thread_ids: source_thread_ids_parsed
