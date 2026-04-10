@@ -233,14 +233,26 @@ fn timing_for_restored_trigger_with_timezone(
             ))
         }
         TimerTrigger::Schedule { rrule: Some(_), .. } => {
-            let due = persisted_next_run_at.is_none_or(|next| next <= now.timestamp());
-            let pending_run = persisted_pending_run || due;
+            let Some(persisted_next_run_at) = persisted_next_run_at else {
+                return Ok(timing(
+                    normalized,
+                    persisted_pending_run,
+                    /*next_run_at*/ None,
+                    now,
+                ));
+            };
+            let due = persisted_next_run_at <= now.timestamp();
             let next_run_at = if due {
                 next_schedule_occurrence_after(&normalized, now, timezone)?
             } else {
-                persisted_next_run_at
+                Some(persisted_next_run_at)
             };
-            Ok(timing(normalized, pending_run, next_run_at, now))
+            Ok(timing(
+                normalized,
+                persisted_pending_run || due,
+                next_run_at,
+                now,
+            ))
         }
     }
 }
@@ -780,6 +792,42 @@ mod tests {
             timing.next_run_at,
             Some(utc_datetime("2024-01-03T09:00:00").timestamp())
         );
+    }
+
+    #[test]
+    fn restored_recurring_schedule_without_next_run_remains_inactive() {
+        let timing = timing_for_restored_trigger_with_timezone(
+            TimerTrigger::Schedule {
+                dtstart: Some("2024-01-01T09:00:00".to_string()),
+                rrule: Some("FREQ=DAILY;COUNT=1".to_string()),
+            },
+            utc_datetime("2024-01-01T08:00:00").timestamp(),
+            /*persisted_pending_run*/ false,
+            /*persisted_next_run_at*/ None,
+            utc_datetime("2024-01-02T09:00:00"),
+            Tz::UTC,
+        )
+        .expect("trigger should be valid");
+        assert_eq!(timing.pending_run, false);
+        assert_eq!(timing.next_run_at, None);
+    }
+
+    #[test]
+    fn restored_pending_recurring_schedule_without_next_run_stays_pending() {
+        let timing = timing_for_restored_trigger_with_timezone(
+            TimerTrigger::Schedule {
+                dtstart: Some("2024-01-01T09:00:00".to_string()),
+                rrule: Some("FREQ=DAILY;COUNT=1".to_string()),
+            },
+            utc_datetime("2024-01-01T08:00:00").timestamp(),
+            /*persisted_pending_run*/ true,
+            /*persisted_next_run_at*/ None,
+            utc_datetime("2024-01-02T09:00:00"),
+            Tz::UTC,
+        )
+        .expect("trigger should be valid");
+        assert_eq!(timing.pending_run, true);
+        assert_eq!(timing.next_run_at, None);
     }
 
     #[test]
