@@ -45,6 +45,7 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
@@ -312,6 +313,9 @@ pub struct Config {
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
+    /// Start the composer in Vim mode (`Normal`) by default.
+    pub tui_vim_mode_default: bool,
+
     /// Start the TUI in the specified collaboration mode (plan/default).
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
@@ -321,7 +325,6 @@ pub struct Config {
     /// - `always`: Always use alternate screen (original behavior).
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
-
     /// Ordered list of status line item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
@@ -335,6 +338,15 @@ pub struct Config {
 
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
+
+    /// Keybinding overrides for the TUI.
+    ///
+    /// Precedence is:
+    ///
+    /// 1. context table (`tui.keymap.chat`, `tui.keymap.composer`, etc.)
+    /// 2. `tui.keymap.global`
+    /// 3. built-in preset defaults (`latest` currently points to `v1`)
+    pub tui_keymap: TuiKeymap,
 
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
@@ -2143,6 +2155,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
+            tui_vim_mode_default: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.vim_mode_default)
+                .unwrap_or(false),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -2151,6 +2168,11 @@ impl Config {
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            tui_keymap: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.keymap.clone())
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);

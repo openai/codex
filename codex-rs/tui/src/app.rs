@@ -34,6 +34,9 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::RuntimeKeymap;
+use crate::keymap_setup;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -93,6 +96,8 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::edit::keymap_binding_clear_edit;
+use codex_core::config::edit::keymap_binding_edit;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
@@ -967,6 +972,7 @@ pub(crate) struct App {
     has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) keymap: RuntimeKeymap,
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
@@ -3804,6 +3810,13 @@ impl App {
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
+        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).map_err(|err| {
+            color_eyre::eyre::eyre!(
+                "Invalid `tui.keymap` configuration: {err}\n\
+Fix the config and retry.\n\
+Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.toml"
+            )
+        })?;
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -3820,6 +3833,7 @@ impl App {
             runtime_sandbox_policy_override: None,
             file_search,
             enhanced_keys_supported,
+            keymap: runtime_keymap,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -4050,6 +4064,7 @@ impl App {
                         |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(frame.area()));
                                 frame.set_cursor_position((x, y));
                             }
                         },
@@ -4399,6 +4414,7 @@ impl App {
                 self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
                     "D I F F".to_string(),
+                    self.keymap.pager.clone(),
                 ));
                 tui.frame_requester().schedule_frame();
             }
@@ -5521,6 +5537,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![diff_summary.into()],
                         "P A T C H".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
                 ApprovalRequest::Exec { command, .. } => {
@@ -5530,6 +5547,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_lines(
                         full_cmd_lines,
                         "E X E C".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
                 ApprovalRequest::Permissions {
@@ -5554,6 +5572,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(Paragraph::new(lines).wrap(Wrap { trim: false }))],
                         "P E R M I S S I O N S".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
                 ApprovalRequest::McpElicitation {
@@ -5571,6 +5590,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "E L I C I T A T I O N".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
             },
@@ -5667,8 +5687,119 @@ impl App {
                     }
                 }
             }
+            AppEvent::OpenKeymapActionMenu { context, action } => {
+                self.chat_widget
+                    .open_keymap_action_menu(context, action, &self.keymap);
+            }
+            AppEvent::OpenKeymapCapture { context, action } => {
+                self.chat_widget
+                    .open_keymap_capture(context, action, &self.keymap);
+            }
+            AppEvent::KeymapCaptured {
+                context,
+                action,
+                key,
+            } => {
+                self.apply_keymap_capture(context, action, key).await;
+            }
+            AppEvent::KeymapCleared { context, action } => {
+                self.apply_keymap_clear(context, action).await;
+            }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    async fn apply_keymap_capture(&mut self, context: String, action: String, key: String) {
+        let keymap_config = match keymap_setup::keymap_with_replacement(
+            &self.config.tui_keymap,
+            &context,
+            &action,
+            &key,
+        ) {
+            Ok(keymap_config) => keymap_config,
+            Err(err) => {
+                self.chat_widget.add_error_message(err);
+                return;
+            }
+        };
+
+        let runtime_keymap = match RuntimeKeymap::from_config(&keymap_config) {
+            Ok(runtime_keymap) => runtime_keymap,
+            Err(err) => {
+                let params = keymap_setup::build_keymap_conflict_params(context, action, key, err);
+                self.chat_widget.show_selection_view(params);
+                return;
+            }
+        };
+
+        let edit = keymap_binding_edit(&context, &action, &key);
+        match ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits([edit])
+            .apply()
+            .await
+        {
+            Ok(()) => {
+                self.config.tui_keymap = keymap_config.clone();
+                self.keymap = runtime_keymap.clone();
+                self.chat_widget
+                    .apply_keymap_update(keymap_config, &runtime_keymap);
+                self.chat_widget.add_info_message(
+                    format!("Remapped `{context}.{action}` to `{key}`."),
+                    /*hint*/ None,
+                );
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "failed to persist keymap binding");
+                self.chat_widget
+                    .add_error_message(format!("Failed to save shortcut: {err}"));
+            }
+        }
+    }
+
+    async fn apply_keymap_clear(&mut self, context: String, action: String) {
+        let keymap_config = match keymap_setup::keymap_without_custom_binding(
+            &self.config.tui_keymap,
+            &context,
+            &action,
+        ) {
+            Ok(keymap_config) => keymap_config,
+            Err(err) => {
+                self.chat_widget.add_error_message(err);
+                return;
+            }
+        };
+
+        let runtime_keymap = match RuntimeKeymap::from_config(&keymap_config) {
+            Ok(runtime_keymap) => runtime_keymap,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to refresh shortcuts: {err}"));
+                return;
+            }
+        };
+
+        let edit = keymap_binding_clear_edit(&context, &action);
+        match ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits([edit])
+            .apply()
+            .await
+        {
+            Ok(()) => {
+                self.config.tui_keymap = keymap_config.clone();
+                self.keymap = runtime_keymap.clone();
+                self.chat_widget
+                    .apply_keymap_update(keymap_config, &runtime_keymap);
+                self.chat_widget.add_info_message(
+                    format!("Removed custom shortcut for `{context}.{action}`."),
+                    /*hint*/ None,
+                );
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "failed to clear keymap binding");
+                self.chat_widget
+                    .add_error_message(format!("Failed to remove shortcut: {err}"));
+            }
+        }
     }
 
     async fn handle_exit_mode(
@@ -6020,18 +6151,67 @@ impl App {
             return;
         }
 
-        match key_event {
-            KeyEvent {
-                code: KeyCode::Char('t'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                // Enter alternate screen and set viewport to full size.
-                let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
-                tui.frame_requester().schedule_frame();
+        if self.keymap.app.open_transcript.is_pressed(key_event) {
+            // Enter alternate screen and set viewport to full size.
+            let _ = tui.enter_alt_screen();
+            self.overlay = Some(Overlay::new_transcript(
+                self.transcript_cells.clone(),
+                self.keymap.pager.clone(),
+            ));
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if self.keymap.app.open_external_editor.is_pressed(key_event) {
+            // Only launch the external editor if there is no overlay and the
+            // bottom pane is not in use. Note that it can be launched while a
+            // task is running to enable editing while the previous turn is
+            // ongoing.
+            if self.overlay.is_none()
+                && self.chat_widget.can_launch_external_editor()
+                && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
+            {
+                self.request_external_editor_launch(tui);
             }
+            return;
+        }
+
+        if self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
+            self.chat_widget.toggle_vim_mode_and_notify();
+            return;
+        }
+
+        if self.should_route_edit_previous_message(key_event) {
+            // Esc primes/advances backtracking only in normal (not working) mode
+            // with the composer focused and empty. In any other state, forward
+            // Esc so the active UI (e.g. status indicator, modals, popups)
+            // handles it.
+            if self.chat_widget.is_normal_backtrack_mode() && self.chat_widget.composer_is_empty() {
+                self.handle_backtrack_esc_key(tui);
+            } else {
+                self.chat_widget.handle_key_event(key_event);
+            }
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .keymap
+                .chat
+                .confirm_edit_previous_message
+                .is_pressed(key_event)
+            && self.backtrack.primed
+            && self.backtrack.nth_user_message != usize::MAX
+            && self.chat_widget.composer_is_empty()
+        {
+            // Confirm backtrack when primed + count > 0.
+            if let Some(selection) = self.confirm_backtrack_from_main() {
+                self.apply_backtrack_selection(tui, selection);
+            }
+            return;
+        }
+
+        match key_event {
             KeyEvent {
                 code: KeyCode::Char('l'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -6052,58 +6232,15 @@ impl App {
                 }
             }
             KeyEvent {
-                code: KeyCode::Char('g'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                // Only launch the external editor if there is no overlay and the bottom pane is not in use.
-                // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
-                if self.overlay.is_none()
-                    && self.chat_widget.can_launch_external_editor()
-                    && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
-                {
-                    self.request_external_editor_launch(tui);
-                }
-            }
-            // Esc primes/advances backtracking only in normal (not working) mode
-            // with the composer focused and empty. In any other state, forward
-            // Esc so the active UI (e.g. status indicator, modals, popups)
-            // handles it.
-            KeyEvent {
-                code: KeyCode::Esc,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
-                {
-                    self.handle_backtrack_esc_key(tui);
-                } else {
-                    self.chat_widget.handle_key_event(key_event);
-                }
-            }
-            // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
-            KeyEvent {
-                code: KeyCode::Enter,
-                kind: KeyEventKind::Press,
-                ..
-            } if self.backtrack.primed
-                && self.backtrack.nth_user_message != usize::MAX
-                && self.chat_widget.composer_is_empty() =>
-            {
-                if let Some(selection) = self.confirm_backtrack_from_main() {
-                    self.apply_backtrack_selection(tui, selection);
-                }
-            }
-            KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
                 // Any non-Esc key press should cancel a primed backtrack.
                 // This avoids stale "Esc-primed" state after the user starts typing
                 // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                if !self.keymap.chat.edit_previous_message.is_pressed(key_event)
+                    && self.backtrack.primed
+                {
                     self.reset_backtrack_state();
                 }
                 self.chat_widget.handle_key_event(key_event);
@@ -6112,6 +6249,11 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
         };
+    }
+
+    fn should_route_edit_previous_message(&self, key_event: KeyEvent) -> bool {
+        self.keymap.chat.edit_previous_message.is_pressed(key_event)
+            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
     fn refresh_status_line(&mut self) {
@@ -6434,6 +6576,7 @@ mod tests {
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use crossterm::event::KeyCode;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -9261,6 +9404,8 @@ guardian_approval = true
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
+        let keymap = RuntimeKeymap::from_config(&config.tui_keymap)
+            .expect("test config should always produce a valid runtime keymap");
 
         App {
             model_catalog: chat_widget.model_catalog(),
@@ -9274,6 +9419,7 @@ guardian_approval = true
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            keymap,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -9315,6 +9461,8 @@ guardian_approval = true
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
+        let keymap = RuntimeKeymap::from_config(&config.tui_keymap)
+            .expect("test config should always produce a valid runtime keymap");
 
         (
             App {
@@ -9329,6 +9477,7 @@ guardian_approval = true
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
                 file_search,
+                keymap,
                 transcript_cells: Vec::new(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),
@@ -10878,7 +11027,10 @@ guardian_approval = true
                 /*is_first_line*/ false,
             )) as Arc<dyn HistoryCell>,
         ];
-        app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+        app.overlay = Some(Overlay::new_transcript(
+            app.transcript_cells.clone(),
+            app.keymap.pager.clone(),
+        ));
         app.deferred_history_lines = vec![Line::from("stale buffered line")];
         app.backtrack.overlay_preview_active = true;
         app.backtrack.nth_user_message = 1;
@@ -11099,7 +11251,10 @@ guardian_approval = true
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
         }) as Arc<dyn HistoryCell>];
-        app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+        app.overlay = Some(Overlay::new_transcript(
+            app.transcript_cells.clone(),
+            RuntimeKeymap::defaults().pager,
+        ));
         app.deferred_history_lines = vec![Line::from("stale buffered line")];
         app.has_emitted_history_lines = true;
         app.backtrack.primed = true;
@@ -11119,6 +11274,29 @@ guardian_approval = true
         assert!(!app.backtrack_render_pending);
         assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
         assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+    }
+
+    #[tokio::test]
+    async fn edit_previous_shortcut_does_not_steal_empty_vim_insert_escape() {
+        let mut app = make_test_app().await;
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(app.chat_widget.composer_is_empty());
+        assert!(app.should_route_edit_previous_message(esc));
+
+        app.chat_widget.toggle_vim_mode_and_notify();
+        assert!(app.should_route_edit_previous_message(esc));
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+        assert!(!app.should_route_edit_previous_message(esc));
+
+        app.chat_widget.handle_key_event(esc);
+
+        assert!(!app.backtrack.primed);
+        assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
+        assert!(app.should_route_edit_previous_message(esc));
     }
 
     #[tokio::test]

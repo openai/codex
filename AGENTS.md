@@ -45,6 +45,7 @@ In the codex-rs folder where the rust code lives:
   - When extracting code from a large module, move the related tests and module/type docs toward
     the new implementation so the invariants stay close to the code that owns them.
 - When running Rust commands (e.g. `just fix` or `cargo test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
+- For TUI keybind changes, do not mutate old preset defaults; add a new preset version, keep `latest` as an explicit pointer (currently to `v1`), and update `docs/default-keymap.toml` plus `docs/config.md` with migration notes (`TODO(docs): mirror this on developers.openai.com`).
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

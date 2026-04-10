@@ -604,6 +604,31 @@ pub(crate) enum AppEvent {
     SyntaxThemeSelected {
         name: String,
     },
+
+    /// Open set/remove actions for the selected keymap action.
+    OpenKeymapActionMenu {
+        context: String,
+        action: String,
+    },
+
+    /// Open key capture for the selected keymap action.
+    OpenKeymapCapture {
+        context: String,
+        action: String,
+    },
+
+    /// Apply a captured key to the selected keymap action.
+    KeymapCaptured {
+        context: String,
+        action: String,
+        key: String,
+    },
+
+    /// Remove the custom root binding for the selected keymap action.
+    KeymapCleared {
+        context: String,
+        action: String,
+    },
 }
 
 #[derive(Debug)]

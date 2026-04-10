@@ -41,6 +41,7 @@ use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
@@ -360,10 +361,12 @@ fn config_toml_deserializes_model_availability_nux() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             terminal_title: None,
             theme: None,
+            keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
                     ("gpt-bar".to_string(), 4),
@@ -386,6 +389,35 @@ fn runtime_config_defaults_model_availability_nux() {
     assert_eq!(
         cfg.model_availability_nux,
         ModelAvailabilityNuxConfig::default()
+    );
+}
+
+#[test]
+fn test_tui_vim_mode_default_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
+    );
+}
+
+#[test]
+fn test_tui_vim_mode_default_true() {
+    let toml = r#"
+        [tui]
+        vim_mode_default = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize vim_mode_default=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
     );
 }
 
@@ -1056,10 +1088,12 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             terminal_title: None,
             theme: None,
+            keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
         }
     );
@@ -4585,6 +4619,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_vim_mode_default: false,
+            tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
@@ -4731,6 +4767,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
@@ -4875,6 +4913,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
@@ -5005,6 +5045,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,

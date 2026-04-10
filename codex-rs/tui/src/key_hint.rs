@@ -1,3 +1,12 @@
+//! Key binding primitives and input matching for the TUI.
+//!
+//! This module provides `KeyBinding`, the runtime representation of a single
+//! keybinding (key code + modifier set), along with matching logic that handles
+//! cross-terminal inconsistencies in how shifted letters are reported.
+//!
+//! It also supplies rendering helpers that convert bindings into styled
+//! `ratatui::text::Span` values for UI hint display.
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -15,7 +24,13 @@ const ALT_PREFIX: &str = "alt + ";
 const CTRL_PREFIX: &str = "ctrl + ";
 const SHIFT_PREFIX: &str = "shift + ";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A single key chord (key code + modifier set) used for input matching.
+///
+/// Matching via `is_press` handles both exact equality and a shifted-letter
+/// compatibility fallback for terminals that report uppercase letters without
+/// the SHIFT modifier flag. This means a binding defined as `shift-a` will
+/// match a terminal event of either `Shift+a` or plain `A`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct KeyBinding {
     key: KeyCode,
     modifiers: KeyModifiers,
@@ -27,9 +42,60 @@ impl KeyBinding {
     }
 
     pub fn is_press(&self, event: KeyEvent) -> bool {
-        self.key == event.code
-            && self.modifiers == event.modifiers
-            && (event.kind == KeyEventKind::Press || event.kind == KeyEventKind::Repeat)
+        if event.kind != KeyEventKind::Press && event.kind != KeyEventKind::Repeat {
+            return false;
+        }
+
+        if self.key == event.code && self.modifiers == event.modifiers {
+            return true;
+        }
+
+        self.matches_shifted_ascii_letter_compat(event)
+    }
+
+    /// Cross-terminal compatibility for shifted ASCII letter bindings.
+    ///
+    /// Some terminals (e.g. certain Kitty/Alacritty builds) report `Shift+a` as
+    /// `KeyCode::Char('A')` with `KeyModifiers::NONE`, while others keep the
+    /// lowercase char and set the SHIFT flag. This method accepts both forms
+    /// when the binding specifies SHIFT + an ASCII lowercase letter, and
+    /// preserves any additional modifiers (e.g. Ctrl) so `ctrl-shift-i`
+    /// also matches `Ctrl+I`.
+    ///
+    /// Only applies to ASCII lowercase letters — non-ASCII shift behavior
+    /// (accented characters on European layouts, for instance) is not handled.
+    fn matches_shifted_ascii_letter_compat(&self, event: KeyEvent) -> bool {
+        let (KeyCode::Char(bound), KeyCode::Char(observed)) = (self.key, event.code) else {
+            return false;
+        };
+
+        if !bound.is_ascii_lowercase() || !self.modifiers.contains(KeyModifiers::SHIFT) {
+            return false;
+        }
+
+        if observed != bound.to_ascii_uppercase() {
+            return false;
+        }
+
+        let mut without_shift = self.modifiers;
+        without_shift.remove(KeyModifiers::SHIFT);
+        event.modifiers == self.modifiers || event.modifiers == without_shift
+    }
+
+    pub(crate) const fn parts(&self) -> (KeyCode, KeyModifiers) {
+        (self.key, self.modifiers)
+    }
+}
+
+/// Matching helpers for one action's keybinding set.
+pub(crate) trait KeyBindingListExt {
+    /// True when any binding in this set matches `event`.
+    fn is_pressed(&self, event: KeyEvent) -> bool;
+}
+
+impl KeyBindingListExt for [KeyBinding] {
+    fn is_pressed(&self, event: KeyEvent) -> bool {
+        self.iter().any(|binding| binding.is_press(event))
     }
 }
 
@@ -109,4 +175,84 @@ pub(crate) fn is_altgr(mods: KeyModifiers) -> bool {
 #[inline]
 pub(crate) fn is_altgr(_mods: KeyModifiers) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_press_accepts_press_and_repeat_but_rejects_release() {
+        let binding = ctrl(KeyCode::Char('k'));
+        let press = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+        let repeat = KeyEvent {
+            kind: KeyEventKind::Repeat,
+            ..press
+        };
+        let release = KeyEvent {
+            kind: KeyEventKind::Release,
+            ..press
+        };
+        let wrong_modifiers = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+
+        assert!(binding.is_press(press));
+        assert!(binding.is_press(repeat));
+        assert!(!binding.is_press(release));
+        assert!(!binding.is_press(wrong_modifiers));
+    }
+
+    #[test]
+    fn keybinding_list_ext_matches_any_binding() {
+        let bindings = [plain(KeyCode::Char('a')), ctrl(KeyCode::Char('b'))];
+
+        assert!(bindings.is_pressed(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)));
+        assert!(bindings.is_pressed(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)));
+        assert!(!bindings.is_pressed(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn shift_letter_binding_matches_uppercase_compat_forms() {
+        let binding = shift(KeyCode::Char('a'));
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SHIFT)));
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn shift_letter_binding_preserves_other_modifiers_with_uppercase_compat() {
+        let binding = KeyBinding::new(
+            KeyCode::Char('i'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::CONTROL)));
+    }
+
+    #[test]
+    fn shift_letter_binding_does_not_match_plain_lowercase_or_other_uppercase() {
+        let binding = shift(KeyCode::Char('o'));
+        assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)));
+        assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn ctrl_alt_sets_both_modifiers() {
+        assert_eq!(
+            ctrl_alt(KeyCode::Char('v')).parts(),
+            (
+                KeyCode::Char('v'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT
+            )
+        );
+    }
+
+    #[test]
+    fn has_ctrl_or_alt_checks_supported_modifier_combinations() {
+        assert!(!has_ctrl_or_alt(KeyModifiers::NONE));
+        assert!(has_ctrl_or_alt(KeyModifiers::CONTROL));
+        assert!(has_ctrl_or_alt(KeyModifiers::ALT));
+
+        #[cfg(windows)]
+        assert!(!has_ctrl_or_alt(KeyModifiers::CONTROL | KeyModifiers::ALT));
+        #[cfg(not(windows))]
+        assert!(has_ctrl_or_alt(KeyModifiers::CONTROL | KeyModifiers::ALT));
+    }
 }

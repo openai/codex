@@ -25,6 +25,21 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub use crate::tui_keymap::KeybindingSpec;
+pub use crate::tui_keymap::KeybindingsSpec;
+pub use crate::tui_keymap::TuiApprovalKeymap;
+pub use crate::tui_keymap::TuiChatKeymap;
+pub use crate::tui_keymap::TuiComposerKeymap;
+pub use crate::tui_keymap::TuiEditorKeymap;
+pub use crate::tui_keymap::TuiGlobalKeymap;
+pub use crate::tui_keymap::TuiKeymap;
+pub use crate::tui_keymap::TuiKeymapPreset;
+pub use crate::tui_keymap::TuiListKeymap;
+pub use crate::tui_keymap::TuiOnboardingKeymap;
+pub use crate::tui_keymap::TuiPagerKeymap;
+pub use crate::tui_keymap::TuiVimNormalKeymap;
+pub use crate::tui_keymap::TuiVimOperatorKeymap;
+
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
@@ -535,6 +550,11 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Start the composer in Vim mode (`Normal`) by default.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub vim_mode_default: bool,
+
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
@@ -566,6 +586,13 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Keybinding overrides for the TUI.
+    ///
+    /// This supports rebinding selected actions globally and by context.
+    /// Context bindings take precedence over `global` bindings.
+    #[serde(default)]
+    pub keymap: TuiKeymap,
 
     /// Startup tooltip availability NUX state persisted by the TUI.
     #[serde(default)]
