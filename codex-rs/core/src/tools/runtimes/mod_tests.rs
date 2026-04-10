@@ -1,7 +1,7 @@
 use super::*;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
-use codex_network_proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
+use codex_network_proxy::MANAGED_PROXY_ENV_ACTIVE_ENV_KEY;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::process::Command;
@@ -353,7 +353,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_managed_proxy_env_from_process_env
     );
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
-        .env(ALLOW_LOCAL_BINDING_ENV_KEY, "0")
+        .env(MANAGED_PROXY_ENV_ACTIVE_ENV_KEY, "0")
         .env("PIP_PROXY", "http://127.0.0.1:4321")
         .env("HTTP_PROXY", "http://127.0.0.1:4321")
         .env("http_proxy", "http://127.0.0.1:4321")
@@ -367,8 +367,55 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_managed_proxy_env_from_process_env
         "http://127.0.0.1:4321\n\
          http://127.0.0.1:4321\n\
          http://127.0.0.1:4321\n\
-         ssh -o ProxyCommand=fresh"
+         ssh -o ProxyCommand=stale"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_refreshes_managed_git_ssh_command() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    let stale_command = format!(
+        "{MANAGED_GIT_SSH_COMMAND_MARKER}ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+    );
+    let fresh_command = format!(
+        "{MANAGED_GIT_SSH_COMMAND_MARKER}ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:48081 %h %p'"
+    );
+    std::fs::write(
+        &snapshot_path,
+        format!(
+            "# Snapshot file\nexport {MANAGED_GIT_SSH_COMMAND_ENV_KEY}='{}'\n",
+            shell_single_quote(&stale_command)
+        ),
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        format!("printf '%s' \"${MANAGED_GIT_SSH_COMMAND_ENV_KEY}\""),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env(MANAGED_GIT_SSH_COMMAND_ENV_KEY, &fresh_command)
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), fresh_command);
 }
 
 #[test]

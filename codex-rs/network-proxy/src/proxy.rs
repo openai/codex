@@ -364,12 +364,12 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
 
 pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
+pub const MANAGED_PROXY_ENV_ACTIVE_ENV_KEY: &str = ALLOW_LOCAL_BINDING_ENV_KEY;
 const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
 pub const MANAGED_PROXY_ENV_KEYS: &[&str] = &[
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
-    GIT_SSH_COMMAND_ENV_KEY,
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "http_proxy",
@@ -403,6 +403,9 @@ pub const MANAGED_PROXY_ENV_KEYS: &[&str] = &[
     "ftp_proxy",
 ];
 
+#[cfg(target_os = "macos")]
+pub const MANAGED_GIT_SSH_COMMAND_ENV_KEY: &str = GIT_SSH_COMMAND_ENV_KEY;
+
 const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
 const WEBSOCKET_PROXY_ENV_KEYS: &[&str] = &["WS_PROXY", "WSS_PROXY", "ws_proxy", "wss_proxy"];
 
@@ -422,7 +425,10 @@ pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
 );
 
 #[cfg(target_os = "macos")]
-const MANAGED_GIT_SSH_COMMAND_PREFIX: &str = "ssh -o ProxyCommand='nc -X 5 -x ";
+pub const MANAGED_GIT_SSH_COMMAND_MARKER: &str = "CODEX_MANAGED_GIT_SSH_COMMAND=1 ";
+#[cfg(target_os = "macos")]
+const MANAGED_GIT_SSH_COMMAND_PREFIX: &str =
+    "CODEX_MANAGED_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x ";
 #[cfg(target_os = "macos")]
 const MANAGED_GIT_SSH_COMMAND_SUFFIX: &str = " %h %p'";
 
@@ -1000,14 +1006,17 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(
             env.get(GIT_SSH_COMMAND_ENV_KEY),
-            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+            Some(
+                &"CODEX_MANAGED_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+                    .to_string()
+            )
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(env.get(GIT_SSH_COMMAND_ENV_KEY), None);
     }
 
     #[test]
-    fn apply_proxy_env_overrides_sets_only_managed_proxy_env_keys() {
+    fn apply_proxy_env_overrides_sets_only_expected_env_keys() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(
             &mut env,
@@ -1018,9 +1027,11 @@ mod tests {
         );
 
         for key in env.keys() {
+            let is_managed_git_ssh_key =
+                cfg!(target_os = "macos") && key == GIT_SSH_COMMAND_ENV_KEY;
             assert!(
-                MANAGED_PROXY_ENV_KEYS.contains(&key.as_str()),
-                "proxy env writer set key missing from MANAGED_PROXY_ENV_KEYS: {key}"
+                MANAGED_PROXY_ENV_KEYS.contains(&key.as_str()) || is_managed_git_ssh_key,
+                "proxy env writer set unexpected key: {key}"
             );
         }
     }
@@ -1077,7 +1088,10 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(
             env.get(GIT_SSH_COMMAND_ENV_KEY),
-            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+            Some(
+                &"CODEX_MANAGED_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+                    .to_string()
+            )
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(env.get(GIT_SSH_COMMAND_ENV_KEY), None);
@@ -1102,6 +1116,28 @@ mod tests {
         assert_eq!(
             env.get(GIT_SSH_COMMAND_ENV_KEY),
             Some(&"ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apply_proxy_env_overrides_preserves_unmarked_git_ssh_command_with_proxy_shape() {
+        let mut env = HashMap::new();
+        env.insert(
+            GIT_SSH_COMMAND_ENV_KEY.to_string(),
+            "ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string(),
+        );
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 48081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+        );
+
+        assert_eq!(
+            env.get(GIT_SSH_COMMAND_ENV_KEY),
+            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
         );
     }
 
