@@ -1,7 +1,9 @@
-//! Slash-command dispatch helpers for `ChatWidget`.
+//! Slash-command dispatch and local-recall handoff for `ChatWidget`.
 //!
-//! Keeping dispatch in a focused submodule makes slash-command
-//! behavior.
+//! `ChatComposer` parses slash input and stages recognized command text for local
+//! Up-arrow recall before returning an input result. This module owns the app-level
+//! dispatch step and records the staged entry once the command has been handled, so
+//! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
 
@@ -269,7 +271,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_rate_limit_refresh_request_id();
+                    let request_id = self.next_status_refresh_request_id;
+                    self.next_status_refresh_request_id =
+                        self.next_status_refresh_request_id.wrapping_add(1);
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
                     self.app_event_tx.send(AppEvent::RefreshRateLimits {
                         origin: RateLimitRefreshOrigin::StatusCommand { request_id },
@@ -392,7 +396,18 @@ impl ChatWidget {
                     self.dispatch_command(cmd);
                     return;
                 }
-                match trimmed.to_ascii_lowercase().as_str() {
+                let prepared_args = if self.bottom_pane.composer_text().is_empty() {
+                    args
+                } else {
+                    let Some((prepared_args, _prepared_elements)) = self
+                        .bottom_pane
+                        .prepare_inline_args_submission(/*record_history*/ false)
+                    else {
+                        return;
+                    };
+                    prepared_args
+                };
+                match prepared_args.trim().to_ascii_lowercase().as_str() {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
                     "off" => self.set_service_tier_selection(/*service_tier*/ None),
                     "status" => {

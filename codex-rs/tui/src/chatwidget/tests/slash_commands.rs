@@ -131,6 +131,8 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 
     submit_composer_text(&mut chat, "/fast maybe");
 
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
         .iter()
