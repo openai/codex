@@ -6,6 +6,7 @@ use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::GuardianReviewEventParams;
 use crate::events::GuardianReviewEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
@@ -180,7 +181,7 @@ impl AnalyticsReducer {
 
     fn ingest_guardian_review(
         &mut self,
-        input: crate::facts::GuardianReviewEventParams,
+        input: GuardianReviewEventParams,
         out: &mut Vec<TrackEventRequest>,
     ) {
         out.push(TrackEventRequest::GuardianReview(Box::new(
