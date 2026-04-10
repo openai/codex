@@ -296,6 +296,10 @@ client_request_definitions! {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
     },
+    ThreadAddCreditsNudgeEmail => "thread/addCreditsNudgeEmail" {
+        params: v2::ThreadAddCreditsNudgeEmailParams,
+        response: v2::ThreadAddCreditsNudgeEmailResponse,
+    },
     #[experimental("thread/backgroundTerminals/clean")]
     ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
         params: v2::ThreadBackgroundTerminalsCleanParams,
@@ -388,6 +392,7 @@ client_request_definitions! {
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
+        inspect_params: true,
         response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {
@@ -990,6 +995,7 @@ server_notification_definitions! {
     McpServerStatusUpdated => "mcpServer/startupStatus/updated" (v2::McpServerStatusUpdatedNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
+    AddCreditsNudgeEmailCompleted => "account/addCreditsNudgeEmail/completed" (v2::AddCreditsNudgeEmailNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
     FsChanged => "fs/changed" (v2::FsChangedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),

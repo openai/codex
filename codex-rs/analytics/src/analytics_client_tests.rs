@@ -454,6 +454,7 @@ fn subagent_thread_started_review_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-review".to_string(),
+            parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -496,6 +497,7 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-spawn".to_string(),
+            parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -526,6 +528,7 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-memory".to_string(),
+            parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -550,6 +553,7 @@ fn subagent_thread_started_other_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             thread_id: "thread-guardian".to_string(),
+            parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -562,6 +566,31 @@ fn subagent_thread_started_other_serializes_expected_shape() {
 
     let payload = serde_json::to_value(&event).expect("serialize other subagent event");
     assert_eq!(payload["event_params"]["subagent_source"], "guardian");
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+}
+
+#[test]
+fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
+    let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
+        SubAgentThreadStartedInput {
+            thread_id: "thread-guardian".to_string(),
+            parent_thread_id: Some("parent-thread-guardian".to_string()),
+            product_client_id: "codex-tui".to_string(),
+            client_name: "codex-tui".to_string(),
+            client_version: "1.0.0".to_string(),
+            model: "gpt-5".to_string(),
+            ephemeral: false,
+            subagent_source: SubAgentSource::Other("guardian".to_string()),
+            created_at: 126,
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize guardian subagent event");
+    assert_eq!(payload["event_params"]["subagent_source"], "guardian");
+    assert_eq!(
+        payload["event_params"]["parent_thread_id"],
+        "parent-thread-guardian"
+    );
 }
 
 #[tokio::test]
@@ -574,6 +603,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
                 SubAgentThreadStartedInput {
                     thread_id: "thread-review".to_string(),
+                    parent_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
                     client_name: "codex-tui".to_string(),
                     client_version: "1.0.0".to_string(),

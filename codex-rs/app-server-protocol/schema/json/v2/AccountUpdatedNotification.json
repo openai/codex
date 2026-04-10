@@ -42,6 +42,14 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "WorkspaceRole": {
+      "enum": [
+        "account-owner",
+        "account-admin",
+        "standard-user"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -55,10 +63,26 @@
         }
       ]
     },
+    "isWorkspaceOwner": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "planType": {
       "anyOf": [
         {
           "$ref": "#/definitions/PlanType"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workspaceRole": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/WorkspaceRole"
         },
         {
           "type": "null"

@@ -41,6 +41,7 @@ tokio = { workspace = true, features = [
 ] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

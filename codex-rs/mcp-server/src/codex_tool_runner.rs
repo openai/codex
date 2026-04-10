@@ -114,6 +114,7 @@ pub async fn run_codex_tool_session(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         },
         trace: None,
     };
@@ -161,6 +162,7 @@ pub async fn run_codex_tool_session_reply(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
     {
@@ -337,6 +339,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::McpToolCallEnd(_)
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListSkillsResponse(_)
+                    | EventMsg::AddCreditsNudgeEmailResponse(_)
                     | EventMsg::RealtimeConversationListVoicesResponse(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::TerminalInteraction(_)

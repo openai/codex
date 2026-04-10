@@ -102,7 +102,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
             &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
         ),
         network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
-        windows_restricted_token_filesystem_overlay: None,
+        windows_sandbox_filesystem_overrides: None,
         arg0: None,
     };
 

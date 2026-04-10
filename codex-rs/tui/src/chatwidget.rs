@@ -67,6 +67,7 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::AddCreditsNudgeEmailResult as AppServerAddCreditsNudgeEmailResult;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
@@ -91,6 +92,7 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WorkspaceRole as AppServerWorkspaceRole;
 use codex_chatgpt::connectors;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
@@ -133,6 +135,7 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
 #[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 #[cfg(test)]
@@ -191,6 +194,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::SpendControlSnapshot;
 #[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -317,7 +321,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
-use crate::clipboard_text;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -556,6 +559,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) initial_workspace_role: Option<AppServerWorkspaceRole>,
+    pub(crate) initial_is_workspace_owner: Option<bool>,
     pub(crate) initial_plan_type: Option<PlanType>,
     pub(crate) model: Option<String>,
     pub(crate) startup_tooltip_override: Option<String>,
@@ -600,6 +605,32 @@ enum RateLimitErrorKind {
     ServerOverloaded,
     UsageLimit,
     Generic,
+}
+
+pub(crate) const CODEX_USAGE_SETTINGS_URL: &str = "https://chatgpt.com/codex/settings/usage";
+const WORKSPACE_OWNER_NOTIFICATION_PROMPT: &str =
+    "Your workspace is out of credits. Request more from your workspace owner? [y/N]";
+const WORKSPACE_OWNER_NOTIFICATION_TITLE: &str = "Request more credits from your workspace owner?";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UsageBasedWorkspaceRateLimitState {
+    OwnerCreditsDepleted,
+    OwnerSpendCapReached,
+    MemberCreditsDepleted,
+    MemberSpendCapReached,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UsageBasedWorkspaceBlockKind {
+    CreditsDepleted,
+    SpendCapReached,
+}
+
+fn is_usage_based_workspace_plan(plan_type: PlanType) -> bool {
+    matches!(
+        plan_type,
+        PlanType::SelfServeBusinessUsageBased | PlanType::EnterpriseCbpUsageBased
+    )
 }
 
 #[cfg(test)]
@@ -757,6 +788,8 @@ pub(crate) struct ChatWidget {
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     has_chatgpt_account: bool,
+    workspace_role: Option<AppServerWorkspaceRole>,
+    is_workspace_owner: Option<bool>,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
@@ -767,6 +800,8 @@ pub(crate) struct ChatWidget {
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
+    notify_workspace_owner_in_flight: bool,
+    pending_workspace_owner_notification_prompt: bool,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     adaptive_chunking: AdaptiveChunkingPolicy,
@@ -774,11 +809,22 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
-    // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
-    last_copyable_output: Option<String>,
-    // Latest agent message observed during the active turn. App-server turn completion
-    // notifications do not repeat this payload, so we promote it when the turn completes.
-    pending_turn_copyable_output: Option<String>,
+    /// Holds the platform clipboard lease so copied text remains available while supported.
+    clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    /// Raw markdown of the most recently completed agent response.
+    ///
+    /// This cache is intentionally best-effort: if the user rolls back the
+    /// thread and then copies before a replacement response arrives, `/copy`
+    /// may still return the response from before the rollback. Keeping this as
+    /// a single cache avoids coupling copy state to the backtrack transcript.
+    last_agent_markdown: Option<String>,
+    /// Whether this turn already produced a copyable response.
+    ///
+    /// `TurnComplete.last_agent_message` is a fallback source: use it only when no earlier
+    /// agent/plan/review item recorded copyable markdown for the turn. This gives item-level
+    /// sources precedence and avoids duplicating the same final answer when both event shapes are
+    /// emitted.
+    saw_copy_source_this_turn: bool,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
@@ -1929,8 +1975,19 @@ impl ChatWidget {
         }
     }
 
+    /// Record or update the raw markdown for the current agent turn.
+    fn record_agent_markdown(&mut self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        self.last_agent_markdown = Some(message.to_string());
+        self.saw_copy_source_this_turn = true;
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        self.last_agent_markdown = None;
+        self.saw_copy_source_this_turn = false;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(/*skills*/ None);
@@ -1968,8 +2025,6 @@ impl ChatWidget {
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
-        self.last_copyable_output = None;
-        self.pending_turn_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -2007,6 +2062,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+        self.saw_copy_source_this_turn = false;
         self.submit_op(AppCommand::list_skills(
             Vec::new(),
             /*force_reload*/ true,
@@ -2161,6 +2217,16 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(Some(&message));
     }
 
+    fn on_context_compacted(&mut self) {
+        self.flush_answer_stream_with_separator();
+        self.handle_stream_finished();
+        self.add_to_history(history_cell::new_info_event(
+            "Context compacted".to_owned(),
+            /*hint*/ None,
+        ));
+        self.request_redraw();
+    }
+
     fn on_agent_message_delta(&mut self, delta: String) {
         self.handle_streaming_delta(delta);
     }
@@ -2201,7 +2267,7 @@ impl ChatWidget {
             text
         };
         if !plan_text.trim().is_empty() {
-            self.last_copyable_output = Some(plan_text.clone());
+            self.record_agent_markdown(&plan_text);
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
@@ -2278,6 +2344,7 @@ impl ChatWidget {
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
+        self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.last_plan_progress = None;
@@ -2285,7 +2352,6 @@ impl ChatWidget {
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
-        self.pending_turn_copyable_output = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
@@ -2305,12 +2371,32 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
-        let copyable_turn_output = last_agent_message
-            .filter(|message| !message.trim().is_empty())
-            .or_else(|| self.pending_turn_copyable_output.take());
-        if let Some(message) = copyable_turn_output.as_ref() {
-            self.last_copyable_output = Some(message.clone());
+        // Use `last_agent_message` from the turn-complete notification as the copy
+        // source only when no earlier item-level event (AgentMessageItem, plan
+        // commit, review output) already recorded markdown for this turn. This
+        // prevents the final summary from overwriting a more specific source.
+        if let Some(message) = last_agent_message
+            .as_ref()
+            .filter(|message| !message.is_empty())
+            && !self.saw_copy_source_this_turn
+        {
+            self.record_agent_markdown(message);
         }
+        // For desktop notifications: prefer the notification payload, fall back to
+        // the item-level copy source if present, otherwise send an empty string.
+        let notification_response = last_agent_message
+            .as_ref()
+            .filter(|message| !message.is_empty())
+            .cloned()
+            .or_else(|| {
+                if self.saw_copy_source_this_turn {
+                    self.last_agent_markdown.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        self.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -2370,7 +2456,7 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
-            response: copyable_turn_output.unwrap_or_default(),
+            response: notification_response,
         });
 
         self.maybe_show_pending_rate_limit_prompt();
@@ -2627,6 +2713,15 @@ impl ChatWidget {
                         balance: credits.balance.clone(),
                     });
             }
+            if snapshot.spend_control.is_none() {
+                snapshot.spend_control = self
+                    .rate_limit_snapshots_by_limit_id
+                    .get(&limit_id)
+                    .and_then(|display| display.spend_control.as_ref())
+                    .map(|spend_control| SpendControlSnapshot {
+                        reached: spend_control.reached,
+                    });
+            }
 
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
@@ -2695,6 +2790,7 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
         }
+        self.maybe_show_pending_workspace_owner_notification_prompt();
         self.refresh_status_line();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
@@ -2716,7 +2812,6 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
-        self.pending_turn_copyable_output = None;
         self.pending_status_indicator_restore = false;
         self.request_status_line_branch_refresh();
         self.maybe_show_pending_rate_limit_prompt();
@@ -2738,13 +2833,32 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.on_error_with_hint(message, /*hint*/ None);
+    }
+
+    fn on_error_with_hint(&mut self, message: String, hint: Option<String>) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        self.add_to_history(history_cell::new_error_event(message));
+        self.add_to_history(history_cell::new_error_event_with_hint(message, hint));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    fn on_rate_limit_error(&mut self, message: String) {
+        if self.should_prefetch_rate_limits() {
+            self.request_rate_limit_refresh();
+        }
+        let guidance = self.usage_based_workspace_rate_limit_error_guidance();
+        let should_prompt_workspace_owner = self.should_prompt_workspace_owner_notification();
+        let hint = guidance.as_ref().and_then(|(_, hint)| hint.clone());
+        let message = guidance.map(|(message, _)| message).unwrap_or(message);
+        self.on_error_with_hint(message, hint);
+        if should_prompt_workspace_owner {
+            self.pending_workspace_owner_notification_prompt = true;
+            self.maybe_show_pending_workspace_owner_notification_prompt();
+        }
     }
 
     fn handle_non_retry_error(
@@ -2763,7 +2877,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.on_error(message)
+                    self.on_rate_limit_error(message);
                 }
             }
         } else {
@@ -4044,8 +4158,8 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
         );
-        if self.agent_turn_running && !message.is_empty() {
-            self.pending_turn_copyable_output = Some(message.clone());
+        if matches!(item.phase, Some(MessagePhase::FinalAnswer) | None) && !message.is_empty() {
+            self.record_agent_markdown(&message);
         }
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -4563,6 +4677,8 @@ impl ChatWidget {
             feedback,
             is_first_run,
             status_account_display,
+            initial_workspace_role,
+            initial_is_workspace_owner,
             initial_plan_type,
             model,
             startup_tooltip_override,
@@ -4624,6 +4740,8 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
+            workspace_role: initial_workspace_role,
+            is_workspace_owner: initial_is_workspace_owner,
             model_catalog,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
@@ -4634,12 +4752,14 @@ impl ChatWidget {
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
+            notify_workspace_owner_in_flight: false,
+            pending_workspace_owner_notification_prompt: false,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
-            last_copyable_output: None,
+            clipboard_lease: None,
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
@@ -4651,7 +4771,8 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
-            pending_turn_copyable_output: None,
+            last_agent_markdown: None,
+            saw_copy_source_this_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
@@ -4759,6 +4880,19 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            // Ctrl+O - copy last agent response from the main view.
+            KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                self.copy_last_agent_markdown();
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -4993,6 +5127,41 @@ impl ChatWidget {
         false
     }
 
+    /// Copy the last agent response (raw markdown) to the system clipboard.
+    pub(crate) fn copy_last_agent_markdown(&mut self) {
+        self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    /// Inner implementation with an injectable clipboard backend for testing.
+    fn copy_last_agent_markdown_with(
+        &mut self,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match self.last_agent_markdown.clone() {
+            Some(markdown) if !markdown.is_empty() => match copy_fn(&markdown) {
+                Ok(lease) => {
+                    self.clipboard_lease = lease;
+                    self.add_to_history(history_cell::new_info_event(
+                        "Copied last message to clipboard".into(),
+                        /*hint*/ None,
+                    ));
+                }
+                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                    "Copy failed: {error}"
+                ))),
+            },
+            _ => self.add_to_history(history_cell::new_error_event(
+                "No agent response to copy".into(),
+            )),
+        }
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_agent_markdown_text(&self) -> Option<&str> {
+        self.last_agent_markdown.as_deref()
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -5196,6 +5365,9 @@ impl ChatWidget {
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
             // }
+            SlashCommand::Copy => {
+                self.copy_last_agent_markdown();
+            }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
@@ -5213,34 +5385,6 @@ impl ChatWidget {
                     tx.send(AppEvent::DiffResult(text));
                 });
             }
-            SlashCommand::Copy => {
-                let Some(text) = self.last_copyable_output.as_deref() else {
-                    self.add_info_message(
-                        "`/copy` is unavailable before the first Codex output or right after a rollback."
-                            .to_string(),
-                        /*hint*/ None,
-                    );
-                    return;
-                };
-
-                let copy_result = clipboard_text::copy_text_to_clipboard(text);
-
-                match copy_result {
-                    Ok(()) => {
-                        let hint = self.agent_turn_running.then_some(
-                            "Current turn is still running; copied the latest completed output (not the in-progress response)."
-                                .to_string(),
-                        );
-                        self.add_info_message(
-                            "Copied latest Codex output to clipboard.".to_string(),
-                            hint,
-                        );
-                    }
-                    Err(err) => {
-                        self.add_error_message(format!("Failed to copy to clipboard: {err}"))
-                    }
-                }
-            }
             SlashCommand::Mention => {
                 self.insert_str("@");
             }
@@ -5249,9 +5393,7 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_status_refresh_request_id;
-                    self.next_status_refresh_request_id =
-                        self.next_status_refresh_request_id.wrapping_add(1);
+                    let request_id = self.next_rate_limit_refresh_request_id();
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
                     self.app_event_tx.send(AppEvent::RefreshRateLimits {
                         origin: RateLimitRefreshOrigin::StatusCommand { request_id },
@@ -6510,6 +6652,18 @@ impl ChatWidget {
                     );
                 }
             }
+            ServerNotification::AddCreditsNudgeEmailCompleted(notification) => {
+                let result = match notification.result {
+                    AppServerAddCreditsNudgeEmailResult::Sent => {
+                        Ok(AddCreditsNudgeEmailStatus::Sent)
+                    }
+                    AppServerAddCreditsNudgeEmailResult::CooldownActive => {
+                        Ok(AddCreditsNudgeEmailStatus::CooldownActive)
+                    }
+                    AppServerAddCreditsNudgeEmailResult::Failed { message } => Err(message),
+                };
+                self.finish_notify_workspace_owner(result);
+            }
             ServerNotification::ThreadRealtimeSdp(notification) => {
                 if !from_replay {
                     self.on_realtime_conversation_sdp(notification.sdp);
@@ -6528,23 +6682,18 @@ impl ChatWidget {
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::FsChanged(_)
-            | ServerNotification::ContextCompacted(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
             | ServerNotification::ThreadRealtimeTranscriptUpdated(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
+            ServerNotification::ContextCompacted(_) => self.on_context_compacted(),
         }
     }
 
     pub(crate) fn handle_skills_list_response(&mut self, response: ListSkillsResponseEvent) {
         self.on_list_skills(response);
-    }
-
-    pub(crate) fn handle_thread_rolled_back(&mut self) {
-        self.last_copyable_output = None;
-        self.pending_turn_copyable_output = None;
     }
 
     fn on_mcp_server_elicitation_request(
@@ -6846,18 +6995,34 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { .. })
+            // NOTE: All three AgentMessage arms feed `record_agent_markdown` even
+            // when the message is otherwise not rendered (thread-snapshot replay,
+            // non-review live messages). This ensures the copy source stays
+            // populated across replay, resume, and live paths.
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
-                    && !self.is_review_mode => {}
+                    && !self.is_review_mode =>
+            {
+                if !message.is_empty() {
+                    self.record_agent_markdown(&message);
+                }
+            }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if from_replay || self.is_review_mode =>
             {
+                if !message.is_empty() {
+                    self.record_agent_markdown(&message);
+                }
                 // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
                 // including thread-snapshot replay, and forward
                 // ItemCompleted(TurnItem::AgentMessage(_)) instead.
                 self.on_agent_message(message)
             }
-            EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                if !message.is_empty() {
+                    self.record_agent_markdown(&message);
+                }
+            }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -6907,7 +7072,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.on_rate_limit_error(message)
                         }
                     }
                 } else {
@@ -6963,6 +7128,9 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::AddCreditsNudgeEmailResponse(ev) => {
+                self.finish_notify_workspace_owner(ev.result);
+            }
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
                     Vec::new(),
@@ -6995,7 +7163,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => self.on_context_compacted(),
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -7027,11 +7195,6 @@ impl ChatWidget {
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
-                // Conservatively clear `/copy` state on rollback. The app layer trims visible
-                // transcript cells, but we do not maintain rollback-aware raw-markdown history yet,
-                // so keeping the previous cache can return content that was just removed.
-                self.last_copyable_output = None;
-                self.pending_turn_copyable_output = None;
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
                         num_turns: rollback.num_turns,
@@ -7156,6 +7319,8 @@ impl ChatWidget {
     #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         if let Some(output) = review.review_output {
+            let review_markdown = codex_core::review_format::render_review_output_text(&output);
+            self.record_agent_markdown(&review_markdown);
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
             self.flush_active_cell();
@@ -9505,19 +9670,268 @@ impl ChatWidget {
         self.plan_type
     }
 
+    pub(crate) fn current_is_workspace_owner(&self) -> Option<bool> {
+        self.workspace_role
+            .map(|role| {
+                matches!(
+                    role,
+                    AppServerWorkspaceRole::AccountOwner | AppServerWorkspaceRole::AccountAdmin
+                )
+            })
+            .or(self.is_workspace_owner)
+    }
+
+    pub(crate) fn current_workspace_role(&self) -> Option<AppServerWorkspaceRole> {
+        self.workspace_role
+    }
+
     pub(crate) fn has_chatgpt_account(&self) -> bool {
         self.has_chatgpt_account
+    }
+
+    fn usage_based_workspace_rate_limit_state(&self) -> Option<UsageBasedWorkspaceRateLimitState> {
+        let block_kind = self.usage_based_workspace_block_kind()?;
+        let is_workspace_owner = self.current_is_workspace_owner()?;
+        Some(match (is_workspace_owner, block_kind) {
+            (true, UsageBasedWorkspaceBlockKind::CreditsDepleted) => {
+                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted
+            }
+            (true, UsageBasedWorkspaceBlockKind::SpendCapReached) => {
+                UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached
+            }
+            (false, UsageBasedWorkspaceBlockKind::CreditsDepleted) => {
+                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted
+            }
+            (false, UsageBasedWorkspaceBlockKind::SpendCapReached) => {
+                UsageBasedWorkspaceRateLimitState::MemberSpendCapReached
+            }
+        })
+    }
+
+    fn usage_based_workspace_block_kind(&self) -> Option<UsageBasedWorkspaceBlockKind> {
+        let plan_type = self.plan_type?;
+        if !is_usage_based_workspace_plan(plan_type) {
+            return None;
+        }
+
+        let codex_snapshot = self.rate_limit_snapshots_by_limit_id.get("codex")?;
+        let credits_depleted = codex_snapshot
+            .credits
+            .as_ref()
+            .is_some_and(|credits| !credits.has_credits);
+        let spend_control_reached = codex_snapshot
+            .spend_control
+            .as_ref()
+            .map(|spend_control| spend_control.reached);
+
+        let blocked_state = match (credits_depleted, spend_control_reached) {
+            (true, _) => Some(true),
+            (false, Some(true)) => Some(false),
+            (false, Some(false)) => None,
+            // Older snapshots do not carry spend-control state, so preserve the
+            // historical interpretation for compatibility.
+            (false, None) => Some(false),
+        }?;
+
+        Some(match blocked_state {
+            true => UsageBasedWorkspaceBlockKind::CreditsDepleted,
+            false => UsageBasedWorkspaceBlockKind::SpendCapReached,
+        })
+    }
+
+    fn usage_based_workspace_rate_limit_error_guidance(&self) -> Option<(String, Option<String>)> {
+        if let Some(state) = self.usage_based_workspace_rate_limit_state() {
+            return match state {
+                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted => Some((
+                    "Your workspace is out of credits.".to_string(),
+                    Some(format!(
+                        "Visit {CODEX_USAGE_SETTINGS_URL} to add workspace credits and continue using Codex."
+                    )),
+                )),
+                UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached => Some((
+                    "Your workspace has reached its spend cap.".to_string(),
+                    Some(format!(
+                        "Visit {CODEX_USAGE_SETTINGS_URL} to increase your workspace spend cap and continue using Codex."
+                    )),
+                )),
+                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => {
+                    Some((WORKSPACE_OWNER_NOTIFICATION_PROMPT.to_string(), None))
+                }
+                UsageBasedWorkspaceRateLimitState::MemberSpendCapReached => Some((
+                    "Your workspace has reached its spend cap.".to_string(),
+                    Some(format!(
+                        "Ask an admin to increase your workspace spend cap. Visit {CODEX_USAGE_SETTINGS_URL} for usage settings."
+                    )),
+                )),
+            };
+        }
+
+        match self.usage_based_workspace_block_kind()? {
+            UsageBasedWorkspaceBlockKind::CreditsDepleted => Some((
+                "Your workspace is out of credits.".to_string(),
+                Some(format!(
+                    "If you're the workspace owner, visit {CODEX_USAGE_SETTINGS_URL} to add credits. Otherwise wait a moment while Codex refreshes your workspace status."
+                )),
+            )),
+            UsageBasedWorkspaceBlockKind::SpendCapReached => Some((
+                "Your workspace has reached its spend cap.".to_string(),
+                Some(format!(
+                    "Ask an admin to increase the workspace spend cap, or visit {CODEX_USAGE_SETTINGS_URL} for usage settings."
+                )),
+            )),
+        }
+    }
+
+    fn next_rate_limit_refresh_request_id(&mut self) -> u64 {
+        let request_id = self.next_status_refresh_request_id;
+        self.next_status_refresh_request_id = self.next_status_refresh_request_id.wrapping_add(1);
+        request_id
+    }
+
+    fn send_rate_limit_refresh_request(&self, request_id: u64) {
+        self.app_event_tx.send(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        });
+    }
+
+    fn request_rate_limit_refresh(&mut self) -> u64 {
+        let request_id = self.next_rate_limit_refresh_request_id();
+        self.send_rate_limit_refresh_request(request_id);
+        request_id
+    }
+
+    fn missing_usage_based_workspace_rate_limit_snapshot(&self) -> bool {
+        self.should_prefetch_rate_limits()
+            && self.plan_type.is_some()
+            && !self.rate_limit_snapshots_by_limit_id.contains_key("codex")
+    }
+
+    fn should_prompt_workspace_owner_notification(&self) -> bool {
+        if self.notify_workspace_owner_in_flight {
+            return false;
+        }
+
+        if matches!(
+            self.usage_based_workspace_rate_limit_state(),
+            Some(UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted)
+        ) {
+            return true;
+        }
+
+        let is_workspace_owner = self.current_is_workspace_owner();
+        if !self.plan_type.is_some_and(is_usage_based_workspace_plan)
+            || is_workspace_owner == Some(true)
+        {
+            return false;
+        }
+
+        let block_kind = self.usage_based_workspace_block_kind();
+        block_kind != Some(UsageBasedWorkspaceBlockKind::SpendCapReached)
+    }
+
+    fn maybe_show_pending_workspace_owner_notification_prompt(&mut self) {
+        if !self.pending_workspace_owner_notification_prompt {
+            return;
+        }
+        if self.notify_workspace_owner_in_flight {
+            self.pending_workspace_owner_notification_prompt = false;
+            return;
+        }
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return;
+        }
+
+        match self.usage_based_workspace_rate_limit_state() {
+            Some(UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted) => {
+                self.pending_workspace_owner_notification_prompt = false;
+                self.open_workspace_owner_notification_prompt();
+            }
+            Some(_) => {
+                self.pending_workspace_owner_notification_prompt = false;
+            }
+            None => {
+                if self.usage_based_workspace_block_kind()
+                    == Some(UsageBasedWorkspaceBlockKind::CreditsDepleted)
+                    && self.current_is_workspace_owner().is_none()
+                {
+                    return;
+                }
+                if !self.missing_usage_based_workspace_rate_limit_snapshot() {
+                    self.pending_workspace_owner_notification_prompt = false;
+                }
+            }
+        }
+    }
+
+    fn open_workspace_owner_notification_prompt(&mut self) {
+        let items = vec![
+            SelectionItem {
+                name: "Yes".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('y'))),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::NotifyWorkspaceOwner))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "No".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('n'))),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(WORKSPACE_OWNER_NOTIFICATION_TITLE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: Some(1),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn start_notify_workspace_owner(&mut self) {
+        self.notify_workspace_owner_in_flight = true;
+        self.pending_workspace_owner_notification_prompt = false;
+    }
+
+    pub(crate) fn finish_notify_workspace_owner(
+        &mut self,
+        result: Result<AddCreditsNudgeEmailStatus, String>,
+    ) {
+        self.notify_workspace_owner_in_flight = false;
+        self.pending_workspace_owner_notification_prompt = false;
+        match result {
+            Ok(AddCreditsNudgeEmailStatus::Sent) => {
+                self.add_info_message("Workspace owner notified.".to_string(), /*hint*/ None);
+            }
+            Ok(AddCreditsNudgeEmailStatus::CooldownActive) => {
+                self.add_info_message(
+                    "Workspace owner was already notified recently.".to_string(),
+                    /*hint*/ None,
+                );
+            }
+            Err(_) => {
+                self.add_error_message(
+                    "Could not notify your workspace owner. Please try again.".to_string(),
+                );
+            }
+        }
     }
 
     pub(crate) fn update_account_state(
         &mut self,
         status_account_display: Option<StatusAccountDisplay>,
+        workspace_role: Option<AppServerWorkspaceRole>,
+        is_workspace_owner: Option<bool>,
         plan_type: Option<PlanType>,
         has_chatgpt_account: bool,
     ) {
         self.status_account_display = status_account_display;
+        self.workspace_role = workspace_role;
+        self.is_workspace_owner = is_workspace_owner;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
+        self.maybe_show_pending_workspace_owner_notification_prompt();
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
     }

@@ -47,11 +47,15 @@ impl From<Vec<u8>> for ByteChunk {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
     pub client_name: String,
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {}
+pub struct InitializeResponse {
+    pub session_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

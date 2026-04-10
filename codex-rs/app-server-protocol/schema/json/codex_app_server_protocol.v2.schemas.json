@@ -100,6 +100,12 @@
             }
           ]
         },
+        "isWorkspaceOwner": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "planType": {
           "anyOf": [
             {
@@ -109,10 +115,91 @@
               "type": "null"
             }
           ]
+        },
+        "workspaceRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "title": "AccountUpdatedNotification",
       "type": "object"
+    },
+    "AddCreditsNudgeEmailNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailResult"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "threadId"
+      ],
+      "title": "AddCreditsNudgeEmailNotification",
+      "type": "object"
+    },
+    "AddCreditsNudgeEmailResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "sent"
+              ],
+              "title": "SentAddCreditsNudgeEmailResultStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "SentAddCreditsNudgeEmailResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "cooldownActive"
+              ],
+              "title": "CooldownActiveAddCreditsNudgeEmailResultStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "CooldownActiveAddCreditsNudgeEmailResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "AgentMessageDeltaNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1055,6 +1142,30 @@
             "params"
           ],
           "title": "Thread/shellCommandRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/addCreditsNudgeEmail"
+              ],
+              "title": "Thread/addCreditsNudgeEmailRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadAddCreditsNudgeEmailParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/addCreditsNudgeEmailRequest",
           "type": "object"
         },
         {
@@ -4770,8 +4881,24 @@
             }
           ]
         },
+        "isWorkspaceOwner": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "requiresOpenaiAuth": {
           "type": "boolean"
+        },
+        "workspaceRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -7199,6 +7326,16 @@
               "type": "null"
             }
           ]
+        },
+        "spendControl": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -9212,6 +9349,26 @@
           "properties": {
             "method": {
               "enum": [
+                "account/addCreditsNudgeEmail/completed"
+              ],
+              "title": "Account/addCreditsNudgeEmail/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AddCreditsNudgeEmailNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Account/addCreditsNudgeEmail/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "app/list/updated"
               ],
               "title": "App/list/updatedNotificationMethod",
@@ -10074,6 +10231,17 @@
       "title": "SkillsListResponse",
       "type": "object"
     },
+    "SpendControlSnapshot": {
+      "properties": {
+        "reached": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reached"
+      ],
+      "type": "object"
+    },
     "SubAgentSource": {
       "oneOf": [
         {
@@ -10364,6 +10532,24 @@
         "waitingOnUserInput"
       ],
       "type": "string"
+    },
+    "ThreadAddCreditsNudgeEmailParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadAddCreditsNudgeEmailParams",
+      "type": "object"
+    },
+    "ThreadAddCreditsNudgeEmailResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadAddCreditsNudgeEmailResponse",
+      "type": "object"
     },
     "ThreadArchiveParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13272,6 +13458,14 @@
       ],
       "title": "WindowsWorldWritableWarningNotification",
       "type": "object"
+    },
+    "WorkspaceRole": {
+      "enum": [
+        "account-owner",
+        "account-admin",
+        "standard-user"
+      ],
+      "type": "string"
     },
     "WriteStatus": {
       "enum": [

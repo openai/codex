@@ -689,7 +689,12 @@ mod phase2 {
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
         subagent.codex.session.ensure_rollout_materialized().await;
-        subagent.codex.session.flush_rollout().await;
+        subagent
+            .codex
+            .session
+            .flush_rollout()
+            .await
+            .expect("subagent rollout should flush");
         let rollout_path = subagent
             .rollout_path()
             .expect("consolidation thread should have a rollout path");

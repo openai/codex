@@ -64,6 +64,17 @@ impl ExecServerHarness {
         &self.websocket_url
     }
 
+    pub(crate) async fn disconnect_websocket(&mut self) -> anyhow::Result<()> {
+        self.websocket.close(None).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn reconnect_websocket(&mut self) -> anyhow::Result<()> {
+        let (websocket, _) = connect_websocket_when_ready(&self.websocket_url).await?;
+        self.websocket = websocket;
+        Ok(())
+    }
+
     pub(crate) async fn send_request(
         &mut self,
         method: &str,

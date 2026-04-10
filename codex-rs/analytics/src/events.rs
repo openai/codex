@@ -249,7 +249,9 @@ pub(crate) fn subagent_thread_started_event_request(
         thread_source: Some("subagent"),
         initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
-        parent_thread_id: subagent_parent_thread_id(&input.subagent_source),
+        parent_thread_id: input
+            .parent_thread_id
+            .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
         created_at: input.created_at,
     };
     ThreadInitializedEvent {

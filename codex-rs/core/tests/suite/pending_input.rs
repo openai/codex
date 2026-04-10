@@ -100,6 +100,7 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap_or_else(|err| panic!("submit user input: {err}"));
@@ -136,6 +137,7 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
                 text_elements: Vec::new(),
             }],
             /*expected_turn_id*/ None,
+            /*responsesapi_client_metadata*/ None,
         )
         .await
         .unwrap_or_else(|err| panic!("steer user input: {err:?}"));
@@ -267,6 +269,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();
@@ -283,6 +286,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();
