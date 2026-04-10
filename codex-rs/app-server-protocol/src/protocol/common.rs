@@ -474,6 +474,11 @@ client_request_definitions! {
         response: v2::McpResourceReadResponse,
     },
 
+    McpServerToolCall => "mcpServer/tool/call" {
+        params: v2::McpServerToolCallParams,
+        response: v2::McpServerToolCallResponse,
+    },
+
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
         params: v2::WindowsSandboxSetupStartParams,
         response: v2::WindowsSandboxSetupStartResponse,

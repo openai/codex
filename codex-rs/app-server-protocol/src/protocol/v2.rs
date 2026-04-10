@@ -28,6 +28,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
 pub use codex_protocol::mcp::ResourceContent as McpResourceContent;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
@@ -2022,6 +2023,48 @@ pub struct McpResourceReadParams {
 #[ts(export_to = "v2/")]
 pub struct McpResourceReadResponse {
     pub contents: Vec<McpResourceContent>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerToolCallParams {
+    pub thread_id: String,
+    pub server: String,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub arguments: Option<JsonValue>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meta: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerToolCallResponse {
+    pub content: Vec<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub structured_content: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub is_error: Option<bool>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meta: Option<JsonValue>,
+}
+
+impl From<CoreMcpCallToolResult> for McpServerToolCallResponse {
+    fn from(result: CoreMcpCallToolResult) -> Self {
+        Self {
+            content: result.content,
+            structured_content: result.structured_content,
+            is_error: result.is_error,
+            meta: result.meta,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
