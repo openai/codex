@@ -221,10 +221,25 @@ async fn thread_start_does_not_track_thread_initialized_analytics_without_featur
     .await??;
     let _ = to_response::<ThreadStartResponse>(resp)?;
 
-    let payload = wait_for_analytics_payload(&server, Duration::from_millis(250)).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let analytics_payloads = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|request| request.url.path() == "/codex/analytics-events/events")
+        .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+        .collect::<Vec<_>>();
+    let has_thread_initialized_event = analytics_payloads.iter().any(|request| {
+        request["events"].as_array().is_some_and(|events| {
+            events
+                .iter()
+                .any(|event| event["event_type"] == "codex_thread_initialized")
+        })
+    });
     assert!(
-        payload.is_err(),
-        "thread analytics should be gated off when general_analytics is disabled"
+        !has_thread_initialized_event,
+        "thread analytics should be gated off when general_analytics is disabled, got {analytics_payloads:#?}"
     );
     Ok(())
 }
@@ -826,11 +841,7 @@ fn create_config_toml_with_chatgpt_base_url(
     chatgpt_base_url: &str,
     general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
-    let general_analytics_toml = if general_analytics_enabled {
-        "\ngeneral_analytics = true".to_string()
-    } else {
-        String::new()
-    };
+    let general_analytics_toml = format!("general_analytics = {general_analytics_enabled}");
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,

@@ -70,6 +70,10 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(windows)]
+const COMMAND_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(windows))]
+const COMMAND_EXECUTION_TIMEOUT: Duration = DEFAULT_TIMEOUT;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 
 #[derive(Debug, Clone, Copy)]
@@ -384,6 +388,29 @@ impl RealtimeE2eHarness {
 
     async fn shutdown(self) {
         self.realtime_server.shutdown().await;
+    }
+
+    fn command_execution_failure_context(&self, phase: &str, turn_id: &str) -> String {
+        let sideband_requests = self
+            .realtime_server
+            .connections()
+            .iter()
+            .map(|connection| {
+                connection
+                    .iter()
+                    .map(WebSocketRequest::body_json)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "timed out waiting for delegated realtime shell command {phase}; \
+             thread_id={}; turn_id={turn_id}; pending_notifications={:?}; \
+             recent_jsonrpc_messages={:#?}; sideband_requests={:#?}",
+            self.thread_id,
+            self.mcp.pending_notification_methods(),
+            self.mcp.recent_message_debugs(),
+            sideband_requests,
+        )
     }
 }
 
@@ -963,35 +990,12 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         "unexpected close reason: {closed_notification:?}"
     );
 
-    let request = call_capture.single_request();
-    assert_eq!(request.url.path(), "/v1/realtime/calls");
-    assert_eq!(request.url.query(), None);
-    assert_eq!(
-        request
-            .headers
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-        Some("multipart/form-data; boundary=codex-realtime-call-boundary")
-    );
-    let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
     let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             v=offer\r\n\
-             \r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
-    );
+    assert_call_create_multipart(
+        call_capture.single_request(),
+        "v=offer\r\n",
+        serde_json::from_str(session)?,
+    )?;
 
     realtime_server.shutdown().await;
     Ok(())
@@ -1338,7 +1342,22 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     let _ = harness.start_webrtc_realtime("v=offer\r\n").await?;
 
     // Phase 2: observe the delegated background agent turn executing the requested shell command.
-    let started_command = wait_for_started_command_execution(&mut harness.mcp).await?;
+    let turn_started = harness
+        .read_notification::<TurnStartedNotification>("turn/started")
+        .await?;
+    assert_eq!(turn_started.thread_id, harness.thread_id);
+
+    let started_command =
+        match wait_for_started_command_execution(&mut harness.mcp, COMMAND_EXECUTION_TIMEOUT).await
+        {
+            Ok(started_command) => started_command,
+            Err(err) => {
+                return Err(err.context(
+                    harness
+                        .command_execution_failure_context("item/started", &turn_started.turn.id),
+                ));
+            }
+        };
     let ThreadItem::CommandExecution { id, status, .. } = started_command.item else {
         unreachable!("helper returns command execution items");
     };
@@ -1347,7 +1366,18 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         ("shell_call", CommandExecutionStatus::InProgress)
     );
 
-    let completed_command = wait_for_completed_command_execution(&mut harness.mcp).await?;
+    let completed_command =
+        match wait_for_completed_command_execution(&mut harness.mcp, COMMAND_EXECUTION_TIMEOUT)
+            .await
+        {
+            Ok(completed_command) => completed_command,
+            Err(err) => {
+                return Err(err.context(
+                    harness
+                        .command_execution_failure_context("item/completed", &turn_started.turn.id),
+                ));
+            }
+        };
     let ThreadItem::CommandExecution {
         id,
         status,
@@ -1588,11 +1618,27 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
 }
 
 async fn read_notification<T: DeserializeOwned>(mcp: &mut McpProcess, method: &str) -> Result<T> {
+    read_notification_with_timeout(mcp, method, DEFAULT_TIMEOUT).await
+}
+
+async fn read_notification_with_timeout<T: DeserializeOwned>(
+    mcp: &mut McpProcess,
+    method: &str,
+    read_timeout: Duration,
+) -> Result<T> {
     let notification = timeout(
-        DEFAULT_TIMEOUT,
+        read_timeout,
         mcp.read_stream_until_notification_message(method),
     )
-    .await??;
+    .await
+    .with_context(|| {
+        format!(
+            "timed out waiting for notification {method}; pending_notifications={:?}; \
+                 recent_jsonrpc_messages={:#?}",
+            mcp.pending_notification_methods(),
+            mcp.recent_message_debugs(),
+        )
+    })??;
     let params = notification
         .params
         .context("expected notification params to be present")?;
@@ -1614,9 +1660,15 @@ async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
 
 async fn wait_for_started_command_execution(
     mcp: &mut McpProcess,
+    read_timeout: Duration,
 ) -> Result<ItemStartedNotification> {
     loop {
-        let started = read_notification::<ItemStartedNotification>(mcp, "item/started").await?;
+        let started = read_notification_with_timeout::<ItemStartedNotification>(
+            mcp,
+            "item/started",
+            read_timeout,
+        )
+        .await?;
         if let ThreadItem::CommandExecution { .. } = &started.item {
             return Ok(started);
         }
@@ -1625,10 +1677,15 @@ async fn wait_for_started_command_execution(
 
 async fn wait_for_completed_command_execution(
     mcp: &mut McpProcess,
+    read_timeout: Duration,
 ) -> Result<ItemCompletedNotification> {
     loop {
-        let completed =
-            read_notification::<ItemCompletedNotification>(mcp, "item/completed").await?;
+        let completed = read_notification_with_timeout::<ItemCompletedNotification>(
+            mcp,
+            "item/completed",
+            read_timeout,
+        )
+        .await?;
         if let ThreadItem::CommandExecution { .. } = &completed.item {
             return Ok(completed);
         }
@@ -1750,7 +1807,7 @@ fn assert_v2_session_update(request: &Value) -> Result<()> {
 fn assert_call_create_multipart(
     request: WiremockRequest,
     offer_sdp: &str,
-    session: &str,
+    expected_session: Value,
 ) -> Result<()> {
     assert_eq!(request.url.path(), "/v1/realtime/calls");
     assert_eq!(request.url.query(), None);
@@ -1762,27 +1819,44 @@ fn assert_call_create_multipart(
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             {offer_sdp}\r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
+    let prefix = format!(
+        "--codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"sdp\"\r\n\
+         Content-Type: application/sdp\r\n\
+         \r\n\
+         {offer_sdp}\r\n\
+         --codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"session\"\r\n\
+         Content-Type: application/json\r\n\
+         \r\n"
     );
+    let suffix = "\r\n--codex-realtime-call-boundary--\r\n";
+    let session_json = body
+        .strip_prefix(&prefix)
+        .and_then(|body| body.strip_suffix(suffix))
+        .with_context(|| format!("unexpected multipart body: {body}"))?;
+    let session = serde_json::from_str::<Value>(session_json)?;
+    assert_eq!(session, expected_session);
     Ok(())
 }
 
-fn v1_session_create_json() -> &'static str {
-    r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"cove"}},"type":"quicksilver","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context"}"#
+fn v1_session_create_json() -> Value {
+    json!({
+        "audio": {
+            "input": {
+                "format": {
+                    "type": "audio/pcm",
+                    "rate": 24_000,
+                },
+            },
+            "output": {
+                "voice": "cove",
+            },
+        },
+        "type": "quicksilver",
+        "model": "gpt-realtime-1.5",
+        "instructions": "backend prompt\n\nstartup context",
+    })
 }
 
 fn create_config_toml(

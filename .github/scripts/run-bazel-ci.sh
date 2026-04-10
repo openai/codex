@@ -74,14 +74,23 @@ print_bazel_test_log_tails() {
     bazel_info_cmd+=("${bazel_startup_args[@]}")
   fi
 
-  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
-
   local failed_targets=()
-  while IFS= read -r target; do
+  local failed_test_logs=()
+  while IFS=$'\t' read -r target test_log; do
     failed_targets+=("$target")
+    failed_test_logs+=("$test_log")
   done < <(
     grep -E '^FAIL: //' "$console_log" \
-      | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
+      | awk '
+        {
+          target = $2
+          test_log = ""
+          if (match($0, /\(see [^)]*test\.log\)/)) {
+            test_log = substr($0, RSTART + 5, RLENGTH - 6)
+          }
+          print target "\t" test_log
+        }
+      ' \
       | sort -u
   )
 
@@ -90,10 +99,17 @@ print_bazel_test_log_tails() {
     return
   fi
 
-  for target in "${failed_targets[@]}"; do
-    local rel_path="${target#//}"
-    rel_path="${rel_path/:/\/}"
-    local test_log="${testlogs_dir}/${rel_path}/test.log"
+  for i in "${!failed_targets[@]}"; do
+    local target="${failed_targets[$i]}"
+    local test_log="${failed_test_logs[$i]}"
+    if [[ -z "$test_log" ]]; then
+      if [[ -z "${testlogs_dir:-}" ]]; then
+        testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+      fi
+      local rel_path="${target#//}"
+      rel_path="${rel_path/:/\/}"
+      test_log="${testlogs_dir}/${rel_path}/test.log"
+    fi
 
     echo "::group::Bazel test log tail for ${target}"
     if [[ -f "$test_log" ]]; then

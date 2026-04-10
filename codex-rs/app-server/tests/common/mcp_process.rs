@@ -96,9 +96,11 @@ pub struct McpProcess {
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     pending_messages: VecDeque<JSONRPCMessage>,
+    recent_messages: VecDeque<String>,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+const RECENT_MESSAGE_LIMIT: usize = 20;
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
@@ -135,6 +137,10 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
+        cmd.env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            codex_home.join("managed_config.toml"),
+        );
         cmd.env("RUST_LOG", "info");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.args(args);
@@ -180,6 +186,7 @@ impl McpProcess {
             stdin: Some(stdin),
             stdout,
             pending_messages: VecDeque::new(),
+            recent_messages: VecDeque::new(),
         })
     }
 
@@ -1055,6 +1062,10 @@ impl McpProcess {
         self.stdout.read_line(&mut line).await?;
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
         eprintln!("read message from stdout: {message:?}");
+        if self.recent_messages.len() == RECENT_MESSAGE_LIMIT {
+            self.recent_messages.pop_front();
+        }
+        self.recent_messages.push_back(format!("{message:?}"));
         Ok(message)
     }
 
@@ -1173,6 +1184,10 @@ impl McpProcess {
                 _ => None,
             })
             .collect()
+    }
+
+    pub fn recent_message_debugs(&self) -> Vec<String> {
+        self.recent_messages.iter().cloned().collect()
     }
 
     /// Reads the stream until a message matches `predicate`, buffering any non-matching messages
