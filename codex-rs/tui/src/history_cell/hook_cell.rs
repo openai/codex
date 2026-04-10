@@ -1,3 +1,15 @@
+//! History cell for hook execution.
+//!
+//! Hooks are intentionally quieter than normal tool calls. A hook that starts and finishes
+//! successfully without output should not leave a transcript artifact, and very fast hooks should
+//! not flash in the viewport. This cell keeps that policy local by treating each hook run as a
+//! small rendering state machine:
+//!
+//! 1. New runs begin hidden in `PendingReveal`.
+//! 2. Runs that outlive the reveal delay become visible and may be coalesced with adjacent runs.
+//! 3. Visible quiet successes linger briefly so they do not disappear in the same frame they were
+//!    first drawn.
+//! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
 use crate::exec_cell::spinner;
 use crate::render::renderable::Renderable;
@@ -16,37 +28,63 @@ use std::time::Instant;
 
 #[derive(Debug)]
 pub(crate) struct HookCell {
+    /// Hook runs that are active, lingering, or have persistent output to render.
     runs: Vec<HookRunCell>,
+    /// Mirrors the global animation setting so transcript rendering and viewport rendering agree.
     animations_enabled: bool,
 }
 
+/// Minimum runtime before a hook is allowed to draw.
+///
+/// Helps avoids a flash of text forwork that was effectively instant.
 const HOOK_RUN_REVEAL_DELAY: Duration = Duration::from_millis(300);
+
+/// Minimum time a quiet success remains on screen after becoming visible.
+///
+/// This pairs with `HOOK_RUN_REVEAL_DELAY`: once the user has seen a hook row, keep it stable long
+/// enough to read instead of removing it immediately when the success event arrives.
 const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(600);
 
 #[derive(Debug)]
 struct HookRunCell {
+    /// Stable protocol id used to match begin/end updates for the same hook invocation.
     id: String,
+    /// Hook event kind, kept outside `state` so a begin update can refresh metadata in place.
     event_name: HookEventName,
+    /// Optional hook-supplied detail shown next to the running header.
     status_message: Option<String>,
+    /// Rendering lifecycle for this run.
     state: HookRunState,
 }
 
 #[derive(Debug)]
 enum HookRunState {
+    /// A newly-started run that is active but deliberately hidden until `reveal_deadline`.
     PendingReveal {
+        /// The original start time, used for spinner phase and grouping once revealed.
         start_time: Instant,
+        /// First instant at which the run may become visible.
         reveal_deadline: Instant,
     },
+    /// A run that survived the reveal delay and is currently shown as running.
     VisibleRunning {
+        /// The original start time, used to keep animation timing stable across transitions.
         start_time: Instant,
+        /// First instant the run was actually rendered, used by quiet-success linger.
         visible_since: Instant,
     },
+    /// A visible run that completed successfully without output but is still lingering briefly.
     QuietLinger {
+        /// The original start time, retained so the spinner does not jump during the linger frame.
         start_time: Instant,
+        /// Instant after which the quiet success can be removed entirely.
         removal_deadline: Instant,
     },
+    /// A completed run with output or a status worth preserving in history.
     Completed {
+        /// Final protocol status for the hook invocation.
         status: HookRunStatus,
+        /// Hook output entries rendered below the completed header.
         entries: Vec<HookOutputEntry>,
     },
 }
@@ -57,13 +95,21 @@ struct RunningHookGroupKey {
     status_message: Option<String>,
 }
 
+/// Accumulator for adjacent running hooks that can share one status line.
+///
+/// Grouping happens only while building display lines, the underlying runs stay separate so their
+/// protocol ids and completion transitions remain independent.
 struct RunningHookGroup {
+    /// Shared event/status pair for every run in this display group.
     key: RunningHookGroupKey,
+    /// Earliest start time in the group, so the combined spinner reflects the oldest work.
     start_time: Option<Instant>,
+    /// Number of adjacent runs represented by the group line.
     count: usize,
 }
 
 impl HookCell {
+    /// Creates a cell around a hook that has just started.
     fn new_active(run: HookRunSummary, animations_enabled: bool) -> Self {
         let mut cell = Self {
             runs: Vec::new(),
@@ -73,6 +119,7 @@ impl HookCell {
         cell
     }
 
+    /// Creates a cell around an already-completed hook from transcript/history data.
     fn new_completed(run: HookRunSummary, animations_enabled: bool) -> Self {
         let mut cell = Self {
             runs: Vec::new(),
@@ -86,18 +133,25 @@ impl HookCell {
         self.runs.is_empty()
     }
 
+    /// Returns true while any run can still change due to an end event or timer.
     pub(crate) fn is_active(&self) -> bool {
         self.runs.iter().any(|run| run.state.is_active())
     }
 
+    /// Completed hook cells are flushed out of the active slot once no timers remain.
     pub(crate) fn should_flush(&self) -> bool {
         !self.is_active() && !self.is_empty()
     }
 
+    /// Returns whether this cell has at least one line worth drawing right now.
     pub(crate) fn should_render(&self) -> bool {
         self.runs.iter().any(|run| run.state.should_render())
     }
 
+    /// Splits durable completed runs from ephemeral active-cell bookkeeping.
+    ///
+    /// Quiet successes are left behind so they can disappear from the active cell, while failures,
+    /// blocked/stopped hooks, and hooks with emitted output become a persistent history cell.
     pub(crate) fn take_completed_persistent_runs(&mut self) -> Option<Self> {
         let mut completed = Vec::new();
         let mut remaining = Vec::new();
@@ -115,10 +169,12 @@ impl HookCell {
         })
     }
 
+    /// Used by callers that need to know whether the active cell currently occupies viewport space.
     pub(crate) fn has_visible_running_run(&self) -> bool {
         self.runs.iter().any(|run| run.state.is_running_visible())
     }
 
+    /// Advances reveal/removal timers and reports whether rendering should be refreshed.
     pub(crate) fn advance_time(&mut self, now: Instant) -> bool {
         let old_len = self.runs.len();
         let mut changed = false;
@@ -129,6 +185,10 @@ impl HookCell {
         changed || self.runs.len() != old_len
     }
 
+    /// Inserts or refreshes a started hook run.
+    ///
+    /// A duplicate begin event resets the reveal timer rather than adding a second row, because
+    /// matching by id is the invariant that keeps begin/end events paired.
     pub(crate) fn start_run(&mut self, run: HookRunSummary) {
         let now = Instant::now();
         if let Some(existing) = self.runs.iter_mut().find(|existing| existing.id == run.id) {
@@ -146,6 +206,9 @@ impl HookCell {
     }
 
     /// Completes a run and returns whether the run was already present in this cell.
+    ///
+    /// Quiet successes intentionally avoid persistent output. If they were never visible, they
+    /// disappear immediately; if they had already drawn, they move into `QuietLinger`.
     pub(crate) fn complete_run(&mut self, run: HookRunSummary) -> bool {
         let Some(index) = self.runs.iter().position(|existing| existing.id == run.id) else {
             return false;
@@ -173,6 +236,9 @@ impl HookCell {
         true
     }
 
+    /// Adds a completed hook that did not pass through this live cell.
+    ///
+    /// This is used for replay/restoration paths where the final run summary is already known.
     pub(crate) fn add_completed_run(&mut self, run: HookRunSummary) {
         if hook_run_is_quiet_success(&run) {
             return;
@@ -225,6 +291,7 @@ impl HookCell {
 }
 
 impl HistoryCell for HookCell {
+    /// Builds viewport lines while coalescing adjacent visible-running hooks.
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let mut running_group: Option<RunningHookGroup> = None;
@@ -234,6 +301,8 @@ impl HistoryCell for HookCell {
             }
 
             let Some(key) = run.running_group_key() else {
+                // Completed runs keep their own output lines, so any pending running group must be
+                // emitted before drawing the completed run.
                 if let Some(group) = running_group.take() {
                     push_running_hook_group(&mut lines, &group, self.animations_enabled);
                 }
@@ -246,6 +315,8 @@ impl HistoryCell for HookCell {
                 && group.key == key
             {
                 group.count += 1;
+                // Preserve the earliest start time so grouped spinners do not reset when a later
+                // adjacent hook is folded into the same line.
                 group.start_time = earliest_instant(group.start_time, run.state.start_time());
                 continue;
             }
@@ -262,10 +333,12 @@ impl HistoryCell for HookCell {
         lines
     }
 
+    /// Hook transcript output matches viewport output.
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.display_lines(width)
     }
 
+    /// Produces a coarse cache key for transcript overlays while hook animations are active.
     fn transcript_animation_tick(&self) -> Option<u64> {
         let elapsed = self
             .runs
@@ -327,6 +400,7 @@ impl HookRunCell {
         }
     }
 
+    /// Returns the grouping key only for states that render as running.
     fn running_group_key(&self) -> Option<RunningHookGroupKey> {
         self.state
             .is_running_visible()
@@ -336,6 +410,7 @@ impl HookRunCell {
             })
     }
 
+    /// Appends the lines for a single, ungrouped hook run.
     fn push_display_lines(&self, lines: &mut Vec<Line<'static>>, animations_enabled: bool) {
         let label = hook_event_label(self.event_name);
         match &self.state {
@@ -362,6 +437,8 @@ impl HookRunCell {
                     .into(),
                 );
                 for entry in entries {
+                    // Output entries are already short hook-authored strings; keep their prefixes
+                    // explicit so warnings/stops/errors remain easy to scan in history.
                     lines
                         .push(format!("  {}{}", hook_output_prefix(entry.kind), entry.text).into());
                 }
@@ -372,6 +449,7 @@ impl HookRunCell {
 }
 
 impl HookRunState {
+    /// Creates the hidden initial state for a live hook run.
     fn pending(start_time: Instant) -> Self {
         Self::PendingReveal {
             start_time,
@@ -379,10 +457,12 @@ impl HookRunState {
         }
     }
 
+    /// Creates the persistent final state for a hook with visible output or a notable status.
     fn completed(status: HookRunStatus, entries: Vec<HookOutputEntry>) -> Self {
         Self::Completed { status, entries }
     }
 
+    /// Returns true while the run is still waiting for a completion event or timer cleanup.
     fn is_active(&self) -> bool {
         match self {
             HookRunState::PendingReveal { .. }
@@ -392,6 +472,7 @@ impl HookRunState {
         }
     }
 
+    /// Returns true when this run contributes at least one line to the current render.
     fn should_render(&self) -> bool {
         match self {
             HookRunState::VisibleRunning { .. }
@@ -401,6 +482,7 @@ impl HookRunState {
         }
     }
 
+    /// Returns true for completed runs that should survive outside the active cell.
     fn has_persistent_output(&self) -> bool {
         match self {
             HookRunState::Completed { status, entries } => {
@@ -412,6 +494,9 @@ impl HookRunState {
         }
     }
 
+    /// Returns the original start time for active states.
+    ///
+    /// Completed runs no longer animate, so they intentionally have no start time.
     fn start_time(&self) -> Option<Instant> {
         match self {
             HookRunState::PendingReveal { start_time, .. }
@@ -421,6 +506,7 @@ impl HookRunState {
         }
     }
 
+    /// Returns true when the run should be treated as an in-progress row.
     fn is_running_visible(&self) -> bool {
         matches!(
             self,
@@ -428,6 +514,10 @@ impl HookRunState {
         )
     }
 
+    /// Reveals a pending run once its deadline has passed.
+    ///
+    /// Returns true only when this call changes the state, allowing timer callbacks to avoid
+    /// unnecessary redraws.
     fn reveal_if_due(&mut self, now: Instant) -> bool {
         let HookRunState::PendingReveal {
             start_time,
@@ -446,6 +536,7 @@ impl HookRunState {
         true
     }
 
+    /// Returns the next state-machine deadline owned by this run.
     fn next_timer_deadline(&self) -> Option<Instant> {
         match self {
             HookRunState::PendingReveal {
@@ -458,6 +549,7 @@ impl HookRunState {
         }
     }
 
+    /// Returns true once a quiet success has lingered for long enough.
     fn quiet_linger_expired(&self, now: Instant) -> bool {
         match self {
             HookRunState::QuietLinger {
@@ -469,6 +561,10 @@ impl HookRunState {
         }
     }
 
+    /// Converts a visible quiet success into a temporary linger state.
+    ///
+    /// Returns false when the success should be removed immediately: either it was never visible or
+    /// it has already stayed visible for the minimum duration.
     fn complete_quiet_success(&mut self, now: Instant) -> bool {
         let HookRunState::VisibleRunning {
             start_time,
@@ -501,6 +597,7 @@ impl RunningHookGroup {
     }
 }
 
+/// Emits one grouped running-hook status row.
 fn push_running_hook_group(
     lines: &mut Vec<Line<'static>>,
     group: &RunningHookGroup,
@@ -522,6 +619,7 @@ fn push_running_hook_group(
     );
 }
 
+/// Emits the animated or static header used by all running hook rows.
 fn push_running_hook_header(
     lines: &mut Vec<Line<'static>>,
     hook_text: &str,
@@ -544,12 +642,14 @@ fn push_running_hook_header(
     lines.push(header.into());
 }
 
+/// Adds a blank separator between hook blocks without leaving a leading blank line.
 fn push_hook_line_separator(lines: &mut Vec<Line<'static>>) {
     if !lines.is_empty() {
         lines.push("".into());
     }
 }
 
+/// Combines optional instants while preserving the earliest known start time.
 fn earliest_instant(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),
@@ -567,6 +667,7 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
     HookCell::new_completed(run, animations_enabled)
 }
 
+/// Returns true for hook completions that should be invisible in history.
 fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
     run.status == HookRunStatus::Completed && run.entries.is_empty()
 }
