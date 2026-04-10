@@ -49,6 +49,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_rollout::state_db::get_state_db;
 use codex_state::log_db;
@@ -1375,9 +1376,8 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
-    let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
-        && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+    let should_prompt_windows_sandbox_nux_at_startup =
+        should_prompt_windows_sandbox_nux_at_startup(&config, trust_decision_was_made);
 
     let Cli {
         prompt,
@@ -1728,6 +1728,31 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     login_status == LoginStatus::NotAuthenticated
 }
 
+fn should_prompt_windows_sandbox_nux_at_startup(
+    config: &Config,
+    trust_decision_was_made: bool,
+) -> bool {
+    should_prompt_windows_sandbox_nux_at_startup_for_platform(
+        config,
+        trust_decision_was_made,
+        cfg!(target_os = "windows"),
+    )
+}
+
+fn should_prompt_windows_sandbox_nux_at_startup_for_platform(
+    config: &Config,
+    trust_decision_was_made: bool,
+    is_windows: bool,
+) -> bool {
+    is_windows
+        && trust_decision_was_made
+        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
+        && !matches!(
+            config.permissions.sandbox_policy.get(),
+            SandboxPolicy::DangerFullAccess
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1994,6 +2019,43 @@ mod tests {
             should_show,
             "Trust prompt should be shown when project trust is undecided"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn windows_sandbox_nux_shows_after_trust_decision_without_sandbox() -> std::io::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.set_windows_sandbox_enabled(/*value*/ false);
+
+        let should_show = should_prompt_windows_sandbox_nux_at_startup_for_platform(
+            &config, /*trust_decision_was_made*/ true, /*is_windows*/ true,
+        );
+
+        assert!(should_show);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn yolo_skips_windows_sandbox_nux_after_trust_decision() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let overrides = ConfigOverrides {
+            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            ..Default::default()
+        };
+        let mut config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .harness_overrides(overrides)
+            .build()
+            .await?;
+        config.set_windows_sandbox_enabled(/*value*/ false);
+
+        let should_show = should_prompt_windows_sandbox_nux_at_startup_for_platform(
+            &config, /*trust_decision_was_made*/ true, /*is_windows*/ true,
+        );
+
+        assert!(!should_show);
         Ok(())
     }
 
