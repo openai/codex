@@ -370,7 +370,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
 }
 
 #[test]
-fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_proxy_env_without_process_proxy_env() {
+fn maybe_wrap_shell_lc_with_snapshot_clears_snapshot_proxy_env_without_process_proxy_env() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(
@@ -406,11 +406,7 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_proxy_env_without_process_pr
         .expect("run rewritten command");
 
     assert!(output.status.success(), "command failed: {output:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "http://127.0.0.1:8080\n\
-         http://127.0.0.1:8080"
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "\n");
 }
 
 #[cfg(target_os = "macos")]

@@ -151,8 +151,7 @@ fn build_proxy_env_exports() -> (String, String) {
     keys.sort_unstable();
     keys.dedup();
 
-    let proxy_blocks =
-        build_existing_env_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
+    let proxy_blocks = build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
     let git_blocks = build_codex_proxy_git_ssh_command_exports();
     (
         join_shell_blocks([proxy_blocks.0, git_blocks.0]),
@@ -203,35 +202,6 @@ fn build_override_exports_for_keys(variable_prefix: &str, keys: &[&str]) -> (Str
             format!(
                 "if [ -n \"${{{set_var}}}\" ]; then export {key}=\"${{{value_var}}}\"; else unset {key}; fi"
             )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    (captures, restores)
-}
-
-fn build_existing_env_exports_for_keys(variable_prefix: &str, keys: &[&str]) -> (String, String) {
-    if keys.is_empty() {
-        return (String::new(), String::new());
-    }
-
-    let captures = keys
-        .iter()
-        .enumerate()
-        .map(|(idx, key)| {
-            let set_var = format!("{variable_prefix}_SET_{idx}");
-            let value_var = format!("{variable_prefix}_{idx}");
-            format!("{set_var}=\"${{{key}+x}}\"\n{value_var}=\"${{{key}-}}\"")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let restores = keys
-        .iter()
-        .enumerate()
-        .map(|(idx, key)| {
-            let set_var = format!("{variable_prefix}_SET_{idx}");
-            let value_var = format!("{variable_prefix}_{idx}");
-            format!("if [ -n \"${{{set_var}}}\" ]; then export {key}=\"${{{value_var}}}\"; fi")
         })
         .collect::<Vec<_>>()
         .join("\n");
