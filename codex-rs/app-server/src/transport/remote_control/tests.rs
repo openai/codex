@@ -938,6 +938,112 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
 }
 
 #[tokio::test]
+async fn remote_control_renews_server_token_with_existing_enrollment_ids() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let expected_server_name = gethostname().to_string_lossy().trim().to_string();
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, _remote_handle) = start_remote_control(
+        remote_control_url,
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&enroll_request.body)
+            .expect("initial enroll body should deserialize"),
+        json!({
+            "name": expected_server_name,
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "app_server_version": env!("CARGO_PKG_VERSION"),
+        })
+    );
+    respond_with_json(
+        enroll_request.stream,
+        json!({
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+            "remote_control_token": "remote-control-token-1",
+            "expires_at": (chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc3339(),
+            "scopes": ["remote_control_server_websocket"],
+        }),
+    )
+    .await;
+
+    let (first_handshake_request, mut first_websocket) =
+        accept_remote_control_backend_connection(&listener).await;
+    assert_eq!(
+        first_handshake_request.headers.get("authorization"),
+        Some(&"Bearer remote-control-token-1".to_string())
+    );
+    assert_eq!(
+        first_handshake_request.headers.get("x-codex-server-id"),
+        Some(&"srv_e_test".to_string())
+    );
+    first_websocket
+        .close(None)
+        .await
+        .expect("first websocket should close");
+    drop(first_websocket);
+
+    let renew_request = accept_http_request(&listener).await;
+    assert_eq!(
+        renew_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&renew_request.body)
+            .expect("renew enroll body should deserialize"),
+        json!({
+            "name": expected_server_name,
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "app_server_version": env!("CARGO_PKG_VERSION"),
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+        })
+    );
+    respond_with_json(
+        renew_request.stream,
+        json!({
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+            "remote_control_token": "remote-control-token-2",
+            "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+            "scopes": ["remote_control_server_websocket"],
+        }),
+    )
+    .await;
+
+    let (second_handshake_request, _second_websocket) =
+        accept_remote_control_backend_connection(&listener).await;
+    assert_eq!(
+        second_handshake_request.headers.get("authorization"),
+        Some(&"Bearer remote-control-token-2".to_string())
+    );
+    assert_eq!(
+        second_handshake_request.headers.get("x-codex-server-id"),
+        Some(&"srv_e_test".to_string())
+    );
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
 async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
