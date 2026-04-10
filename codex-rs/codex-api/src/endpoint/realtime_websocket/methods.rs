@@ -982,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_realtime_v2_response_done_handoff_event() {
+    fn parse_realtime_v2_response_done_event() {
         let payload = json!({
             "type": "response.done",
             "response": {
@@ -999,12 +999,7 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
-                handoff_id: "call_123".to_string(),
-                item_id: "item_123".to_string(),
-                input_transcript: "delegate from done".to_string(),
-                active_transcript: Vec::new(),
-            }))
+            None
         );
     }
 

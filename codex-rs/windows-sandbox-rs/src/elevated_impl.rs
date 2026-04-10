@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 pub struct ElevatedSandboxCaptureRequest<'a> {
     pub policy_json_or_preset: &'a str,
@@ -11,13 +12,14 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
     pub timeout_ms: Option<u64>,
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
+    pub read_roots_override: Option<&'a [PathBuf]>,
+    pub write_roots_override: Option<&'a [PathBuf]>,
+    pub deny_write_paths_override: &'a [PathBuf],
 }
 
 mod windows_impl {
     use super::ElevatedSandboxCaptureRequest;
     use crate::acl::allow_null_device;
-    use crate::allow::AllowDenyPaths;
-    use crate::allow::compute_allow_paths;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
@@ -235,13 +237,15 @@ mod windows_impl {
             timeout_ms,
             use_private_desktop,
             proxy_enforced,
+            read_roots_override,
+            write_roots_override,
+            deny_write_paths_override,
         } = request;
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
         inject_git_safe_directory(&mut env_map, cwd, None);
-        let current_dir = cwd.to_path_buf();
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
         ensure_codex_home_exists(&sandbox_base)?;
@@ -254,6 +258,9 @@ mod windows_impl {
             cwd,
             &env_map,
             codex_home,
+            read_roots_override,
+            write_roots_override,
+            deny_write_paths_override,
             proxy_enforced,
         )?;
         let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
@@ -291,9 +298,6 @@ mod windows_impl {
             }
         };
 
-        let AllowDenyPaths { allow: _, deny: _ } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
-        // Deny/allow ACEs are now applied during setup; avoid per-command churn.
         unsafe {
             allow_null_device(psid_to_use);
         }
