@@ -1821,6 +1821,10 @@ impl HookCell {
         !self.is_active() && !self.is_empty()
     }
 
+    pub(crate) fn should_render(&self) -> bool {
+        self.runs.iter().any(HookRunCell::should_render)
+    }
+
     pub(crate) fn take_completed_persistent_runs(&mut self) -> Option<Self> {
         let mut completed = Vec::new();
         let mut remaining = Vec::new();
