@@ -769,6 +769,24 @@ impl AnalyticsReducer {
                 )
             });
         let Some((app_server_client, runtime)) = connection_metadata else {
+            if let Some(connection_id) = turn_state.connection_id {
+                tracing::warn!(
+                    turn_id,
+                    connection_id,
+                    "dropping turn analytics event: missing connection metadata"
+                );
+            }
+            return;
+        };
+        let Some(thread_id) = turn_state.thread_id.as_ref() else {
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(thread_id) else {
+            tracing::warn!(
+                thread_id,
+                turn_id,
+                "dropping turn analytics event: missing thread lifecycle metadata"
+            );
             return;
         };
         let Some(thread_id) = turn_state.thread_id.as_ref() else {
