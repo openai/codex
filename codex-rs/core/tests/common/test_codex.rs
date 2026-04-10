@@ -148,7 +148,11 @@ pub async fn test_env() -> Result<TestEnv> {
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
-                .create_directory(&cwd, CreateDirectoryOptions { recursive: true })
+                .create_directory(
+                    &cwd,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
                 .await?;
             remote_process.process.register_cleanup_path(cwd.as_path());
             Ok(TestEnv {
@@ -835,18 +839,26 @@ impl TestCodexHarness {
         if let Some(parent) = abs_path.parent() {
             self.test
                 .fs()
-                .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+                .create_directory(
+                    &parent,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
                 .await?;
         }
         self.test
             .fs()
-            .write_file(&abs_path, contents.as_ref().to_vec())
+            .write_file(&abs_path, contents.as_ref().to_vec(), /*sandbox*/ None)
             .await?;
         Ok(())
     }
 
     pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
-        Ok(self.test.fs().read_file_text(&self.path_abs(rel)).await?)
+        Ok(self
+            .test
+            .fs()
+            .read_file_text(&self.path_abs(rel), /*sandbox*/ None)
+            .await?)
     }
 
     pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
@@ -855,6 +867,7 @@ impl TestCodexHarness {
             .create_directory(
                 &self.path_abs(rel),
                 CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
             )
             .await?;
         Ok(())
@@ -873,13 +886,14 @@ impl TestCodexHarness {
                     recursive: false,
                     force: true,
                 },
+                /*sandbox*/ None,
             )
             .await?;
         Ok(())
     }
 
     pub async fn abs_path_exists(&self, path: &AbsolutePathBuf) -> Result<bool> {
-        match self.test.fs().get_metadata(path).await {
+        match self.test.fs().get_metadata(path, /*sandbox*/ None).await {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err.into()),

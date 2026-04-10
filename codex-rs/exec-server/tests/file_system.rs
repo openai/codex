@@ -115,7 +115,7 @@ async fn file_system_get_metadata_returns_expected_fields(use_remote: bool) -> R
     std::fs::write(&file_path, "hello")?;
 
     let metadata = file_system
-        .get_metadata(&absolute_path(file_path))
+        .get_metadata(&absolute_path(file_path), /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(metadata.is_directory, false);
@@ -144,6 +144,7 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         .create_directory(
             &absolute_path(nested_dir.clone()),
             CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -152,6 +153,7 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         .write_file(
             &absolute_path(nested_file.clone()),
             b"hello from trait".to_vec(),
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -159,18 +161,19 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         .write_file(
             &absolute_path(source_file.clone()),
             b"hello from source root".to_vec(),
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
 
     let nested_file_contents = file_system
-        .read_file(&absolute_path(nested_file.clone()))
+        .read_file(&absolute_path(nested_file.clone()), /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(nested_file_contents, b"hello from trait");
 
     let nested_file_text = file_system
-        .read_file_text(&absolute_path(nested_file.clone()))
+        .read_file_text(&absolute_path(nested_file.clone()), /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(nested_file_text, "hello from trait");
@@ -180,6 +183,7 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
             &absolute_path(nested_file),
             &absolute_path(copied_file.clone()),
             CopyOptions { recursive: false },
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -190,6 +194,7 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
             &absolute_path(source_dir.clone()),
             &absolute_path(copied_dir.clone()),
             CopyOptions { recursive: true },
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -199,7 +204,7 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
     );
 
     let mut entries = file_system
-        .read_directory(&absolute_path(source_dir))
+        .read_directory(&absolute_path(source_dir), /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
@@ -226,6 +231,7 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
                 recursive: true,
                 force: true,
             },
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -250,6 +256,7 @@ async fn file_system_copy_rejects_directory_without_recursive(use_remote: bool) 
             &absolute_path(source_dir),
             &absolute_path(tmp.path().join("dest")),
             CopyOptions { recursive: false },
+            /*sandbox*/ None,
         )
         .await;
     let error = match error {
@@ -268,7 +275,7 @@ async fn file_system_copy_rejects_directory_without_recursive(use_remote: bool) 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_with_sandbox_allows_readable_root(use_remote: bool) -> Result<()> {
+async fn file_system_sandboxed_read_allows_readable_root(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -280,7 +287,7 @@ async fn file_system_read_with_sandbox_allows_readable_root(use_remote: bool) ->
     let sandbox = read_only_sandbox(allowed_dir);
 
     let contents = file_system
-        .read_file_with_sandbox(&absolute_path(file_path), Some(&sandbox))
+        .read_file(&absolute_path(file_path), Some(&sandbox))
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -291,7 +298,7 @@ async fn file_system_read_with_sandbox_allows_readable_root(use_remote: bool) ->
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_write_with_sandbox_rejects_unwritable_path(use_remote: bool) -> Result<()> {
+async fn file_system_sandboxed_write_rejects_unwritable_path(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -302,7 +309,7 @@ async fn file_system_write_with_sandbox_rejects_unwritable_path(use_remote: bool
 
     let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .write_file_with_sandbox(
+        .write_file(
             &absolute_path(blocked_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox),
@@ -321,7 +328,7 @@ async fn file_system_write_with_sandbox_rejects_unwritable_path(use_remote: bool
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_with_sandbox_rejects_symlink_escape(use_remote: bool) -> Result<()> {
+async fn file_system_sandboxed_read_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -336,7 +343,7 @@ async fn file_system_read_with_sandbox_rejects_symlink_escape(use_remote: bool) 
     let requested_path = allowed_dir.join("link").join("secret.txt");
     let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .read_file_with_sandbox(&absolute_path(requested_path.clone()), Some(&sandbox))
+        .read_file(&absolute_path(requested_path.clone()), Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("read should be blocked"),
@@ -350,7 +357,7 @@ async fn file_system_read_with_sandbox_rejects_symlink_escape(use_remote: bool) 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_with_sandbox_rejects_symlink_parent_dotdot_escape(
+async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape(
     use_remote: bool,
 ) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
@@ -367,10 +374,7 @@ async fn file_system_read_with_sandbox_rejects_symlink_parent_dotdot_escape(
 
     let requested_path = absolute_path(allowed_dir.join("link").join("..").join("secret.txt"));
     let sandbox = read_only_sandbox(allowed_dir);
-    let error = match file_system
-        .read_file_with_sandbox(&requested_path, Some(&sandbox))
-        .await
-    {
+    let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
         Err(error) => error,
     };
@@ -382,7 +386,7 @@ async fn file_system_read_with_sandbox_rejects_symlink_parent_dotdot_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_write_with_sandbox_rejects_symlink_escape(use_remote: bool) -> Result<()> {
+async fn file_system_sandboxed_write_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -396,7 +400,7 @@ async fn file_system_write_with_sandbox_rejects_symlink_escape(use_remote: bool)
     let requested_path = allowed_dir.join("link").join("blocked.txt");
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .write_file_with_sandbox(
+        .write_file(
             &absolute_path(requested_path.clone()),
             b"nope".to_vec(),
             Some(&sandbox),
@@ -415,9 +419,7 @@ async fn file_system_write_with_sandbox_rejects_symlink_escape(use_remote: bool)
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_create_directory_with_sandbox_rejects_symlink_escape(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_create_directory_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -431,7 +433,7 @@ async fn file_system_create_directory_with_sandbox_rejects_symlink_escape(
     let requested_path = allowed_dir.join("link").join("created");
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .create_directory_with_sandbox(
+        .create_directory(
             &absolute_path(requested_path.clone()),
             CreateDirectoryOptions { recursive: false },
             Some(&sandbox),
@@ -450,9 +452,7 @@ async fn file_system_create_directory_with_sandbox_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_get_metadata_with_sandbox_rejects_symlink_escape(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_get_metadata_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -467,7 +467,7 @@ async fn file_system_get_metadata_with_sandbox_rejects_symlink_escape(
     let requested_path = allowed_dir.join("link").join("secret.txt");
     let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .get_metadata_with_sandbox(&absolute_path(requested_path.clone()), Some(&sandbox))
+        .get_metadata(&absolute_path(requested_path.clone()), Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("get_metadata should be blocked"),
@@ -481,9 +481,7 @@ async fn file_system_get_metadata_with_sandbox_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_directory_with_sandbox_rejects_symlink_escape(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_read_directory_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -498,7 +496,7 @@ async fn file_system_read_directory_with_sandbox_rejects_symlink_escape(
     let requested_path = allowed_dir.join("link");
     let sandbox = read_only_sandbox(allowed_dir);
     let error = match file_system
-        .read_directory_with_sandbox(&absolute_path(requested_path.clone()), Some(&sandbox))
+        .read_directory(&absolute_path(requested_path.clone()), Some(&sandbox))
         .await
     {
         Ok(_) => anyhow::bail!("read_directory should be blocked"),
@@ -512,9 +510,7 @@ async fn file_system_read_directory_with_sandbox_rejects_symlink_escape(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_copy_with_sandbox_rejects_symlink_escape_destination(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_copy_rejects_symlink_escape_destination(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -529,7 +525,7 @@ async fn file_system_copy_with_sandbox_rejects_symlink_escape_destination(
     let requested_destination = allowed_dir.join("link").join("copied.txt");
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     let error = match file_system
-        .copy_with_sandbox(
+        .copy(
             &absolute_path(allowed_dir.join("source.txt")),
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
@@ -549,9 +545,7 @@ async fn file_system_copy_with_sandbox_rejects_symlink_escape_destination(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_remove_with_sandbox_removes_symlink_not_target(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_remove_removes_symlink_not_target(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -567,7 +561,7 @@ async fn file_system_remove_with_sandbox_removes_symlink_not_target(
 
     let sandbox = workspace_write_sandbox(allowed_dir);
     file_system
-        .remove_with_sandbox(
+        .remove(
             &absolute_path(symlink_path.clone()),
             RemoveOptions {
                 recursive: false,
@@ -588,7 +582,7 @@ async fn file_system_remove_with_sandbox_removes_symlink_not_target(
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_copy_with_sandbox_preserves_symlink_source(use_remote: bool) -> Result<()> {
+async fn file_system_copy_preserves_symlink_source(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -605,7 +599,7 @@ async fn file_system_copy_with_sandbox_preserves_symlink_source(use_remote: bool
 
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
-        .copy_with_sandbox(
+        .copy(
             &absolute_path(source_symlink),
             &absolute_path(copied_symlink.clone()),
             CopyOptions { recursive: false },
@@ -624,7 +618,7 @@ async fn file_system_copy_with_sandbox_preserves_symlink_source(use_remote: bool
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_remove_with_sandbox_rejects_symlink_escape(use_remote: bool) -> Result<()> {
+async fn file_system_remove_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -640,7 +634,7 @@ async fn file_system_remove_with_sandbox_rejects_symlink_escape(use_remote: bool
     let requested_path = allowed_dir.join("link").join("secret.txt");
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .remove_with_sandbox(
+        .remove(
             &absolute_path(requested_path.clone()),
             RemoveOptions {
                 recursive: false,
@@ -662,9 +656,7 @@ async fn file_system_remove_with_sandbox_rejects_symlink_escape(use_remote: bool
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_copy_with_sandbox_rejects_symlink_escape_source(
-    use_remote: bool,
-) -> Result<()> {
+async fn file_system_copy_rejects_symlink_escape_source(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
@@ -681,7 +673,7 @@ async fn file_system_copy_with_sandbox_rejects_symlink_escape_source(
     let requested_source = allowed_dir.join("link").join("secret.txt");
     let sandbox = workspace_write_sandbox(allowed_dir);
     let error = match file_system
-        .copy_with_sandbox(
+        .copy(
             &absolute_path(requested_source.clone()),
             &absolute_path(requested_destination.clone()),
             CopyOptions { recursive: false },
@@ -716,6 +708,7 @@ async fn file_system_copy_rejects_copying_directory_into_descendant(
             &absolute_path(source_dir.clone()),
             &absolute_path(source_dir.join("nested").join("copy")),
             CopyOptions { recursive: true },
+            /*sandbox*/ None,
         )
         .await;
     let error = match error {
@@ -750,6 +743,7 @@ async fn file_system_copy_preserves_symlinks_in_recursive_copy(use_remote: bool)
             &absolute_path(source_dir),
             &absolute_path(copied_dir.clone()),
             CopyOptions { recursive: true },
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -795,6 +789,7 @@ async fn file_system_copy_ignores_unknown_special_files_in_recursive_copy(
             &absolute_path(source_dir),
             &absolute_path(copied_dir.clone()),
             CopyOptions { recursive: true },
+            /*sandbox*/ None,
         )
         .await
         .with_context(|| format!("mode={use_remote}"))?;
@@ -831,6 +826,7 @@ async fn file_system_copy_rejects_standalone_fifo_source(use_remote: bool) -> Re
             &absolute_path(fifo_path),
             &absolute_path(tmp.path().join("copied")),
             CopyOptions { recursive: false },
+            /*sandbox*/ None,
         )
         .await;
     let error = match error {

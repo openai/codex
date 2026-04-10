@@ -40,30 +40,12 @@ impl RemoteFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for RemoteFileSystem {
-    async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
-        trace!("remote fs read_file");
-        let response = self
-            .client
-            .fs_read_file(FsReadFileParams {
-                path: path.clone(),
-                sandbox: None,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        STANDARD.decode(response.data_base64).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("remote fs/readFile returned invalid base64 dataBase64: {err}"),
-            )
-        })
-    }
-
-    async fn read_file_with_sandbox(
+    async fn read_file(
         &self,
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        trace!("remote fs read_file_with_sandbox");
+        trace!("remote fs read_file");
         let response = self
             .client
             .fs_read_file(FsReadFileParams {
@@ -80,26 +62,13 @@ impl ExecutorFileSystem for RemoteFileSystem {
         })
     }
 
-    async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
-        trace!("remote fs write_file");
-        self.client
-            .fs_write_file(FsWriteFileParams {
-                path: path.clone(),
-                data_base64: STANDARD.encode(contents),
-                sandbox: None,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(())
-    }
-
-    async fn write_file_with_sandbox(
+    async fn write_file(
         &self,
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        trace!("remote fs write_file_with_sandbox");
+        trace!("remote fs write_file");
         self.client
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
@@ -115,30 +84,13 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &self,
         path: &AbsolutePathBuf,
         options: CreateDirectoryOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs create_directory");
         self.client
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
-                sandbox: None,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(())
-    }
-
-    async fn create_directory_with_sandbox(
-        &self,
-        path: &AbsolutePathBuf,
-        create_directory_options: CreateDirectoryOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()> {
-        trace!("remote fs create_directory_with_sandbox");
-        self.client
-            .fs_create_directory(FsCreateDirectoryParams {
-                path: path.clone(),
-                recursive: Some(create_directory_options.recursive),
                 sandbox: sandbox.cloned(),
             })
             .await
@@ -146,30 +98,12 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Ok(())
     }
 
-    async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
-        trace!("remote fs get_metadata");
-        let response = self
-            .client
-            .fs_get_metadata(FsGetMetadataParams {
-                path: path.clone(),
-                sandbox: None,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(FileMetadata {
-            is_directory: response.is_directory,
-            is_file: response.is_file,
-            created_at_ms: response.created_at_ms,
-            modified_at_ms: response.modified_at_ms,
-        })
-    }
-
-    async fn get_metadata_with_sandbox(
+    async fn get_metadata(
         &self,
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        trace!("remote fs get_metadata_with_sandbox");
+        trace!("remote fs get_metadata");
         let response = self
             .client
             .fs_get_metadata(FsGetMetadataParams {
@@ -189,33 +123,9 @@ impl ExecutorFileSystem for RemoteFileSystem {
     async fn read_directory(
         &self,
         path: &AbsolutePathBuf,
-    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        trace!("remote fs read_directory");
-        let response = self
-            .client
-            .fs_read_directory(FsReadDirectoryParams {
-                path: path.clone(),
-                sandbox: None,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(response
-            .entries
-            .into_iter()
-            .map(|entry| ReadDirectoryEntry {
-                file_name: entry.file_name,
-                is_directory: entry.is_directory,
-                is_file: entry.is_file,
-            })
-            .collect())
-    }
-
-    async fn read_directory_with_sandbox(
-        &self,
-        path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        trace!("remote fs read_directory_with_sandbox");
+        trace!("remote fs read_directory");
         let response = self
             .client
             .fs_read_directory(FsReadDirectoryParams {
@@ -235,32 +145,18 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .collect())
     }
 
-    async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
+    async fn remove(
+        &self,
+        path: &AbsolutePathBuf,
+        options: RemoveOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
         trace!("remote fs remove");
         self.client
             .fs_remove(FsRemoveParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 force: Some(options.force),
-                sandbox: None,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(())
-    }
-
-    async fn remove_with_sandbox(
-        &self,
-        path: &AbsolutePathBuf,
-        remove_options: RemoveOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()> {
-        trace!("remote fs remove_with_sandbox");
-        self.client
-            .fs_remove(FsRemoveParams {
-                path: path.clone(),
-                recursive: Some(remove_options.recursive),
-                force: Some(remove_options.force),
                 sandbox: sandbox.cloned(),
             })
             .await
@@ -273,6 +169,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         source_path: &AbsolutePathBuf,
         destination_path: &AbsolutePathBuf,
         options: CopyOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs copy");
         self.client
@@ -280,26 +177,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
-                sandbox: None,
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(())
-    }
-
-    async fn copy_with_sandbox(
-        &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
-        copy_options: CopyOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()> {
-        trace!("remote fs copy_with_sandbox");
-        self.client
-            .fs_copy(FsCopyParams {
-                source_path: source_path.clone(),
-                destination_path: destination_path.clone(),
-                recursive: copy_options.recursive,
                 sandbox: sandbox.cloned(),
             })
             .await

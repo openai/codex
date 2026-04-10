@@ -27,7 +27,12 @@ pub(crate) struct LocalFileSystem;
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {
-    async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
+    async fn read_file(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        reject_sandbox_context(sandbox)?;
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         if metadata.len() > MAX_READ_FILE_BYTES {
             return Err(io::Error::new(
@@ -38,34 +43,23 @@ impl ExecutorFileSystem for LocalFileSystem {
         tokio::fs::read(path.as_path()).await
     }
 
-    async fn read_file_with_sandbox(
-        &self,
-        path: &AbsolutePathBuf,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<Vec<u8>> {
-        reject_sandbox_context(sandbox)?;
-        self.read_file(path).await
-    }
-
-    async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
-        tokio::fs::write(path.as_path(), contents).await
-    }
-
-    async fn write_file_with_sandbox(
+    async fn write_file(
         &self,
         path: &AbsolutePathBuf,
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        self.write_file(path, contents).await
+        tokio::fs::write(path.as_path(), contents).await
     }
 
     async fn create_directory(
         &self,
         path: &AbsolutePathBuf,
         options: CreateDirectoryOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        reject_sandbox_context(sandbox)?;
         if options.recursive {
             tokio::fs::create_dir_all(path.as_path()).await?;
         } else {
@@ -74,17 +68,12 @@ impl ExecutorFileSystem for LocalFileSystem {
         Ok(())
     }
 
-    async fn create_directory_with_sandbox(
+    async fn get_metadata(
         &self,
         path: &AbsolutePathBuf,
-        create_directory_options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()> {
+    ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
-        self.create_directory(path, create_directory_options).await
-    }
-
-    async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         Ok(FileMetadata {
             is_directory: metadata.is_dir(),
@@ -94,19 +83,12 @@ impl ExecutorFileSystem for LocalFileSystem {
         })
     }
 
-    async fn get_metadata_with_sandbox(
-        &self,
-        path: &AbsolutePathBuf,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<FileMetadata> {
-        reject_sandbox_context(sandbox)?;
-        self.get_metadata(path).await
-    }
-
     async fn read_directory(
         &self,
         path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        reject_sandbox_context(sandbox)?;
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
@@ -120,16 +102,13 @@ impl ExecutorFileSystem for LocalFileSystem {
         Ok(entries)
     }
 
-    async fn read_directory_with_sandbox(
+    async fn remove(
         &self,
         path: &AbsolutePathBuf,
+        options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+    ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        self.read_directory(path).await
-    }
-
-    async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
         match tokio::fs::symlink_metadata(path.as_path()).await {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
@@ -149,22 +128,14 @@ impl ExecutorFileSystem for LocalFileSystem {
         }
     }
 
-    async fn remove_with_sandbox(
-        &self,
-        path: &AbsolutePathBuf,
-        remove_options: RemoveOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()> {
-        reject_sandbox_context(sandbox)?;
-        self.remove(path, remove_options).await
-    }
-
     async fn copy(
         &self,
         source_path: &AbsolutePathBuf,
         destination_path: &AbsolutePathBuf,
         options: CopyOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        reject_sandbox_context(sandbox)?;
         let source_path = source_path.to_path_buf();
         let destination_path = destination_path.to_path_buf();
         tokio::task::spawn_blocking(move || -> FileSystemResult<()> {
@@ -208,17 +179,6 @@ impl ExecutorFileSystem for LocalFileSystem {
         })
         .await
         .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
-    }
-
-    async fn copy_with_sandbox(
-        &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
-        copy_options: CopyOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()> {
-        reject_sandbox_context(sandbox)?;
-        self.copy(source_path, destination_path, copy_options).await
     }
 }
 

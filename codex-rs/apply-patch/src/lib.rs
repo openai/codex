@@ -271,23 +271,31 @@ async fn apply_hunks_to_files(
         match hunk {
             Hunk::AddFile { contents, .. } => {
                 if let Some(parent_abs) = path_abs.parent() {
-                    fs.create_directory(&parent_abs, CreateDirectoryOptions { recursive: true })
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to create parent directories for {}",
-                                path_abs.display()
-                            )
-                        })?;
-                }
-                fs.write_file(&path_abs, contents.clone().into_bytes())
+                    fs.create_directory(
+                        &parent_abs,
+                        CreateDirectoryOptions { recursive: true },
+                        /*sandbox*/ None,
+                    )
                     .await
-                    .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                    .with_context(|| {
+                        format!(
+                            "Failed to create parent directories for {}",
+                            path_abs.display()
+                        )
+                    })?;
+                }
+                fs.write_file(
+                    &path_abs,
+                    contents.clone().into_bytes(),
+                    /*sandbox*/ None,
+                )
+                .await
+                .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
                 let result: io::Result<()> = async {
-                    let metadata = fs.get_metadata(&path_abs).await?;
+                    let metadata = fs.get_metadata(&path_abs, /*sandbox*/ None).await?;
                     if metadata.is_directory {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
@@ -300,6 +308,7 @@ async fn apply_hunks_to_files(
                             recursive: false,
                             force: false,
                         },
+                        /*sandbox*/ None,
                     )
                     .await
                 }
@@ -318,6 +327,7 @@ async fn apply_hunks_to_files(
                         fs.create_directory(
                             &parent_abs,
                             CreateDirectoryOptions { recursive: true },
+                            /*sandbox*/ None,
                         )
                         .await
                         .with_context(|| {
@@ -327,11 +337,11 @@ async fn apply_hunks_to_files(
                             )
                         })?;
                     }
-                    fs.write_file(&dest_abs, new_contents.into_bytes())
+                    fs.write_file(&dest_abs, new_contents.into_bytes(), /*sandbox*/ None)
                         .await
                         .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
                     let result: io::Result<()> = async {
-                        let metadata = fs.get_metadata(&path_abs).await?;
+                        let metadata = fs.get_metadata(&path_abs, /*sandbox*/ None).await?;
                         if metadata.is_directory {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -344,6 +354,7 @@ async fn apply_hunks_to_files(
                                 recursive: false,
                                 force: false,
                             },
+                            /*sandbox*/ None,
                         )
                         .await
                     }
@@ -353,7 +364,7 @@ async fn apply_hunks_to_files(
                     })?;
                     modified.push(affected_path);
                 } else {
-                    fs.write_file(&path_abs, new_contents.into_bytes())
+                    fs.write_file(&path_abs, new_contents.into_bytes(), /*sandbox*/ None)
                         .await
                         .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
                     modified.push(affected_path);
@@ -380,12 +391,15 @@ async fn derive_new_contents_from_chunks(
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path_abs).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!("Failed to read file to update {}", path_abs.display()),
-            source: err,
-        })
-    })?;
+    let original_contents = fs
+        .read_file_text(path_abs, /*sandbox*/ None)
+        .await
+        .map_err(|err| {
+            ApplyPatchError::IoError(IoError {
+                context: format!("Failed to read file to update {}", path_abs.display()),
+                source: err,
+            })
+        })?;
 
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 

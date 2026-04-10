@@ -95,7 +95,7 @@ impl ToolHandler for ViewImageHandler {
 
         let metadata = environment
             .get_filesystem()
-            .get_metadata(&abs_path)
+            .get_metadata(&abs_path, /*sandbox*/ None)
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -112,7 +112,7 @@ impl ToolHandler for ViewImageHandler {
         }
         let file_bytes = environment
             .get_filesystem()
-            .read_file(&abs_path)
+            .read_file(&abs_path, /*sandbox*/ None)
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(

@@ -48,7 +48,7 @@ impl FileSystemHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file_with_sandbox(&params.path, params.sandbox.as_ref())
+            .read_file(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -67,7 +67,7 @@ impl FileSystemHandler {
             ))
         })?;
         self.file_system
-            .write_file_with_sandbox(&params.path, bytes, params.sandbox.as_ref())
+            .write_file(&params.path, bytes, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -79,7 +79,7 @@ impl FileSystemHandler {
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         let recursive = params.recursive.unwrap_or(true);
         self.file_system
-            .create_directory_with_sandbox(
+            .create_directory(
                 &params.path,
                 CreateDirectoryOptions { recursive },
                 params.sandbox.as_ref(),
@@ -95,7 +95,7 @@ impl FileSystemHandler {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata_with_sandbox(&params.path, params.sandbox.as_ref())
+            .get_metadata(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -112,7 +112,7 @@ impl FileSystemHandler {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory_with_sandbox(&params.path, params.sandbox.as_ref())
+            .read_directory(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?
             .into_iter()
@@ -132,7 +132,7 @@ impl FileSystemHandler {
         let recursive = params.recursive.unwrap_or(true);
         let force = params.force.unwrap_or(true);
         self.file_system
-            .remove_with_sandbox(
+            .remove(
                 &params.path,
                 RemoveOptions { recursive, force },
                 params.sandbox.as_ref(),
@@ -147,7 +147,7 @@ impl FileSystemHandler {
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.file_system
-            .copy_with_sandbox(
+            .copy(
                 &params.source_path,
                 &params.destination_path,
                 CopyOptions {

@@ -170,7 +170,7 @@ pub async fn maybe_parse_apply_patch_verified(
                         );
                     }
                     Hunk::DeleteFile { .. } => {
-                        let content = match fs.read_file_text(&path).await {
+                        let content = match fs.read_file_text(&path, /*sandbox*/ None).await {
                             Ok(content) => content,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(
