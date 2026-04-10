@@ -274,9 +274,18 @@ fn create_filesystem_args(
                 if !root.exists() {
                     continue;
                 }
-                // In restricted-read sandboxes the tmpfs root does not provide
-                // symlink aliases, so bind the real target just like writable roots.
-                let mount_root = canonical_target_if_symlinked_path(&root).unwrap_or(root);
+                // Writable roots are rebound by real target below; mirror that
+                // for their restricted-read bootstrap mount. Plain read-only
+                // roots must stay logical because callers may execute those
+                // paths inside bwrap, such as Bazel runfiles helper binaries.
+                let mount_root = if writable_roots
+                    .iter()
+                    .any(|writable_root| root.starts_with(writable_root.root.as_path()))
+                {
+                    canonical_target_if_symlinked_path(&root).unwrap_or(root)
+                } else {
+                    root
+                };
                 args.push("--ro-bind".to_string());
                 args.push(path_to_string(&mount_root));
                 args.push(path_to_string(&mount_root));
