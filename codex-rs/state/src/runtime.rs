@@ -15,6 +15,9 @@ use crate::STATE_DB_VERSION;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
+use crate::ThreadTimer;
+use crate::ThreadTimerCreateParams;
+use crate::ThreadTimerUpdateParams;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
 use crate::migrations::runtime_logs_migrator;
@@ -58,8 +61,10 @@ mod remote_control;
 #[cfg(test)]
 mod test_support;
 mod threads;
+mod timers;
 
 pub use remote_control::RemoteControlEnrollmentRecord;
+pub use timers::TimerDataVersionChecker;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id

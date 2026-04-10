@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
-use super::timer_sidecar::thread_preview_from_timer_sidecar;
 use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
@@ -714,12 +713,7 @@ async fn build_thread_item(
     {
         return None;
     }
-    let timer_preview = if summary.saw_user_event {
-        None
-    } else {
-        thread_preview_from_timer_sidecar(&path).await
-    };
-    if summary.saw_session_meta && (summary.saw_user_event || timer_preview.is_some()) {
+    if summary.saw_session_meta && summary.saw_user_event {
         let HeadTailSummary {
             thread_id,
             first_user_message,
@@ -742,7 +736,7 @@ async fn build_thread_item(
         return Some(ThreadItem {
             path,
             thread_id,
-            first_user_message: first_user_message.or(timer_preview),
+            first_user_message,
             cwd,
             git_branch,
             git_sha,

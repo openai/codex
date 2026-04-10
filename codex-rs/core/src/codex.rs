@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -307,6 +309,7 @@ use crate::tasks::SessionTaskContext;
 use crate::timers::ClaimedTimer;
 use crate::timers::CreateTimer;
 use crate::timers::PersistedTimer;
+use crate::timers::RestoredTimerTask;
 use crate::timers::TIMER_FIRED_BACKGROUND_EVENT_PREFIX;
 use crate::timers::TIMER_UPDATED_BACKGROUND_EVENT_PREFIX;
 use crate::timers::ThreadTimer;
@@ -314,9 +317,7 @@ use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;
 use crate::timers::TimerTaskSpec;
 use crate::timers::TimersState;
-use crate::timers::load_timer_sidecar;
 use crate::timers::timer_prompt_input_item;
-use crate::timers::write_timer_sidecar;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
@@ -414,6 +415,44 @@ pub struct Codex {
 }
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
+
+const TIMER_SOURCE_AGENT: &str = "agent";
+const TIMER_CLIENT_ID_FALLBACK: &str = "codex-cli";
+const TIMER_DB_SYNC_INTERVAL: Duration = Duration::from_secs(15);
+const TIMER_DB_MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+fn db_timer_to_persisted_timer(row: codex_state::ThreadTimer) -> Option<PersistedTimer> {
+    let trigger = match serde_json::from_str(&row.trigger_json) {
+        Ok(trigger) => trigger,
+        Err(err) => {
+            warn!("skipping invalid persisted timer {} trigger: {err}", row.id);
+            return None;
+        }
+    };
+    let delivery =
+        match serde_json::from_value::<TimerDelivery>(serde_json::Value::String(row.delivery)) {
+            Ok(delivery) => delivery,
+            Err(err) => {
+                warn!(
+                    "skipping invalid persisted timer {} delivery: {err}",
+                    row.id
+                );
+                return None;
+            }
+        };
+    Some(PersistedTimer {
+        timer: ThreadTimer {
+            id: row.id,
+            trigger,
+            prompt: row.prompt,
+            delivery,
+            created_at: row.created_at,
+            next_run_at: row.next_run_at,
+            last_run_at: row.last_run_at,
+        },
+        pending_run: row.pending_run,
+    })
+}
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
 /// the submission id for the initial `ConfigureSession` request and the
@@ -838,9 +877,7 @@ pub(crate) struct Session {
     /// Prevents concurrent timers from claiming multiple timers before a
     /// newly started turn becomes the active turn.
     timer_start_in_progress: Mutex<bool>,
-    /// Serializes timer sidecar snapshots and file writes so stale timer state
-    /// cannot overwrite newer persisted state.
-    timer_sidecar_write_lock: Mutex<()>,
+    timer_db_sync_started: AtomicBool,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
@@ -2014,7 +2051,7 @@ impl Session {
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             timer_start_in_progress: Mutex::new(false),
-            timer_sidecar_write_lock: Mutex::new(()),
+            timer_db_sync_started: AtomicBool::new(false),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
@@ -2057,7 +2094,7 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
-        sess.restore_timers_from_sidecar().await;
+        sess.restore_timers_from_db().await;
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
@@ -2168,6 +2205,36 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    async fn timer_state_db(&self) -> Result<state_db::StateDbHandle, String> {
+        if let Some(state_db) = self.state_db() {
+            return Ok(state_db);
+        }
+
+        let config = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .clone()
+        };
+        match codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        {
+            Ok(runtime) => Ok(runtime),
+            Err(err) => {
+                let message = format!(
+                    "failed to initialize SQLite state db for timers at {}: {err}",
+                    config.sqlite_home.display()
+                );
+                warn!("{message}");
+                Err(message)
+            }
+        }
     }
 
     /// Ensure rollout file writes are durably flushed.
@@ -2700,7 +2767,12 @@ impl Session {
         .await
     }
 
-    pub(crate) async fn list_timers(&self) -> Vec<ThreadTimer> {
+    pub(crate) async fn list_timers(self: &Arc<Self>) -> Vec<ThreadTimer> {
+        self.sync_timers_from_db(/*emit_update*/ false).await;
+        self.list_timers_from_memory().await
+    }
+
+    async fn list_timers_from_memory(&self) -> Vec<ThreadTimer> {
         self.timers.lock().await.list_timers()
     }
 
@@ -2711,15 +2783,14 @@ impl Session {
         delivery: TimerDelivery,
     ) -> Result<ThreadTimer, String> {
         self.ensure_rollout_materialized().await;
-        let Some(rollout_path) = self.current_rollout_path().await else {
-            return Err("timers require a persisted rollout path for restoration".to_string());
-        };
+        let state_db = self.timer_state_db().await?;
+        self.start_timer_db_sync_task(state_db.clone());
 
         let timer_cancel = CancellationToken::new();
         let id = uuid::Uuid::new_v4().to_string();
-        let (timer, timer_spec) = {
+        let (timer, persisted_timer, timer_spec) = {
             let mut timers = self.timers.lock().await;
-            timers.create_timer(
+            let (timer, timer_spec) = timers.create_timer(
                 CreateTimer {
                     id: id.clone(),
                     trigger,
@@ -2728,13 +2799,20 @@ impl Session {
                     now: Utc::now(),
                 },
                 Some(timer_cancel.clone()),
-            )?
+            )?;
+            let persisted_timer = timers
+                .persisted_timer(&id)
+                .ok_or_else(|| format!("created timer {id} was not stored in memory"))?;
+            (timer, persisted_timer, timer_spec)
         };
-        if let Err(err) = self.persist_timers_to_rollout_sidecar(&rollout_path).await {
+        let params = self
+            .thread_timer_create_params(&persisted_timer, TIMER_SOURCE_AGENT)
+            .await?;
+        if let Err(err) = state_db.create_thread_timer(&params).await {
             if let Some(runtime) = self.timers.lock().await.remove_timer(&id) {
                 TimersState::cancel_runtime(&runtime);
             }
-            return Err(err);
+            return Err(format!("failed to persist timer to sqlite: {err}"));
         }
 
         if let Some(timer_spec) = timer_spec {
@@ -2745,17 +2823,30 @@ impl Session {
         Ok(timer)
     }
 
-    pub(crate) async fn delete_timer(&self, id: &str) -> Result<bool, String> {
-        let Some(runtime) = self.timers.lock().await.remove_timer(id) else {
+    pub(crate) async fn delete_timer(self: &Arc<Self>, id: &str) -> Result<bool, String> {
+        self.sync_timers_from_db(/*emit_update*/ false).await;
+        let state_db = self.timer_state_db().await?;
+        self.start_timer_db_sync_task(state_db.clone());
+
+        let runtime = self.timers.lock().await.remove_timer(id);
+        let deleted = match state_db
+            .delete_thread_timer(&self.thread_id_string(), id)
+            .await
+        {
+            Ok(deleted) => deleted,
+            Err(err) => {
+                if let Some(runtime) = runtime {
+                    self.timers.lock().await.restore_runtime(runtime);
+                }
+                return Err(format!("failed to delete timer from sqlite: {err}"));
+            }
+        };
+        let Some(runtime) = runtime else {
+            return Ok(deleted);
+        };
+        if !deleted {
+            self.timers.lock().await.restore_runtime(runtime);
             return Ok(false);
-        };
-        let Some(rollout_path) = self.current_rollout_path().await else {
-            self.timers.lock().await.restore_runtime(runtime);
-            return Err("timers require a persisted rollout path for restoration".to_string());
-        };
-        if let Err(err) = self.persist_timers_to_rollout_sidecar(&rollout_path).await {
-            self.timers.lock().await.restore_runtime(runtime);
-            return Err(err);
         }
         TimersState::cancel_runtime(&runtime);
         self.emit_timer_updated_notification().await;
@@ -2776,8 +2867,6 @@ impl Session {
         if deleted_one_shot_timer {
             self.emit_timer_updated_notification().await;
         }
-        self.persist_timers_sidecar_best_effort().await;
-
         let input_item = timer_prompt_input_item(&context);
         match context.delivery {
             TimerDelivery::SteerCurrentTurn => {
@@ -2822,10 +2911,17 @@ impl Session {
             can_after_turn,
             active_turn_is_regular,
         );
-        if claimed.is_none() {
+        let Some(claimed) = claimed else {
             *self.timer_start_in_progress.lock().await = false;
+            return None;
+        };
+
+        if !self.try_claim_timer_in_db(&claimed).await {
+            self.sync_timers_from_db(/*emit_update*/ true).await;
+            *self.timer_start_in_progress.lock().await = false;
+            return None;
         }
-        claimed
+        Some(claimed)
     }
 
     async fn inject_timer_into_active_turn(&self, item: ResponseInputItem) -> bool {
@@ -2868,8 +2964,9 @@ impl Session {
                     break;
                 };
                 let changed = session.timers.lock().await.mark_timer_due(&id, Utc::now());
-                if changed {
-                    session.persist_timers_sidecar_best_effort().await;
+                if changed && !session.persist_timer_due_best_effort(&id).await {
+                    session.sync_timers_from_db(/*emit_update*/ true).await;
+                    continue;
                 }
                 session.maybe_start_pending_timer().await;
                 let next_timer_spec = session
@@ -2885,98 +2982,239 @@ impl Session {
         });
     }
 
-    async fn persist_timers_to_rollout_sidecar(&self, rollout_path: &Path) -> Result<(), String> {
-        let rollout_path = rollout_path.to_path_buf();
-        self.persist_timers_sidecar_with_writer(|timers| async move {
-            write_timer_sidecar(&rollout_path, &timers).await
-        })
-        .await
-    }
-
-    async fn persist_timers_sidecar_with_writer<W, Fut>(
+    async fn thread_timer_create_params(
         &self,
-        write_sidecar: W,
-    ) -> Result<(), String>
-    where
-        W: FnOnce(Vec<PersistedTimer>) -> Fut,
-        Fut: Future<Output = Result<(), String>>,
-    {
-        let _write_lock = self.timer_sidecar_write_lock.lock().await;
-        let timers = self.timers.lock().await.persisted_timers();
-        write_sidecar(timers).await
+        persisted_timer: &PersistedTimer,
+        source: &str,
+    ) -> Result<codex_state::ThreadTimerCreateParams, String> {
+        let timer = &persisted_timer.timer;
+        Ok(codex_state::ThreadTimerCreateParams {
+            id: timer.id.clone(),
+            thread_id: self.thread_id_string(),
+            source: source.to_string(),
+            client_id: self.timer_client_id().await,
+            trigger_json: serde_json::to_string(&timer.trigger)
+                .map_err(|err| format!("failed to serialize timer trigger: {err}"))?,
+            prompt: timer.prompt.clone(),
+            delivery: timer.delivery.as_str().to_string(),
+            created_at: timer.created_at,
+            next_run_at: timer.next_run_at,
+            last_run_at: timer.last_run_at,
+            pending_run: persisted_timer.pending_run,
+        })
     }
 
-    async fn persist_timers_sidecar_best_effort(&self) {
-        let Some(rollout_path) = self.current_rollout_path().await else {
-            return;
+    fn thread_timer_update_params(
+        &self,
+        persisted_timer: &PersistedTimer,
+    ) -> Result<codex_state::ThreadTimerUpdateParams, String> {
+        let timer = &persisted_timer.timer;
+        Ok(codex_state::ThreadTimerUpdateParams {
+            trigger_json: serde_json::to_string(&timer.trigger)
+                .map_err(|err| format!("failed to serialize timer trigger: {err}"))?,
+            delivery: timer.delivery.as_str().to_string(),
+            next_run_at: timer.next_run_at,
+            last_run_at: timer.last_run_at,
+            pending_run: persisted_timer.pending_run,
+        })
+    }
+
+    async fn persist_timer_due_best_effort(&self, id: &str) -> bool {
+        let state_db = match self.timer_state_db().await {
+            Ok(state_db) => state_db,
+            Err(err) => {
+                warn!("failed to persist due timer {id}: {err}");
+                return false;
+            }
         };
-        if let Err(err) = self.persist_timers_to_rollout_sidecar(&rollout_path).await {
-            warn!("failed to persist timers sidecar: {err}");
+        let Some(persisted_timer) = self.timers.lock().await.persisted_timer(id) else {
+            return false;
+        };
+        match state_db
+            .update_thread_timer_due(
+                &self.thread_id_string(),
+                id,
+                persisted_timer.timer.next_run_at,
+            )
+            .await
+        {
+            Ok(updated) => updated,
+            Err(err) => {
+                warn!("failed to persist due timer {id}: {err}");
+                false
+            }
         }
     }
 
-    async fn restore_timers_from_sidecar(self: &Arc<Self>) {
+    async fn try_claim_timer_in_db(&self, claimed: &ClaimedTimer) -> bool {
+        let state_db = match self.timer_state_db().await {
+            Ok(state_db) => state_db,
+            Err(err) => {
+                warn!(
+                    "failed to claim timer {} in sqlite: {err}",
+                    claimed.timer.id
+                );
+                return true;
+            }
+        };
+        let thread_id = self.thread_id_string();
+        let result = if claimed.deleted_one_shot_timer {
+            state_db
+                .claim_one_shot_thread_timer(&thread_id, &claimed.timer.id)
+                .await
+        } else {
+            let persisted_timer = PersistedTimer {
+                timer: claimed.timer.clone(),
+                pending_run: claimed.timer.trigger.is_idle_recurring(),
+            };
+            let Ok(params) = self.thread_timer_update_params(&persisted_timer) else {
+                return false;
+            };
+            state_db
+                .claim_recurring_thread_timer(&thread_id, &claimed.timer.id, &params)
+                .await
+        };
+        match result {
+            Ok(claimed) => claimed,
+            Err(err) => {
+                warn!(
+                    "failed to claim timer {} in sqlite: {err}",
+                    claimed.timer.id
+                );
+                false
+            }
+        }
+    }
+
+    async fn restore_timers_from_db(self: &Arc<Self>) {
         if !self.features.enabled(Feature::TimerScheduler) {
             return;
         }
-        let Some(rollout_path) = self.current_rollout_path().await else {
+        let Ok(state_db) = self.timer_state_db().await else {
             return;
         };
-        let persisted = match load_timer_sidecar(&rollout_path).await {
-            Ok(persisted) => persisted,
-            Err(err) => {
-                warn!("{err}");
-                return;
-            }
-        };
-        if persisted.is_empty() {
-            return;
-        }
-
-        {
-            let _write_lock = self.timer_sidecar_write_lock.lock().await;
-            let mut normalized = Vec::<PersistedTimer>::new();
-            for persisted_timer in persisted {
-                let timer_cancel = CancellationToken::new();
-                let timer_spec = {
-                    let mut timers = self.timers.lock().await;
-                    match timers.restore_timer(
-                        persisted_timer.clone(),
-                        Utc::now(),
-                        Some(timer_cancel.clone()),
-                    ) {
-                        Ok(timer_spec) => {
-                            normalized = timers.persisted_timers();
-                            timer_spec
-                        }
-                        Err(err) => {
-                            warn!(
-                                "skipping invalid persisted timer {}: {err}",
-                                persisted_timer.timer.id
-                            );
-                            continue;
-                        }
-                    }
-                };
-                if let Some(timer_spec) = timer_spec {
-                    self.spawn_timer_task(
-                        persisted_timer.timer.id.clone(),
-                        timer_spec,
-                        timer_cancel,
-                    );
-                }
-            }
-
-            if let Err(err) = write_timer_sidecar(&rollout_path, &normalized).await {
-                warn!("failed to rewrite normalized timer sidecar: {err}");
-            }
-        }
-        self.emit_timer_updated_notification().await;
+        self.start_timer_db_sync_task(state_db);
+        self.sync_timers_from_db(/*emit_update*/ true).await;
         self.maybe_start_pending_timer().await;
     }
 
+    fn start_timer_db_sync_task(self: &Arc<Self>, state_db: state_db::StateDbHandle) {
+        if !self.features.enabled(Feature::TimerScheduler) {
+            return;
+        }
+        if self
+            .timer_db_sync_started
+            .swap(/*val*/ true, Ordering::SeqCst)
+        {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let session_cancel = self.timer_tasks_cancellation_token.clone();
+        tokio::spawn(async move {
+            let checker = match state_db.timer_data_version_checker().await {
+                Ok(checker) => checker,
+                Err(err) => {
+                    warn!("failed to start timer db sync: {err}");
+                    if let Some(session) = weak.upgrade() {
+                        session.timer_db_sync_started.store(false, Ordering::SeqCst);
+                    }
+                    return;
+                }
+            };
+            let mut last_data_version = checker.data_version().await.ok();
+            let mut last_full_refresh = tokio::time::Instant::now();
+            let mut interval = tokio::time::interval(TIMER_DB_SYNC_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                tokio::select! {
+                    _ = session_cancel.cancelled() => break,
+                    _ = interval.tick() => {}
+                }
+
+                let current_data_version = match checker.data_version().await {
+                    Ok(version) => Some(version),
+                    Err(err) => {
+                        warn!("failed to poll timer db data_version: {err}");
+                        None
+                    }
+                };
+                let version_changed =
+                    current_data_version.is_some() && current_data_version != last_data_version;
+                let max_refresh_elapsed =
+                    last_full_refresh.elapsed() >= TIMER_DB_MAX_REFRESH_INTERVAL;
+                if !version_changed && !max_refresh_elapsed {
+                    continue;
+                }
+                last_data_version = current_data_version.or(last_data_version);
+                let Some(session) = weak.upgrade() else {
+                    break;
+                };
+                session.sync_timers_from_db(/*emit_update*/ true).await;
+                session.maybe_start_pending_timer().await;
+                last_full_refresh = tokio::time::Instant::now();
+            }
+        });
+    }
+
+    async fn sync_timers_from_db(self: &Arc<Self>, emit_update: bool) -> bool {
+        if !self.features.enabled(Feature::TimerScheduler) {
+            return false;
+        }
+        let Ok(state_db) = self.timer_state_db().await else {
+            return false;
+        };
+        self.start_timer_db_sync_task(state_db.clone());
+        let thread_id = self.thread_id_string();
+        let db_timers = match state_db.list_thread_timers(&thread_id).await {
+            Ok(timers) => timers,
+            Err(err) => {
+                warn!("failed to load timers from sqlite for thread {thread_id}: {err}");
+                return false;
+            }
+        };
+        let persisted = db_timers
+            .into_iter()
+            .filter_map(db_timer_to_persisted_timer)
+            .collect::<Vec<_>>();
+        let (changed, restored_tasks) = self
+            .timers
+            .lock()
+            .await
+            .replace_timers_if_changed(persisted, Utc::now());
+        self.spawn_restored_timer_tasks(restored_tasks);
+        if changed && emit_update {
+            self.emit_timer_updated_notification().await;
+        }
+        changed
+    }
+
+    fn spawn_restored_timer_tasks(self: &Arc<Self>, restored_tasks: Vec<RestoredTimerTask>) {
+        for RestoredTimerTask {
+            id,
+            timer_spec,
+            timer_cancel,
+        } in restored_tasks
+        {
+            self.spawn_timer_task(id, timer_spec, timer_cancel);
+        }
+    }
+
+    fn thread_id_string(&self) -> String {
+        self.conversation_id.to_string()
+    }
+
+    async fn timer_client_id(&self) -> String {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .app_server_client_name
+            .clone()
+            .unwrap_or_else(|| TIMER_CLIENT_ID_FALLBACK.to_string())
+    }
+
     async fn emit_timer_updated_notification(&self) {
-        let timers = self.list_timers().await;
+        let timers = self.list_timers_from_memory().await;
         let Ok(payload) = serde_json::to_string(&timers) else {
             warn!("failed to serialize timer update payload");
             return;

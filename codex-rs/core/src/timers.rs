@@ -1,7 +1,7 @@
 //! Persistent thread-local timer scheduling for follow-on turns and same-turn steer delivery.
 //!
 //! This module owns the in-memory timer registry, trigger evaluation, the user
-//! message injected when a timer fires, and the JSON sidecar format used to
+//! message injected when a timer fires, and the persistent state shape used to
 //! restore timers after a harness restart.
 
 use crate::timer_trigger::TimerTrigger;
@@ -15,11 +15,7 @@ use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::ErrorKind;
-use std::path::Path;
-use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 pub const TIMER_UPDATED_BACKGROUND_EVENT_PREFIX: &str = "timer_updated:";
 pub const TIMER_FIRED_BACKGROUND_EVENT_PREFIX: &str = "timer_fired:";
@@ -104,6 +100,13 @@ pub(crate) struct TimerTaskSpec {
     pub(crate) delay: std::time::Duration,
 }
 
+#[derive(Debug)]
+pub(crate) struct RestoredTimerTask {
+    pub(crate) id: String,
+    pub(crate) timer_spec: TimerTaskSpec,
+    pub(crate) timer_cancel: CancellationToken,
+}
+
 impl TimersState {
     pub(crate) fn list_timers(&self) -> Vec<ThreadTimer> {
         let mut timers = self
@@ -135,6 +138,48 @@ impl TimersState {
                 .then_with(|| left.timer.id.cmp(&right.timer.id))
         });
         timers
+    }
+
+    pub(crate) fn persisted_timer(&self, id: &str) -> Option<PersistedTimer> {
+        self.timers.get(id).map(|runtime| PersistedTimer {
+            timer: runtime.timer.clone(),
+            pending_run: runtime.pending_run,
+        })
+    }
+
+    pub(crate) fn replace_timers_if_changed(
+        &mut self,
+        persisted: Vec<PersistedTimer>,
+        now: chrono::DateTime<Utc>,
+    ) -> (bool, Vec<RestoredTimerTask>) {
+        if self.persisted_timers() == persisted {
+            return (false, Vec::new());
+        }
+
+        for runtime in self.timers.values() {
+            Self::cancel_runtime(runtime);
+        }
+        self.timers.clear();
+
+        let mut restored_tasks = Vec::new();
+        for persisted_timer in persisted {
+            let timer_cancel = CancellationToken::new();
+            let timer_id = persisted_timer.timer.id.clone();
+            match self.restore_timer(persisted_timer, now, Some(timer_cancel.clone())) {
+                Ok(Some(timer_spec)) => {
+                    restored_tasks.push(RestoredTimerTask {
+                        id: timer_id,
+                        timer_spec,
+                        timer_cancel,
+                    });
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!("skipping invalid persisted timer {timer_id}: {err}");
+                }
+            }
+        }
+        (true, restored_tasks)
     }
 
     pub(crate) fn create_timer(
@@ -379,113 +424,6 @@ fn render_timer_prompt_template(template: &str, timer: &TimerInvocationContext) 
         .to_string()
 }
 
-pub fn timer_sidecar_path_for_rollout(rollout_path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.timers.json", rollout_path.display()))
-}
-
-pub(crate) async fn load_timer_sidecar(rollout_path: &Path) -> Result<Vec<PersistedTimer>, String> {
-    let sidecar_path = timer_sidecar_path_for_rollout(rollout_path);
-    let bytes = match tokio::fs::read(&sidecar_path).await {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => {
-            return Err(format!(
-                "failed to read timer sidecar `{}`: {err}",
-                sidecar_path.display()
-            ));
-        }
-    };
-    let raw_timers: Vec<serde_json::Value> = serde_json::from_slice(&bytes).map_err(|err| {
-        format!(
-            "failed to parse timer sidecar `{}`: {err}",
-            sidecar_path.display()
-        )
-    })?;
-    let mut timers = Vec::new();
-    for raw_timer in raw_timers {
-        match serde_json::from_value::<PersistedTimer>(raw_timer) {
-            Ok(timer) => timers.push(timer),
-            Err(err) => {
-                tracing::warn!(
-                    "skipping invalid persisted timer from `{}`: {err}",
-                    sidecar_path.display()
-                );
-            }
-        }
-    }
-    Ok(timers)
-}
-
-pub(crate) async fn write_timer_sidecar(
-    rollout_path: &Path,
-    timers: &[PersistedTimer],
-) -> Result<(), String> {
-    let sidecar_path = timer_sidecar_path_for_rollout(rollout_path);
-    if timers.is_empty() {
-        match tokio::fs::remove_file(&sidecar_path).await {
-            Ok(()) => return Ok(()),
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(err) => {
-                return Err(format!(
-                    "failed to remove empty timer sidecar `{}`: {err}",
-                    sidecar_path.display()
-                ));
-            }
-        }
-    }
-
-    let bytes = serde_json::to_vec_pretty(timers).map_err(|err| {
-        format!(
-            "failed to serialize timer sidecar `{}`: {err}",
-            sidecar_path.display()
-        )
-    })?;
-    let tmp_path = PathBuf::from(format!("{}.tmp-{}", sidecar_path.display(), Uuid::new_v4()));
-    tokio::fs::write(&tmp_path, bytes).await.map_err(|err| {
-        format!(
-            "failed to write temporary timer sidecar `{}`: {err}",
-            tmp_path.display()
-        )
-    })?;
-    match tokio::fs::rename(&tmp_path, &sidecar_path).await {
-        Ok(()) => Ok(()),
-        Err(initial_error) => {
-            #[cfg(target_os = "windows")]
-            {
-                match tokio::fs::remove_file(&sidecar_path).await {
-                    Ok(()) => {
-                        tokio::fs::rename(&tmp_path, &sidecar_path)
-                            .await
-                            .map_err(|err| {
-                                format!(
-                                    "failed to replace timer sidecar `{}` with `{}`: {err}",
-                                    sidecar_path.display(),
-                                    tmp_path.display()
-                                )
-                            })?;
-                        return Ok(());
-                    }
-                    Err(err) if err.kind() == ErrorKind::NotFound => {}
-                    Err(err) => {
-                        let _ = tokio::fs::remove_file(&tmp_path).await;
-                        return Err(format!(
-                            "failed to remove existing timer sidecar `{}` before replace: {err}",
-                            sidecar_path.display()
-                        ));
-                    }
-                }
-            }
-
-            let _ = tokio::fs::remove_file(&tmp_path).await;
-            Err(format!(
-                "failed to atomically replace timer sidecar `{}` with `{}`: {initial_error}",
-                sidecar_path.display(),
-                tmp_path.display()
-            ))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::CreateTimer;
@@ -495,17 +433,13 @@ mod tests {
     use super::TimerDelivery;
     use super::TimerInvocationContext;
     use super::TimersState;
-    use super::load_timer_sidecar;
     use super::timer_prompt_input_item;
-    use super::timer_sidecar_path_for_rollout;
-    use super::write_timer_sidecar;
     use crate::timer_trigger::TimerTrigger;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseInputItem;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     const ZERO_SECONDS: u64 = 0;
     const TEN_SECONDS: u64 = 10;
@@ -739,126 +673,6 @@ mod tests {
                     text: "<timer_fired>\n<id>timer-1</id>\n<trigger>delay 0s</trigger>\n<delivery>after-turn</delivery>\n<recurring>false</recurring>\n<prompt>\nrun tests once\n</prompt>\n<instructions>\nThis one-shot timer has already been removed from the schedule, so you do not need to call TimerDelete.\nDo not expose scheduler internals unless they matter to the user.\n</instructions>\n</timer_fired>".to_string(),
                 }],
             }
-        );
-    }
-
-    #[tokio::test]
-    async fn timer_sidecar_round_trips_persisted_timers() {
-        let tempdir = TempDir::new().expect("tempdir");
-        let rollout_path = tempdir.path().join("rollout.jsonl");
-        let persisted = vec![PersistedTimer {
-            timer: super::ThreadTimer {
-                id: "timer-1".to_string(),
-                trigger: delay(ZERO_SECONDS, /*repeat*/ None),
-                prompt: "run tests".to_string(),
-                delivery: TimerDelivery::AfterTurn,
-                created_at: 1,
-                next_run_at: None,
-                last_run_at: None,
-            },
-            pending_run: true,
-        }];
-
-        write_timer_sidecar(&rollout_path, &persisted)
-            .await
-            .expect("write sidecar");
-        let loaded = load_timer_sidecar(&rollout_path)
-            .await
-            .expect("load sidecar");
-
-        assert_eq!(loaded, persisted);
-        assert_eq!(
-            timer_sidecar_path_for_rollout(&rollout_path),
-            tempdir.path().join("rollout.jsonl.timers.json")
-        );
-    }
-
-    #[tokio::test]
-    async fn timer_sidecar_overwrites_existing_file() {
-        let tempdir = TempDir::new().expect("tempdir");
-        let rollout_path = tempdir.path().join("rollout.jsonl");
-        let original = vec![PersistedTimer {
-            timer: super::ThreadTimer {
-                id: "timer-1".to_string(),
-                trigger: delay(ZERO_SECONDS, /*repeat*/ None),
-                prompt: "run tests".to_string(),
-                delivery: TimerDelivery::AfterTurn,
-                created_at: 1,
-                next_run_at: None,
-                last_run_at: None,
-            },
-            pending_run: true,
-        }];
-        let replacement = vec![PersistedTimer {
-            timer: super::ThreadTimer {
-                id: "timer-2".to_string(),
-                trigger: delay(SIXTY_SECONDS, Some(true)),
-                prompt: "run different tests".to_string(),
-                delivery: TimerDelivery::SteerCurrentTurn,
-                created_at: 2,
-                next_run_at: None,
-                last_run_at: Some(3),
-            },
-            pending_run: false,
-        }];
-
-        write_timer_sidecar(&rollout_path, &original)
-            .await
-            .expect("write original sidecar");
-        write_timer_sidecar(&rollout_path, &replacement)
-            .await
-            .expect("overwrite sidecar");
-
-        let loaded = load_timer_sidecar(&rollout_path)
-            .await
-            .expect("load overwritten sidecar");
-        assert_eq!(loaded, replacement);
-    }
-
-    #[tokio::test]
-    async fn timer_sidecar_skips_invalid_entries() {
-        let tempdir = TempDir::new().expect("tempdir");
-        let rollout_path = tempdir.path().join("rollout.jsonl");
-        let sidecar_path = timer_sidecar_path_for_rollout(&rollout_path);
-        tokio::fs::write(
-            &sidecar_path,
-            r#"[
-              { "timer": { "id": "old", "cronExpression": "@after-turn" }, "pending_run": true },
-              {
-                "timer": {
-                  "id": "timer-1",
-                  "trigger": { "kind": "delay", "seconds": 0, "repeat": null },
-                  "prompt": "run tests",
-                  "delivery": "after-turn",
-                  "created_at": 1,
-                  "next_run_at": null,
-                  "last_run_at": null
-                },
-                "pending_run": true
-              }
-            ]"#,
-        )
-        .await
-        .expect("write sidecar");
-
-        let loaded = load_timer_sidecar(&rollout_path)
-            .await
-            .expect("load sidecar");
-
-        assert_eq!(
-            loaded,
-            vec![PersistedTimer {
-                timer: super::ThreadTimer {
-                    id: "timer-1".to_string(),
-                    trigger: delay(ZERO_SECONDS, /*repeat*/ None),
-                    prompt: "run tests".to_string(),
-                    delivery: TimerDelivery::AfterTurn,
-                    created_at: 1,
-                    next_run_at: None,
-                    last_run_at: None,
-                },
-                pending_run: true,
-            }]
         );
     }
 }
