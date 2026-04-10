@@ -436,7 +436,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
-        analytics_events_client: None,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         skills_manager,
@@ -455,6 +454,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
         user_shell_override: None,
         parent_trace: None,
+        analytics_events_client: None,
     })
     .await
     .expect("spawn guardian subagent");
