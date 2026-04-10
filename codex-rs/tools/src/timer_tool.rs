@@ -58,7 +58,7 @@ pub fn create_timer_tool() -> ToolSpec {
         ),
         (
             "meta".to_string(),
-            JsonSchema::object(BTreeMap::new(), None, Some(true.into())),
+            JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(true.into())),
         ),
         (
             "delivery".to_string(),
@@ -115,7 +115,7 @@ pub fn create_list_timers_tool() -> ToolSpec {
         description: "List thread timers for the current thread.".to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(BTreeMap::new(), None, Some(false.into())),
+        parameters: JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(false.into())),
         output_schema: None,
     })
 }
