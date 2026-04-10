@@ -3,6 +3,7 @@
 use crate::timers::TimerDelivery;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::InjectedMessageEvent;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -68,6 +69,13 @@ pub(crate) fn message_prompt_input_item(message: &MessageInvocationContext) -> R
         content: vec![ContentItem::InputText {
             text: render_message_prompt(message),
         }],
+    }
+}
+
+pub(crate) fn injected_message_event(message: &MessageInvocationContext) -> InjectedMessageEvent {
+    InjectedMessageEvent {
+        content: message.content.clone(),
+        source: message.source.clone(),
     }
 }
 

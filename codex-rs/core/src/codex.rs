@@ -114,6 +114,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
+use codex_protocol::protocol::InjectedMessageEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -287,6 +288,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
+use crate::pending_input::PendingInputItem;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
@@ -848,7 +850,7 @@ pub(crate) struct Session {
     timer_db_sync_started: AtomicBool,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
-    idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    idle_pending_input: Mutex<Vec<PendingInputItem>>, // TODO (jif) merge with mailbox!
     timers: Mutex<TimersState>,
     timer_tasks_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
@@ -4137,6 +4139,19 @@ impl Session {
         self.ensure_rollout_materialized().await;
     }
 
+    pub(crate) async fn record_generated_message_and_emit_display(
+        &self,
+        turn_context: &TurnContext,
+        response_item: ResponseItem,
+        injected_event: InjectedMessageEvent,
+    ) {
+        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+            .await;
+        self.send_event(turn_context, EventMsg::InjectedMessage(injected_event))
+            .await;
+        self.ensure_rollout_materialized().await;
+    }
+
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
@@ -4250,7 +4265,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_input(ResponseInputItem::from(input).into());
         turn_state.accept_mailbox_delivery_for_current_turn();
         Ok(active_turn_id.clone())
     }
@@ -4265,7 +4280,7 @@ impl Session {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 for item in input {
-                    ts.push_pending_input(item);
+                    ts.push_pending_input(item.into());
                 }
                 Ok(())
             }
@@ -4321,7 +4336,16 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
+    #[cfg(test)]
     pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
+        self.prepend_pending_input_items(input.into_iter().map(Into::into).collect())
+            .await
+    }
+
+    pub(crate) async fn prepend_pending_input_items(
+        &self,
+        input: Vec<PendingInputItem>,
+    ) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -4333,7 +4357,16 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        self.take_pending_input_items()
+            .await
+            .into_iter()
+            .map(PendingInputItem::into_model_input)
+            .collect()
+    }
+
+    pub(crate) async fn take_pending_input_items(&self) -> Vec<PendingInputItem> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -4356,6 +4389,7 @@ impl Session {
                 .drain()
                 .into_iter()
                 .map(|mail| mail.to_response_input_item())
+                .map(Into::into)
                 .collect::<Vec<_>>()
         };
         if pending_input.is_empty() {
@@ -4369,7 +4403,17 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
+        if items.is_empty() {
+            return;
+        }
+
+        let mut idle_pending_input = self.idle_pending_input.lock().await;
+        idle_pending_input.extend(items.into_iter().map(PendingInputItem::from));
+    }
+
+    pub(crate) async fn queue_pending_input_for_next_turn(&self, items: Vec<PendingInputItem>) {
         if items.is_empty() {
             return;
         }
@@ -4378,7 +4422,7 @@ impl Session {
         idle_pending_input.extend(items);
     }
 
-    pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
+    pub(crate) async fn take_queued_pending_input_for_next_turn(&self) -> Vec<PendingInputItem> {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
@@ -6258,7 +6302,7 @@ pub(crate) async fn run_turn(
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = if can_drain_pending_input {
-            sess.get_pending_input().await
+            sess.take_pending_input_items().await
         } else {
             Vec::new()
         };
@@ -6279,7 +6323,9 @@ pub(crate) async fn run_turn(
                     } => {
                         let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
                         if !remaining_pending_input.is_empty() {
-                            let _ = sess.prepend_pending_input(remaining_pending_input).await;
+                            let _ = sess
+                                .prepend_pending_input_items(remaining_pending_input)
+                                .await;
                             requeued_pending_input = true;
                         }
                         blocked_pending_input_contexts = additional_contexts;
@@ -7244,6 +7290,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
         | EventMsg::UserMessage(_)
+        | EventMsg::InjectedMessage(_)
         | EventMsg::AgentMessageDelta(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningDelta(_)

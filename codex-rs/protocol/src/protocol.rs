@@ -1412,6 +1412,9 @@ pub enum EventMsg {
     /// User/system input message (what was sent to the model)
     UserMessage(UserMessageEvent),
 
+    /// Transcript-safe display text for a runtime-injected message.
+    InjectedMessage(InjectedMessageEvent),
+
     /// Agent text output delta message
     AgentMessageDelta(AgentMessageDeltaEvent),
 
@@ -2281,6 +2284,12 @@ pub struct UserMessageEvent {
     /// UI-defined spans within `message` used to render or persist special elements.
     #[serde(default)]
     pub text_elements: Vec<crate::user_input::TextElement>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct InjectedMessageEvent {
+    pub content: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

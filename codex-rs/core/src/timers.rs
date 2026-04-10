@@ -6,7 +6,6 @@
 
 use crate::messages::MessageInvocationContext;
 use crate::messages::MessagePayload;
-use crate::messages::message_prompt_input_item;
 use crate::messages::validate_meta;
 use crate::timer_trigger::TimerTrigger;
 use crate::timer_trigger::TriggerTiming;
@@ -15,7 +14,6 @@ use crate::timer_trigger::normalize_schedule_dtstart_input;
 use crate::timer_trigger::timing_for_new_trigger;
 use crate::timer_trigger::timing_for_restored_trigger;
 use chrono::Utc;
-use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -462,15 +460,23 @@ pub fn build_thread_timer_create_params(
     })
 }
 
-pub(crate) fn timer_prompt_input_item(timer: &TimerInvocationContext) -> ResponseInputItem {
-    let instructions = timer_message_instructions(timer);
-    message_prompt_input_item(&MessageInvocationContext {
+#[cfg(test)]
+pub(crate) fn timer_prompt_input_item(
+    timer: &TimerInvocationContext,
+) -> codex_protocol::models::ResponseInputItem {
+    crate::messages::message_prompt_input_item(&timer_message_invocation_context(timer))
+}
+
+pub(crate) fn timer_message_invocation_context(
+    timer: &TimerInvocationContext,
+) -> MessageInvocationContext {
+    MessageInvocationContext {
         source: format!("timer {}", timer.current_timer_id),
         content: timer_message_content(timer),
-        instructions,
+        instructions: timer_message_instructions(timer),
         meta: timer.meta.clone(),
         queued_at: timer.queued_at,
-    })
+    }
 }
 
 fn timer_message_content(timer: &TimerInvocationContext) -> String {
