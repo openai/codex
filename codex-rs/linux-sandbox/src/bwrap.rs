@@ -274,9 +274,12 @@ fn create_filesystem_args(
                 if !root.exists() {
                     continue;
                 }
+                // In restricted-read sandboxes the tmpfs root does not provide
+                // symlink aliases, so bind the real target just like writable roots.
+                let mount_root = canonical_target_if_symlinked_path(&root).unwrap_or(root);
                 args.push("--ro-bind".to_string());
-                args.push(path_to_string(&root));
-                args.push(path_to_string(&root));
+                args.push(path_to_string(&mount_root));
+                args.push(path_to_string(&mount_root));
             }
         }
 
@@ -783,7 +786,13 @@ mod tests {
             BwrapOptions::default(),
         )
         .expect("create bwrap args");
+        let canonical_sandbox_cwd = path_to_string(
+            &real_root
+                .canonicalize()
+                .expect("canonicalize sandbox policy cwd"),
+        );
         let canonical_command_cwd = path_to_string(&canonical_command_cwd);
+        let link_sandbox_cwd = path_to_string(&link_root);
         let link_command_cwd = path_to_string(&command_cwd);
 
         assert!(
@@ -791,12 +800,28 @@ mod tests {
                 .windows(2)
                 .any(|window| { window == ["--chdir", canonical_command_cwd.as_str()] })
         );
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--ro-bind",
+                    canonical_sandbox_cwd.as_str(),
+                    canonical_sandbox_cwd.as_str(),
+                ]
+        }));
         assert!(
             !args
                 .args
                 .windows(2)
                 .any(|window| { window == ["--chdir", link_command_cwd.as_str()] })
         );
+        assert!(!args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--ro-bind",
+                    link_sandbox_cwd.as_str(),
+                    link_sandbox_cwd.as_str(),
+                ]
+        }));
     }
 
     #[cfg(unix)]
