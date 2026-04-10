@@ -28,11 +28,24 @@ struct HookRunCell {
     id: String,
     event_name: HookEventName,
     status_message: Option<String>,
-    start_time: Option<Instant>,
-    reveal_deadline: Instant,
-    running_visible: bool,
-    completed: Option<CompletedHookRun>,
-    quiet_removal_deadline: Option<Instant>,
+    state: HookRunState,
+}
+
+#[derive(Debug)]
+enum HookRunState {
+    PendingReveal {
+        start_time: Instant,
+        reveal_deadline: Instant,
+    },
+    Running {
+        start_time: Instant,
+        reveal_deadline: Instant,
+    },
+    QuietLinger {
+        start_time: Instant,
+        removal_deadline: Instant,
+    },
+    Completed(CompletedHookRun),
 }
 
 #[derive(Debug)]
@@ -68,7 +81,7 @@ impl HookCell {
     }
 
     pub(crate) fn is_active(&self) -> bool {
-        self.runs.iter().any(HookRunCell::is_active)
+        self.runs.iter().any(|run| run.state.is_active())
     }
 
     pub(crate) fn should_flush(&self) -> bool {
@@ -76,14 +89,14 @@ impl HookCell {
     }
 
     pub(crate) fn should_render(&self) -> bool {
-        self.runs.iter().any(HookRunCell::should_render)
+        self.runs.iter().any(|run| run.state.should_render())
     }
 
     pub(crate) fn take_completed_persistent_runs(&mut self) -> Option<Self> {
         let mut completed = Vec::new();
         let mut remaining = Vec::new();
         for run in self.runs.drain(..) {
-            if run.has_persistent_output() {
+            if run.state.has_persistent_output() {
                 completed.push(run);
             } else {
                 remaining.push(run);
@@ -97,33 +110,22 @@ impl HookCell {
     }
 
     pub(crate) fn has_visible_running_run(&self) -> bool {
-        self.runs
-            .iter()
-            .any(|run| run.completed.is_none() && run.running_visible)
+        self.runs.iter().any(|run| run.state.is_running_visible())
     }
 
     pub(crate) fn start_run(&mut self, run: HookRunSummary) {
+        let now = Instant::now();
         if let Some(existing) = self.runs.iter_mut().find(|existing| existing.id == run.id) {
             existing.event_name = run.event_name;
             existing.status_message = run.status_message;
-            let now = Instant::now();
-            existing.start_time = Some(now);
-            existing.reveal_deadline = now + HOOK_RUN_REVEAL_DELAY;
-            existing.running_visible = false;
-            existing.completed = None;
-            existing.quiet_removal_deadline = None;
+            existing.state = HookRunState::pending(now);
             return;
         }
-        let now = Instant::now();
         self.runs.push(HookRunCell {
             id: run.id,
             event_name: run.event_name,
             status_message: run.status_message,
-            start_time: Some(now),
-            reveal_deadline: now + HOOK_RUN_REVEAL_DELAY,
-            running_visible: false,
-            completed: None,
-            quiet_removal_deadline: None,
+            state: HookRunState::pending(now),
         });
     }
 
@@ -133,8 +135,8 @@ impl HookCell {
             return false;
         };
         if hook_run_is_quiet_success(&run) {
-            if let Some(deadline) = self.runs[index].quiet_removal_deadline_after_quiet_success() {
-                self.runs[index].quiet_removal_deadline = Some(deadline);
+            if self.runs[index].start_quiet_linger_after_success() {
+                return true;
             } else {
                 self.runs.remove(index);
             }
@@ -143,8 +145,7 @@ impl HookCell {
         let existing = &mut self.runs[index];
         existing.event_name = run.event_name;
         existing.status_message = run.status_message;
-        existing.start_time = None;
-        existing.completed = Some(CompletedHookRun {
+        existing.state = HookRunState::Completed(CompletedHookRun {
             status: run.status,
             entries: run.entries,
         });
@@ -159,31 +160,23 @@ impl HookCell {
             id: run.id,
             event_name: run.event_name,
             status_message: run.status_message,
-            start_time: None,
-            reveal_deadline: Instant::now(),
-            running_visible: false,
-            completed: Some(CompletedHookRun {
+            state: HookRunState::Completed(CompletedHookRun {
                 status: run.status,
                 entries: run.entries,
             }),
-            quiet_removal_deadline: None,
         });
     }
 
     pub(crate) fn prune_expired_quiet_runs(&mut self, now: Instant) -> bool {
         let old_len = self.runs.len();
-        self.runs.retain(|run| {
-            run.quiet_removal_deadline
-                .is_none_or(|deadline| now < deadline)
-        });
+        self.runs.retain(|run| !run.state.quiet_linger_expired(now));
         self.runs.len() != old_len
     }
 
     pub(crate) fn update_due_visibility(&mut self, now: Instant) -> bool {
         let mut changed = false;
         for run in &mut self.runs {
-            if run.should_reveal_running(now) {
-                run.running_visible = true;
+            if run.state.reveal_if_due(now) {
                 changed = true;
             }
         }
@@ -193,21 +186,14 @@ impl HookCell {
     pub(crate) fn next_timer_deadline(&self) -> Option<Instant> {
         self.runs
             .iter()
-            .filter_map(|run| {
-                run.quiet_removal_deadline.or_else(|| {
-                    run.should_wait_to_reveal_running()
-                        .then_some(run.reveal_deadline)
-                })
-            })
+            .filter_map(|run| run.state.next_timer_deadline())
             .min()
     }
 
     #[cfg(test)]
     pub(crate) fn expire_quiet_runs_now_for_test(&mut self) {
         for run in &mut self.runs {
-            if run.quiet_removal_deadline.is_some() {
-                run.quiet_removal_deadline = Some(Instant::now());
-            }
+            run.expire_quiet_linger_now_for_test();
         }
     }
 
@@ -215,9 +201,7 @@ impl HookCell {
     pub(crate) fn reveal_running_runs_now_for_test(&mut self) {
         let now = Instant::now();
         for run in &mut self.runs {
-            if run.should_wait_to_reveal_running() {
-                run.reveal_deadline = now;
-            }
+            run.reveal_running_now_for_test(now);
         }
     }
 
@@ -225,21 +209,22 @@ impl HookCell {
         let mut lines = Vec::new();
         let mut running_group: Option<RunningHookGroup> = None;
         for run in &self.runs {
-            if !run.should_render() {
+            if !run.state.should_render() {
                 continue;
             }
             if let Some(key) = run.running_group_key() {
                 match running_group.as_mut() {
                     Some(group) if group.key == key => {
                         group.count += 1;
-                        group.start_time = earliest_instant(group.start_time, run.start_time);
+                        group.start_time =
+                            earliest_instant(group.start_time, run.state.start_time());
                     }
                     Some(group) => {
                         push_running_hook_group(&mut lines, group, self.animations_enabled);
-                        running_group = Some(RunningHookGroup::new(key, run.start_time));
+                        running_group = Some(RunningHookGroup::new(key, run.state.start_time()));
                     }
                     None => {
-                        running_group = Some(RunningHookGroup::new(key, run.start_time));
+                        running_group = Some(RunningHookGroup::new(key, run.state.start_time()));
                     }
                 }
                 continue;
@@ -270,7 +255,12 @@ impl HistoryCell for HookCell {
         let elapsed = self
             .runs
             .iter()
-            .find_map(|run| run.is_active().then_some(run.start_time).flatten())?
+            .find_map(|run| {
+                run.state
+                    .is_active()
+                    .then(|| run.state.start_time())
+                    .flatten()
+            })?
             .elapsed();
         Some(elapsed.as_millis() as u64 / 600)
     }
@@ -289,76 +279,186 @@ impl Renderable for HookCell {
 }
 
 impl HookRunCell {
-    fn quiet_removal_deadline_after_quiet_success(&self) -> Option<Instant> {
-        if !self.running_visible {
-            return None;
+    fn start_quiet_linger_after_success(&mut self) -> bool {
+        let Some((start_time, removal_deadline)) = self.state.quiet_linger_after_success() else {
+            return false;
+        };
+        self.state = HookRunState::QuietLinger {
+            start_time,
+            removal_deadline,
+        };
+        true
+    }
+
+    #[cfg(test)]
+    fn expire_quiet_linger_now_for_test(&mut self) {
+        if let HookRunState::QuietLinger {
+            removal_deadline, ..
+        } = &mut self.state
+        {
+            *removal_deadline = Instant::now();
         }
-        let minimum_deadline = self.reveal_deadline + QUIET_HOOK_MIN_VISIBLE;
-        (Instant::now() < minimum_deadline).then_some(minimum_deadline)
     }
 
-    fn is_active(&self) -> bool {
-        self.completed.is_none() || self.quiet_removal_deadline.is_some()
-    }
-
-    fn should_wait_to_reveal_running(&self) -> bool {
-        self.completed.is_none() && !self.running_visible
-    }
-
-    fn should_reveal_running(&self, now: Instant) -> bool {
-        self.should_wait_to_reveal_running() && now >= self.reveal_deadline
-    }
-
-    fn should_display_running(&self) -> bool {
-        self.completed.is_none()
+    #[cfg(test)]
+    fn reveal_running_now_for_test(&mut self, now: Instant) {
+        if let HookRunState::PendingReveal {
+            reveal_deadline, ..
+        } = &mut self.state
+        {
+            *reveal_deadline = now;
+        }
     }
 
     fn running_group_key(&self) -> Option<RunningHookGroupKey> {
-        self.should_display_running().then(|| RunningHookGroupKey {
-            event_name: self.event_name,
-            status_message: self.status_message.clone(),
-        })
-    }
-
-    fn should_render(&self) -> bool {
-        self.completed.is_some() || self.running_visible || self.quiet_removal_deadline.is_some()
-    }
-
-    fn has_persistent_output(&self) -> bool {
-        self.completed.as_ref().is_some_and(|completed| {
-            completed.status != HookRunStatus::Completed || !completed.entries.is_empty()
-        })
+        self.state
+            .is_running_visible()
+            .then(|| RunningHookGroupKey {
+                event_name: self.event_name,
+                status_message: self.status_message.clone(),
+            })
     }
 
     fn push_display_lines(&self, lines: &mut Vec<Line<'static>>, animations_enabled: bool) {
         let label = hook_event_label(self.event_name);
-        if self.should_display_running() {
-            let hook_text = format!("Running {label} hook");
-            push_running_hook_header(
-                lines,
-                &hook_text,
-                self.start_time,
-                self.status_message.as_deref(),
-                animations_enabled,
-            );
-            return;
-        }
-
-        if let Some(completed) = &self.completed {
-            let status = format!("{:?}", completed.status).to_lowercase();
-            let bullet = hook_completed_bullet(completed);
-            lines.push(
-                vec![
-                    bullet,
-                    " ".into(),
-                    format!("{label} hook ({status})").into(),
-                ]
-                .into(),
-            );
-            for entry in &completed.entries {
-                lines.push(format!("  {}{}", hook_output_prefix(entry.kind), entry.text).into());
+        match &self.state {
+            HookRunState::Running { start_time, .. }
+            | HookRunState::QuietLinger { start_time, .. } => {
+                let hook_text = format!("Running {label} hook");
+                push_running_hook_header(
+                    lines,
+                    &hook_text,
+                    Some(*start_time),
+                    self.status_message.as_deref(),
+                    animations_enabled,
+                );
             }
+            HookRunState::Completed(completed) => {
+                let status = format!("{:?}", completed.status).to_lowercase();
+                let bullet = hook_completed_bullet(completed);
+                lines.push(
+                    vec![
+                        bullet,
+                        " ".into(),
+                        format!("{label} hook ({status})").into(),
+                    ]
+                    .into(),
+                );
+                for entry in &completed.entries {
+                    lines
+                        .push(format!("  {}{}", hook_output_prefix(entry.kind), entry.text).into());
+                }
+            }
+            HookRunState::PendingReveal { .. } => {}
         }
+    }
+}
+
+impl HookRunState {
+    fn pending(start_time: Instant) -> Self {
+        Self::PendingReveal {
+            start_time,
+            reveal_deadline: start_time + HOOK_RUN_REVEAL_DELAY,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        match self {
+            HookRunState::PendingReveal { .. }
+            | HookRunState::Running { .. }
+            | HookRunState::QuietLinger { .. } => true,
+            HookRunState::Completed(_) => false,
+        }
+    }
+
+    fn should_render(&self) -> bool {
+        match self {
+            HookRunState::Running { .. }
+            | HookRunState::QuietLinger { .. }
+            | HookRunState::Completed(_) => true,
+            HookRunState::PendingReveal { .. } => false,
+        }
+    }
+
+    fn has_persistent_output(&self) -> bool {
+        match self {
+            HookRunState::Completed(completed) => {
+                completed.status != HookRunStatus::Completed || !completed.entries.is_empty()
+            }
+            HookRunState::PendingReveal { .. }
+            | HookRunState::Running { .. }
+            | HookRunState::QuietLinger { .. } => false,
+        }
+    }
+
+    fn start_time(&self) -> Option<Instant> {
+        match self {
+            HookRunState::PendingReveal { start_time, .. }
+            | HookRunState::Running { start_time, .. }
+            | HookRunState::QuietLinger { start_time, .. } => Some(*start_time),
+            HookRunState::Completed(_) => None,
+        }
+    }
+
+    fn is_running_visible(&self) -> bool {
+        matches!(
+            self,
+            HookRunState::Running { .. } | HookRunState::QuietLinger { .. }
+        )
+    }
+
+    fn reveal_if_due(&mut self, now: Instant) -> bool {
+        let HookRunState::PendingReveal {
+            start_time,
+            reveal_deadline,
+        } = self
+        else {
+            return false;
+        };
+        if now < *reveal_deadline {
+            return false;
+        }
+        *self = HookRunState::Running {
+            start_time: *start_time,
+            reveal_deadline: *reveal_deadline,
+        };
+        true
+    }
+
+    fn next_timer_deadline(&self) -> Option<Instant> {
+        match self {
+            HookRunState::PendingReveal {
+                reveal_deadline, ..
+            } => Some(*reveal_deadline),
+            HookRunState::QuietLinger {
+                removal_deadline, ..
+            } => Some(*removal_deadline),
+            HookRunState::Running { .. } | HookRunState::Completed(_) => None,
+        }
+    }
+
+    fn quiet_linger_expired(&self, now: Instant) -> bool {
+        match self {
+            HookRunState::QuietLinger {
+                removal_deadline, ..
+            } => now >= *removal_deadline,
+            HookRunState::PendingReveal { .. }
+            | HookRunState::Running { .. }
+            | HookRunState::Completed(_) => false,
+        }
+    }
+
+    fn quiet_linger_after_success(&self) -> Option<(Instant, Instant)> {
+        let HookRunState::Running {
+            start_time,
+            reveal_deadline,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let minimum_deadline = *reveal_deadline + QUIET_HOOK_MIN_VISIBLE;
+        (Instant::now() < minimum_deadline).then_some((*start_time, minimum_deadline))
     }
 }
 
