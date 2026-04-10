@@ -1170,7 +1170,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(hook_inputs[0]["approval_review"], Value::Null);
+    assert_eq!(hook_inputs[0]["guardian_review"], Value::Null);
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
@@ -1272,9 +1272,8 @@ async fn permission_request_hook_receives_guardian_review_before_fallback() -> R
     let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
-        hook_inputs[0]["approval_review"],
+        hook_inputs[0]["guardian_review"],
         serde_json::json!({
-            "source": "guardian",
             "status": "approved",
             "decision": "allow",
             "risk_level": "medium",

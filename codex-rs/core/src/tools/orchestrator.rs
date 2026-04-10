@@ -28,12 +28,10 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
-use codex_hooks::PermissionRequestApprovalReview;
-use codex_hooks::PermissionRequestApprovalReviewDecision;
-use codex_hooks::PermissionRequestApprovalReviewRiskLevel;
-use codex_hooks::PermissionRequestApprovalReviewStatus as HookApprovalReviewStatus;
-use codex_hooks::PermissionRequestApprovalReviewUserAuthorization;
 use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestGuardianReview;
+use codex_hooks::PermissionRequestGuardianReviewDecision;
+use codex_hooks::PermissionRequestGuardianReviewStatus as HookGuardianReviewStatus;
 use codex_otel::SessionTelemetry;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::error::CodexErr;
@@ -425,7 +423,7 @@ impl ToolOrchestrator {
                 permission_request.command,
                 guardian_review
                     .as_ref()
-                    .map(|review| permission_request_approval_review(review.review.clone())),
+                    .map(|review| permission_request_guardian_review(review.review.clone())),
             )
             .await
             {
@@ -478,51 +476,23 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     "command failed; retry without sandbox?".to_string()
 }
 
-fn permission_request_approval_review(
+fn permission_request_guardian_review(
     review: GuardianApprovalReview,
-) -> PermissionRequestApprovalReview {
-    PermissionRequestApprovalReview {
+) -> PermissionRequestGuardianReview {
+    PermissionRequestGuardianReview {
         status: match review.status {
-            GuardianApprovalReviewStatus::Approved => HookApprovalReviewStatus::Approved,
-            GuardianApprovalReviewStatus::Denied => HookApprovalReviewStatus::Denied,
-            GuardianApprovalReviewStatus::Aborted => HookApprovalReviewStatus::Aborted,
-            GuardianApprovalReviewStatus::Failed => HookApprovalReviewStatus::Failed,
-            GuardianApprovalReviewStatus::TimedOut => HookApprovalReviewStatus::TimedOut,
+            GuardianApprovalReviewStatus::Approved => HookGuardianReviewStatus::Approved,
+            GuardianApprovalReviewStatus::Denied => HookGuardianReviewStatus::Denied,
+            GuardianApprovalReviewStatus::Aborted => HookGuardianReviewStatus::Aborted,
+            GuardianApprovalReviewStatus::Failed => HookGuardianReviewStatus::Failed,
+            GuardianApprovalReviewStatus::TimedOut => HookGuardianReviewStatus::TimedOut,
         },
         decision: review.decision.map(|decision| match decision {
-            GuardianAssessmentOutcome::Allow => PermissionRequestApprovalReviewDecision::Allow,
-            GuardianAssessmentOutcome::Deny => PermissionRequestApprovalReviewDecision::Deny,
+            GuardianAssessmentOutcome::Allow => PermissionRequestGuardianReviewDecision::Allow,
+            GuardianAssessmentOutcome::Deny => PermissionRequestGuardianReviewDecision::Deny,
         }),
-        risk_level: review.risk_level.map(|risk_level| match risk_level {
-            codex_protocol::protocol::GuardianRiskLevel::Low => {
-                PermissionRequestApprovalReviewRiskLevel::Low
-            }
-            codex_protocol::protocol::GuardianRiskLevel::Medium => {
-                PermissionRequestApprovalReviewRiskLevel::Medium
-            }
-            codex_protocol::protocol::GuardianRiskLevel::High => {
-                PermissionRequestApprovalReviewRiskLevel::High
-            }
-            codex_protocol::protocol::GuardianRiskLevel::Critical => {
-                PermissionRequestApprovalReviewRiskLevel::Critical
-            }
-        }),
-        user_authorization: review.user_authorization.map(|user_authorization| {
-            match user_authorization {
-                codex_protocol::protocol::GuardianUserAuthorization::Unknown => {
-                    PermissionRequestApprovalReviewUserAuthorization::Unknown
-                }
-                codex_protocol::protocol::GuardianUserAuthorization::Low => {
-                    PermissionRequestApprovalReviewUserAuthorization::Low
-                }
-                codex_protocol::protocol::GuardianUserAuthorization::Medium => {
-                    PermissionRequestApprovalReviewUserAuthorization::Medium
-                }
-                codex_protocol::protocol::GuardianUserAuthorization::High => {
-                    PermissionRequestApprovalReviewUserAuthorization::High
-                }
-            }
-        }),
+        risk_level: review.risk_level,
+        user_authorization: review.user_authorization,
         rationale: review.rationale,
     }
 }

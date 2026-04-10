@@ -1,15 +1,11 @@
 mod engine;
 pub(crate) mod events;
 mod legacy_notify;
+mod permission_review;
 mod registry;
 mod schema;
 mod types;
 
-pub use events::permission_request::PermissionRequestApprovalReview;
-pub use events::permission_request::PermissionRequestApprovalReviewDecision;
-pub use events::permission_request::PermissionRequestApprovalReviewRiskLevel;
-pub use events::permission_request::PermissionRequestApprovalReviewStatus;
-pub use events::permission_request::PermissionRequestApprovalReviewUserAuthorization;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
@@ -26,6 +22,9 @@ pub use events::user_prompt_submit::UserPromptSubmitOutcome;
 pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;
 pub use legacy_notify::notify_hook;
+pub use permission_review::PermissionRequestGuardianReview;
+pub use permission_review::PermissionRequestGuardianReviewDecision;
+pub use permission_review::PermissionRequestGuardianReviewStatus;
 pub use registry::Hooks;
 pub use registry::HooksConfig;
 pub use registry::command_from_argv;

@@ -21,11 +21,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
-use crate::schema::PermissionRequestApprovalReviewDecisionWire;
-use crate::schema::PermissionRequestApprovalReviewRiskLevelWire;
-use crate::schema::PermissionRequestApprovalReviewStatusWire;
-use crate::schema::PermissionRequestApprovalReviewUserAuthorizationWire;
-use crate::schema::PermissionRequestApprovalReviewWire;
+use crate::permission_review::PermissionRequestGuardianReview;
 use crate::schema::PermissionRequestCommandInput;
 use crate::schema::PermissionRequestToolInput;
 
@@ -49,53 +45,13 @@ pub struct PermissionRequestRequest {
     /// A hook can use this as another signal, but it is not bound by the
     /// guardian's decision. The hook may allow, deny, or stay quiet; if it stays
     /// quiet, the orchestrator falls back to the guardian's original decision.
-    pub approval_review: Option<PermissionRequestApprovalReview>,
+    pub guardian_review: Option<PermissionRequestGuardianReview>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRequestDecision {
     Allow,
     Deny { message: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionRequestApprovalReview {
-    pub status: PermissionRequestApprovalReviewStatus,
-    pub decision: Option<PermissionRequestApprovalReviewDecision>,
-    pub risk_level: Option<PermissionRequestApprovalReviewRiskLevel>,
-    pub user_authorization: Option<PermissionRequestApprovalReviewUserAuthorization>,
-    pub rationale: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionRequestApprovalReviewStatus {
-    Approved,
-    Denied,
-    Aborted,
-    Failed,
-    TimedOut,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionRequestApprovalReviewDecision {
-    Allow,
-    Deny,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionRequestApprovalReviewRiskLevel {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionRequestApprovalReviewUserAuthorization {
-    Unknown,
-    Low,
-    Medium,
-    High,
 }
 
 #[derive(Debug)]
@@ -161,7 +117,7 @@ pub(crate) async fn run(
         tool_input: PermissionRequestToolInput {
             command: request.command.clone(),
         },
-        approval_review: request.approval_review.map(Into::into),
+        guardian_review: request.guardian_review,
     }) {
         Ok(input_json) => input_json,
         Err(error) => {
@@ -311,65 +267,5 @@ fn parse_completed(
     dispatcher::ParsedHandler {
         completed,
         data: PermissionRequestHandlerData { decision },
-    }
-}
-
-impl From<PermissionRequestApprovalReview> for PermissionRequestApprovalReviewWire {
-    fn from(value: PermissionRequestApprovalReview) -> Self {
-        Self {
-            source: "guardian".to_string(),
-            status: value.status.into(),
-            decision: value.decision.map(Into::into),
-            risk_level: value.risk_level.map(Into::into),
-            user_authorization: value.user_authorization.map(Into::into),
-            rationale: value.rationale,
-        }
-    }
-}
-
-impl From<PermissionRequestApprovalReviewStatus> for PermissionRequestApprovalReviewStatusWire {
-    fn from(value: PermissionRequestApprovalReviewStatus) -> Self {
-        match value {
-            PermissionRequestApprovalReviewStatus::Approved => Self::Approved,
-            PermissionRequestApprovalReviewStatus::Denied => Self::Denied,
-            PermissionRequestApprovalReviewStatus::Aborted => Self::Aborted,
-            PermissionRequestApprovalReviewStatus::Failed => Self::Failed,
-            PermissionRequestApprovalReviewStatus::TimedOut => Self::TimedOut,
-        }
-    }
-}
-
-impl From<PermissionRequestApprovalReviewDecision> for PermissionRequestApprovalReviewDecisionWire {
-    fn from(value: PermissionRequestApprovalReviewDecision) -> Self {
-        match value {
-            PermissionRequestApprovalReviewDecision::Allow => Self::Allow,
-            PermissionRequestApprovalReviewDecision::Deny => Self::Deny,
-        }
-    }
-}
-
-impl From<PermissionRequestApprovalReviewRiskLevel>
-    for PermissionRequestApprovalReviewRiskLevelWire
-{
-    fn from(value: PermissionRequestApprovalReviewRiskLevel) -> Self {
-        match value {
-            PermissionRequestApprovalReviewRiskLevel::Low => Self::Low,
-            PermissionRequestApprovalReviewRiskLevel::Medium => Self::Medium,
-            PermissionRequestApprovalReviewRiskLevel::High => Self::High,
-            PermissionRequestApprovalReviewRiskLevel::Critical => Self::Critical,
-        }
-    }
-}
-
-impl From<PermissionRequestApprovalReviewUserAuthorization>
-    for PermissionRequestApprovalReviewUserAuthorizationWire
-{
-    fn from(value: PermissionRequestApprovalReviewUserAuthorization) -> Self {
-        match value {
-            PermissionRequestApprovalReviewUserAuthorization::Unknown => Self::Unknown,
-            PermissionRequestApprovalReviewUserAuthorization::Low => Self::Low,
-            PermissionRequestApprovalReviewUserAuthorization::Medium => Self::Medium,
-            PermissionRequestApprovalReviewUserAuthorization::High => Self::High,
-        }
     }
 }

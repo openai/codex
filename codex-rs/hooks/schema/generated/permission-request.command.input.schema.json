@@ -2,20 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "NullableString": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "PermissionRequestApprovalReviewDecisionWire": {
-      "enum": [
-        "allow",
-        "deny"
-      ],
-      "type": "string"
-    },
-    "PermissionRequestApprovalReviewRiskLevelWire": {
+    "GuardianRiskLevel": {
       "enum": [
         "low",
         "medium",
@@ -24,17 +11,7 @@
       ],
       "type": "string"
     },
-    "PermissionRequestApprovalReviewStatusWire": {
-      "enum": [
-        "approved",
-        "denied",
-        "aborted",
-        "failed",
-        "timed_out"
-      ],
-      "type": "string"
-    },
-    "PermissionRequestApprovalReviewUserAuthorizationWire": {
+    "GuardianUserAuthorization": {
       "enum": [
         "unknown",
         "low",
@@ -43,13 +20,19 @@
       ],
       "type": "string"
     },
-    "PermissionRequestApprovalReviewWire": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "PermissionRequestGuardianReview": {
       "additionalProperties": false,
       "properties": {
         "decision": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PermissionRequestApprovalReviewDecisionWire"
+              "$ref": "#/definitions/PermissionRequestGuardianReviewDecision"
             },
             {
               "type": "null"
@@ -65,24 +48,20 @@
         "risk_level": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PermissionRequestApprovalReviewRiskLevelWire"
+              "$ref": "#/definitions/GuardianRiskLevel"
             },
             {
               "type": "null"
             }
           ]
         },
-        "source": {
-          "const": "guardian",
-          "type": "string"
-        },
         "status": {
-          "$ref": "#/definitions/PermissionRequestApprovalReviewStatusWire"
+          "$ref": "#/definitions/PermissionRequestGuardianReviewStatus"
         },
         "user_authorization": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PermissionRequestApprovalReviewUserAuthorizationWire"
+              "$ref": "#/definitions/GuardianUserAuthorization"
             },
             {
               "type": "null"
@@ -94,11 +73,27 @@
         "decision",
         "rationale",
         "risk_level",
-        "source",
         "status",
         "user_authorization"
       ],
       "type": "object"
+    },
+    "PermissionRequestGuardianReviewDecision": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestGuardianReviewStatus": {
+      "enum": [
+        "approved",
+        "denied",
+        "aborted",
+        "failed",
+        "timed_out"
+      ],
+      "type": "string"
     },
     "PermissionRequestToolInput": {
       "additionalProperties": false,
@@ -114,18 +109,18 @@
     }
   },
   "properties": {
-    "approval_review": {
+    "cwd": {
+      "type": "string"
+    },
+    "guardian_review": {
       "anyOf": [
         {
-          "$ref": "#/definitions/PermissionRequestApprovalReviewWire"
+          "$ref": "#/definitions/PermissionRequestGuardianReview"
         },
         {
           "type": "null"
         }
       ]
-    },
-    "cwd": {
-      "type": "string"
     },
     "hook_event_name": {
       "const": "PermissionRequest",
@@ -163,8 +158,8 @@
     }
   },
   "required": [
-    "approval_review",
     "cwd",
+    "guardian_review",
     "hook_event_name",
     "model",
     "permission_mode",
