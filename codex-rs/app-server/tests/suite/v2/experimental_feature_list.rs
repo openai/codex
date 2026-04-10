@@ -281,9 +281,9 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
         error.message
     );
     assert!(
-        error
-            .message
-            .contains("apps, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"),
+        error.message.contains(
+            "apps, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation, prefix_compaction"
+        ),
         "{}",
         error.message
     );

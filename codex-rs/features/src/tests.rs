@@ -98,6 +98,23 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
 }
 
 #[test]
+fn prefix_compaction_is_experimental_and_user_toggleable() {
+    let spec = Feature::PrefixCompaction.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("Prefix compaction"));
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "Precompute history compaction in the background before the normal context compaction threshold is reached."
+        )
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(Feature::PrefixCompaction.default_enabled(), false);
+}
+
+#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),
@@ -317,6 +334,79 @@ usage_hint_enabled = false
             usage_hint_text: None,
             hide_spawn_agent_metadata: None,
         }))
+    );
+}
+
+#[test]
+fn prefix_compaction_feature_config_deserializes_bool() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+prefix_compaction = true
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("prefix_compaction".to_string(), true)])
+    );
+    assert_eq!(features.prefix_compaction, Some(FeatureToml::Enabled(true)));
+}
+
+#[test]
+fn prefix_compaction_feature_config_deserializes_table() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[prefix_compaction]
+enabled = true
+threshold_percent = 75
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("prefix_compaction".to_string(), true)])
+    );
+    assert_eq!(
+        features.prefix_compaction,
+        Some(crate::FeatureToml::Config(
+            crate::PrefixCompactionConfigToml {
+                enabled: Some(true),
+                threshold_percent: Some(75),
+            }
+        ))
+    );
+}
+
+#[test]
+fn prefix_compaction_threshold_percent_does_not_enable_feature() {
+    let features_toml: FeaturesToml = toml::from_str(
+        r#"
+[prefix_compaction]
+threshold_percent = 75
+"#,
+    )
+    .expect("features table should deserialize");
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features.enabled(Feature::PrefixCompaction), false);
+    assert_eq!(features_toml.entries(), BTreeMap::new());
+    assert_eq!(
+        features_toml.prefix_compaction,
+        Some(crate::FeatureToml::Config(
+            crate::PrefixCompactionConfigToml {
+                enabled: None,
+                threshold_percent: Some(75),
+            }
+        ))
     );
 }
 

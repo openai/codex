@@ -69,6 +69,7 @@ export type { ConfigValueWriteParams } from "./ConfigValueWriteParams";
 export type { ConfigWarningNotification } from "./ConfigWarningNotification";
 export type { ConfigWriteResponse } from "./ConfigWriteResponse";
 export type { ContextCompactedNotification } from "./ContextCompactedNotification";
+export type { ContextCompactionKind } from "./ContextCompactionKind";
 export type { CreditsSnapshot } from "./CreditsSnapshot";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";

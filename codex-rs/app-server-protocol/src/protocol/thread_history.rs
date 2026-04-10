@@ -816,11 +816,14 @@ impl ThreadHistoryBuilder {
         });
     }
 
-    fn handle_context_compacted(&mut self, _payload: &ContextCompactedEvent) {
+    fn handle_context_compacted(&mut self, payload: &ContextCompactedEvent) {
         let id = self.next_item_id();
         self.ensure_turn()
             .items
-            .push(ThreadItem::ContextCompaction { id });
+            .push(ThreadItem::ContextCompaction {
+                id,
+                kind: payload.kind.clone().map(Into::into),
+            });
     }
 
     fn handle_entered_review_mode(&mut self, payload: &codex_protocol::protocol::ReviewRequest) {

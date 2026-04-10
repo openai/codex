@@ -1287,10 +1287,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::PlanDelta(notification))
                 .await;
         }
-        EventMsg::ContextCompacted(..) => {
+        EventMsg::ContextCompacted(event) => {
             let notification = ContextCompactedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                kind: event.kind.map(Into::into),
             };
             outgoing
                 .send_server_notification(ServerNotification::ContextCompacted(notification))

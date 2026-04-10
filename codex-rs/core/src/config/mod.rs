@@ -55,6 +55,7 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_features::PrefixCompactionConfigToml;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -527,6 +528,9 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    /// Settings specific to background prefix compaction.
+    pub prefix_compaction: PrefixCompactionConfig,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
 
@@ -586,6 +590,11 @@ impl Default for MultiAgentV2Config {
             hide_spawn_agent_metadata: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrefixCompactionConfig {
+    pub threshold_percent: Option<i64>,
 }
 
 impl AuthManagerConfig for Config {
@@ -1339,6 +1348,29 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
     }
 }
 
+fn resolve_prefix_compaction_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> PrefixCompactionConfig {
+    let base = prefix_compaction_toml_config(config_toml.features.as_ref());
+    let profile = prefix_compaction_toml_config(config_profile.features.as_ref());
+
+    PrefixCompactionConfig {
+        threshold_percent: profile
+            .and_then(|config| config.threshold_percent)
+            .or_else(|| base.and_then(|config| config.threshold_percent)),
+    }
+}
+
+fn prefix_compaction_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&PrefixCompactionConfigToml> {
+    match features?.prefix_compaction.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -1671,6 +1703,7 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
+        let prefix_compaction = resolve_prefix_compaction_config(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -2110,6 +2143,7 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             multi_agent_v2,
+            prefix_compaction,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning

@@ -431,6 +431,9 @@
             "plugins": {
               "type": "boolean"
             },
+            "prefix_compaction": {
+              "$ref": "#/definitions/FeatureToml_for_PrefixCompactionConfigToml"
+            },
             "prevent_idle_sleep": {
               "type": "boolean"
             },
@@ -625,6 +628,16 @@
         },
         {
           "$ref": "#/definitions/MultiAgentV2ConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_PrefixCompactionConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/PrefixCompactionConfigToml"
         }
       ]
     },
@@ -1362,6 +1375,20 @@
         "enabled": {
           "default": true,
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "PrefixCompactionConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "threshold_percent": {
+          "description": "Percentage of the auto-compaction threshold that starts background prefix compaction. When omitted, Codex uses 60%.",
+          "format": "int64",
+          "type": "integer"
         }
       },
       "type": "object"
@@ -2232,6 +2259,9 @@
         },
         "plugins": {
           "type": "boolean"
+        },
+        "prefix_compaction": {
+          "$ref": "#/definitions/FeatureToml_for_PrefixCompactionConfigToml"
         },
         "prevent_idle_sleep": {
           "type": "boolean"

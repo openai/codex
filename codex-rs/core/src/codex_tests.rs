@@ -5713,3 +5713,60 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
 
     pretty_assertions::assert_eq!(output, expected);
 }
+
+#[test]
+fn prefix_compact_token_limit_defaults_to_sixty_percent_of_auto_compact() {
+    assert_eq!(
+        prefix_compact_token_limit(
+            /*auto_compact_limit*/ 1_000, /*configured_threshold_percent*/ None
+        ),
+        Some(600)
+    );
+}
+
+#[test]
+fn prefix_compact_token_limit_uses_configured_threshold_percent() {
+    assert_eq!(
+        prefix_compact_token_limit(
+            /*auto_compact_limit*/ 1_000,
+            /*configured_threshold_percent*/ Some(75)
+        ),
+        Some(750)
+    );
+}
+
+#[test]
+fn prefix_compact_token_limit_stays_below_auto_compact() {
+    assert_eq!(
+        prefix_compact_token_limit(
+            /*auto_compact_limit*/ 1_000,
+            /*configured_threshold_percent*/ Some(100)
+        ),
+        Some(999)
+    );
+    assert_eq!(
+        prefix_compact_token_limit(
+            /*auto_compact_limit*/ 1_000,
+            /*configured_threshold_percent*/ Some(125)
+        ),
+        Some(999)
+    );
+}
+
+#[test]
+fn prefix_compact_token_limit_ignores_non_positive_threshold_percent() {
+    assert_eq!(
+        prefix_compact_token_limit(
+            /*auto_compact_limit*/ 1_000,
+            /*configured_threshold_percent*/ Some(0)
+        ),
+        None
+    );
+    assert_eq!(
+        prefix_compact_token_limit(
+            /*auto_compact_limit*/ 1_000,
+            /*configured_threshold_percent*/ Some(-1)
+        ),
+        None
+    );
+}
