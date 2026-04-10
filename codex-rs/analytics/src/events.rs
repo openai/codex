@@ -108,7 +108,7 @@ pub(crate) struct ThreadInitializedEvent {
 #[derive(Serialize)]
 pub(crate) struct GuardianReviewEventRequest {
     pub(crate) event_type: &'static str,
-    pub(crate) event_params: GuardianReviewEventParams,
+    pub(crate) event_params: GuardianReviewEventPayload,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -164,31 +164,33 @@ pub enum GuardianReviewRiskLevel {
     Low,
     Medium,
     High,
+    Critical,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct GuardianToolCallCounts {
-    pub shell: u64,
-    pub unified_exec: u64,
-    pub mcp: u64,
-    pub dynamic: u64,
-    pub apply_patch: u64,
-    pub web_search: u64,
-    pub image_generation: u64,
-    pub view_image: u64,
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianReviewUserAuthorization {
+    Unknown,
+    Low,
+    Medium,
+    High,
 }
 
-impl GuardianToolCallCounts {
-    pub fn total(&self) -> u64 {
-        self.shell
-            + self.unified_exec
-            + self.mcp
-            + self.dynamic
-            + self.apply_patch
-            + self.web_search
-            + self.image_generation
-            + self.view_image
-    }
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianReviewOutcome {
+    Allow,
+    Deny,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianApprovalRequestSource {
+    /// Approval requested directly by the main Codex turn.
+    MainTurn,
+    /// Approval requested by a delegated subagent and routed through the parent
+    /// session for guardian review.
+    DelegatedSubagent,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -221,7 +223,6 @@ pub enum GuardianReviewedAction {
     ApplyPatch {
         cwd: String,
         files: Vec<String>,
-        patch: Option<String>,
     },
     NetworkAccess {
         target: String,
@@ -232,7 +233,6 @@ pub enum GuardianReviewedAction {
     McpToolCall {
         server: String,
         tool_name: String,
-        arguments: Option<serde_json::Value>,
         connector_id: Option<String>,
         connector_name: Option<String>,
         tool_title: Option<String>,
@@ -246,23 +246,23 @@ pub enum GuardianCommandSource {
     UnifiedExec,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GuardianReviewEventParams {
     pub thread_id: String,
     pub turn_id: String,
     pub review_id: String,
     pub target_item_id: String,
-    pub product_client_id: Option<String>,
     pub trigger: GuardianReviewTrigger,
     pub retry_reason: Option<String>,
-    pub delegated_review: bool,
+    pub approval_request_source: GuardianApprovalRequestSource,
     pub reviewed_action: GuardianReviewedAction,
     pub reviewed_action_truncated: bool,
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_kind: Option<GuardianReviewFailureKind>,
-    pub risk_score: Option<u8>,
     pub risk_level: Option<GuardianReviewRiskLevel>,
+    pub user_authorization: Option<GuardianReviewUserAuthorization>,
+    pub outcome: Option<GuardianReviewOutcome>,
     pub rationale: Option<String>,
     pub guardian_thread_id: Option<String>,
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
@@ -270,10 +270,9 @@ pub struct GuardianReviewEventParams {
     pub guardian_reasoning_effort: Option<String>,
     pub had_prior_review_context: Option<bool>,
     pub review_timeout_ms: u64,
-    pub guardian_tool_call_count: u64,
-    pub guardian_tool_call_counts: GuardianToolCallCounts,
-    pub guardian_time_to_first_token_ms: Option<u64>,
-    pub guardian_completion_latency_ms: Option<u64>,
+    pub tool_call_count: u64,
+    pub time_to_first_token_ms: Option<u64>,
+    pub completion_latency_ms: Option<u64>,
     pub started_at: u64,
     pub completed_at: Option<u64>,
     pub input_tokens: Option<i64>,
@@ -281,6 +280,14 @@ pub struct GuardianReviewEventParams {
     pub output_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct GuardianReviewEventPayload {
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    #[serde(flatten)]
+    pub(crate) guardian_review: GuardianReviewEventParams,
 }
 
 #[derive(Serialize)]
