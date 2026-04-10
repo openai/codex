@@ -11,12 +11,12 @@
 //! - The projection is presentation-specific. Core protocol events stay generic, while the
 //!   app-server protocol decides how to surface those events as `ThreadItem`s for clients.
 use crate::protocol::common::ServerNotification;
+use crate::protocol::v2::AutoReviewDecisionSource;
 use crate::protocol::v2::CommandAction;
 use crate::protocol::v2::CommandExecutionSource;
 use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::FileUpdateChange;
 use crate::protocol::v2::GuardianApprovalReview;
-use crate::protocol::v2::AutoReviewDecisionSource;
 use crate::protocol::v2::GuardianApprovalReviewStatus;
 use crate::protocol::v2::ItemGuardianApprovalReviewCompletedNotification;
 use crate::protocol::v2::ItemGuardianApprovalReviewStartedNotification;
@@ -205,9 +205,6 @@ pub fn guardian_auto_approval_review_notification(
     event_turn_id: &str,
     assessment: &GuardianAssessmentEvent,
 ) -> ServerNotification {
-    // TODO(ccunningham): Attach guardian review state to the reviewed tool
-    // item's lifecycle instead of sending standalone review notifications so
-    // the app-server API can persist and replay review state via `thread/read`.
     let turn_id = if assessment.turn_id.is_empty() {
         event_turn_id.to_string()
     } else {

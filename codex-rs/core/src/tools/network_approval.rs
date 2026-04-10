@@ -373,8 +373,6 @@ impl NetworkApprovalService {
         let guardian_review_id =
             routes_approval_to_guardian(&turn_context).then(new_guardian_review_id);
         let approval_decision = if routes_approval_to_guardian(&turn_context) {
-            // TODO(ccunningham): Attach guardian network reviews to the reviewed tool item
-            // lifecycle instead of this temporary standalone network approval id.
             review_approval_request(
                 &session,
                 &turn_context,
