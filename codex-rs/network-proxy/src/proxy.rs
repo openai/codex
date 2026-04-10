@@ -364,10 +364,10 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
 
 pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
-pub const MANAGED_PROXY_ENV_ACTIVE_ENV_KEY: &str = ALLOW_LOCAL_BINDING_ENV_KEY;
+pub const PROXY_ENV_ACTIVE_ENV_KEY: &str = ALLOW_LOCAL_BINDING_ENV_KEY;
 const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
-pub const MANAGED_PROXY_ENV_KEYS: &[&str] = &[
+pub const PROXY_ENV_KEYS: &[&str] = &[
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
     "HTTP_PROXY",
@@ -404,7 +404,7 @@ pub const MANAGED_PROXY_ENV_KEYS: &[&str] = &[
 ];
 
 #[cfg(target_os = "macos")]
-pub const MANAGED_GIT_SSH_COMMAND_ENV_KEY: &str = GIT_SSH_COMMAND_ENV_KEY;
+pub const PROXY_GIT_SSH_COMMAND_ENV_KEY: &str = GIT_SSH_COMMAND_ENV_KEY;
 
 const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
 const WEBSOCKET_PROXY_ENV_KEYS: &[&str] = &["WS_PROXY", "WSS_PROXY", "ws_proxy", "wss_proxy"];
@@ -425,12 +425,12 @@ pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
 );
 
 #[cfg(target_os = "macos")]
-pub const MANAGED_GIT_SSH_COMMAND_MARKER: &str = "CODEX_MANAGED_GIT_SSH_COMMAND=1 ";
+pub const CODEX_PROXY_GIT_SSH_COMMAND_MARKER: &str = "CODEX_PROXY_GIT_SSH_COMMAND=1 ";
 #[cfg(target_os = "macos")]
-const MANAGED_GIT_SSH_COMMAND_PREFIX: &str =
-    "CODEX_MANAGED_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x ";
+const CODEX_PROXY_GIT_SSH_COMMAND_PREFIX: &str =
+    "CODEX_PROXY_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x ";
 #[cfg(target_os = "macos")]
-const MANAGED_GIT_SSH_COMMAND_SUFFIX: &str = " %h %p'";
+const CODEX_PROXY_GIT_SSH_COMMAND_SUFFIX: &str = " %h %p'";
 
 pub fn proxy_url_env_value<'a>(
     env: &'a HashMap<String, String>,
@@ -456,14 +456,14 @@ fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
 }
 
 #[cfg(target_os = "macos")]
-fn managed_git_ssh_command(socks_addr: SocketAddr) -> String {
-    format!("{MANAGED_GIT_SSH_COMMAND_PREFIX}{socks_addr}{MANAGED_GIT_SSH_COMMAND_SUFFIX}")
+fn codex_proxy_git_ssh_command(socks_addr: SocketAddr) -> String {
+    format!("{CODEX_PROXY_GIT_SSH_COMMAND_PREFIX}{socks_addr}{CODEX_PROXY_GIT_SSH_COMMAND_SUFFIX}")
 }
 
 #[cfg(target_os = "macos")]
-fn is_managed_git_ssh_command(command: &str) -> bool {
-    command.starts_with(MANAGED_GIT_SSH_COMMAND_PREFIX)
-        && command.ends_with(MANAGED_GIT_SSH_COMMAND_SUFFIX)
+fn is_codex_proxy_git_ssh_command(command: &str) -> bool {
+    command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_PREFIX)
+        && command.ends_with(CODEX_PROXY_GIT_SSH_COMMAND_SUFFIX)
 }
 
 fn apply_proxy_env_overrides(
@@ -537,11 +537,11 @@ fn apply_proxy_env_overrides(
         // but refresh a previously injected Codex fallback so it cannot point
         // at a stale proxy port after the proxy is restarted.
         match env.get(GIT_SSH_COMMAND_ENV_KEY) {
-            Some(command) if !is_managed_git_ssh_command(command) => {}
+            Some(command) if !is_codex_proxy_git_ssh_command(command) => {}
             _ => {
                 env.insert(
                     GIT_SSH_COMMAND_ENV_KEY.to_string(),
-                    managed_git_ssh_command(socks_addr),
+                    codex_proxy_git_ssh_command(socks_addr),
                 );
             }
         }
@@ -1007,7 +1007,7 @@ mod tests {
         assert_eq!(
             env.get(GIT_SSH_COMMAND_ENV_KEY),
             Some(
-                &"CODEX_MANAGED_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+                &"CODEX_PROXY_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
                     .to_string()
             )
         );
@@ -1027,10 +1027,9 @@ mod tests {
         );
 
         for key in env.keys() {
-            let is_managed_git_ssh_key =
-                cfg!(target_os = "macos") && key == GIT_SSH_COMMAND_ENV_KEY;
+            let is_proxy_git_ssh_key = cfg!(target_os = "macos") && key == GIT_SSH_COMMAND_ENV_KEY;
             assert!(
-                MANAGED_PROXY_ENV_KEYS.contains(&key.as_str()) || is_managed_git_ssh_key,
+                PROXY_ENV_KEYS.contains(&key.as_str()) || is_proxy_git_ssh_key,
                 "proxy env writer set unexpected key: {key}"
             );
         }
@@ -1089,7 +1088,7 @@ mod tests {
         assert_eq!(
             env.get(GIT_SSH_COMMAND_ENV_KEY),
             Some(
-                &"CODEX_MANAGED_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+                &"CODEX_PROXY_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
                     .to_string()
             )
         );
@@ -1143,11 +1142,11 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn apply_proxy_env_overrides_refreshes_previous_managed_git_ssh_command() {
+    fn apply_proxy_env_overrides_refreshes_previous_codex_proxy_git_ssh_command() {
         let mut env = HashMap::new();
         env.insert(
             GIT_SSH_COMMAND_ENV_KEY.to_string(),
-            managed_git_ssh_command(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081)),
+            codex_proxy_git_ssh_command(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081)),
         );
 
         apply_proxy_env_overrides(
@@ -1160,7 +1159,7 @@ mod tests {
 
         assert_eq!(
             env.get(GIT_SSH_COMMAND_ENV_KEY),
-            Some(&managed_git_ssh_command(SocketAddr::new(
+            Some(&codex_proxy_git_ssh_command(SocketAddr::new(
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
                 48081,
             )))
