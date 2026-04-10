@@ -207,11 +207,7 @@ async fn slash_plan_with_bound_mention_persists_encoded_history_text() {
         .handle_composer_key_event_without_popup(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         InputResult::CommandWithArgs(cmd, args, text_elements) => {
-            assert_eq!(
-                chat.dispatch_command_with_args(cmd, args, text_elements),
-                SlashCommandDispatchOutcome::Committed
-            );
-            chat.commit_pending_slash_command_history();
+            chat.dispatch_command_with_args(cmd, args, text_elements);
         }
         other => panic!("expected inline-arg slash command, got {other:?}"),
     }
@@ -287,11 +283,7 @@ async fn rejected_inline_slash_command_keeps_visible_draft_metadata() {
         .handle_composer_key_event_without_popup(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         InputResult::CommandWithArgs(cmd, args, text_elements) => {
-            assert_eq!(
-                chat.dispatch_command_with_args(cmd, args, text_elements),
-                SlashCommandDispatchOutcome::RejectedKeepDraft
-            );
-            let _ = chat.bottom_pane.take_pending_slash_command_history();
+            chat.dispatch_command_with_args(cmd, args, text_elements);
         }
         other => panic!("expected inline-arg slash command, got {other:?}"),
     }

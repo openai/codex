@@ -13,6 +13,11 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+//!
+//! The pane also exposes narrow cleanup boundaries for submission state. `ChatComposer` owns the
+//! raw draft metadata, while `ChatWidget` decides whether a slash command succeeded; `BottomPane`
+//! keeps those layers from reaching through each other by offering explicit methods to commit,
+//! discard, or drain the staged command state.
 use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
@@ -192,6 +197,12 @@ pub(crate) struct BottomPane {
     context_window_used_tokens: Option<i64>,
 }
 
+/// Construction parameters for the bottom pane and its retained composer.
+///
+/// Callers pass session/UI capabilities at construction time so the pane can initialize the
+/// composer once and preserve draft state across transient views. Runtime capability changes, such
+/// as image paste support or plugin mentions, should go through the corresponding setters so popup
+/// and redraw side effects stay centralized.
 pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) frame_requester: FrameRequester,
@@ -281,6 +292,11 @@ impl BottomPane {
     }
 
     /// Discards the staged slash-command history entry without recording it.
+    ///
+    /// This is the lightweight rejection path for commands whose visible draft should remain in the
+    /// composer. Using `drain_pending_submission_state` for those cases would drop attachments,
+    /// remote images, and mention bindings that the user still expects to edit.
+    ///
     /// See [`ChatComposer::take_pending_slash_command_history`].
     pub(crate) fn take_pending_slash_command_history(
         &mut self,
@@ -288,8 +304,12 @@ impl BottomPane {
         self.composer.take_pending_slash_command_history()
     }
 
-    /// Commits the staged slash-command entry to the local history ring and
-    /// returns it for persistent storage.
+    /// Commits the staged slash-command entry to the local history ring.
+    ///
+    /// The returned entry is intended for the persistent-history path in `ChatWidget`. Callers
+    /// should not call this until command dispatch has accepted the invocation; otherwise a rejected
+    /// command becomes recallable and can be persisted across sessions.
+    ///
     /// See [`ChatComposer::record_pending_slash_command_history`].
     pub(crate) fn record_pending_slash_command_history(
         &mut self,
@@ -297,8 +317,12 @@ impl BottomPane {
         self.composer.record_pending_slash_command_history()
     }
 
-    /// Clears attachments and mention bindings that were staged while preparing
-    /// a submission, but preserves any pending slash-command history entry.
+    /// Clears recent submission metadata without touching staged slash-command history.
+    ///
+    /// Use this after an accepted inline command has consumed attachments, remote images, and
+    /// mention bindings but still needs the staged command entry for history commit. Calling the
+    /// broader pending-state drain here would make the command run successfully but disappear from
+    /// recall.
     pub(crate) fn drain_recent_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
         let _ = self.take_remote_image_urls();
@@ -306,12 +330,11 @@ impl BottomPane {
         let _ = self.take_mention_bindings();
     }
 
-    /// Clears pending attachments, mention bindings, and any staged
-    /// slash-command history entry.
+    /// Clears recent submission metadata and any staged slash-command history entry.
     ///
-    /// Used when a slash command is rejected or fails after the composer draft
-    /// was already cleared, so nothing should be committed to local/persistent
-    /// history.
+    /// Use this only when the command path has already prepared or cleared the draft and the
+    /// invocation must not be committed. Using it for a rejection that keeps the visible draft would
+    /// silently strip attachments and mention bindings from the user's retry.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         self.drain_recent_submission_state();
         let _ = self.take_pending_slash_command_history();
@@ -1153,6 +1176,11 @@ impl BottomPane {
             .take_recent_submission_images_with_placeholders()
     }
 
+    /// Expands pending paste placeholders and returns normalized inline-command arguments.
+    ///
+    /// `ChatWidget` calls this only after accepting an inline-argument command. Calling it before a
+    /// command has passed validation can consume and clear draft metadata even if the command later
+    /// reports an error.
     pub(crate) fn prepare_inline_args_submission(
         &mut self,
         record_history: bool,

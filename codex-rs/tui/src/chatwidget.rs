@@ -25,6 +25,11 @@
 //! the final answer. During streaming we hide the status row to avoid duplicate
 //! progress indicators; once commentary completes and stream queues drain, we
 //! re-show it so users still see turn-in-progress state between output bursts.
+//!
+//! Slash-command submission is split with the composer. `ChatComposer` snapshots a pending history
+//! entry before clearing the visible draft, while `ChatWidget` decides whether command dispatch
+//! accepted the invocation and whether that staged entry should be committed, discarded while
+//! preserving the draft, or discarded together with prepared submission state.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -975,10 +980,25 @@ enum CodexOpTarget {
     AppEvent,
 }
 
+/// Outcome of dispatching a slash command that may have staged composer history.
+///
+/// This enum exists because a boolean cannot distinguish the two rejection modes that matter for
+/// draft safety. Some invalid commands leave the user's draft visible and editable, while others
+/// have already consumed prepared submission state and must drain attachments, remote images, and
+/// mention bindings before returning control to the composer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SlashCommandDispatchOutcome {
+    /// The command was accepted and the staged history entry should be committed.
     Committed,
+    /// The command was rejected before submission state was consumed.
+    ///
+    /// The caller should discard only the staged history entry. Draining recent submission state in
+    /// this branch would lose draft metadata that the user still sees and may retry.
     RejectedKeepDraft,
+    /// The command was rejected after prepared submission state may have been consumed.
+    ///
+    /// The caller should drain both recent submission state and the staged history entry so stale
+    /// attachments or mention bindings cannot leak into the next draft.
     RejectedDiscardPreparedState,
 }
 
@@ -1006,6 +1026,12 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
+/// User-authored or command-derived input waiting to be submitted to a thread.
+///
+/// Most instances represent ordinary composer text and should be persisted to history. Slash
+/// commands with side effects can also create derived messages, such as the argument text from
+/// `/plan investigate this`; those messages must carry `persist_to_history = false` because the
+/// visible slash-command draft is persisted through the staged command-history path instead.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
     text: String,
@@ -4945,24 +4971,10 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
                 InputResult::Command(cmd) => {
-                    if self.dispatch_command(cmd) {
-                        self.commit_pending_slash_command_history();
-                    } else {
-                        self.bottom_pane.drain_pending_submission_state();
-                    }
+                    self.dispatch_command(cmd);
                 }
                 InputResult::CommandWithArgs(cmd, args, text_elements) => {
-                    match self.dispatch_command_with_args(cmd, args, text_elements) {
-                        SlashCommandDispatchOutcome::Committed => {
-                            self.commit_pending_slash_command_history();
-                        }
-                        SlashCommandDispatchOutcome::RejectedKeepDraft => {
-                            let _ = self.bottom_pane.take_pending_slash_command_history();
-                        }
-                        SlashCommandDispatchOutcome::RejectedDiscardPreparedState => {
-                            self.bottom_pane.drain_pending_submission_state();
-                        }
-                    }
+                    self.dispatch_command_with_args(cmd, args, text_elements);
                 }
                 InputResult::None => {}
             },
@@ -5033,13 +5045,23 @@ impl ChatWidget {
         false
     }
 
-    /// Executes a bare slash command (no inline arguments).
+    /// Executes a bare slash command that may have already been staged by the composer.
     ///
-    /// Returns `true` if the command was accepted and should be persisted to
-    /// history, or `false` if it was rejected, unavailable, or handled as a
-    /// no-op/help-only UI message. The caller uses this to decide whether to
-    /// call `commit_pending_slash_command_history`.
-    fn dispatch_command(&mut self, cmd: SlashCommand) -> bool {
+    /// Accepted commands commit the staged entry to local and persistent history. Rejected,
+    /// unavailable, or no-op/help-only commands discard staged submission state before returning.
+    ///
+    /// A future command that submits derived user text should prefer
+    /// `submit_user_message_without_history`, or it can persist both the slash command and the
+    /// derived text as separate recall entries.
+    fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if self.dispatch_command_inner(cmd) {
+            self.commit_pending_slash_command_history();
+        } else {
+            self.bottom_pane.drain_pending_submission_state();
+        }
+    }
+
+    fn dispatch_command_inner(&mut self, cmd: SlashCommand) -> bool {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -5440,21 +5462,45 @@ impl ChatWidget {
         }
     }
 
-    /// Executes a slash command that was submitted with inline arguments
-    /// (e.g. `/plan investigate this`).
+    /// Executes a slash command that was submitted with inline arguments.
     ///
-    /// Some rejections happen before submission prep consumes the draft,
-    /// while others happen after the draft was already prepared and cleared.
-    /// The caller uses the returned outcome to preserve visible draft state
-    /// when appropriate.
+    /// Inline commands are validated in two phases. First, this method checks whether the command
+    /// accepts the provided arguments without consuming the visible draft. Once accepted, it asks
+    /// the bottom pane to prepare submission text, which may expand paste placeholders, trim text,
+    /// and drain draft metadata.
+    ///
     fn dispatch_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        args: String,
+        text_elements: Vec<TextElement>,
+    ) {
+        match self.dispatch_command_with_args_inner(cmd, args, text_elements) {
+            SlashCommandDispatchOutcome::Committed => {
+                self.commit_pending_slash_command_history();
+            }
+            SlashCommandDispatchOutcome::RejectedKeepDraft => {
+                let _ = self.bottom_pane.take_pending_slash_command_history();
+            }
+            SlashCommandDispatchOutcome::RejectedDiscardPreparedState => {
+                self.bottom_pane.drain_pending_submission_state();
+            }
+        }
+    }
+
+    /// Returns how the staged slash-command history entry should be handled.
+    ///
+    /// Returning `RejectedKeepDraft` after calling `prepare_inline_args_submission` would leave the
+    /// UI looking recoverable while metadata had already been consumed, so accepted command arms
+    /// should prepare only after their user-facing validation has passed.
+    fn dispatch_command_with_args_inner(
         &mut self,
         cmd: SlashCommand,
         args: String,
         _text_elements: Vec<TextElement>,
     ) -> SlashCommandDispatchOutcome {
         if !cmd.supports_inline_args() {
-            return if self.dispatch_command(cmd) {
+            return if self.dispatch_command_inner(cmd) {
                 SlashCommandDispatchOutcome::Committed
             } else {
                 SlashCommandDispatchOutcome::RejectedDiscardPreparedState
@@ -5474,7 +5520,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Fast => {
                 if trimmed.is_empty() {
-                    return if self.dispatch_command(cmd) {
+                    return if self.dispatch_command_inner(cmd) {
                         SlashCommandDispatchOutcome::Committed
                     } else {
                         SlashCommandDispatchOutcome::RejectedDiscardPreparedState
@@ -5523,7 +5569,7 @@ impl ChatWidget {
                 SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
-                if !self.dispatch_command(cmd) || self.active_mode_kind() != ModeKind::Plan {
+                if !self.dispatch_command_inner(cmd) || self.active_mode_kind() != ModeKind::Plan {
                     return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 }
                 let Some((prepared_args, prepared_elements)) = self
@@ -5585,7 +5631,7 @@ impl ChatWidget {
                 SlashCommandDispatchOutcome::Committed
             }
             _ => {
-                if self.dispatch_command(cmd) {
+                if self.dispatch_command_inner(cmd) {
                     SlashCommandDispatchOutcome::Committed
                 } else {
                     SlashCommandDispatchOutcome::RejectedDiscardPreparedState
@@ -5700,6 +5746,15 @@ impl ChatWidget {
         self.submit_user_message_with_history(user_message, /*persist_to_history*/ false);
     }
 
+    /// Submits a user message and optionally records it in cross-session history.
+    ///
+    /// The method applies both the call-site flag and the message's own `persist_to_history` flag.
+    /// This lets command-derived messages remain non-persistent while still flowing through the
+    /// ordinary queueing, pending-steer, rendering, and model-submission paths.
+    ///
+    /// Passing `true` here does not override a message that already opted out. Accidentally
+    /// constructing a derived slash-command message with `persist_to_history = true` would make the
+    /// arguments persist in addition to the full slash command.
     fn submit_user_message_with_history(
         &mut self,
         mut user_message: UserMessage,

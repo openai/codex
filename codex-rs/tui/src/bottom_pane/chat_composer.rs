@@ -29,6 +29,21 @@
 //! Recalled entries move the cursor to end-of-line so repeated Up/Down presses keep shell-like
 //! history traversal semantics instead of dropping to column 0.
 //!
+//! # Slash Command History Staging
+//!
+//! Slash commands clear the textarea before `ChatWidget` knows whether the command truly
+//! succeeded, so the composer snapshots them into a pending [`HistoryEntry`] first.
+//!
+//! This pending entry is a short-lived handoff slot, not history yet. The composer stages the exact
+//! draft while it still owns the raw text, element ranges, attachment lists, mention bindings, and
+//! pending paste placeholders. `ChatWidget` then either commits the entry after a successful
+//! command dispatch, or discards it if the command is rejected.
+//!
+//! The distinction matters most for inline-argument commands such as `/plan investigate this`.
+//! Rejections that happen before submission preparation keep the visible draft and must only clear
+//! the pending history slot. Rejections that happen after preparation must drain recent submission
+//! state as well, or stale attachments and mention bindings can leak into the next draft.
+//!
 //! # Submission and Prompt Expansion
 //!
 //! `Enter` submits immediately. `Tab` requests queuing while a task is running; if no task is
@@ -277,6 +292,12 @@ impl ChatComposerConfig {
     }
 }
 
+/// Owns the editable prompt draft and the local state needed to submit or recall it.
+///
+/// `ChatComposer` is the only component that can faithfully snapshot a draft because it owns the
+/// textarea, element ranges, attachments, mention bindings, and pending paste expansion state.
+/// Higher layers should treat its submission/history helpers as authority boundaries rather than
+/// trying to reconstruct draft metadata from visible text alone.
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -1066,22 +1087,24 @@ impl ChatComposer {
 
     /// Takes the staged slash-command history entry without recording it.
     ///
-    /// Used by `drain_pending_submission_state` to discard the entry when a
-    /// command is rejected or fails. Returns `None` if no entry was staged.
+    /// Use this when the command outcome says the invocation should not become recallable. The
+    /// caller must still decide separately whether to drain recent submission state; discarding the
+    /// staged entry alone intentionally preserves the visible draft and its metadata for
+    /// `RejectedKeepDraft` paths.
     pub(crate) fn take_pending_slash_command_history(&mut self) -> Option<HistoryEntry> {
         self.pending_slash_command_history.take()
     }
 
-    /// Commits the staged slash-command entry into the local history ring
-    /// and returns the stored draft for persistent (cross-session) storage
+    /// Commits the staged slash-command entry into the local history ring.
+    ///
+    /// This is the commit half of the two-phase slash-command history protocol. The caller
+    /// (`ChatWidget::commit_pending_slash_command_history`) should only call this after confirming
+    /// the command was accepted, then use the returned entry for persistent cross-session storage
     /// via `Op::AddToHistory`.
     ///
-    /// This is the "commit" half of the two-phase slash-command history
-    /// protocol. The caller (`ChatWidget::commit_pending_slash_command_history`)
-    /// should only call this after confirming the command succeeded.
-    ///
-    /// Returns `None` if no entry was staged, which happens when the command
-    /// was already drained or was never a slash command to begin with.
+    /// Calling this speculatively would make a failed command recallable even though no command
+    /// actually ran. Returns `None` if no entry was staged, which happens when the command was
+    /// already drained or was never a slash command to begin with.
     pub(crate) fn record_pending_slash_command_history(&mut self) -> Option<HistoryEntry> {
         let entry = self.pending_slash_command_history.take()?;
         self.history.record_local_submission(entry.clone());
@@ -2407,6 +2430,13 @@ impl ChatComposer {
         self.stage_pending_slash_command_history_text(format!("/{}", cmd.command()));
     }
 
+    /// Stores a prepared slash-command history entry in the pending handoff slot.
+    ///
+    /// The caller chooses the text to persist because popup selection and typed commands differ:
+    /// typed commands should store the trimmed draft, while popup completion should store the
+    /// canonical command that actually dispatches. This helper always snapshots the current
+    /// metadata alongside that text, so calling it after metadata has been drained would create a
+    /// recall entry that looks right but cannot restore mentions or attachments.
     fn stage_pending_slash_command_history_text(&mut self, text: String) {
         self.pending_slash_command_history = Some(HistoryEntry {
             text,
