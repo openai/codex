@@ -6,6 +6,7 @@ use crate::AuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
+use reqwest::header::COOKIE;
 use serde::Deserialize;
 use tokio::fs::File;
 use tokio::time::Instant;
@@ -265,6 +266,9 @@ fn authorized_request(
     }
     if let Some(account_id) = auth.account_id() {
         request = request.header("chatgpt-account-id", account_id);
+    }
+    if auth.is_fedramp_account() {
+        request = request.header(COOKIE, "_account_is_fedramp=true");
     }
     request
 }

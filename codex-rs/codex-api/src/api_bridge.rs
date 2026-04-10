@@ -178,6 +178,7 @@ struct UsageErrorBody {
 pub struct CoreAuthProvider {
     pub token: Option<String>,
     pub account_id: Option<String>,
+    pub is_fedramp_account: bool,
 }
 
 impl CoreAuthProvider {
@@ -195,6 +196,7 @@ impl CoreAuthProvider {
         Self {
             token: token.map(str::to_string),
             account_id: account_id.map(str::to_string),
+            is_fedramp_account: false,
         }
     }
 }
@@ -206,5 +208,9 @@ impl ApiAuthProvider for CoreAuthProvider {
 
     fn account_id(&self) -> Option<String> {
         self.account_id.clone()
+    }
+
+    fn is_fedramp_account(&self) -> bool {
+        self.is_fedramp_account
     }
 }
