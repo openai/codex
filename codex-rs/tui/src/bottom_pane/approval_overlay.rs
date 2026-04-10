@@ -1322,8 +1322,11 @@ mod tests {
         };
 
         let view = make_overlay(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(80)));
-        view.render(Rect::new(0, 0, 80, view.desired_height(80)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)));
+        view.render(
+            Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -1553,8 +1556,11 @@ mod tests {
         };
 
         let view = make_overlay(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
-        view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)));
+        view.render(
+            Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
