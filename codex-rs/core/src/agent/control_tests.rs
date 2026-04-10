@@ -994,6 +994,62 @@ async fn spawn_agent_releases_slot_after_shutdown() {
 }
 
 #[tokio::test]
+async fn request_live_agent_shutdown_preserving_thread_releases_slot_without_untracking() {
+    let max_threads = 1usize;
+    let (_home, config) = test_config_with_cli_overrides(vec![(
+        "agents.max_threads".to_string(),
+        TomlValue::Integer(max_threads as i64),
+    )])
+    .await;
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
+    );
+    let control = manager.agent_control();
+
+    let first_agent_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("hello"),
+            /*session_source*/ None,
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let _ = control
+        .request_live_agent_shutdown_preserving_thread(first_agent_id)
+        .await
+        .expect("shutdown request should succeed");
+
+    manager
+        .get_thread(first_agent_id)
+        .await
+        .expect("thread should remain tracked after requested shutdown");
+
+    let second_agent_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("hello again"),
+            /*session_source*/ None,
+        )
+        .await
+        .expect("spawn_agent should succeed after preserving-thread shutdown");
+
+    let report = manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+    let mut expected_completed = vec![first_agent_id, second_agent_id];
+    expected_completed.sort_by_key(std::string::ToString::to_string);
+    assert_eq!(report.completed, expected_completed);
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
+    assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
 async fn spawn_agent_limit_shared_across_clones() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(

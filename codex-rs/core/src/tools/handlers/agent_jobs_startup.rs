@@ -30,6 +30,7 @@ pub(super) struct StartupTasks {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SchedulerOccupancy {
     pub(super) active_items: usize,
+    pub(super) db_pending_items: usize,
     pub(super) db_running_items: usize,
 }
 
@@ -142,6 +143,7 @@ pub(super) async fn launch_pending_items(
         tracing::info!(
             job_id,
             launched,
+            db_pending_items = occupancy.db_pending_items,
             db_running_items = occupancy.db_running_items,
             active_items = occupancy.active_items,
             starting_items = startup_tasks.len(),
@@ -228,6 +230,22 @@ pub(super) async fn wait_for_startup_or_status_change(
     Ok(())
 }
 
+pub(super) async fn abort_all_startups(startup_tasks: &mut StartupTasks) -> usize {
+    let startup_count = startup_tasks.starting_items.len();
+    if startup_count == 0 {
+        startup_tasks.launching_items.clear();
+        return 0;
+    }
+
+    for launching_item in startup_tasks.launching_items.values() {
+        launching_item.abort_handle.abort();
+    }
+    startup_tasks.launching_items.clear();
+
+    while startup_tasks.starting_items.join_next().await.is_some() {}
+    startup_count
+}
+
 pub(super) async fn reap_stale_startups(
     db: Arc<codex_state::StateRuntime>,
     job_id: &str,
@@ -290,7 +308,7 @@ async fn handle_worker_startup_result(
                         let _ = session
                             .services
                             .agent_control
-                            .shutdown_live_agent(thread_id)
+                            .request_live_agent_shutdown_preserving_thread(thread_id)
                             .await;
                         tracing::debug!(
                             job_id,

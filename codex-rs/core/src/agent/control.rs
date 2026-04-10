@@ -677,6 +677,36 @@ impl AgentControl {
         result
     }
 
+    /// Submit a shutdown request for a live agent while keeping the thread tracked until the
+    /// session loop actually terminates.
+    ///
+    /// This releases the spawned-agent slot immediately so callers can refill concurrency, but
+    /// it deliberately does not remove the thread from [`ThreadManagerState`]. Keeping the thread
+    /// tracked ensures later global shutdown paths can still await or abort the underlying session
+    /// loop instead of leaving an orphaned task alive on the runtime.
+    pub(crate) async fn request_live_agent_shutdown_preserving_thread(
+        &self,
+        agent_id: ThreadId,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        let result = if let Ok(thread) = state.get_thread(agent_id).await {
+            thread.codex.session.ensure_rollout_materialized().await;
+            thread.codex.session.flush_rollout().await;
+            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+                Ok(String::new())
+            } else {
+                state.send_op(agent_id, Op::Shutdown {}).await
+            }
+        } else {
+            Ok(String::new())
+        };
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+        }
+        self.state.release_spawned_thread(agent_id);
+        result
+    }
+
     /// Mark `agent_id` as explicitly closed in persisted spawn-edge state, then shut down the
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {

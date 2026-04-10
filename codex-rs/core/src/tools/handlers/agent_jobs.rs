@@ -110,6 +110,18 @@ struct ActiveJobItem {
     status_rx: Option<Receiver<AgentStatus>>,
 }
 
+fn request_live_agent_shutdown(
+    agent_control: crate::agent::control::AgentControl,
+    thread_id: ThreadId,
+) {
+    tokio::spawn(async move {
+        tokio::task::yield_now().await;
+        let _ = agent_control
+            .request_live_agent_shutdown_preserving_thread(thread_id)
+            .await;
+    });
+}
+
 struct JobProgressEmitter {
     started_at: Instant,
     last_emit_at: Instant,
@@ -486,39 +498,42 @@ mod report_agent_job_result {
         let db = required_state_db(&session)?;
         let reporting_thread_id = session.conversation_id;
         let reporting_thread_id_str = reporting_thread_id.to_string();
-        let accepted = db
-            .report_agent_job_item_result(
+        let accepted = if args.stop.unwrap_or(false) {
+            db.report_agent_job_item_result_and_cancel_job(
+                args.job_id.as_str(),
+                args.item_id.as_str(),
+                reporting_thread_id_str.as_str(),
+                &args.result,
+                "cancelled by worker request",
+            )
+            .await
+        } else {
+            db.report_agent_job_item_result(
                 args.job_id.as_str(),
                 args.item_id.as_str(),
                 reporting_thread_id_str.as_str(),
                 &args.result,
             )
             .await
-            .map_err(|err| {
-                let job_id = args.job_id.as_str();
-                let item_id = args.item_id.as_str();
-                FunctionCallError::RespondToModel(format!(
-                    "failed to record agent job result for {job_id} / {item_id}: {err}"
-                ))
-            })?;
-        if accepted && args.stop.unwrap_or(false) {
-            let message = "cancelled by worker request";
-            let _ = db
-                .mark_agent_job_cancelled(args.job_id.as_str(), message)
-                .await;
         }
+        .map_err(|err| {
+            let job_id = args.job_id.as_str();
+            let item_id = args.item_id.as_str();
+            FunctionCallError::RespondToModel(format!(
+                "failed to record agent job result for {job_id} / {item_id}: {err}"
+            ))
+        })?;
         if accepted {
-            let agent_control = session.services.agent_control.clone();
             tracing::debug!(
                 job_id = args.job_id,
                 item_id = args.item_id,
                 thread_id = %reporting_thread_id,
                 "agent job accepted worker result; scheduling worker shutdown"
             );
-            tokio::spawn(async move {
-                tokio::task::yield_now().await;
-                let _ = agent_control.shutdown_live_agent(reporting_thread_id).await;
-            });
+            request_live_agent_shutdown(
+                session.services.agent_control.clone(),
+                reporting_thread_id,
+            );
         }
         let content =
             serde_json::to_string(&ReportAgentJobResultToolResult { accepted }).map_err(|err| {
@@ -667,6 +682,27 @@ async fn run_agent_job_loop(
                 .await;
         }
 
+        let terminal_in_db = if cancel_requested {
+            scheduler_progress.running_items == 0
+        } else {
+            scheduler_progress.pending_items == 0 && scheduler_progress.running_items == 0
+        };
+        if terminal_in_db
+            && slots::reconcile_terminal_scheduler_state(
+                session.clone(),
+                job_id.as_str(),
+                &scheduler_progress,
+                &mut active_items,
+                &mut starting_items,
+            )
+            .await?
+        {
+            progressed = true;
+        }
+        if terminal_in_db && active_items.is_empty() && starting_items.is_empty() {
+            break;
+        }
+
         if !cancel_requested
             && active_items.len() + starting_items.len() < options.max_concurrency
             && startup::launch_pending_items(
@@ -677,6 +713,7 @@ async fn run_agent_job_loop(
                 &options,
                 startup::SchedulerOccupancy {
                     active_items: active_items.len(),
+                    db_pending_items: scheduler_progress.pending_items,
                     db_running_items: scheduler_progress.running_items,
                 },
                 &mut starting_items,
@@ -723,19 +760,29 @@ async fn run_agent_job_loop(
 
         let finished = find_finished_threads(session.clone(), &active_items).await;
         if finished.is_empty() {
-            let progress = db.get_agent_job_progress(job_id.as_str()).await?;
-            if cancel_requested {
-                if progress.running_items == 0
-                    && active_items.is_empty()
-                    && starting_items.is_empty()
-                {
-                    break;
-                }
-            } else if progress.pending_items == 0
-                && progress.running_items == 0
-                && active_items.is_empty()
-                && starting_items.is_empty()
+            let progress = if progressed {
+                db.get_agent_job_progress(job_id.as_str()).await?
+            } else {
+                scheduler_progress
+            };
+            let terminal_in_db = if cancel_requested {
+                progress.running_items == 0
+            } else {
+                progress.pending_items == 0 && progress.running_items == 0
+            };
+            if terminal_in_db
+                && slots::reconcile_terminal_scheduler_state(
+                    session.clone(),
+                    job_id.as_str(),
+                    &progress,
+                    &mut active_items,
+                    &mut starting_items,
+                )
+                .await?
             {
+                progressed = true;
+            }
+            if terminal_in_db && active_items.is_empty() && starting_items.is_empty() {
                 break;
             }
             if !progressed {
@@ -856,11 +903,7 @@ async fn recover_running_items(
             if let Some(assigned_thread_id) = item.assigned_thread_id.as_ref()
                 && let Ok(thread_id) = ThreadId::from_string(assigned_thread_id.as_str())
             {
-                let _ = session
-                    .services
-                    .agent_control
-                    .shutdown_live_agent(thread_id)
-                    .await;
+                request_live_agent_shutdown(session.services.agent_control.clone(), thread_id);
             }
             continue;
         }
@@ -981,7 +1024,7 @@ async fn reap_stale_active_items(
         let _ = session
             .services
             .agent_control
-            .shutdown_live_agent(thread_id)
+            .request_live_agent_shutdown_preserving_thread(thread_id)
             .await;
         active_items.remove(&thread_id);
     }
@@ -1017,7 +1060,7 @@ async fn finalize_finished_item(
     let _ = session
         .services
         .agent_control
-        .shutdown_live_agent(thread_id)
+        .request_live_agent_shutdown_preserving_thread(thread_id)
         .await;
     Ok(())
 }
