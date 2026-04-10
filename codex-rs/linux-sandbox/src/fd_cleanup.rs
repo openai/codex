@@ -1,5 +1,7 @@
 //! File descriptor hygiene before entering the sandboxed command.
 
+use std::io::ErrorKind;
+
 /// Close helper-inherited descriptors unless they are standard input/output/error
 /// or already close-on-exec.
 ///
@@ -8,10 +10,29 @@
 pub(crate) fn close_inherited_exec_fds() {
     let fds = match non_stdio_fds_from_proc() {
         Ok(fds) => fds,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            mark_inherited_exec_fds_cloexec();
+            return;
+        }
         Err(err) => panic!("failed to enumerate inherited file descriptors: {err}"),
     };
     for fd in fds {
         close_fd_if_inheritable(fd);
+    }
+}
+
+fn mark_inherited_exec_fds_cloexec() {
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            (libc::STDERR_FILENO + 1) as libc::c_uint,
+            u32::MAX as libc::c_uint,
+            libc::CLOSE_RANGE_CLOEXEC,
+        )
+    };
+    if result != 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("failed to mark inherited file descriptors close-on-exec: {err}");
     }
 }
 
