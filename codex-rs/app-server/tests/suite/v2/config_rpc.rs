@@ -570,6 +570,55 @@ model = "gpt-old"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_after_pipelined_write_sees_written_value() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().canonicalize()?;
+    write_config(
+        &temp_dir,
+        r#"
+model = "gpt-old"
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let write_id = mcp
+        .send_config_value_write_request(ConfigValueWriteParams {
+            file_path: None,
+            key_path: "model".to_string(),
+            value: json!("gpt-new"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await?;
+    let read_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+
+    let write_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
+    )
+    .await??;
+    let write: ConfigWriteResponse = to_response(write_resp)?;
+    assert_eq!(write.status, WriteStatus::Ok);
+
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let read: ConfigReadResponse = to_response(read_resp)?;
+    assert_eq!(read.config.model.as_deref(), Some("gpt-new"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_value_write_rejects_version_conflict() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
