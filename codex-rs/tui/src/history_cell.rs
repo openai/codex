@@ -10,6 +10,7 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::buffer_hyperlinks::mark_markdown_links;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -21,6 +22,7 @@ use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::osc8::osc8_hyperlink;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -176,6 +178,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn transcript_animation_tick(&self) -> Option<u64> {
         None
     }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        false
+    }
 }
 
 impl Renderable for Box<dyn HistoryCell> {
@@ -191,6 +197,9 @@ impl Renderable for Box<dyn HistoryCell> {
             u16::try_from(overflow).unwrap_or(u16::MAX)
         };
         paragraph.scroll((y, 0)).render(area, buf);
+        if self.should_mark_markdown_links() {
+            mark_markdown_links(buf, area);
+        }
     }
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)
@@ -445,6 +454,10 @@ impl HistoryCell for ReasoningSummaryCell {
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines(width)
     }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -478,6 +491,10 @@ impl HistoryCell for AgentMessageCell {
 
     fn is_stream_continuation(&self) -> bool {
         !self.is_first_line
+    }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        true
     }
 }
 
@@ -1107,6 +1124,10 @@ impl HistoryCell for TooltipHistoryCell {
 
         prefix_lines(lines, indent.into(), indent.into())
     }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -1123,6 +1144,10 @@ impl HistoryCell for SessionInfoCell {
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.transcript_lines(width)
+    }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        self.0.should_mark_markdown_links()
     }
 }
 
@@ -1400,6 +1425,12 @@ impl HistoryCell for CompositeHistoryCell {
             }
         }
         out
+    }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        self.parts
+            .iter()
+            .any(|part| part.should_mark_markdown_links())
     }
 }
 
@@ -1794,8 +1825,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
-                .underlined(),
+            osc8_hyperlink("https://developers.openai.com/codex/mcp", "MCP docs").underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -2426,6 +2456,10 @@ impl HistoryCell for ProposedPlanCell {
         lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
         lines
     }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        true
+    }
 }
 
 impl HistoryCell for ProposedPlanStreamCell {
@@ -2435,6 +2469,10 @@ impl HistoryCell for ProposedPlanStreamCell {
 
     fn is_stream_continuation(&self) -> bool {
         self.is_stream_continuation
+    }
+
+    fn should_mark_markdown_links(&self) -> bool {
+        true
     }
 }
 
@@ -2803,6 +2841,7 @@ mod tests {
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
     use codex_protocol::protocol::ExecCommandSource;
+    use ratatui::buffer::Buffer;
     use rmcp::model::Content;
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
@@ -2917,6 +2956,15 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    fn render_cell_symbols(cell: &impl Renderable, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        cell.render(area, &mut buf);
+        area.positions()
+            .map(|position| buf[(position.x, position.y)].symbol())
+            .collect()
     }
 
     fn image_block(data: &str) -> serde_json::Value {
@@ -4609,6 +4657,37 @@ mod tests {
         assert!(
             first_row.contains("•"),
             "expected first rendered row to keep summary bullet visible, got: {first_row:?}"
+        );
+    }
+
+    #[test]
+    fn plain_history_cell_does_not_synthesize_osc8_from_link_shaped_styles() {
+        let cell: Box<dyn HistoryCell> = Box::new(PlainHistoryCell::new(vec![Line::from(vec![
+            "tool output".underlined(),
+            " (".into(),
+            "https://example.com/tool".cyan().underlined(),
+            ")".into(),
+        ])]));
+
+        let rendered = render_cell_symbols(&cell, /*width*/ 80, /*height*/ 1);
+
+        assert!(
+            !rendered.contains("\u{1b}]8;;"),
+            "plain history/tool-style output must not be promoted to terminal hyperlinks: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn empty_mcp_output_keeps_clickable_docs_link() {
+        let cell: Box<dyn HistoryCell> = Box::new(empty_mcp_output());
+
+        let rendered = render_cell_symbols(&cell, /*width*/ 100, /*height*/ 5);
+
+        assert!(
+            rendered.contains(
+                "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{1b}\\MCP docs\u{1b}]8;;\u{1b}\\"
+            ),
+            "MCP docs help should remain a real OSC-8 hyperlink: {rendered:?}"
         );
     }
 

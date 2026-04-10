@@ -39,6 +39,7 @@ use uuid::Uuid;
 use crate::LoginStatus;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
+use crate::osc8::osc8_hyperlink;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
@@ -50,17 +51,6 @@ use crate::tui::FrameRequester;
 /// row boundary, which breaks normal terminal URL detection for long URLs that
 /// wrap across multiple rows.
 pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
-    // Sanitize: strip any characters that could break out of the OSC 8
-    // sequence (ESC or BEL) to prevent terminal escape injection from a
-    // malformed or compromised upstream URL.
-    let safe_url: String = url
-        .chars()
-        .filter(|&c| c != '\x1B' && c != '\x07')
-        .collect();
-    if safe_url.is_empty() {
-        return;
-    }
-
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut buf[(x, y)];
@@ -72,9 +62,68 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
             if sym.trim().is_empty() {
                 continue;
             }
-            cell.set_symbol(&format!("\x1B]8;;{safe_url}\x07{sym}\x1B]8;;\x07"));
+            cell.set_symbol(&osc8_hyperlink(url, sym));
         }
     }
+}
+
+fn mark_text_hyperlink(buf: &mut Buffer, area: Rect, url: &str, text: &str) {
+    let cells = rendered_text_cells(buf, area);
+
+    for start in 0..cells.len() {
+        let mut remaining = text;
+        let mut end = start;
+        while !remaining.is_empty() && end < cells.len() {
+            let symbol = cells[end].1.as_str();
+            if let Some(next_remaining) = remaining.strip_prefix(symbol) {
+                remaining = next_remaining;
+            } else if let Some(next_remaining) = remaining.trim_start().strip_prefix(symbol) {
+                remaining = next_remaining;
+            } else {
+                break;
+            }
+            end += 1;
+        }
+
+        if remaining.is_empty() {
+            for (position, symbol) in &cells[start..end] {
+                buf[(position.x, position.y)].set_symbol(&osc8_hyperlink(url, symbol));
+            }
+            return;
+        }
+    }
+}
+
+fn rendered_text_cells(buf: &Buffer, area: Rect) -> Vec<(ratatui::layout::Position, String)> {
+    let mut cells = Vec::new();
+    for y in area.top()..area.bottom() {
+        let row = (area.left()..area.right())
+            .filter_map(|x| {
+                let cell = &buf[(x, y)];
+                if cell.skip {
+                    None
+                } else {
+                    Some((ratatui::layout::Position::new(x, y), cell))
+                }
+            })
+            .collect::<Vec<_>>();
+        let row_content_end = row
+            .iter()
+            .rposition(|(_, cell)| {
+                !(cell.symbol() == " "
+                    && cell.fg == Color::Reset
+                    && cell.bg == Color::Reset
+                    && cell.modifier.is_empty())
+            })
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        cells.extend(
+            row.into_iter()
+                .take(row_content_end)
+                .map(|(position, cell)| (position, cell.symbol().to_string())),
+        );
+    }
+    cells
 }
 
 use super::onboarding_screen::StepState;
@@ -518,24 +567,28 @@ impl AuthModeWidget {
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
+            "✓ Signed in with your ChatGPT account"
+                .fg(Color::Green)
+                .into(),
             "".into(),
             "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Codex".into(),
             Line::from(vec![
                 "  For more details see the ".into(),
-                "\u{1b}]8;;https://developers.openai.com/codex/security\u{7}Codex docs\u{1b}]8;;\u{7}".underlined(),
+                "Codex docs".underlined(),
             ])
             .dim(),
             "".into(),
             "  Codex can make mistakes".into(),
-            "  Review the code it writes and commands it runs".dim().into(),
+            "  Review the code it writes and commands it runs"
+                .dim()
+                .into(),
             "".into(),
             "  Powered by your ChatGPT account".into(),
             Line::from(vec![
                 "  Uses your plan's rate limits and ".into(),
-                "\u{1b}]8;;https://chatgpt.com/#settings\u{7}training data preferences\u{1b}]8;;\u{7}".underlined(),
+                "training data preferences".underlined(),
             ])
             .dim(),
             "".into(),
@@ -545,6 +598,19 @@ impl AuthModeWidget {
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
+
+        mark_text_hyperlink(
+            buf,
+            area,
+            "https://developers.openai.com/codex/security",
+            "Codex docs",
+        );
+        mark_text_hyperlink(
+            buf,
+            area,
+            "https://chatgpt.com/#settings",
+            "training data preferences",
+        );
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
@@ -954,6 +1020,7 @@ pub(super) fn maybe_open_auth_url_in_browser(request_handle: &AppServerRequestHa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::osc8::parse_osc8_hyperlink;
     use codex_app_server_client::AppServerRequestHandle;
     use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
     use codex_app_server_client::InProcessAppServerClient;
@@ -1106,16 +1173,14 @@ mod tests {
     /// Collects all buffer cell symbols that contain the OSC 8 open sequence
     /// for the given URL.  Returns the concatenated "inner" characters.
     fn collect_osc8_chars(buf: &Buffer, area: Rect, url: &str) -> String {
-        let open = format!("\x1B]8;;{url}\x07");
-        let close = "\x1B]8;;\x07";
         let mut chars = String::new();
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 let sym = buf[(x, y)].symbol();
-                if let Some(rest) = sym.strip_prefix(open.as_str())
-                    && let Some(ch) = rest.strip_suffix(close)
+                if let Some(parsed) = parse_osc8_hyperlink(sym)
+                    && parsed.destination == url
                 {
-                    chars.push_str(ch);
+                    chars.push_str(parsed.text);
                 }
             }
         }
@@ -1141,6 +1206,41 @@ mod tests {
         // Every character of the URL should be present as an OSC 8 cell.
         let found = collect_osc8_chars(&buf, area, url);
         assert_eq!(found, url, "OSC 8 hyperlink should cover the full URL");
+    }
+
+    #[test]
+    fn chatgpt_success_message_renders_osc8_hyperlink_labels() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
+
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        widget.render_chatgpt_success_message(area, &mut buf);
+
+        assert_eq!(
+            collect_osc8_chars(&buf, area, "https://developers.openai.com/codex/security"),
+            "Codex docs"
+        );
+        assert_eq!(
+            collect_osc8_chars(&buf, area, "https://chatgpt.com/#settings"),
+            "training data preferences"
+        );
+    }
+
+    #[test]
+    fn chatgpt_success_message_links_label_words_split_by_wrapping() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
+
+        let area = Rect::new(0, 0, 18, 40);
+        let mut buf = Buffer::empty(area);
+        widget.render_chatgpt_success_message(area, &mut buf);
+
+        let linked = collect_osc8_chars(&buf, area, "https://chatgpt.com/#settings");
+        assert_eq!(
+            linked.replace(char::is_whitespace, ""),
+            "trainingdatapreferences"
+        );
     }
 
     #[test]

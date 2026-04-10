@@ -43,39 +43,19 @@ use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
-use unicode_width::UnicodeWidthStr;
 
-/// Returns the display width of a cell symbol, ignoring OSC escape sequences.
+use crate::terminal_wrappers::visible_width;
+
+/// Returns the display width of a cell symbol, ignoring recognized zero-width wrappers.
 ///
-/// OSC sequences (e.g. OSC 8 hyperlinks: `\x1B]8;;URL\x07`) are terminal
-/// control sequences that don't consume display columns.  The standard
+/// OSC-8 sequences in login URL cells are terminal control sequences that don't
+/// consume display columns. The standard
 /// `UnicodeWidthStr::width()` method incorrectly counts the printable
 /// characters inside OSC payloads (like `]`, `8`, `;`, and URL characters).
 /// This function strips them first so that only visible characters contribute
 /// to the width.
 fn display_width(s: &str) -> usize {
-    // Fast path: no escape sequences present.
-    if !s.contains('\x1B') {
-        return s.width();
-    }
-
-    // Strip OSC sequences: ESC ] ... BEL
-    let mut visible = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1B' && chars.clone().next() == Some(']') {
-            // Consume the ']' and everything up to and including BEL.
-            chars.next(); // skip ']'
-            for c in chars.by_ref() {
-                if c == '\x07' {
-                    break;
-                }
-            }
-            continue;
-        }
-        visible.push(ch);
-    }
-    visible.width()
+    visible_width(s)
 }
 
 #[derive(Debug, Hash)]
@@ -710,6 +690,22 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
+
+    #[test]
+    fn display_width_ignores_bel_terminated_osc8_wrapper() {
+        assert_eq!(
+            display_width("\u{1b}]8;;https://example.com\u{7}docs\u{1b}]8;;\u{7}"),
+            4
+        );
+    }
+
+    #[test]
+    fn display_width_ignores_st_terminated_osc8_wrapper() {
+        assert_eq!(
+            display_width("\u{1b}]8;;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\"),
+            4
+        );
+    }
 
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
