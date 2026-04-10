@@ -8,6 +8,10 @@ use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::path_utils;
 use crate::shell::Shell;
 use crate::tools::sandboxing::ToolError;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_protocol::models::PermissionProfile;
@@ -143,12 +147,36 @@ fn build_proxy_env_exports() -> (String, String) {
     let (captures, restores) =
         build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
     let key = PROXY_ACTIVE_ENV_KEY;
-    (
+    let proxy_blocks = (
         format!("{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
         format!(
             "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi"
         ),
+    );
+    let git_blocks = build_codex_proxy_git_ssh_command_exports();
+    (
+        join_shell_blocks([proxy_blocks.0, git_blocks.0]),
+        join_shell_blocks([proxy_blocks.1, git_blocks.1]),
     )
+}
+
+#[cfg(target_os = "macos")]
+fn build_codex_proxy_git_ssh_command_exports() -> (String, String) {
+    let key = PROXY_GIT_SSH_COMMAND_ENV_KEY;
+    let marker_pattern = format!("{}\\ *", CODEX_PROXY_GIT_SSH_COMMAND_MARKER.trim_end());
+    (
+        format!(
+            "__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND=\"${{{key}-}}\"\ncase \"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND\" in\n  {marker_pattern}) __CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_SET=1 ;;\n  *) __CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_SET= ;;\nesac"
+        ),
+        format!(
+            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_SET\" ]; then\n  case \"${{{key}-}}\" in\n    {marker_pattern}) export {key}=\"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND\" ;;\n    *) if [ -z \"${{{key}+x}}\" ]; then export {key}=\"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND\"; fi ;;\n  esac\nfi"
+        ),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn build_codex_proxy_git_ssh_command_exports() -> (String, String) {
+    (String::new(), String::new())
 }
 
 fn build_override_exports_for_keys(variable_prefix: &str, keys: &[&str]) -> (String, String) {
