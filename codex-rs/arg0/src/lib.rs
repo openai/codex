@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_FILE_ARG1;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
@@ -93,10 +94,23 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 
     let argv1 = args.next().unwrap_or_default();
-    if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
+    if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 || argv1 == CODEX_CORE_APPLY_PATCH_FILE_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {
             Some(patch_arg) => {
+                let patch_arg = if argv1 == CODEX_CORE_APPLY_PATCH_FILE_ARG1 {
+                    match std::fs::read_to_string(&patch_arg) {
+                        Ok(contents) => contents,
+                        Err(err) => {
+                            eprintln!(
+                                "Error: failed to read patch file for {CODEX_CORE_APPLY_PATCH_FILE_ARG1}: {err}"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    patch_arg
+                };
                 let mut stdout = std::io::stdout();
                 let mut stderr = std::io::stderr();
                 let cwd = match codex_utils_absolute_path::AbsolutePathBuf::current_dir() {
@@ -122,7 +136,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                 }
             }
             None => {
-                eprintln!("Error: {CODEX_CORE_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
+                eprintln!("Error: {argv1:?} requires a UTF-8 PATCH argument.");
                 1
             }
         };

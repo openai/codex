@@ -21,7 +21,10 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
+#[cfg(not(target_os = "windows"))]
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+#[cfg(target_os = "windows")]
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_FILE_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
@@ -35,6 +38,10 @@ use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
+#[cfg(target_os = "windows")]
+use std::time::SystemTime;
+#[cfg(target_os = "windows")]
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -49,6 +56,11 @@ pub struct ApplyPatchRequest {
 
 #[derive(Default)]
 pub struct ApplyPatchRuntime;
+
+struct BuiltApplyPatchCommand {
+    command: SandboxCommand,
+    temp_patch_path: Option<PathBuf>,
+}
 
 impl ApplyPatchRuntime {
     pub fn new() -> Self {
@@ -71,20 +83,46 @@ impl ApplyPatchRuntime {
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
         codex_home: &std::path::Path,
-    ) -> Result<SandboxCommand, ToolError> {
-        Ok(Self::build_sandbox_command_with_program(
+    ) -> Result<BuiltApplyPatchCommand, ToolError> {
+        let patch_file = Self::write_patch_to_temp_file(codex_home, &req.action.patch)?;
+        let patch_file_abs = AbsolutePathBuf::from_absolute_path(&patch_file).map_err(|err| {
+            ToolError::Rejected(format!("failed to resolve patch temp file path: {err}"))
+        })?;
+        let mut command = Self::build_sandbox_command_with_program(
             req,
             codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
-        ))
+            vec![
+                CODEX_CORE_APPLY_PATCH_FILE_ARG1.to_string(),
+                patch_file.to_string_lossy().to_string(),
+            ],
+        );
+        command.additional_permissions = Some(Self::with_patch_file_read_permission(
+            req.additional_permissions.clone(),
+            patch_file_abs,
+        ));
+        Ok(BuiltApplyPatchCommand {
+            command,
+            temp_patch_path: Some(patch_file),
+        })
     }
 
     #[cfg(not(target_os = "windows"))]
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
         codex_self_exe: Option<&PathBuf>,
-    ) -> Result<SandboxCommand, ToolError> {
+    ) -> Result<BuiltApplyPatchCommand, ToolError> {
         let exe = Self::resolve_apply_patch_program(codex_self_exe)?;
-        Ok(Self::build_sandbox_command_with_program(req, exe))
+        Ok(BuiltApplyPatchCommand {
+            command: Self::build_sandbox_command_with_program(
+                req,
+                exe,
+                vec![
+                    CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
+                    req.action.patch.clone(),
+                ],
+            ),
+            temp_patch_path: None,
+        })
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -97,13 +135,48 @@ impl ApplyPatchRuntime {
             .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
     }
 
-    fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
+    #[cfg(target_os = "windows")]
+    fn write_patch_to_temp_file(
+        codex_home: &std::path::Path,
+        patch: &str,
+    ) -> Result<PathBuf, ToolError> {
+        let dir = codex_home.join("tmp").join("apply-patch");
+        std::fs::create_dir_all(&dir).map_err(|err| {
+            ToolError::Rejected(format!("failed to create apply_patch temp dir: {err}"))
+        })?;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let path = dir.join(format!("patch-{}-{nanos}.txt", std::process::id()));
+        std::fs::write(&path, patch).map_err(|err| {
+            ToolError::Rejected(format!("failed to write apply_patch temp file: {err}"))
+        })?;
+        Ok(path)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn with_patch_file_read_permission(
+        mut profile: Option<PermissionProfile>,
+        patch_file: AbsolutePathBuf,
+    ) -> PermissionProfile {
+        let profile = profile.get_or_insert_with(PermissionProfile::default);
+        let file_system = profile.file_system.get_or_insert_with(Default::default);
+        file_system
+            .read
+            .get_or_insert_with(Vec::new)
+            .push(patch_file);
+        profile.clone()
+    }
+
+    fn build_sandbox_command_with_program(
+        req: &ApplyPatchRequest,
+        exe: PathBuf,
+        args: Vec<String>,
+    ) -> SandboxCommand {
         SandboxCommand {
             program: exe.into_os_string(),
-            args: vec![
-                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
-                req.action.patch.clone(),
-            ],
+            args,
             cwd: req.action.cwd.clone(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
@@ -241,19 +314,33 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         }
 
         #[cfg(target_os = "windows")]
-        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        let built_command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
         #[cfg(not(target_os = "windows"))]
-        let command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
+        let built_command = Self::build_sandbox_command(req, ctx.turn.codex_self_exe.as_ref())?;
+        let BuiltApplyPatchCommand {
+            command,
+            temp_patch_path,
+        } = built_command;
         let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
         };
-        let env = attempt
-            .env_for(command, options, /*network*/ None)
-            .map_err(|err| ToolError::Codex(err.into()))?;
+        let env = match attempt.env_for(command, options, /*network*/ None) {
+            Ok(env) => env,
+            Err(err) => {
+                if let Some(temp_patch_path) = temp_patch_path {
+                    let _ = std::fs::remove_file(temp_patch_path);
+                }
+                return Err(ToolError::Codex(err.into()));
+            }
+        };
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await
-            .map_err(ToolError::Codex)?;
+            .map_err(ToolError::Codex);
+        if let Some(temp_patch_path) = temp_patch_path {
+            let _ = std::fs::remove_file(temp_patch_path);
+        }
+        let out = out?;
         Ok(out)
     }
 }
