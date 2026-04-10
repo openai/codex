@@ -3733,7 +3733,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_turns_list(
-        &mut self,
+        &self,
         request_id: ConnectionRequestId,
         params: ThreadTurnsListParams,
     ) {

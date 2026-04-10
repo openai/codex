@@ -372,6 +372,7 @@ FROM threads
             model_providers,
             /*anchor*/ None,
             crate::SortKey::UpdatedAt,
+            crate::SortDirection::Desc,
             /*search_term*/ None,
         );
         builder.push(" AND title = ");
@@ -380,7 +381,12 @@ FROM threads
             builder.push(" AND cwd = ");
             builder.push_bind(cwd.display().to_string());
         }
-        push_thread_order_and_limit(&mut builder, crate::SortKey::UpdatedAt, /*limit*/ 1);
+        push_thread_order_and_limit(
+            &mut builder,
+            crate::SortKey::UpdatedAt,
+            crate::SortDirection::Desc,
+            /*limit*/ 1,
+        );
 
         let row = builder.build().fetch_optional(self.pool.as_ref()).await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(crate::ThreadMetadata::try_from))

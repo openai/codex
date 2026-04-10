@@ -1136,6 +1136,7 @@ fn thread_list_params(
             ThreadSortKey::CreatedAt => AppServerThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
         }),
+        sort_direction: None,
         model_providers: match provider_filter {
             ProviderFilter::Any => None,
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
