@@ -391,7 +391,8 @@
     "AutoReviewDecisionSource": {
       "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
       "enum": [
-        "agent"
+        "agent",
+        "user"
       ],
       "type": "string"
     },

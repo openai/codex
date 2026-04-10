@@ -3,6 +3,7 @@ use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::guardian::GuardianReviewOverrideError;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
@@ -15,6 +16,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::GuardianReviewOverrideDecision;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -261,6 +263,29 @@ impl CodexThread {
         }
 
         Ok(*guard)
+    }
+
+    pub async fn override_guardian_review(
+        &self,
+        review_id: &str,
+        turn_id: &str,
+        decision: GuardianReviewOverrideDecision,
+    ) -> CodexResult<()> {
+        self.codex
+            .session
+            .guardian_review_session
+            .override_review(review_id, turn_id, decision)
+            .await
+            .map_err(|err| match err {
+                GuardianReviewOverrideError::NotFound => CodexErr::InvalidRequest(format!(
+                    "guardian review not found or already completed: {review_id}"
+                )),
+                GuardianReviewOverrideError::TurnMismatch { expected_turn_id } => {
+                    CodexErr::InvalidRequest(format!(
+                        "guardian review {review_id} belongs to turn {expected_turn_id}, not {turn_id}"
+                    ))
+                }
+            })
     }
 }
 

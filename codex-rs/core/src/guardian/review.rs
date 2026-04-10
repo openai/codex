@@ -6,12 +6,15 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianReviewOverrideDecision;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
+use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -60,6 +63,11 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
             rejection.rationale.trim(),
             GUARDIAN_REJECTION_INSTRUCTIONS
         ),
+        GuardianAssessmentDecisionSource::User => format!(
+            "This action was declined before the automatic approval review completed.\nReason: {}\n{}",
+            rejection.rationale.trim(),
+            GUARDIAN_REJECTION_INSTRUCTIONS
+        ),
     }
 }
 
@@ -68,6 +76,22 @@ pub(super) enum GuardianReviewOutcome {
     Completed(anyhow::Result<GuardianAssessment>),
     TimedOut,
     Aborted,
+}
+
+enum GuardianReviewSelection {
+    Review(GuardianReviewOutcome),
+    Override(GuardianReviewOverrideDecision),
+    OverrideClosed,
+    ExternalCancel,
+}
+
+struct GuardianReviewOverrideCompletion {
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    review_id: String,
+    target_item_id: Option<String>,
+    assessment_turn_id: String,
+    action_summary: codex_protocol::protocol::GuardianAssessmentAction,
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -110,6 +134,10 @@ async fn run_guardian_review(
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
+    let override_rx = session
+        .guardian_review_session
+        .register_pending_override(review_id.clone(), assessment_turn_id.clone())
+        .await;
     session
         .send_event(
             turn.as_ref(),
@@ -132,6 +160,10 @@ async fn run_guardian_review(
         .is_some_and(CancellationToken::is_cancelled)
     {
         session
+            .guardian_review_session
+            .clear_pending_override(&review_id)
+            .await;
+        session
             .send_event(
                 turn.as_ref(),
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
@@ -152,15 +184,90 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let outcome = run_guardian_review_session(
+    let review_cancel = CancellationToken::new();
+    let mut review_task = tokio::spawn(run_guardian_review_session(
         session.clone(),
         turn.clone(),
         request,
         retry_reason,
         schema,
-        external_cancel,
-    )
-    .await;
+        Some(review_cancel.clone()),
+    ));
+    let external_cancelled = async {
+        if let Some(cancel_token) = external_cancel.as_ref() {
+            cancel_token.cancelled().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::pin!(external_cancelled);
+    let selection = tokio::select! {
+        result = &mut review_task => {
+            GuardianReviewSelection::Review(guardian_review_task_result(result))
+        }
+        override_decision = override_rx => {
+            match override_decision {
+                Ok(decision) => GuardianReviewSelection::Override(decision),
+                Err(_) => GuardianReviewSelection::OverrideClosed,
+            }
+        }
+        _ = &mut external_cancelled => GuardianReviewSelection::ExternalCancel,
+    };
+
+    let outcome = match selection {
+        GuardianReviewSelection::Review(outcome) => {
+            session
+                .guardian_review_session
+                .clear_pending_override(&review_id)
+                .await;
+            outcome
+        }
+        GuardianReviewSelection::Override(decision) => {
+            review_cancel.cancel();
+            if let Err(err) = review_task.await {
+                warn!("guardian review task failed after client override: {err}");
+            }
+            session
+                .guardian_review_session
+                .clear_pending_override(&review_id)
+                .await;
+            return finish_guardian_review_override(
+                GuardianReviewOverrideCompletion {
+                    session,
+                    turn,
+                    review_id,
+                    target_item_id,
+                    assessment_turn_id,
+                    action_summary,
+                },
+                decision,
+            )
+            .await;
+        }
+        GuardianReviewSelection::OverrideClosed => {
+            warn!("pending guardian review override channel closed before decision");
+            let outcome = match review_task.await {
+                Ok(outcome) => outcome,
+                Err(err) => guardian_review_task_result(Err(err)),
+            };
+            session
+                .guardian_review_session
+                .clear_pending_override(&review_id)
+                .await;
+            outcome
+        }
+        GuardianReviewSelection::ExternalCancel => {
+            review_cancel.cancel();
+            if let Err(err) = review_task.await {
+                warn!("guardian review task failed after external cancellation: {err}");
+            }
+            session
+                .guardian_review_session
+                .clear_pending_override(&review_id)
+                .await;
+            GuardianReviewOutcome::Aborted
+        }
+    };
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
@@ -260,6 +367,75 @@ async fn run_guardian_review(
     } else {
         ReviewDecision::Denied
     }
+}
+
+fn guardian_review_task_result(
+    result: Result<GuardianReviewOutcome, JoinError>,
+) -> GuardianReviewOutcome {
+    match result {
+        Ok(outcome) => outcome,
+        Err(err) => GuardianReviewOutcome::Completed(Err(anyhow::anyhow!(
+            "guardian review task failed: {err}"
+        ))),
+    }
+}
+
+async fn finish_guardian_review_override(
+    completion: GuardianReviewOverrideCompletion,
+    decision: GuardianReviewOverrideDecision,
+) -> ReviewDecision {
+    let GuardianReviewOverrideCompletion {
+        session,
+        turn,
+        review_id,
+        target_item_id,
+        assessment_turn_id,
+        action_summary,
+    } = completion;
+    let (status, review_decision, rationale) = match decision {
+        GuardianReviewOverrideDecision::Approve => (
+            GuardianAssessmentStatus::Approved,
+            ReviewDecision::Approved,
+            "User preempted the automatic guardian review and approved this review.".to_string(),
+        ),
+        GuardianReviewOverrideDecision::Decline => (
+            GuardianAssessmentStatus::Denied,
+            ReviewDecision::Denied,
+            "User preempted the automatic guardian review and declined this review.".to_string(),
+        ),
+    };
+
+    {
+        let mut rationales = session.services.guardian_rejections.lock().await;
+        if matches!(decision, GuardianReviewOverrideDecision::Approve) {
+            rationales.remove(&review_id);
+        } else {
+            let rejection = GuardianRejection {
+                rationale: rationale.clone(),
+                source: GuardianAssessmentDecisionSource::User,
+            };
+            rationales.insert(review_id.clone(), rejection);
+        }
+    }
+
+    session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: review_id,
+                target_item_id,
+                turn_id: assessment_turn_id,
+                status,
+                risk_level: None,
+                user_authorization: None,
+                rationale: Some(rationale),
+                decision_source: Some(GuardianAssessmentDecisionSource::User),
+                action: action_summary,
+            }),
+        )
+        .await;
+
+    review_decision
 }
 
 /// Public entrypoint for approval requests that should be reviewed by guardian.

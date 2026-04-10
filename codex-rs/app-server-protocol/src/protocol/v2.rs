@@ -54,6 +54,7 @@ use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
+use codex_protocol::protocol::GuardianReviewOverrideDecision as CoreGuardianReviewOverrideDecision;
 use codex_protocol::protocol::GuardianRiskLevel as CoreGuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization as CoreGuardianUserAuthorization;
 use codex_protocol::protocol::HookEventName as CoreHookEventName;
@@ -4541,12 +4542,33 @@ pub enum GuardianApprovalReviewStatus {
 /// [UNSTABLE] Source that produced a terminal guardian approval review decision.
 pub enum AutoReviewDecisionSource {
     Agent,
+    #[serde(alias = "clientOverride")]
+    User,
 }
 
 impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
     fn from(value: CoreGuardianAssessmentDecisionSource) -> Self {
         match value {
             CoreGuardianAssessmentDecisionSource::Agent => Self::Agent,
+            CoreGuardianAssessmentDecisionSource::User => Self::User,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Client decision that preempts a pending guardian approval review.
+pub enum GuardianApprovalReviewOverrideDecision {
+    Approve,
+    Decline,
+}
+
+impl From<GuardianApprovalReviewOverrideDecision> for CoreGuardianReviewOverrideDecision {
+    fn from(value: GuardianApprovalReviewOverrideDecision) -> Self {
+        match value {
+            GuardianApprovalReviewOverrideDecision::Approve => Self::Approve,
+            GuardianApprovalReviewOverrideDecision::Decline => Self::Decline,
         }
     }
 }
@@ -4607,6 +4629,23 @@ pub struct GuardianApprovalReview {
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub rationale: Option<String>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Params for preempting a pending guardian approval review.
+pub struct ItemGuardianApprovalReviewOverrideParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub review_id: String,
+    pub decision: GuardianApprovalReviewOverrideDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Empty response for `item/autoApprovalReview/override`.
+pub struct ItemGuardianApprovalReviewOverrideResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

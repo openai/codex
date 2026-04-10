@@ -69,6 +69,8 @@ use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
+use codex_app_server_protocol::ItemGuardianApprovalReviewOverrideParams;
+use codex_app_server_protocol::ItemGuardianApprovalReviewOverrideResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -853,6 +855,13 @@ impl CodexMessageProcessor {
             ClientRequest::ReviewStart { request_id, params } => {
                 self.review_start(to_connection_request_id(request_id), params)
                     .await;
+            }
+            ClientRequest::ItemGuardianApprovalReviewOverride { request_id, params } => {
+                self.item_guardian_approval_review_override(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
             }
             ClientRequest::GetConversationSummary { request_id, params } => {
                 self.get_thread_summary(to_connection_request_id(request_id), params)
@@ -5348,6 +5357,46 @@ impl CodexMessageProcessor {
                 }
             }
         });
+    }
+
+    async fn item_guardian_approval_review_override(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ItemGuardianApprovalReviewOverrideParams,
+    ) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(thread) => thread,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread
+            .override_guardian_review(&params.review_id, &params.turn_id, params.decision.into())
+            .await
+        {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, ItemGuardianApprovalReviewOverrideResponse {})
+                    .await;
+            }
+            Err(codex_protocol::error::CodexErr::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: err.to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
     }
 
     async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {

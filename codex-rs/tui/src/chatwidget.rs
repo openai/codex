@@ -3402,11 +3402,16 @@ impl ChatWidget {
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
+            let actor = if ev.decision_source == Some(GuardianAssessmentDecisionSource::User) {
+                history_cell::ApprovalDecisionActor::User
+            } else {
+                history_cell::ApprovalDecisionActor::Guardian
+            };
             let cell = if let Some(command) = guardian_command(&ev.action) {
                 history_cell::new_approval_decision_cell(
                     command,
                     codex_protocol::protocol::ReviewDecision::Approved,
-                    history_cell::ApprovalDecisionActor::Guardian,
+                    actor,
                 )
             } else if let Some(summary) = guardian_action_summary(&ev.action) {
                 history_cell::new_guardian_approved_action_request(summary)
@@ -3424,11 +3429,16 @@ impl ChatWidget {
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
+        let actor = if ev.decision_source == Some(GuardianAssessmentDecisionSource::User) {
+            history_cell::ApprovalDecisionActor::User
+        } else {
+            history_cell::ApprovalDecisionActor::Guardian
+        };
         let cell = if let Some(command) = guardian_command(&ev.action) {
             history_cell::new_approval_decision_cell(
                 command,
                 codex_protocol::protocol::ReviewDecision::Denied,
-                history_cell::ApprovalDecisionActor::Guardian,
+                actor,
             )
         } else {
             match &ev.action {
@@ -6952,6 +6962,9 @@ impl ChatWidget {
             decision_source: decision_source.map(|source| match source {
                 codex_app_server_protocol::AutoReviewDecisionSource::Agent => {
                     GuardianAssessmentDecisionSource::Agent
+                }
+                codex_app_server_protocol::AutoReviewDecisionSource::User => {
+                    GuardianAssessmentDecisionSource::User
                 }
             }),
             action: action.into(),
