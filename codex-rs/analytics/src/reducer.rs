@@ -765,6 +765,24 @@ impl AnalyticsReducer {
                 )
             });
         let Some((app_server_client, runtime)) = connection_metadata else {
+            if let Some(connection_id) = turn_state.connection_id {
+                tracing::warn!(
+                    turn_id,
+                    connection_id,
+                    "dropping turn analytics event: missing connection metadata"
+                );
+            }
+            return;
+        };
+        let Some(thread_id) = turn_state.thread_id.as_ref() else {
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(thread_id) else {
+            tracing::warn!(
+                thread_id,
+                turn_id,
+                "dropping turn analytics event: missing thread lifecycle metadata"
+            );
             return;
         };
         out.push(TrackEventRequest::TurnEvent(Box::new(
@@ -775,6 +793,7 @@ impl AnalyticsReducer {
                     runtime,
                     turn_id.to_string(),
                     turn_state,
+                    thread_metadata,
                 ),
             },
         )));
@@ -787,6 +806,7 @@ fn codex_turn_event_params(
     runtime: CodexRuntimeMetadata,
     turn_id: String,
     turn_state: &TurnState,
+    thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
     let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
         turn_state.thread_id.clone(),
@@ -803,7 +823,7 @@ fn codex_turn_event_params(
         num_input_images: _resolved_num_input_images,
         submission_type,
         ephemeral,
-        session_source,
+        session_source: _session_source,
         initialization_mode,
         model,
         model_provider,
@@ -826,10 +846,10 @@ fn codex_turn_event_params(
         runtime,
         submission_type,
         ephemeral,
-        thread_source: thread_source_name(&session_source).map(str::to_string),
+        thread_source: thread_metadata.thread_source.map(str::to_string),
         initialization_mode,
-        subagent_source: None,
-        parent_thread_id: None,
+        subagent_source: thread_metadata.subagent_source.clone(),
+        parent_thread_id: thread_metadata.parent_thread_id.clone(),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),
