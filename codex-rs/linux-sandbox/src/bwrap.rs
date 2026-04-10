@@ -439,11 +439,9 @@ fn append_read_only_subpath_args(
     }
 
     if !subpath.exists() {
-        // A missing protected leaf, such as `<workspace>/.codex`, can be
-        // blocked with a file mask. Missing intermediate directories need
-        // mountpoint cleanup and are handled by a separate follow-up.
+        // Mask the first missing component so the process cannot create a
+        // protected subtree under a writable root before reaching the leaf.
         if let Some(first_missing_component) = find_first_non_existent_component(subpath)
-            && first_missing_component.as_path() == subpath
             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
         {
             append_empty_file_read_only_bind_args(args, preserved_files, &first_missing_component)?;
@@ -816,6 +814,55 @@ mod tests {
             .position(|window| window == ["--bind", "/dev", "/dev"])
             .expect("expected /dev to be rebound after the writable root");
         assert!(codex_mask_index < dev_rebind_index);
+    }
+
+    #[test]
+    fn masks_first_missing_component_for_nested_read_only_subpaths() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let protected_path = temp_dir.path().join("missing").join("protected");
+        let first_missing_component = temp_dir.path().join("missing");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(temp_dir.path()).expect("absolute temp dir"),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(protected_path.as_path())
+                        .expect("absolute protected path"),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let first_missing_component = path_to_string(&first_missing_component);
+        let protected_path = path_to_string(&protected_path);
+
+        assert_eq!(args.preserved_files.len(), 1);
+        assert!(
+            args.args.windows(3).any(|window| {
+                window[0] == "--ro-bind-data" && window[2] == first_missing_component
+            }),
+            "missing protected subtree should be masked at first missing component: {:#?}",
+            args.args
+        );
+        assert!(
+            !args
+                .args
+                .windows(3)
+                .any(|window| window[0] == "--ro-bind-data" && window[2] == protected_path),
+            "mask should target the first missing component, not the unreachable leaf: {:#?}",
+            args.args
+        );
     }
 
     #[test]
