@@ -184,6 +184,53 @@ fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn zsh_snapshot_preserves_tied_path_export() -> Result<()> {
+    let dir = tempdir()?;
+    let tool_dir = dir.path().join("toolbin");
+    let expected_path = format!("{}:/usr/bin:/bin", tool_dir.display());
+    std::fs::write(
+        dir.path().join(".zshrc"),
+        format!("export PATH='{expected_path}'\n"),
+    )?;
+
+    let output = Command::new("/bin/zsh")
+        .arg("-fc")
+        .arg(zsh_snapshot_script())
+        .env("ZDOTDIR", dir.path())
+        .output()?;
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("export -T PATH path="),
+        "snapshot should include zsh tied PATH export; stdout={stdout:?}"
+    );
+
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(&snapshot_path, stdout.as_bytes())?;
+
+    let validate = Command::new("/bin/zsh")
+        .arg("-fc")
+        .arg("PATH=/should/not/survive; . \"$1\"; print -r -- \"$PATH\"")
+        .arg("zsh")
+        .arg(&snapshot_path)
+        .output()?;
+    assert!(
+        validate.status.success(),
+        "snapshot validation failed: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&validate.stdout).trim(),
+        expected_path
+    );
+
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
