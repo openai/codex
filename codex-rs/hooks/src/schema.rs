@@ -5,6 +5,7 @@ use schemars::schema::InstanceType;
 use schemars::schema::RootSchema;
 use schemars::schema::Schema;
 use schemars::schema::SchemaObject;
+use schemars::schema::SubschemaValidation;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -237,6 +238,59 @@ pub(crate) struct PermissionRequestToolInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestApprovalReviewWire {
+    #[schemars(schema_with = "permission_request_approval_review_source_schema")]
+    pub source: String,
+    pub status: PermissionRequestApprovalReviewStatusWire,
+    #[schemars(schema_with = "nullable_permission_request_approval_review_decision_schema")]
+    pub decision: Option<PermissionRequestApprovalReviewDecisionWire>,
+    #[schemars(schema_with = "nullable_permission_request_approval_review_risk_level_schema")]
+    pub risk_level: Option<PermissionRequestApprovalReviewRiskLevelWire>,
+    #[schemars(
+        schema_with = "nullable_permission_request_approval_review_user_authorization_schema"
+    )]
+    pub user_authorization: Option<PermissionRequestApprovalReviewUserAuthorizationWire>,
+    #[schemars(schema_with = "nullable_string_schema")]
+    pub rationale: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PermissionRequestApprovalReviewStatusWire {
+    Approved,
+    Denied,
+    Aborted,
+    Failed,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PermissionRequestApprovalReviewDecisionWire {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PermissionRequestApprovalReviewRiskLevelWire {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PermissionRequestApprovalReviewUserAuthorizationWire {
+    Unknown,
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "permission-request.command.input")]
 pub(crate) struct PermissionRequestCommandInput {
     pub session_id: String,
@@ -252,6 +306,8 @@ pub(crate) struct PermissionRequestCommandInput {
     #[schemars(schema_with = "permission_request_tool_name_schema")]
     pub tool_name: String,
     pub tool_input: PermissionRequestToolInput,
+    #[schemars(schema_with = "nullable_permission_request_approval_review_schema")]
+    pub approval_review: Option<PermissionRequestApprovalReviewWire>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -552,6 +608,54 @@ fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Bash")
+}
+
+fn permission_request_approval_review_source_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("guardian")
+}
+
+fn nullable_permission_request_approval_review_schema(generator: &mut SchemaGenerator) -> Schema {
+    nullable_schema(generator.subschema_for::<PermissionRequestApprovalReviewWire>())
+}
+
+fn nullable_permission_request_approval_review_decision_schema(
+    generator: &mut SchemaGenerator,
+) -> Schema {
+    nullable_schema(generator.subschema_for::<PermissionRequestApprovalReviewDecisionWire>())
+}
+
+fn nullable_permission_request_approval_review_risk_level_schema(
+    generator: &mut SchemaGenerator,
+) -> Schema {
+    nullable_schema(generator.subschema_for::<PermissionRequestApprovalReviewRiskLevelWire>())
+}
+
+fn nullable_permission_request_approval_review_user_authorization_schema(
+    generator: &mut SchemaGenerator,
+) -> Schema {
+    nullable_schema(
+        generator.subschema_for::<PermissionRequestApprovalReviewUserAuthorizationWire>(),
+    )
+}
+
+fn nullable_string_schema(generator: &mut SchemaGenerator) -> Schema {
+    NullableString::json_schema(generator)
+}
+
+fn nullable_schema(schema: Schema) -> Schema {
+    Schema::Object(SchemaObject {
+        subschemas: Some(Box::new(SubschemaValidation {
+            any_of: Some(vec![
+                schema,
+                Schema::Object(SchemaObject {
+                    instance_type: Some(InstanceType::Null.into()),
+                    ..Default::default()
+                }),
+            ]),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

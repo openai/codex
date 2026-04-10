@@ -118,6 +118,17 @@ impl ShellRuntime {
             tx_event: ctx.session.get_tx_event(),
         })
     }
+
+    fn guardian_request(req: &ShellRequest, ctx: &ApprovalCtx<'_>) -> GuardianApprovalRequest {
+        GuardianApprovalRequest::Shell {
+            id: ctx.call_id.to_string(),
+            command: req.command.clone(),
+            cwd: req.cwd.to_path_buf(),
+            sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
+            justification: req.justification.clone(),
+        }
+    }
 }
 
 impl Sandboxable for ShellRuntime {
@@ -147,6 +158,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
         let keys = self.approval_keys(req);
+        let guardian_request = Self::guardian_request(req, &ctx);
         let command = req.command.clone();
         let cwd = req.cwd.to_path_buf();
         let retry_reason = ctx.retry_reason.clone();
@@ -156,20 +168,8 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                return review_approval_request(
-                    session,
-                    turn,
-                    GuardianApprovalRequest::Shell {
-                        id: call_id,
-                        command,
-                        cwd,
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                    },
-                    retry_reason,
-                )
-                .await;
+                return review_approval_request(session, turn, guardian_request, retry_reason)
+                    .await;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;
@@ -200,6 +200,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn permission_request_payload(&self, req: &ShellRequest) -> Option<PermissionRequestPayload> {
         Some(PermissionRequestPayload::bash(req.hook_command.clone()))
+    }
+
+    fn guardian_approval_request(
+        &self,
+        req: &ShellRequest,
+        ctx: &ApprovalCtx<'_>,
+    ) -> Option<GuardianApprovalRequest> {
+        Some(Self::guardian_request(req, ctx))
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {

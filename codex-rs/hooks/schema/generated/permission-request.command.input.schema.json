@@ -8,6 +8,98 @@
         "null"
       ]
     },
+    "PermissionRequestApprovalReviewDecisionWire": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestApprovalReviewRiskLevelWire": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestApprovalReviewStatusWire": {
+      "enum": [
+        "approved",
+        "denied",
+        "aborted",
+        "failed",
+        "timed_out"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestApprovalReviewUserAuthorizationWire": {
+      "enum": [
+        "unknown",
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestApprovalReviewWire": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestApprovalReviewDecisionWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "risk_level": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestApprovalReviewRiskLevelWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "const": "guardian",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/PermissionRequestApprovalReviewStatusWire"
+        },
+        "user_authorization": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestApprovalReviewUserAuthorizationWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decision",
+        "rationale",
+        "risk_level",
+        "source",
+        "status",
+        "user_authorization"
+      ],
+      "type": "object"
+    },
     "PermissionRequestToolInput": {
       "additionalProperties": false,
       "properties": {
@@ -22,6 +114,16 @@
     }
   },
   "properties": {
+    "approval_review": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PermissionRequestApprovalReviewWire"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "cwd": {
       "type": "string"
     },
@@ -61,6 +163,7 @@
     }
   },
   "required": [
+    "approval_review",
     "cwd",
     "hook_event_name",
     "model",

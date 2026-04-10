@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_hooks::PermissionRequestApprovalReview;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -154,6 +155,7 @@ pub(crate) async fn run_permission_request_hooks(
     run_id_suffix: String,
     tool_name: String,
     command: String,
+    approval_review: Option<PermissionRequestApprovalReview>,
 ) -> Option<PermissionRequestDecision> {
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,
@@ -165,6 +167,7 @@ pub(crate) async fn run_permission_request_hooks(
         tool_name,
         run_id_suffix,
         command,
+        approval_review,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;

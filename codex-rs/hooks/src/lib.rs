@@ -5,6 +5,11 @@ mod registry;
 mod schema;
 mod types;
 
+pub use events::permission_request::PermissionRequestApprovalReview;
+pub use events::permission_request::PermissionRequestApprovalReviewDecision;
+pub use events::permission_request::PermissionRequestApprovalReviewRiskLevel;
+pub use events::permission_request::PermissionRequestApprovalReviewStatus;
+pub use events::permission_request::PermissionRequestApprovalReviewUserAuthorization;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;

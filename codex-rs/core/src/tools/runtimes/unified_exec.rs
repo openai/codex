@@ -92,6 +92,21 @@ impl<'a> UnifiedExecRuntime<'a> {
             shell_mode,
         }
     }
+
+    fn guardian_request(
+        req: &UnifiedExecRequest,
+        ctx: &ApprovalCtx<'_>,
+    ) -> GuardianApprovalRequest {
+        GuardianApprovalRequest::ExecCommand {
+            id: ctx.call_id.to_string(),
+            command: req.command.clone(),
+            cwd: req.cwd.to_path_buf(),
+            sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
+            justification: req.justification.clone(),
+            tty: req.tty,
+        }
+    }
 }
 
 impl Sandboxable for UnifiedExecRuntime<'_> {
@@ -123,6 +138,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         ctx: ApprovalCtx<'b>,
     ) -> BoxFuture<'b, ReviewDecision> {
         let keys = self.approval_keys(req);
+        let guardian_request = Self::guardian_request(req, &ctx);
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -132,21 +148,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                return review_approval_request(
-                    session,
-                    turn,
-                    GuardianApprovalRequest::ExecCommand {
-                        id: call_id,
-                        command,
-                        cwd,
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                        tty: req.tty,
-                    },
-                    retry_reason,
-                )
-                .await;
+                return review_approval_request(session, turn, guardian_request, retry_reason)
+                    .await;
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;
@@ -183,6 +186,14 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         req: &UnifiedExecRequest,
     ) -> Option<PermissionRequestPayload> {
         Some(PermissionRequestPayload::bash(req.hook_command.clone()))
+    }
+
+    fn guardian_approval_request(
+        &self,
+        req: &UnifiedExecRequest,
+        ctx: &ApprovalCtx<'_>,
+    ) -> Option<GuardianApprovalRequest> {
+        Some(Self::guardian_request(req, ctx))
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {

@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
@@ -1169,6 +1170,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["approval_review"], Value::Null);
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
@@ -1177,6 +1179,108 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         hook_inputs[0]["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_receives_guardian_review_before_fallback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-guardian-review";
+    let marker = std::env::temp_dir().join("permissionrequest-guardian-review-marker");
+    let command = format!("printf guardian > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "medium",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The user asked to run this local marker command.",
+    })
+    .to_string();
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message("msg-guardian", &guardian_assessment),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "guardian fallback allowed it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_permission_request_hook(home, Some("^Bash$"), "quiet", "unused")
+            {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::GuardianApproval)
+                .expect("test config should allow feature update");
+            config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover guardian review marker")?;
+    }
+
+    test.submit_turn_with_policies(
+        "run the shell command after guardian review",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "guardian decision should be reused instead of running a second review",
+    );
+    assert!(
+        marker.exists(),
+        "guardian-approved fallback should create marker file",
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]["approval_review"],
+        serde_json::json!({
+            "source": "guardian",
+            "status": "approved",
+            "decision": "allow",
+            "risk_level": "medium",
+            "user_authorization": "high",
+            "rationale": "The user asked to run this local marker command.",
+        })
     );
 
     Ok(())

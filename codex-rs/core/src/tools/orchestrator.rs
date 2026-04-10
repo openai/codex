@@ -6,7 +6,12 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::guardian::GuardianApprovalReview;
+use crate::guardian::GuardianApprovalReviewResult;
+use crate::guardian::GuardianApprovalReviewStatus;
+use crate::guardian::GuardianAssessmentOutcome;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::review_approval_request_with_review;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
@@ -23,6 +28,11 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use codex_hooks::PermissionRequestApprovalReview;
+use codex_hooks::PermissionRequestApprovalReviewDecision;
+use codex_hooks::PermissionRequestApprovalReviewRiskLevel;
+use codex_hooks::PermissionRequestApprovalReviewStatus as HookApprovalReviewStatus;
+use codex_hooks::PermissionRequestApprovalReviewUserAuthorization;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::SessionTelemetry;
 use codex_otel::ToolDecisionSource;
@@ -371,10 +381,12 @@ impl ToolOrchestrator {
         }
     }
 
-    // PermissionRequest hooks get the first chance to answer approval prompts
-    // for tools that expose a hook payload. Today this is Bash-only; if no
-    // matching hook returns a decision, fall back to the normal user or guardian
-    // approval path.
+    // Centralize one approval prompt for three possible decision makers. If
+    // this prompt would normally route to guardian, run guardian first and pass
+    // its result to PermissionRequest hooks as advisory context. The hook can
+    // still answer the prompt; if it stays quiet, reuse the guardian decision
+    // instead of asking guardian again. Without a hook or reusable guardian
+    // result, fall back to the runtime's normal approval path.
     async fn request_approval<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,
@@ -387,6 +399,23 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
+        let guardian_review = if routes_approval_to_guardian(turn_ctx) {
+            match tool.guardian_approval_request(req, &approval_ctx) {
+                Some(request) => Some(
+                    review_approval_request_with_review(
+                        approval_ctx.session,
+                        approval_ctx.turn,
+                        request,
+                        approval_ctx.retry_reason.clone(),
+                    )
+                    .await,
+                ),
+                None => None,
+            }
+        } else {
+            None
+        };
+
         if let Some(permission_request) = tool.permission_request_payload(req) {
             match run_permission_request_hooks(
                 approval_ctx.session,
@@ -394,6 +423,9 @@ impl ToolOrchestrator {
                 approval_ctx.call_id.to_string(),
                 permission_request.tool_name,
                 permission_request.command,
+                guardian_review
+                    .as_ref()
+                    .map(|review| permission_request_approval_review(review.review.clone())),
             )
             .await
             {
@@ -419,6 +451,16 @@ impl ToolOrchestrator {
             }
         }
 
+        if let Some(GuardianApprovalReviewResult { decision, .. }) = guardian_review {
+            otel.tool_decision(
+                otel_tn,
+                otel_ci,
+                &decision,
+                ToolDecisionSource::AutomatedReviewer,
+            );
+            return Ok(decision);
+        }
+
         let decision = tool.start_approval_async(req, approval_ctx).await;
         let otel_source = if routes_approval_to_guardian(turn_ctx) {
             ToolDecisionSource::AutomatedReviewer
@@ -434,4 +476,53 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // Keep approval reason terse and stable for UX/tests, but accept the
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
+}
+
+fn permission_request_approval_review(
+    review: GuardianApprovalReview,
+) -> PermissionRequestApprovalReview {
+    PermissionRequestApprovalReview {
+        status: match review.status {
+            GuardianApprovalReviewStatus::Approved => HookApprovalReviewStatus::Approved,
+            GuardianApprovalReviewStatus::Denied => HookApprovalReviewStatus::Denied,
+            GuardianApprovalReviewStatus::Aborted => HookApprovalReviewStatus::Aborted,
+            GuardianApprovalReviewStatus::Failed => HookApprovalReviewStatus::Failed,
+            GuardianApprovalReviewStatus::TimedOut => HookApprovalReviewStatus::TimedOut,
+        },
+        decision: review.decision.map(|decision| match decision {
+            GuardianAssessmentOutcome::Allow => PermissionRequestApprovalReviewDecision::Allow,
+            GuardianAssessmentOutcome::Deny => PermissionRequestApprovalReviewDecision::Deny,
+        }),
+        risk_level: review.risk_level.map(|risk_level| match risk_level {
+            codex_protocol::protocol::GuardianRiskLevel::Low => {
+                PermissionRequestApprovalReviewRiskLevel::Low
+            }
+            codex_protocol::protocol::GuardianRiskLevel::Medium => {
+                PermissionRequestApprovalReviewRiskLevel::Medium
+            }
+            codex_protocol::protocol::GuardianRiskLevel::High => {
+                PermissionRequestApprovalReviewRiskLevel::High
+            }
+            codex_protocol::protocol::GuardianRiskLevel::Critical => {
+                PermissionRequestApprovalReviewRiskLevel::Critical
+            }
+        }),
+        user_authorization: review.user_authorization.map(|user_authorization| {
+            match user_authorization {
+                codex_protocol::protocol::GuardianUserAuthorization::Unknown => {
+                    PermissionRequestApprovalReviewUserAuthorization::Unknown
+                }
+                codex_protocol::protocol::GuardianUserAuthorization::Low => {
+                    PermissionRequestApprovalReviewUserAuthorization::Low
+                }
+                codex_protocol::protocol::GuardianUserAuthorization::Medium => {
+                    PermissionRequestApprovalReviewUserAuthorization::Medium
+                }
+                codex_protocol::protocol::GuardianUserAuthorization::High => {
+                    PermissionRequestApprovalReviewUserAuthorization::High
+                }
+            }
+        }),
+        rationale: review.rationale,
+    }
 }
