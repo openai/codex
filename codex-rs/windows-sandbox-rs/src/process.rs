@@ -115,7 +115,7 @@ pub unsafe fn create_process_as_user(
                     ));
                 }
             }
-            let mut attrs = ProcThreadAttributeList::new(1)?;
+            let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
             attrs.set_handle_list(inherited_handles)?;
             si.lpAttributeList = attrs.as_mut_ptr();
 

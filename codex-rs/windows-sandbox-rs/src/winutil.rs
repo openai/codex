@@ -120,41 +120,6 @@ pub fn string_from_sid_bytes(sid: &[u8]) -> Result<String, String> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::argv_to_command_line;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn argv_to_command_line_quotes_each_argument_independently() {
-        let argv = vec![
-            "cmd.exe".to_string(),
-            "/c".to_string(),
-            "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
-                .to_string(),
-        ];
-
-        assert_eq!(
-            argv_to_command_line(&argv),
-            "cmd.exe /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
-        );
-    }
-
-    #[test]
-    fn argv_to_command_line_quotes_regular_program_args() {
-        let argv = vec![
-            "pwsh.exe".to_string(),
-            "-Command".to_string(),
-            "Write-Output \"hello world\"".to_string(),
-        ];
-
-        assert_eq!(
-            argv_to_command_line(&argv),
-            "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
-        );
-    }
-}
-
 const SID_ADMINISTRATORS: &str = "S-1-5-32-544";
 const SID_USERS: &str = "S-1-5-32-545";
 const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
@@ -233,4 +198,39 @@ fn sid_bytes_from_string(sid_str: &str) -> Result<Vec<u8>> {
         return Err(anyhow::anyhow!("CopySid failed for {sid_str}"));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::argv_to_command_line;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn argv_to_command_line_quotes_each_argument_independently() {
+        let argv = vec![
+            "cmd.exe".to_string(),
+            "/c".to_string(),
+            "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
+                .to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "cmd.exe /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
+        );
+    }
+
+    #[test]
+    fn argv_to_command_line_quotes_regular_program_args() {
+        let argv = vec![
+            "pwsh.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output \"hello world\"".to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
+        );
+    }
 }

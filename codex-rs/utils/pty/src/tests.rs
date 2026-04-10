@@ -658,10 +658,10 @@ async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<(
         terminator: None,
         writer_handle: None,
         resizer: Some(Box::new(move |size| {
-            if let Ok(mut guard) = size_tx.lock() {
-                if let Some(size_tx) = guard.take() {
-                    let _ = size_tx.send(size);
-                }
+            if let Ok(mut guard) = size_tx.lock()
+                && let Some(size_tx) = guard.take()
+            {
+                let _ = size_tx.send(size);
             }
             Ok(())
         })),

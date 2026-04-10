@@ -108,7 +108,7 @@ pub fn spawn_conpty_process_as_user(
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
 
-    let raw = RawConPty::new(80, 24)?;
+    let raw = RawConPty::new(/*cols*/ 80, /*rows*/ 24)?;
     let (hpc, input_write, output_read) = raw.into_raw_handles();
     let conpty = ConptyInstance {
         hpc: hpc as HANDLE,

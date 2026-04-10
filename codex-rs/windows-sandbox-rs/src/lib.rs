@@ -352,8 +352,8 @@ mod windows_impl {
             cwd,
             &mut env_map,
             &command,
-            false,
-            false,
+            /*inherit_path*/ false,
+            /*add_git_safe_directory*/ false,
         )?;
         let policy = common.policy;
         let current_dir = common.current_dir;
