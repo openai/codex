@@ -36,14 +36,15 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::os::windows::fs::MetadataExt;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
-use std::sync::mpsc;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -66,6 +67,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 mod read_acl_mutex;
 mod sandbox_users;
@@ -137,6 +139,105 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut File) -> Result<()> {
 struct ReadAclSubjects<'a> {
     sandbox_group_psid: *mut c_void,
     rx_psids: &'a [*mut c_void],
+}
+
+struct WriteAclGrantTask {
+    path: PathBuf,
+    sid_strings: Vec<String>,
+}
+
+fn path_is_below(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+}
+
+fn should_skip_recursive_write_grant(path: &Path, skip_roots: &[PathBuf]) -> bool {
+    let canonical_path = canonicalize_path(path);
+    skip_roots
+        .iter()
+        .any(|skip_root| path_is_below(&canonical_path, skip_root))
+}
+
+fn collect_recursive_write_grant_tasks(
+    root: &Path,
+    sid_strings: &[String],
+    skip_roots: &[PathBuf],
+    tasks: &mut Vec<WriteAclGrantTask>,
+    log: &mut File,
+) -> Result<()> {
+    if should_skip_recursive_write_grant(root, skip_roots) {
+        log_line(
+            log,
+            &format!(
+                "skipping recursive write ACE repair under protected path {}",
+                root.display()
+            ),
+        )?;
+        return Ok(());
+    }
+
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            log_line(
+                log,
+                &format!(
+                    "recursive write ACE repair could not stat {}; skipping: {err}",
+                    root.display()
+                ),
+            )?;
+            return Ok(());
+        }
+    };
+    if (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+        log_line(
+            log,
+            &format!(
+                "recursive write ACE repair skipping reparse point {}",
+                root.display()
+            ),
+        )?;
+        return Ok(());
+    }
+
+    tasks.push(WriteAclGrantTask {
+        path: root.to_path_buf(),
+        sid_strings: sid_strings.to_vec(),
+    });
+
+    if metadata.is_dir() {
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(err) => {
+                log_line(
+                    log,
+                    &format!(
+                        "recursive write ACE repair could not read {}; skipping descendants: {err}",
+                        root.display()
+                    ),
+                )?;
+                return Ok(());
+            }
+        };
+        for entry in entries {
+            match entry {
+                Ok(entry) => collect_recursive_write_grant_tasks(
+                    &entry.path(),
+                    sid_strings,
+                    skip_roots,
+                    tasks,
+                    log,
+                )?,
+                Err(err) => log_line(
+                    log,
+                    &format!(
+                        "recursive write ACE repair could not read child of {}; skipping: {err}",
+                        root.display()
+                    ),
+                )?,
+            }
+        }
+    }
+    Ok(())
 }
 
 fn apply_read_acls(
@@ -642,11 +743,24 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
-    let mut grant_tasks: Vec<PathBuf> = Vec::new();
+    let mut grant_tasks: Vec<WriteAclGrantTask> = Vec::new();
 
     let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
     let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
+    let protected_write_roots: Vec<PathBuf> = payload
+        .deny_write_paths
+        .iter()
+        .cloned()
+        .chain(
+            payload
+                .write_roots
+                .iter()
+                .flat_map(|root| [root.join(".git"), root.join(".codex"), root.join(".agents")]),
+        )
+        .filter(|path| path.exists())
+        .map(|path| canonicalize_path(&path))
+        .collect();
 
     for root in &payload.write_roots {
         if !seen_write_roots.insert(root.clone()) {
@@ -659,7 +773,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             )?;
             continue;
         }
-        let mut need_grant = false;
         let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
         let cap_label = if is_command_cwd {
             "workspace_cap"
@@ -671,6 +784,13 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         } else {
             cap_psid
         };
+        let sid_strings = if is_command_cwd {
+            vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
+        } else {
+            vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
+        };
+
+        let mut need_grant = !refresh_only;
         for (label, psid) in [
             ("sandbox_group", sandbox_group_psid),
             (cap_label, cap_psid_for_root),
@@ -700,67 +820,70 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             }
         }
         if need_grant {
-            log_line(
-                log,
-                &format!(
+            let grant_log = if refresh_only {
+                format!(
                     "granting write ACE to {} for sandbox group and capability SID",
                     root.display()
-                ),
-            )?;
-            grant_tasks.push(root.clone());
+                )
+            } else {
+                format!(
+                    "recursively repairing write ACEs under {} for sandbox group and capability SID",
+                    root.display()
+                )
+            };
+            log_line(log, &grant_log)?;
+            if refresh_only {
+                grant_tasks.push(WriteAclGrantTask {
+                    path: root.clone(),
+                    sid_strings,
+                });
+            } else {
+                collect_recursive_write_grant_tasks(
+                    root,
+                    &sid_strings,
+                    &protected_write_roots,
+                    &mut grant_tasks,
+                    log,
+                )?;
+            }
         }
     }
 
-    let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
-    std::thread::scope(|scope| {
-        for root in grant_tasks {
-            let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
-            let sid_strings = if is_command_cwd {
-                vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
+    for task in grant_tasks {
+        let mut psids: Vec<*mut c_void> = Vec::new();
+        let mut conversion_error = None;
+        for sid_str in &task.sid_strings {
+            if let Some(psid) = unsafe { convert_string_sid_to_sid(sid_str) } {
+                psids.push(psid);
             } else {
-                vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
-            };
-            let tx = tx.clone();
-            scope.spawn(move || {
-                // Convert SID strings to psids locally in this thread.
-                let mut psids: Vec<*mut c_void> = Vec::new();
-                for sid_str in &sid_strings {
-                    if let Some(psid) = unsafe { convert_string_sid_to_sid(sid_str) } {
-                        psids.push(psid);
-                    } else {
-                        let _ = tx.send((root.clone(), Err(anyhow::anyhow!("convert SID failed"))));
-                        return;
-                    }
-                }
-
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
-
-                for psid in psids {
-                    unsafe {
-                        LocalFree(psid as HLOCAL);
-                    }
-                }
-                let _ = tx.send((root, res));
-            });
-        }
-        drop(tx);
-        for (root, res) in rx {
-            match res {
-                Ok(_) => {}
-                Err(e) => {
-                    refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
-                    if log_line(
-                        log,
-                        &format!("write ACE grant failed on {}: {}", root.display(), e),
-                    )
-                    .is_err()
-                    {
-                        // ignore log errors inside scoped thread
-                    }
-                }
+                conversion_error = Some(anyhow::anyhow!("convert SID failed"));
+                break;
             }
         }
-    });
+
+        let res = match conversion_error {
+            Some(err) => Err(err),
+            None => unsafe { ensure_allow_write_aces(&task.path, &psids) },
+        };
+
+        for psid in psids {
+            unsafe {
+                LocalFree(psid as HLOCAL);
+            }
+        }
+
+        if let Err(e) = res {
+            refresh_errors.push(format!(
+                "write ACE failed on {}: {}",
+                task.path.display(),
+                e
+            ));
+            log_line(
+                log,
+                &format!("write ACE grant failed on {}: {}", task.path.display(), e),
+            )?;
+        }
+    }
 
     for path in &payload.deny_write_paths {
         if !seen_deny_paths.insert(path.clone()) {
