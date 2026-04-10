@@ -68,10 +68,15 @@ fn windows_command_processor() -> String {
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
     let registry = SessionRegistry::new();
+    let runtime_paths = ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
     let handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(outgoing_tx),
-        ExecServerRuntimePaths::from_current_environment().expect("runtime paths"),
+        runtime_paths,
     ));
     let initialize_response = handler
         .initialize(InitializeParams {

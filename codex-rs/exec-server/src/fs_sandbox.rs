@@ -51,7 +51,7 @@ impl FileSystemSandboxRunner {
             &helper_sandbox_policy,
             cwd.as_path(),
         );
-        let network_policy = NetworkSandboxPolicy::from(&helper_sandbox_policy);
+        let network_policy = NetworkSandboxPolicy::Restricted;
         let command = self.sandbox_exec_request(
             &helper_sandbox_policy,
             &file_system_policy,

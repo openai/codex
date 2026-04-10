@@ -72,5 +72,3 @@ pub use runtime_paths::ExecServerRuntimePaths;
 pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
 pub use server::run_main;
-pub use server::run_main_with_listen_url;
-pub use server::run_main_with_listen_url_and_paths;

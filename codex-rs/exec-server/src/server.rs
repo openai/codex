@@ -12,21 +12,7 @@ pub use transport::ExecServerListenUrlParseError;
 
 use crate::ExecServerRuntimePaths;
 
-pub async fn run_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_main_with_listen_url(DEFAULT_LISTEN_URL).await
-}
-
-pub async fn run_main_with_listen_url(
-    listen_url: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_main_with_listen_url_and_paths(
-        listen_url,
-        ExecServerRuntimePaths::from_current_environment()?,
-    )
-    .await
-}
-
-pub async fn run_main_with_listen_url_and_paths(
+pub async fn run_main(
     listen_url: &str,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

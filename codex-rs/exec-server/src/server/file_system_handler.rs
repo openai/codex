@@ -185,9 +185,12 @@ mod tests {
     #[tokio::test]
     async fn no_platform_sandbox_policies_do_not_require_configured_sandbox_helper() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let handler = FileSystemHandler::new(
-            ExecServerRuntimePaths::from_current_environment().expect("runtime paths"),
-        );
+        let runtime_paths = ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let handler = FileSystemHandler::new(runtime_paths);
 
         for (file_name, sandbox_policy) in [
             ("danger.txt", SandboxPolicy::DangerFullAccess),

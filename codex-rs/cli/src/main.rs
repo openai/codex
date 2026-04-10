@@ -1098,7 +1098,7 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    codex_exec_server::run_main_with_listen_url_and_paths(&cmd.listen, runtime_paths)
+    codex_exec_server::run_main(&cmd.listen, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
 }

@@ -90,9 +90,7 @@ fn assert_sandbox_denied(error: &std::io::Error) {
     assert!(
         matches!(
             error.kind(),
-            std::io::ErrorKind::InvalidInput
-                | std::io::ErrorKind::PermissionDenied
-                | std::io::ErrorKind::NotFound
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::PermissionDenied
         ),
         "unexpected sandbox error kind: {error:?}",
     );
@@ -100,8 +98,7 @@ fn assert_sandbox_denied(error: &std::io::Error) {
     assert!(
         message.contains("is not permitted")
             || message.contains("Operation not permitted")
-            || message.contains("Permission denied")
-            || message.contains("No such file"),
+            || message.contains("Permission denied"),
         "unexpected sandbox error message: {message}",
     );
 }
