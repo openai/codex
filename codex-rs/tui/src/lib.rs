@@ -1927,9 +1927,9 @@ mod tests {
 
         assert_eq!(
             config_cwd,
-            Some(AbsolutePathBuf::from_absolute_path(
-                temp_dir.path().canonicalize()?
-            )?)
+            Some(AbsolutePathBuf::from_absolute_path(dunce::canonicalize(
+                temp_dir.path()
+            )?)?)
         );
         Ok(())
     }
