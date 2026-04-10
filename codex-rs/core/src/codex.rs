@@ -6441,6 +6441,8 @@ pub(crate) async fn run_turn(
     }
     if let Err(error) = sess.ensure_agent_task_registered().await {
         warn!(error = %error, "agent task registration failed");
+        sess.fail_agent_identity_registration(error).await;
+        return None;
     }
 
     if !skill_items.is_empty() {

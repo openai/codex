@@ -54,10 +54,10 @@ impl AgentIdentityManager {
         let client = create_client();
         let url =
             agent_task_registration_url(&self.chatgpt_base_url, &stored_identity.agent_runtime_id);
+        let human_biscuit = self.mint_human_biscuit(&binding, &url).await?;
         let response = client
             .post(&url)
-            .bearer_auth(&binding.access_token)
-            .header("chatgpt-account-id", &binding.chatgpt_account_id)
+            .header("X-OpenAI-Authorization", human_biscuit)
             .json(&request_body)
             .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
             .send()
@@ -126,11 +126,7 @@ fn curve25519_secret_key_from_signing_key(signing_key: &SigningKey) -> Curve2551
 
 fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
-    let path = format!("/v1/agent/{agent_runtime_id}/task/register");
-    if let Some(root) = trimmed.strip_suffix("/backend-api") {
-        return format!("{root}{path}");
-    }
-    format!("{trimmed}{path}")
+    format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
 }
 
 #[cfg(test)]
@@ -182,12 +178,14 @@ mod tests {
     #[tokio::test]
     async fn register_task_registers_and_decrypts_plaintext_task_id() {
         let server = MockServer::start().await;
+        let target_url = agent_task_registration_url(&server.uri(), "agent-123");
+        mount_human_biscuit(&server, &target_url).await;
         let auth = make_chatgpt_auth("account-123", Some("user-123"));
         let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            format!("{}/backend-api/", server.uri()),
+            server.uri(),
             SessionSource::Cli,
         );
         let stored_identity = seed_stored_identity(&manager, &auth, "agent-123", "account-123");
@@ -196,8 +194,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/agent/agent-123/task/register"))
-            .and(header("authorization", "Bearer access-token-account-123"))
-            .and(header("chatgpt-account-id", "account-123"))
+            .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "encrypted_task_id": encrypted_task_id,
             })))
@@ -224,12 +221,14 @@ mod tests {
     #[tokio::test]
     async fn register_task_uses_canonical_registration_url() {
         let server = MockServer::start().await;
+        let target_url = agent_task_registration_url(&server.uri(), "agent-fallback");
+        mount_human_biscuit(&server, &target_url).await;
         let auth = make_chatgpt_auth("account-123", Some("user-123"));
         let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            format!("{}/backend-api/", server.uri()),
+            server.uri(),
             SessionSource::Cli,
         );
         let stored_identity =
@@ -239,6 +238,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/agent/agent-fallback/task/register"))
+            .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "encrypted_task_id": encrypted_task_id,
             })))
@@ -254,6 +254,20 @@ mod tests {
 
         assert_eq!(task.agent_runtime_id, "agent-fallback");
         assert_eq!(task.task_id, "task_fallback");
+    }
+
+    async fn mount_human_biscuit(server: &MockServer, target_url: &str) {
+        Mock::given(method("GET"))
+            .and(path("/authenticate_app_v2"))
+            .and(header("authorization", "Bearer access-token-account-123"))
+            .and(header("x-original-method", "GET"))
+            .and(header("x-original-url", target_url))
+            .respond_with(
+                ResponseTemplate::new(200).insert_header("x-openai-authorization", "human-biscuit"),
+            )
+            .expect(1)
+            .mount(server)
+            .await;
     }
 
     fn seed_stored_identity(
@@ -308,6 +322,7 @@ mod tests {
                     chatgpt_plan_type: None,
                     chatgpt_user_id: user_id.map(ToOwned::to_owned),
                     chatgpt_account_id: Some(account_id.to_string()),
+                    is_org_owner: None,
                     raw_jwt: fake_id_token(account_id, user_id),
                 },
                 access_token: format!("access-token-{account_id}"),
