@@ -14,6 +14,7 @@ members = [
     "arg0",
     "feedback",
     "features",
+    "install-context",
     "codex-backend-openapi-models",
     "code-mode",
     "cloud-requirements",
@@ -134,6 +135,7 @@ codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
+codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
