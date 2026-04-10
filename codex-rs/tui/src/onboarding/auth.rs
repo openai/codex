@@ -198,23 +198,23 @@ impl KeyboardHandler for AuthModeWidget {
         }
 
         if self.onboarding_keymap.move_up.is_pressed(key_event) {
-            self.move_highlight(-1);
+            self.move_highlight(/*delta*/ -1);
             return;
         }
         if self.onboarding_keymap.move_down.is_pressed(key_event) {
-            self.move_highlight(1);
+            self.move_highlight(/*delta*/ 1);
             return;
         }
         if self.onboarding_keymap.select_first.is_pressed(key_event) {
-            self.select_option_by_index(0);
+            self.select_option_by_index(/*index*/ 0);
             return;
         }
         if self.onboarding_keymap.select_second.is_pressed(key_event) {
-            self.select_option_by_index(1);
+            self.select_option_by_index(/*index*/ 1);
             return;
         }
         if self.onboarding_keymap.select_third.is_pressed(key_event) {
-            self.select_option_by_index(2);
+            self.select_option_by_index(/*index*/ 2);
             return;
         }
         if self.onboarding_keymap.confirm.is_pressed(key_event) {
