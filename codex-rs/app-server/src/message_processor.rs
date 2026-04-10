@@ -678,7 +678,8 @@ impl MessageProcessor {
             return;
         }
         if self.config.features.enabled(Feature::GeneralAnalytics)
-            && let ClientRequest::TurnStart { request_id, .. } = &codex_request
+            && let ClientRequest::TurnStart { request_id, .. }
+            | ClientRequest::TurnSteer { request_id, .. } = &codex_request
         {
             self.analytics_events_client.track_request(
                 connection_id.0,

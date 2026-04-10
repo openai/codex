@@ -6,6 +6,7 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::JSONRPCError;
@@ -23,6 +24,9 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+use super::analytics::enable_analytics_capture;
+use super::analytics::wait_for_analytics_event;
+
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
@@ -32,7 +36,12 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
     std::fs::create_dir(&codex_home)?;
 
     let server = create_mock_responses_server_sequence(vec![]).await;
-    create_config_toml(&codex_home, &server.uri())?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        &codex_home,
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -52,7 +61,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
 
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "steer".to_string(),
                 text_elements: Vec::new(),
@@ -67,6 +76,21 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
     )
     .await??;
     assert_eq!(steer_err.error.code, -32600);
+
+    let event =
+        wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_steer_event").await?;
+    assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["result"], "rejected");
+    assert_eq!(event["event_params"]["num_input_images"], 0);
+    assert_eq!(
+        event["event_params"]["expected_turn_id"],
+        "turn-does-not-exist"
+    );
+    assert_eq!(
+        event["event_params"]["accepted_turn_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(event["event_params"]["rejection_reason"], "no_active_turn");
 
     Ok(())
 }
@@ -96,7 +120,12 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
             "call_sleep",
         )?])
         .await;
-    create_config_toml(&codex_home, &server.uri())?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        &codex_home,
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -200,7 +229,12 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
             "call_sleep",
         )?])
         .await;
-    create_config_toml(&codex_home, &server.uri())?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        &codex_home,
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -261,31 +295,20 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
     let steer: TurnSteerResponse = to_response::<TurnSteerResponse>(steer_resp)?;
     assert_eq!(steer.turn_id, turn.id);
 
+    let event =
+        wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_steer_event").await?;
+    assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["result"], "accepted");
+    assert_eq!(event["event_params"]["num_input_images"], 0);
+    assert_eq!(event["event_params"]["expected_turn_id"], turn.id);
+    assert_eq!(event["event_params"]["accepted_turn_id"], turn.id);
+    assert_eq!(
+        event["event_params"]["rejection_reason"],
+        serde_json::Value::Null
+    );
+
     mcp.interrupt_turn_and_wait_for_aborted(thread.id, steer.turn_id, DEFAULT_READ_TIMEOUT)
         .await?;
 
     Ok(())
-}
-
-fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
 }
