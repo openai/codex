@@ -212,6 +212,7 @@ pub(crate) fn format_headers(headers: &HeaderMap) -> String {
 pub(super) async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
+    existing_enrollment: Option<&RemoteControlEnrollment>,
 ) -> io::Result<RemoteControlEnrollmentResult> {
     let enroll_url = &remote_control_target.enroll_url;
     let server_name = gethostname().to_string_lossy().trim().to_string();
@@ -220,6 +221,8 @@ pub(super) async fn enroll_remote_control_server(
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         app_server_version: env!("CARGO_PKG_VERSION"),
+        server_id: existing_enrollment.map(|enrollment| enrollment.server_id.clone()),
+        environment_id: existing_enrollment.map(|enrollment| enrollment.environment_id.clone()),
     };
     let client = build_reqwest_client();
     let http_request = client
@@ -563,6 +566,7 @@ mod tests {
                 bearer_token: "Access Token".to_string(),
                 account_id: "account_id".to_string(),
             },
+            /*existing_enrollment*/ None,
         )
         .await
         .expect_err("invalid response should fail to parse");
