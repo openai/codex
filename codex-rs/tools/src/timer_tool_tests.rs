@@ -15,6 +15,18 @@ fn timer_create_tool_uses_expected_name() {
 }
 
 #[test]
+fn timer_create_tool_exposes_only_core_timer_payload_fields() {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = create_timer_tool() else {
+        panic!("expected function tool");
+    };
+    let properties = parameters.properties.expect("create_timer properties");
+
+    assert!(properties.contains_key("content"));
+    assert!(!properties.contains_key("prompt"));
+    assert!(!properties.contains_key("instructions"));
+}
+
+#[test]
 fn timer_delete_tool_uses_expected_name() {
     let ToolSpec::Function(ResponsesApiTool { name, .. }) = create_delete_timer_tool() else {
         panic!("expected function tool");

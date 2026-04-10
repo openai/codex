@@ -164,6 +164,20 @@ fn remote_control_is_under_development() {
 }
 
 #[test]
+fn timers_and_queued_messages_are_under_development() {
+    assert_eq!(feature_for_key("timers"), Some(Feature::Timers));
+    assert_eq!(
+        feature_for_key("queued_messages"),
+        Some(Feature::QueuedMessages)
+    );
+    assert_eq!(feature_for_key("timer_tool"), None);
+    assert_eq!(Feature::Timers.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::Timers.default_enabled(), false);
+    assert_eq!(Feature::QueuedMessages.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::QueuedMessages.default_enabled(), false);
+}
+
+#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
