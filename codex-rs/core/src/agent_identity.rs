@@ -624,7 +624,7 @@ mod tests {
 
         let binding = AgentIdentityBinding::from_auth(
             &make_chatgpt_auth("account-123", Some("user-123")),
-            None,
+            /*forced_workspace_id*/ None,
         )
         .expect("binding");
         let scope = secret_scope(&binding).expect("scope");
@@ -727,6 +727,7 @@ mod tests {
                     chatgpt_plan_type: None,
                     chatgpt_user_id: user_id.map(ToOwned::to_owned),
                     chatgpt_account_id: Some(account_id.to_string()),
+                    is_org_owner: None,
                     raw_jwt: fake_id_token(account_id, user_id),
                 },
                 access_token: format!("access-token-{account_id}"),
