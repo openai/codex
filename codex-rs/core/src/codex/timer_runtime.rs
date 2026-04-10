@@ -186,7 +186,8 @@ impl Session {
             return Ok(deleted);
         };
         if !deleted {
-            self.timers.lock().await.restore_runtime(runtime);
+            TimersState::cancel_runtime(&runtime);
+            self.emit_timer_updated_notification().await;
             return Ok(false);
         }
         TimersState::cancel_runtime(&runtime);

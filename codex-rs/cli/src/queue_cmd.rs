@@ -144,6 +144,12 @@ fn queue_timer_success_message(
 
 async fn resolve_queue_thread_id(codex_home: &Path, target: &str) -> anyhow::Result<String> {
     if let Ok(thread_id) = ThreadId::from_string(target) {
+        if codex_core::find_thread_path_by_id_str(codex_home, &thread_id.to_string())
+            .await?
+            .is_none()
+        {
+            anyhow::bail!("no thread with id `{thread_id}`");
+        }
         return Ok(thread_id.to_string());
     }
 
@@ -346,6 +352,40 @@ mod tests {
                 .await
                 .expect("resolve"),
             thread_id.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_thread_id_requires_existing_thread() {
+        let temp = TempDir::new().expect("tempdir");
+        let thread_id = ThreadId::new();
+        let sessions_dir = temp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("04")
+            .join("10");
+        std::fs::create_dir_all(&sessions_dir).expect("create sessions dir");
+        std::fs::write(
+            sessions_dir.join(format!("rollout-2026-04-10T12-00-00-{thread_id}.jsonl")),
+            "",
+        )
+        .expect("write rollout");
+
+        assert_eq!(
+            resolve_queue_thread_id(temp.path(), &thread_id.to_string())
+                .await
+                .expect("resolve"),
+            thread_id.to_string()
+        );
+
+        let missing = ThreadId::new();
+        assert_eq!(
+            resolve_queue_thread_id(temp.path(), &missing.to_string())
+                .await
+                .expect_err("missing id should fail")
+                .to_string(),
+            format!("no thread with id `{missing}`")
         );
     }
 
