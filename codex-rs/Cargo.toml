@@ -210,6 +210,7 @@ bm25 = "2.3.2"
 bytes = "1.10.1"
 chardetng = "0.1.17"
 chrono = "0.4.43"
+chrono-tz = "0.10.4"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
@@ -277,6 +278,7 @@ ratatui-macros = "0.6.0"
 regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = "0.12"
+rrule = "0.14.0"
 rmcp = { version = "0.15.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = [

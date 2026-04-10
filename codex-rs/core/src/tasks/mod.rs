@@ -236,7 +236,7 @@ impl Session {
         self.start_task(turn_context, input, task).await;
     }
 
-    async fn start_task<T: SessionTask>(
+    pub(crate) async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
@@ -534,15 +534,15 @@ impl Session {
             duration_ms,
         });
         self.send_event(turn_context.as_ref(), event).await;
-
-        if should_clear_active_turn {
-            let session = Arc::clone(self);
-            let _scheduler = tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(async move {
+        let session = Arc::clone(self);
+        let _scheduler = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                session.maybe_start_pending_timer().await;
+                if should_clear_active_turn {
                     session.maybe_start_turn_for_pending_work().await;
-                });
+                }
             });
-        }
+        });
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {

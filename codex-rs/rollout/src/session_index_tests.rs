@@ -265,6 +265,47 @@ async fn find_thread_names_by_ids_prefers_latest_entry() -> std::io::Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn find_thread_ids_by_name_uses_latest_name_per_thread() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let path = session_index_path(temp.path());
+    let id1 = ThreadId::new();
+    let id2 = ThreadId::new();
+    let id3 = ThreadId::new();
+    let lines = vec![
+        SessionIndexEntry {
+            id: id1,
+            thread_name: "target".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        },
+        SessionIndexEntry {
+            id: id2,
+            thread_name: "target".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        },
+        SessionIndexEntry {
+            id: id1,
+            thread_name: "renamed".to_string(),
+            updated_at: "2024-01-02T00:00:00Z".to_string(),
+        },
+        SessionIndexEntry {
+            id: id3,
+            thread_name: "target".to_string(),
+            updated_at: "2024-01-03T00:00:00Z".to_string(),
+        },
+    ];
+    write_index(&path, &lines)?;
+
+    let found = find_thread_ids_by_name(temp.path(), "target").await?;
+    let expected = {
+        let mut ids = vec![id2, id3];
+        ids.sort_by_key(ToString::to_string);
+        ids
+    };
+    assert_eq!(found, expected);
+    Ok(())
+}
+
 #[test]
 fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
     let temp = TempDir::new()?;

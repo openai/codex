@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -201,6 +202,9 @@ use codex_protocol::exec_output::StreamOutput;
 mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
+mod timer_runtime;
+#[cfg(test)]
+mod timer_runtime_tests;
 
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
@@ -306,6 +310,7 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::timers::TimersState;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
@@ -837,13 +842,25 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Prevents concurrent timers from claiming multiple timers before a
+    /// newly started turn becomes the active turn.
+    timer_start_in_progress: Mutex<bool>,
+    timer_db_sync_started: AtomicBool,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    timers: Mutex<TimersState>,
+    timer_tasks_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.timer_tasks_cancellation_token.cancel();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2074,9 +2091,13 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            timer_start_in_progress: Mutex::new(false),
+            timer_db_sync_started: AtomicBool::new(false),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
+            timers: Mutex::new(TimersState::default()),
+            timer_tasks_cancellation_token: CancellationToken::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -2114,6 +2135,7 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+        sess.restore_timers_from_db().await;
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
@@ -2225,6 +2247,36 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    async fn timer_state_db(&self) -> Result<state_db::StateDbHandle, String> {
+        if let Some(state_db) = self.state_db() {
+            return Ok(state_db);
+        }
+
+        let config = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .clone()
+        };
+        match codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        {
+            Ok(runtime) => Ok(runtime),
+            Err(err) => {
+                let message = format!(
+                    "failed to initialize SQLite state db for timers at {}: {err}",
+                    config.sqlite_home.display()
+                );
+                warn!("{message}");
+                Err(message)
+            }
+        }
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
@@ -4317,8 +4369,6 @@ impl Session {
         }
     }
 
-    /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
