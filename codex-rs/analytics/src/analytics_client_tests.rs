@@ -327,8 +327,8 @@ fn compaction_event_serializes_expected_shape() {
             sample_app_server_client_metadata(),
             sample_runtime_metadata(),
             Some("user"),
-            None,
-            None,
+            /*subagent_source*/ None,
+            /*parent_thread_id*/ None,
         ),
     }));
 
