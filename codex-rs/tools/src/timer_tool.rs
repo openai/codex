@@ -1,7 +1,7 @@
-//! Responses API tool specs for thread-local persistent timer and message management.
+//! Responses API tool specs for thread-local persistent timer management.
 //!
-//! These specs expose the `create_timer`, `delete_timer`, `list_timers`, and
-//! `queue_message` built-in tools.
+//! These specs expose the `create_timer`, `delete_timer`, and `list_timers`
+//! built-in tools.
 
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
@@ -89,53 +89,6 @@ pub fn create_timer_tool() -> ToolSpec {
                 "content".to_string(),
                 "delivery".to_string(),
             ]),
-            Some(false.into()),
-        ),
-        output_schema: None,
-    })
-}
-
-pub fn create_queue_message_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "thread_id".to_string(),
-            JsonSchema::string(Some(
-                "Target thread id that should receive the queued message.".to_string(),
-            )),
-        ),
-        (
-            "content".to_string(),
-            JsonSchema::string(Some(
-                "Message content visible in the target thread transcript.".to_string(),
-            )),
-        ),
-        (
-            "instructions".to_string(),
-            JsonSchema::string(Some(
-                "Optional model-visible instructions hidden from transcript display.".to_string(),
-            )),
-        ),
-        (
-            "meta".to_string(),
-            JsonSchema::object(BTreeMap::new(), None, Some(true.into())),
-        ),
-        (
-            "delivery".to_string(),
-            JsonSchema::string(Some(
-                "Delivery mode for the message. Use `after-turn` or `steer-current-turn`."
-                    .to_string(),
-            )),
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "queue_message".to_string(),
-        description: "Queue a message for delivery to a target thread.".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::object(
-            properties,
-            Some(vec!["thread_id".to_string(), "content".to_string()]),
             Some(false.into()),
         ),
         output_schema: None,

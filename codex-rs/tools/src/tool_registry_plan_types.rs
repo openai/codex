@@ -14,7 +14,6 @@ pub enum ToolHandlerKind {
     CreateTimer,
     DeleteTimer,
     ListTimers,
-    QueueMessage,
     AgentJobs,
     ApplyPatch,
     CloseAgentV1,

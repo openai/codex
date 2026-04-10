@@ -12,7 +12,6 @@ use super::INITIAL_SUBMIT_ID;
 use super::Session;
 use crate::messages::MessageInvocationContext;
 use crate::messages::MessagePayload;
-use crate::messages::ThreadMessage;
 use crate::messages::db_message_to_thread_message;
 use crate::messages::injected_message_event;
 use crate::messages::message_prompt_input_item;
@@ -183,46 +182,6 @@ impl Session {
         TimersState::cancel_runtime(&runtime);
         self.emit_timer_updated_notification().await;
         Ok(true)
-    }
-
-    pub(crate) async fn queue_message_to_thread(
-        self: &Arc<Self>,
-        thread_id: String,
-        payload: MessagePayload,
-        delivery: TimerDelivery,
-    ) -> Result<ThreadMessage, String> {
-        validate_meta(&payload.meta)?;
-        let state_db = self.timer_state_db().await?;
-        self.start_timer_db_sync_task(state_db.clone());
-        let MessagePayload {
-            content,
-            instructions,
-            meta,
-        } = payload;
-        let params = codex_state::ThreadMessageCreateParams::new(
-            thread_id,
-            format!("thread {}", self.thread_id_string()),
-            content,
-            instructions,
-            serde_json::to_string(&meta)
-                .map_err(|err| format!("failed to serialize message metadata: {err}"))?,
-            delivery.as_str().to_string(),
-            Utc::now().timestamp(),
-        );
-        state_db
-            .create_thread_message(&params)
-            .await
-            .map_err(|err| format!("failed to queue message in sqlite: {err}"))?;
-        Ok(ThreadMessage {
-            id: params.id,
-            thread_id: params.thread_id,
-            source: params.source,
-            content: params.content,
-            instructions: params.instructions,
-            meta,
-            delivery,
-            queued_at: params.queued_at,
-        })
     }
 
     pub(crate) async fn maybe_start_pending_timer(self: &Arc<Self>) {

@@ -34,7 +34,6 @@ use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_list_timers_tool;
 use crate::create_local_shell_tool;
-use crate::create_queue_message_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
@@ -253,11 +252,6 @@ pub fn build_tool_registry_plan(
 
     if config.timer_scheduler {
         plan.push_spec(
-            create_queue_message_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        plan.push_spec(
             create_timer_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -272,7 +266,6 @@ pub fn build_tool_registry_plan(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        plan.register_handler("queue_message", ToolHandlerKind::QueueMessage);
         plan.register_handler("create_timer", ToolHandlerKind::CreateTimer);
         plan.register_handler("delete_timer", ToolHandlerKind::DeleteTimer);
         plan.register_handler("list_timers", ToolHandlerKind::ListTimers);

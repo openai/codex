@@ -3,7 +3,6 @@ use crate::shell::ShellType;
 use crate::tools::handlers::CreateTimerHandler;
 use crate::tools::handlers::DeleteTimerHandler;
 use crate::tools::handlers::ListTimersHandler;
-use crate::tools::handlers::QueueMessageHandler;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
@@ -173,9 +172,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ListTimers => {
                 builder.register_handler(handler.name, Arc::new(ListTimersHandler));
-            }
-            ToolHandlerKind::QueueMessage => {
-                builder.register_handler(handler.name, Arc::new(QueueMessageHandler));
             }
             ToolHandlerKind::AgentJobs => {
                 builder.register_handler(handler.name, Arc::new(BatchJobHandler));
