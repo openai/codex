@@ -5170,6 +5170,14 @@
         }
       ]
     },
+    "GuardianApprovalReviewDecisionSource": {
+      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+      "enum": [
+        "agent",
+        "user"
+      ],
+      "type": "string"
+    },
     "GuardianApprovalReviewStatus": {
       "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
       "enum": [
@@ -5502,16 +5510,27 @@
     },
     "ItemGuardianApprovalReviewCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
         },
+        "decisionSource": {
+          "$ref": "#/definitions/GuardianApprovalReviewDecisionSource"
+        },
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
-        "targetItemId": {
+        "reviewId": {
+          "description": "Stable identifier for this review.",
           "type": "string"
+        },
+        "targetItemId": {
+          "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "threadId": {
           "type": "string"
@@ -5522,8 +5541,9 @@
       },
       "required": [
         "action",
+        "decisionSource",
         "review",
-        "targetItemId",
+        "reviewId",
         "threadId",
         "turnId"
       ],
@@ -5532,7 +5552,7 @@
     },
     "ItemGuardianApprovalReviewStartedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
@@ -5540,8 +5560,16 @@
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
-        "targetItemId": {
+        "reviewId": {
+          "description": "Stable identifier for this review.",
           "type": "string"
+        },
+        "targetItemId": {
+          "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "threadId": {
           "type": "string"
@@ -5553,7 +5581,7 @@
       "required": [
         "action",
         "review",
-        "targetItemId",
+        "reviewId",
         "threadId",
         "turnId"
       ],

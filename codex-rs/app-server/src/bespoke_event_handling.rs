@@ -307,6 +307,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 } else {
                     assessment.turn_id.clone()
                 };
+                let assessment_target_item_id =
+                    assessment.target_item_id.as_ref().unwrap_or(&assessment.id);
                 if assessment.status
                     == codex_protocol::protocol::GuardianAssessmentStatus::InProgress
                     && let Some(completion_item) = pending_command_execution.as_ref()
@@ -314,7 +316,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     start_command_execution_item(
                         &conversation_id,
                         assessment_turn_id.clone(),
-                        assessment.id.clone(),
+                        assessment_target_item_id.to_string(),
                         completion_item.command.clone(),
                         completion_item.cwd.clone(),
                         completion_item.command_actions.clone(),
@@ -339,7 +341,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     complete_command_execution_item(
                         &conversation_id,
                         assessment_turn_id,
-                        assessment.id.clone(),
+                        assessment_target_item_id.to_string(),
                         completion_item.command,
                         completion_item.cwd,
                         /*process_id*/ None,
@@ -2917,6 +2919,7 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_app_server_protocol::GuardianApprovalReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
@@ -3018,12 +3021,18 @@ mod tests {
             GuardianAssessmentStatus::Aborted => (None, None, None),
         };
         GuardianAssessmentEvent {
-            id: id.to_string(),
+            id: format!("review-{id}"),
+            target_item_id: Some(id.to_string()),
             turn_id: turn_id.to_string(),
             status,
             risk_level,
             user_authorization,
             rationale,
+            decision_source: if matches!(status, GuardianAssessmentStatus::InProgress) {
+                None
+            } else {
+                Some(codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent)
+            },
             action: serde_json::from_value(json!({
                 "type": "command",
                 "source": "shell",
@@ -3078,12 +3087,14 @@ mod tests {
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-1".to_string(),
+                id: "review-1".to_string(),
+                target_item_id: Some("item-1".to_string()),
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: action.clone(),
             },
         );
@@ -3092,7 +3103,8 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
-                assert_eq!(payload.target_item_id, "item-1");
+                assert_eq!(payload.review_id, "review-1");
+                assert_eq!(payload.target_item_id.as_deref(), Some("item-1"));
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3118,12 +3130,16 @@ mod tests {
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-2".to_string(),
+                id: "review-2".to_string(),
+                target_item_id: Some("item-2".to_string()),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: action.clone(),
             },
         );
@@ -3132,7 +3148,12 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-2");
+                assert_eq!(payload.review_id, "review-2");
+                assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
+                assert_eq!(
+                    payload.decision_source,
+                    GuardianApprovalReviewDecisionSource::Agent
+                );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(
                     payload.review.risk_level,
@@ -3162,12 +3183,16 @@ mod tests {
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-3".to_string(),
+                id: "review-3".to_string(),
+                target_item_id: None,
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: action.clone(),
             },
         );
@@ -3176,7 +3201,12 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-3");
+                assert_eq!(payload.review_id, "review-3");
+                assert_eq!(payload.target_item_id, None);
+                assert_eq!(
+                    payload.decision_source,
+                    GuardianApprovalReviewDecisionSource::Agent
+                );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.user_authorization, None);
@@ -3393,7 +3423,11 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewStarted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-approved");
+                assert_eq!(payload.review_id, "review-cmd-guardian-approved");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-approved")
+                );
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3414,7 +3448,15 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewCompleted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-approved");
+                assert_eq!(payload.review_id, "review-cmd-guardian-approved");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-approved")
+                );
+                assert_eq!(
+                    payload.decision_source,
+                    GuardianApprovalReviewDecisionSource::Agent
+                );
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::Approved
@@ -3451,7 +3493,11 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewStarted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-denied");
+                assert_eq!(payload.review_id, "review-cmd-guardian-denied");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-denied")
+                );
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3472,7 +3518,15 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewCompleted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-denied");
+                assert_eq!(payload.review_id, "review-cmd-guardian-denied");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-denied")
+                );
+                assert_eq!(
+                    payload.decision_source,
+                    GuardianApprovalReviewDecisionSource::Agent
+                );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
             }
             other => bail!("unexpected message: {other:?}"),
