@@ -184,6 +184,7 @@ use codex_protocol::user_input::TextElement;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_event::RecentSessionMention;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
@@ -320,6 +321,8 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
+    recent_session_mentions: Option<Vec<RecentSessionMention>>,
+    recent_session_mentions_requested: bool,
     dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
     recent_submission_mention_bindings: Vec<MentionBinding>,
@@ -442,6 +445,8 @@ impl ChatComposer {
             skills: None,
             plugins: None,
             connectors_snapshot: None,
+            recent_session_mentions: None,
+            recent_session_mentions_requested: false,
             dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
             recent_submission_mention_bindings: Vec::new(),
@@ -502,6 +507,15 @@ impl ChatComposer {
 
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
+        self.sync_popups();
+    }
+
+    pub(crate) fn set_recent_session_mentions(
+        &mut self,
+        recent_session_mentions: Vec<RecentSessionMention>,
+    ) {
+        self.recent_session_mentions = Some(recent_session_mentions);
+        self.recent_session_mentions_requested = false;
         self.sync_popups();
     }
 
@@ -1577,7 +1591,7 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = self.current_mention_token() {
+                if let Some(tok) = self.current_dismissible_mention_popup_token() {
                     self.dismissed_mention_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
@@ -1764,11 +1778,11 @@ impl ChatComposer {
     /// - If the token under the cursor starts with `prefix`, that token is
     ///   returned without the leading prefix. When `allow_empty` is true, a
     ///   lone prefix character yields `Some(String::new())` to surface hints.
-    fn current_prefixed_token(
+    fn current_prefixed_token_with_range(
         textarea: &TextArea,
         prefix: char,
         allow_empty: bool,
-    ) -> Option<String> {
+    ) -> Option<(Range<usize>, String)> {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
 
@@ -1838,20 +1852,26 @@ impl ChatComposer {
         };
 
         let prefix_str = prefix.to_string();
-        let left_match = token_left.filter(|t| t.starts_with(prefix));
-        let right_match = token_right.filter(|t| t.starts_with(prefix));
-
-        let left_prefixed = left_match.map(|t| t[prefix.len_utf8()..].to_string());
-        let right_prefixed = right_match.map(|t| t[prefix.len_utf8()..].to_string());
+        let left_match = token_left
+            .filter(|token| token.starts_with(prefix))
+            .map(|token| (start_left..end_left, token[prefix.len_utf8()..].to_string()));
+        let right_match = token_right
+            .filter(|token| token.starts_with(prefix))
+            .map(|token| {
+                (
+                    start_right..end_right,
+                    token[prefix.len_utf8()..].to_string(),
+                )
+            });
 
         if at_whitespace {
-            if right_prefixed.is_some() {
-                return right_prefixed;
+            if right_match.is_some() {
+                return right_match;
             }
             if token_left.is_some_and(|t| t == prefix_str) {
-                return allow_empty.then(String::new);
+                return allow_empty.then_some((start_left..end_left, String::new()));
             }
-            return left_prefixed;
+            return left_match;
         }
         if after_cursor.starts_with(prefix) {
             let prefix_starts_token = before_cursor
@@ -1859,12 +1879,21 @@ impl ChatComposer {
                 .next_back()
                 .is_none_or(char::is_whitespace);
             return if prefix_starts_token {
-                right_prefixed.or(left_prefixed)
+                right_match.or(left_match)
             } else {
-                left_prefixed
+                left_match
             };
         }
-        left_prefixed.or(right_prefixed)
+        left_match.or(right_match)
+    }
+
+    fn current_prefixed_token(
+        textarea: &TextArea,
+        prefix: char,
+        allow_empty: bool,
+    ) -> Option<String> {
+        Self::current_prefixed_token_with_range(textarea, prefix, allow_empty)
+            .map(|(_range, token)| token)
     }
 
     /// Extract the `@token` that the cursor is currently positioned on, if any.
@@ -1881,21 +1910,46 @@ impl ChatComposer {
         Self::current_prefixed_token(&self.textarea, '$', /*allow_empty*/ true)
     }
 
-    /// Replace the active `@token` (the one under the cursor) with `path`.
-    ///
-    /// The algorithm mirrors `current_at_token` so replacement works no matter
-    /// where the cursor is within the token and regardless of how many
-    /// `@tokens` exist in the line.
-    fn insert_selected_path(&mut self, path: &str) {
+    fn current_hash_item_token(&self) -> Option<String> {
+        let (token_range, token) = Self::current_prefixed_token_with_range(
+            &self.textarea,
+            '#',
+            /*allow_empty*/ true,
+        )?;
+        let overlaps_text_element =
+            self.textarea
+                .text_element_snapshots()
+                .into_iter()
+                .any(|snapshot| {
+                    token_range.start < snapshot.range.end && snapshot.range.start < token_range.end
+                });
+        if overlaps_text_element {
+            return None;
+        }
+        Some(token)
+    }
+
+    fn dismissed_popup_token(prefix: char, query: &str) -> String {
+        format!("{prefix}{query}")
+    }
+
+    fn current_dismissible_mention_popup_token(&self) -> Option<String> {
+        if let Some(query) = self.current_mention_token() {
+            return Some(Self::dismissed_popup_token('$', &query));
+        }
+        self.current_hash_item_token()
+            .map(|query| Self::dismissed_popup_token('#', &query))
+    }
+
+    /// Return the whitespace-delimited token under the cursor.
+    fn active_token_range(&self) -> Range<usize> {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
-        // Clamp to a valid char boundary to avoid panics when slicing.
         let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
 
         let before_cursor = &text[..safe_cursor];
         let after_cursor = &text[safe_cursor..];
 
-        // Determine token boundaries.
         let start_idx = before_cursor
             .char_indices()
             .rfind(|(_, c)| c.is_whitespace())
@@ -1909,6 +1963,15 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
+        start_idx..end_idx
+    }
+
+    /// Replace the active `@token` (the one under the cursor) with `path`.
+    ///
+    /// The algorithm mirrors `current_at_token` so replacement works no matter
+    /// where the cursor is within the token and regardless of how many
+    /// `@tokens` exist in the line.
+    fn insert_selected_path(&mut self, path: &str) {
         // If the path contains whitespace, wrap it in double quotes so the
         // local prompt arg parser treats it as a single argument. Avoid adding
         // quotes when the path already contains one to keep behavior simple.
@@ -1921,40 +1984,23 @@ impl ChatComposer {
 
         // Replace just the active `@token` so unrelated text elements, such as
         // large-paste placeholders, remain atomic and can still expand on submit.
+        let token_range = self.active_token_range();
+        let start_idx = token_range.start;
         self.textarea
-            .replace_range(start_idx..end_idx, &format!("{inserted} "));
+            .replace_range(token_range, &format!("{inserted} "));
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
 
     fn insert_selected_mention(&mut self, insert_text: &str, path: Option<&str>) {
-        let cursor_offset = self.textarea.cursor();
-        let text = self.textarea.text();
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
         // Remove the active token and insert the selected mention as an atomic element.
-        self.textarea.replace_range(start_idx..end_idx, "");
+        let token_range = self.active_token_range();
+        let start_idx = token_range.start;
+        self.textarea.replace_range(token_range, "");
         self.textarea.set_cursor(start_idx);
         let id = self.textarea.insert_element(insert_text);
 
-        if let (Some(path), Some(mention)) =
-            (path, Self::mention_name_from_insert_text(insert_text))
+        if let (Some(path), Some(mention)) = (path, Self::mention_key_from_insert_text(insert_text))
         {
             self.mention_bindings.insert(
                 id,
@@ -1972,15 +2018,18 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-    fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
-        let name = insert_text.strip_prefix('$')?;
+    fn mention_key_from_insert_text(insert_text: &str) -> Option<String> {
+        let name = insert_text
+            .strip_prefix('$')
+            .or_else(|| insert_text.strip_prefix('#'))?;
         if name.is_empty() {
             return None;
         }
-        if name
-            .as_bytes()
-            .iter()
-            .all(|byte| is_mention_name_char(*byte))
+        if insert_text.starts_with('#')
+            || name
+                .as_bytes()
+                .iter()
+                .all(|byte| is_mention_name_char(*byte))
         {
             Some(name.to_string())
         } else {
@@ -1993,7 +2042,7 @@ impl ChatComposer {
             .text_element_snapshots()
             .into_iter()
             .filter_map(|snapshot| {
-                Self::mention_name_from_insert_text(snapshot.text.as_str())
+                Self::mention_key_from_insert_text(snapshot.text.as_str())
                     .map(|mention| (snapshot.id, mention))
             })
             .collect()
@@ -2023,7 +2072,12 @@ impl ChatComposer {
         let text = self.textarea.text().to_string();
         let mut scan_from = 0usize;
         for binding in mention_bindings {
-            let token = format!("${}", binding.mention);
+            let sigil = if binding.path.starts_with("thread://") {
+                '#'
+            } else {
+                '$'
+            };
+            let token = format!("{sigil}{}", binding.mention);
             let Some(range) =
                 find_next_mention_token_range(text.as_str(), token.as_str(), scan_from)
             else {
@@ -2874,9 +2928,16 @@ impl ChatComposer {
             return;
         }
         let mention_token = self.current_mention_token();
+        let hash_item_token = if mention_token.is_none() {
+            self.current_hash_item_token()
+        } else {
+            None
+        };
 
-        let allow_command_popup =
-            self.slash_commands_enabled() && file_token.is_none() && mention_token.is_none();
+        let allow_command_popup = self.slash_commands_enabled()
+            && file_token.is_none()
+            && mention_token.is_none()
+            && hash_item_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -2897,6 +2958,16 @@ impl ChatComposer {
                 self.current_file_query = None;
             }
             self.sync_mention_popup(token);
+            return;
+        }
+
+        if let Some(token) = hash_item_token {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
+            self.sync_hash_item_popup(token);
             return;
         }
         self.dismissed_mention_popup_token = None;
@@ -3133,7 +3204,9 @@ impl ChatComposer {
     }
 
     fn sync_mention_popup(&mut self, query: String) {
-        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+        if self.dismissed_mention_popup_token.as_ref()
+            == Some(&Self::dismissed_popup_token('$', &query))
+        {
             return;
         }
 
@@ -3143,6 +3216,70 @@ impl ChatComposer {
             return;
         }
 
+        self.sync_skill_popup(query, mentions);
+    }
+
+    fn sync_hash_item_popup(&mut self, query: String) {
+        if self.dismissed_mention_popup_token.as_ref()
+            == Some(&Self::dismissed_popup_token('#', &query))
+        {
+            return;
+        }
+
+        if self.recent_session_mentions.is_none() && !self.recent_session_mentions_requested {
+            self.app_event_tx
+                .send(AppEvent::RequestRecentSessionMentions);
+            self.recent_session_mentions_requested = true;
+        }
+
+        self.sync_skill_popup(query, self.recent_session_mention_items());
+    }
+
+    fn recent_session_mention_items(&self) -> Vec<MentionItem> {
+        let Some(sessions) = self.recent_session_mentions.as_ref() else {
+            return vec![MentionItem {
+                display_name: "Loading sessions...".to_string(),
+                description: Some("Recent Codex sessions".to_string()),
+                insert_text: "#".to_string(),
+                search_terms: vec!["loading".to_string(), "sessions".to_string()],
+                path: None,
+                category_tag: Some("[Session]".to_string()),
+                sort_rank: 0,
+            }];
+        };
+
+        if sessions.is_empty() {
+            return vec![MentionItem {
+                display_name: "No recent sessions".to_string(),
+                description: Some("Start a new session, then try # again".to_string()),
+                insert_text: "#".to_string(),
+                search_terms: vec!["no recent sessions".to_string()],
+                path: None,
+                category_tag: Some("[Session]".to_string()),
+                sort_rank: 0,
+            }];
+        }
+
+        sessions
+            .iter()
+            .enumerate()
+            .map(|(idx, session)| MentionItem {
+                display_name: session.title.clone(),
+                description: Some(session.preview.clone()),
+                insert_text: format!("#{}", session.title),
+                search_terms: vec![
+                    session.title.clone(),
+                    session.preview.clone(),
+                    session.thread_id.clone(),
+                ],
+                path: Some(format!("thread://{}", session.thread_id)),
+                category_tag: Some("[Session]".to_string()),
+                sort_rank: idx.try_into().unwrap_or(u8::MAX),
+            })
+            .collect()
+    }
+
+    fn sync_skill_popup(&mut self, query: String, mentions: Vec<MentionItem>) {
         match &mut self.active_popup {
             ActivePopup::Skill(popup) => {
                 popup.set_query(&query);
@@ -4913,6 +5050,118 @@ mod tests {
                 }]));
             },
         );
+    }
+
+    #[test]
+    fn hash_item_popup_snapshot() {
+        snapshot_composer_state_with_width(
+            "hash_item_popup",
+            /*width*/ 72,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_recent_session_mentions(vec![
+                    RecentSessionMention {
+                        thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
+                        title: "Fix flaky remote image deletion".to_string(),
+                        preview: "Debug a composer test failure".to_string(),
+                    },
+                    RecentSessionMention {
+                        thread_id: "22222222-2222-2222-2222-222222222222".to_string(),
+                        title: "Explore skill autocomplete".to_string(),
+                        preview: "Trace the $ mention popup path".to_string(),
+                    },
+                ]);
+                composer.set_text_content("#".to_string(), Vec::new(), Vec::new());
+            },
+        );
+    }
+
+    #[test]
+    fn hash_item_popup_inserts_bound_session_title() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_recent_session_mentions(vec![RecentSessionMention {
+            thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            title: "Favorite hobbies".to_string(),
+            preview: "Prior session preview".to_string(),
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &"Remember my favorite hobbies that I mentioned in #"
+                .chars()
+                .collect::<Vec<_>>(),
+        );
+
+        let ActivePopup::Skill(popup) = &composer.active_popup else {
+            panic!("expected hash item popup to open");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected hash item to be selected");
+        assert_eq!(mention.insert_text, "#Favorite hobbies".to_string());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            composer.current_text(),
+            "Remember my favorite hobbies that I mentioned in #Favorite hobbies "
+        );
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert_eq!(
+            composer.take_mention_bindings(),
+            vec![MentionBinding {
+                mention: "Favorite hobbies".to_string(),
+                path: "thread://11111111-1111-1111-1111-111111111111".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn hash_item_popup_requests_sessions_on_first_open() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['#']);
+
+        let event = rx
+            .try_recv()
+            .expect("expected recent sessions request event");
+        assert!(matches!(event, AppEvent::RequestRecentSessionMentions));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn hash_item_popup_ignores_hash_inside_text_element() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.textarea.insert_element("[Image #2]");
+        composer.sync_popups();
+
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

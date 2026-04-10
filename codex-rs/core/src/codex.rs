@@ -195,7 +195,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
-mod rollout_reconstruction;
+pub(crate) mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -3562,6 +3562,17 @@ impl Session {
         self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
+    }
+
+    /// Records response items into conversation history and rollout without
+    /// emitting raw response item events.
+    pub(crate) async fn record_conversation_items_silently(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) {
+        self.record_into_history(items, turn_context).await;
+        self.persist_rollout_response_items(items).await;
     }
 
     /// Append ResponseItems to the in-memory conversation history only.

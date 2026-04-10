@@ -6,6 +6,8 @@ use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::RecentSessionMention;
+use crate::app_event::RememberThreadSource;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -79,9 +81,13 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
@@ -492,6 +498,28 @@ fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
 struct SessionSummary {
     usage_line: Option<String>,
     resume_command: Option<String>,
+}
+
+fn recent_session_mention_from_thread(thread: Thread) -> RecentSessionMention {
+    let trimmed_preview = thread.preview.trim();
+    let preview = if trimmed_preview.is_empty() {
+        format!("Session in {}", thread.cwd.display())
+    } else {
+        trimmed_preview.to_string()
+    };
+    let title = thread
+        .name
+        .as_ref()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&preview)
+        .to_string();
+
+    RecentSessionMention {
+        thread_id: thread.id,
+        title,
+        preview,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1699,6 +1727,72 @@ impl App {
     /// recently began switching.
     fn current_displayed_thread_id(&self) -> Option<ThreadId> {
         self.active_thread_id.or(self.chat_widget.thread_id())
+    }
+
+    async fn load_recent_session_mentions(
+        &self,
+        app_server: &mut AppServerSession,
+    ) -> Result<Vec<RecentSessionMention>> {
+        let active_thread_id = self.current_displayed_thread_id().map(|id| id.to_string());
+        let response = app_server
+            .thread_list(ThreadListParams {
+                cursor: None,
+                limit: Some(8),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                model_providers: None,
+                source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+                archived: Some(false),
+                cwd: Some(self.config.cwd.to_string_lossy().to_string()),
+                search_term: None,
+            })
+            .await?;
+
+        Ok(response
+            .data
+            .into_iter()
+            .filter(|thread| active_thread_id.as_ref() != Some(&thread.id))
+            .map(recent_session_mention_from_thread)
+            .collect())
+    }
+
+    async fn remember_threads_before_turn(
+        &mut self,
+        app_server: &mut AppServerSession,
+        sources: &[RememberThreadSource],
+    ) -> bool {
+        if sources.is_empty() {
+            return true;
+        }
+        let Some(thread_id) = self.current_displayed_thread_id() else {
+            self.chat_widget.add_error_message(
+                "No active thread is available for remembered context.".to_string(),
+            );
+            return false;
+        };
+
+        let mut source_thread_ids = Vec::with_capacity(sources.len());
+        for source in sources {
+            let Ok(source_thread_id) = ThreadId::from_string(&source.thread_id) else {
+                self.chat_widget.add_error_message(format!(
+                    "Selected session '{}' is not a valid thread.",
+                    source.title
+                ));
+                return false;
+            };
+            source_thread_ids.push(source_thread_id);
+        }
+
+        match app_server
+            .thread_remember(thread_id, source_thread_ids)
+            .await
+        {
+            Ok(_) => true,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to remember previous session: {err}"));
+                false
+            }
+        }
     }
 
     fn ignore_same_thread_resume(
@@ -4378,6 +4472,14 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op.into()).await?;
             }
+            AppEvent::CodexOpRememberingThreads { sources, op } => {
+                if self
+                    .remember_threads_before_turn(app_server, &sources)
+                    .await
+                {
+                    self.submit_active_thread_op(app_server, op.into()).await?;
+                }
+            }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
                     .await?;
@@ -4431,6 +4533,23 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::RequestRecentSessionMentions => {
+                let result = self
+                    .load_recent_session_mentions(app_server)
+                    .await
+                    .map_err(|err| err.to_string());
+                self.app_event_tx
+                    .send(AppEvent::RecentSessionMentionsLoaded { result });
+            }
+            AppEvent::RecentSessionMentionsLoaded { result } => match result {
+                Ok(sessions) => {
+                    self.chat_widget.set_recent_session_mentions(sessions);
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "failed to load recent session mentions");
+                    self.chat_widget.set_recent_session_mentions(Vec::new());
+                }
+            },
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
                     self.chat_widget.refresh_connectors(/*force_refetch*/ true);
@@ -6446,6 +6565,46 @@ mod tests {
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    fn app_server_thread_for_test(id: &str, preview: &str, name: Option<&str>) -> Thread {
+        Thread {
+            id: id.to_string(),
+            forked_from_id: None,
+            preview: preview.to_string(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: PathBuf::from("/tmp/project"),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::Cli.into(),
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: name.map(str::to_string),
+            turns: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn recent_session_mention_prefers_thread_name() {
+        let mention = recent_session_mention_from_thread(app_server_thread_for_test(
+            "11111111-1111-1111-1111-111111111111",
+            "Explain the resume picker",
+            Some("Resume picker notes"),
+        ));
+
+        assert_eq!(
+            mention,
+            RecentSessionMention {
+                thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
+                title: "Resume picker notes".to_string(),
+                preview: "Explain the resume picker".to_string(),
+            }
+        );
     }
 
     #[test]

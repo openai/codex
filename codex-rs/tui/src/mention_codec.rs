@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
@@ -23,11 +24,16 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
     }
 
     let mut mentions_by_name: HashMap<&str, VecDeque<&str>> = HashMap::new();
+    let mut thread_mentions = VecDeque::new();
     for mention in mentions {
-        mentions_by_name
-            .entry(mention.mention.as_str())
-            .or_default()
-            .push_back(mention.path.as_str());
+        if mention.path.starts_with("thread://") {
+            thread_mentions.push_back(mention);
+        } else {
+            mentions_by_name
+                .entry(mention.mention.as_str())
+                .or_default()
+                .push_back(mention.path.as_str());
+        }
     }
 
     let bytes = text.as_bytes();
@@ -35,6 +41,32 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
     let mut index = 0usize;
 
     while index < bytes.len() {
+        if bytes[index] == b'#'
+            && let Some((queue_index, _mention)) = thread_mentions
+                .iter()
+                .enumerate()
+                .filter(|(_, mention)| {
+                    !mention.mention.is_empty()
+                        && text[index + 1..].starts_with(mention.mention.as_str())
+                })
+                .max_by_key(|(_, mention)| mention.mention.len())
+            && let Some(mention) = thread_mentions.remove(queue_index)
+        {
+            out.push('[');
+            out.push('#');
+            for ch in mention.mention.chars() {
+                if matches!(ch, '\\' | ']') {
+                    out.push('\\');
+                }
+                out.push(ch);
+            }
+            out.push_str("](");
+            out.push_str(mention.path.as_str());
+            out.push(')');
+            index += '#'.len_utf8() + mention.mention.len();
+            continue;
+        }
+
         if bytes[index] == TOOL_MENTION_SIGIL as u8 {
             let name_start = index + 1;
             if let Some(first) = bytes.get(name_start)
@@ -79,12 +111,13 @@ pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
 
     while index < bytes.len() {
         if bytes[index] == b'['
-            && let Some((name, path, end_index)) = parse_history_linked_mention(text, bytes, index)
+            && let Some((sigil, name, path, end_index)) =
+                parse_history_linked_mention(text, bytes, index)
         {
-            out.push(TOOL_MENTION_SIGIL);
-            out.push_str(name);
+            out.push(sigil);
+            out.push_str(name.as_ref());
             mentions.push(LinkedMention {
-                mention: name.to_string(),
+                mention: name.into_owned(),
                 path: path.to_string(),
             });
             index = end_index;
@@ -108,14 +141,15 @@ fn parse_history_linked_mention<'a>(
     text: &'a str,
     text_bytes: &[u8],
     start: usize,
-) -> Option<(&'a str, &'a str, usize)> {
+) -> Option<(char, Cow<'a, str>, &'a str, usize)> {
     // TUI writes `$name`, but may read plugin `[@name](plugin://...)` links from other clients.
     if let Some(mention @ (name, path, _)) =
         parse_linked_tool_mention(text, text_bytes, start, TOOL_MENTION_SIGIL)
         && !is_common_env_var(name)
         && is_tool_path(path)
     {
-        return Some(mention);
+        let (name, path, end_index) = mention;
+        return Some((TOOL_MENTION_SIGIL, Cow::Borrowed(name), path, end_index));
     }
 
     if let Some(mention @ (name, path, _)) =
@@ -123,7 +157,15 @@ fn parse_history_linked_mention<'a>(
         && !is_common_env_var(name)
         && path.starts_with("plugin://")
     {
-        return Some(mention);
+        let (name, path, end_index) = mention;
+        return Some((TOOL_MENTION_SIGIL, Cow::Borrowed(name), path, end_index));
+    }
+
+    if let Some((name, path, end_index)) =
+        parse_linked_freeform_mention(text, text_bytes, start, '#')
+        && path.starts_with("thread://")
+    {
+        return Some(('#', name, path, end_index));
     }
 
     None
@@ -183,6 +225,87 @@ fn parse_linked_tool_mention<'a>(
     }
 
     let name = &text[name_start..name_end];
+    Some((name, path, path_end + 1))
+}
+
+fn parse_linked_freeform_mention<'a>(
+    text: &'a str,
+    text_bytes: &[u8],
+    start: usize,
+    sigil: char,
+) -> Option<(Cow<'a, str>, &'a str, usize)> {
+    let sigil_index = start + 1;
+    if text_bytes.get(sigil_index) != Some(&(sigil as u8)) {
+        return None;
+    }
+
+    let name_start = sigil_index + 1;
+    let mut name_end = name_start;
+    let mut escaped = false;
+    let mut has_escape = false;
+    while let Some(next_byte) = text_bytes.get(name_end) {
+        if escaped {
+            escaped = false;
+            name_end += 1;
+            continue;
+        }
+        if *next_byte == b'\\' {
+            escaped = true;
+            has_escape = true;
+            name_end += 1;
+            continue;
+        }
+        if *next_byte == b']' {
+            break;
+        }
+        name_end += 1;
+    }
+    if name_end == name_start || text_bytes.get(name_end) != Some(&b']') {
+        return None;
+    }
+
+    let mut path_start = name_end + 1;
+    while let Some(next_byte) = text_bytes.get(path_start)
+        && next_byte.is_ascii_whitespace()
+    {
+        path_start += 1;
+    }
+    if text_bytes.get(path_start) != Some(&b'(') {
+        return None;
+    }
+
+    let mut path_end = path_start + 1;
+    while let Some(next_byte) = text_bytes.get(path_end)
+        && *next_byte != b')'
+    {
+        path_end += 1;
+    }
+    if text_bytes.get(path_end) != Some(&b')') {
+        return None;
+    }
+
+    let path = text[path_start + 1..path_end].trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    let raw_name = &text[name_start..name_end];
+    let name = if has_escape {
+        let mut unescaped = String::with_capacity(raw_name.len());
+        let mut chars = raw_name.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\'
+                && let Some(next) = chars.next()
+            {
+                unescaped.push(next);
+                continue;
+            }
+            unescaped.push(ch);
+        }
+        Cow::Owned(unescaped)
+    } else {
+        Cow::Borrowed(raw_name)
+    };
     Some((name, path, path_end + 1))
 }
 
@@ -279,6 +402,20 @@ mod tests {
     }
 
     #[test]
+    fn decode_history_mentions_restores_thread_links_with_hash_sigil() {
+        let decoded = decode_history_mentions("Remember [#Favorite hobbies](thread://thread-1).");
+
+        assert_eq!(decoded.text, "Remember #Favorite hobbies.");
+        assert_eq!(
+            decoded.mentions,
+            vec![LinkedMention {
+                mention: "Favorite hobbies".to_string(),
+                path: "thread://thread-1".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn encode_history_mentions_links_bound_mentions_in_order() {
         let text = "$figma then $sample then $figma then $other";
         let encoded = encode_history_mentions(
@@ -301,6 +438,57 @@ mod tests {
         assert_eq!(
             encoded,
             "[$figma](app://figma-app) then [$sample](plugin://sample@test) then [$figma](/tmp/figma/SKILL.md) then $other"
+        );
+    }
+
+    #[test]
+    fn encode_history_mentions_links_bound_thread_mentions() {
+        let text = "Remember #Favorite hobbies then ask about #Travel";
+        let encoded = encode_history_mentions(
+            text,
+            &[
+                LinkedMention {
+                    mention: "Favorite hobbies".to_string(),
+                    path: "thread://thread-1".to_string(),
+                },
+                LinkedMention {
+                    mention: "Travel".to_string(),
+                    path: "thread://thread-2".to_string(),
+                },
+            ],
+        );
+        assert_eq!(
+            encoded,
+            "Remember [#Favorite hobbies](thread://thread-1) then ask about [#Travel](thread://thread-2)"
+        );
+    }
+
+    #[test]
+    fn thread_history_mentions_roundtrip_escaped_titles() {
+        let text = "Remember #Favorite [hobbies] and #Windows \\ shells";
+        let mentions = [
+            LinkedMention {
+                mention: "Favorite [hobbies]".to_string(),
+                path: "thread://thread-1".to_string(),
+            },
+            LinkedMention {
+                mention: "Windows \\ shells".to_string(),
+                path: "thread://thread-2".to_string(),
+            },
+        ];
+
+        let encoded = encode_history_mentions(text, &mentions);
+
+        assert_eq!(
+            encoded,
+            "Remember [#Favorite [hobbies\\]](thread://thread-1) and [#Windows \\\\ shells](thread://thread-2)"
+        );
+        assert_eq!(
+            decode_history_mentions(&encoded),
+            DecodedHistoryText {
+                text: text.to_string(),
+                mentions: mentions.to_vec(),
+            }
         );
     }
 }

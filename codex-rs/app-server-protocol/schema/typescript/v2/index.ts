@@ -304,6 +304,8 @@ export type { ThreadRealtimeSdpNotification } from "./ThreadRealtimeSdpNotificat
 export type { ThreadRealtimeStartTransport } from "./ThreadRealtimeStartTransport";
 export type { ThreadRealtimeStartedNotification } from "./ThreadRealtimeStartedNotification";
 export type { ThreadRealtimeTranscriptUpdatedNotification } from "./ThreadRealtimeTranscriptUpdatedNotification";
+export type { ThreadRememberParams } from "./ThreadRememberParams";
+export type { ThreadRememberResponse } from "./ThreadRememberResponse";
 export type { ThreadResumeParams } from "./ThreadResumeParams";
 export type { ThreadResumeResponse } from "./ThreadResumeResponse";
 export type { ThreadRollbackParams } from "./ThreadRollbackParams";

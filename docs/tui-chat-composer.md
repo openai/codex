@@ -118,6 +118,19 @@ still available for `Ctrl+Y`. This supports flows where a user kills part of a d
 composer action such as changing reasoning level, and then yanks that text back into the cleared
 draft.
 
+### Previous-thread mentions (`#`)
+
+Typing `#` opens the previous-thread mention popup. Accepting a row with `Enter` or `Tab` inserts
+the visible `#<thread title>` text into the draft and stores a hidden `thread://<thread id>`
+binding for that range. The draft stays editable after insertion, so the user can keep typing around
+the selected previous-thread mention before submitting.
+
+On submit, selected previous-thread bindings are extracted before the normal user turn starts. The
+TUI asks app-server to `thread/remember` those source threads into the current thread, then submits
+the user's visible text as the turn. The remembered packet is model-visible context in the rollout,
+but it is classified as hidden contextual user content and is not rendered back as a normal user
+message.
+
 ## Remote image rows (selection/deletion flow)
 
 Remote image URLs are shown as `[Image #N]` rows above the textarea, inside the same composer box.

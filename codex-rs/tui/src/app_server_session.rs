@@ -47,6 +47,8 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
+use codex_app_server_protocol::ThreadRememberParams;
+use codex_app_server_protocol::ThreadRememberResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -416,6 +418,27 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_remember(
+        &mut self,
+        thread_id: ThreadId,
+        source_thread_ids: Vec<ThreadId>,
+    ) -> Result<ThreadRememberResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadRemember {
+                request_id,
+                params: ThreadRememberParams {
+                    thread_id: thread_id.to_string(),
+                    source_thread_ids: source_thread_ids
+                        .into_iter()
+                        .map(|thread_id| thread_id.to_string())
+                        .collect(),
+                },
+            })
+            .await
+            .wrap_err("thread/remember failed in TUI")
     }
 
     #[allow(clippy::too_many_arguments)]

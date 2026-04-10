@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 4097
+expression: terminal.backend()
+---
+"                                                                        "
+"› #                                                                     "
+"                                                                        "
+"                                                                        "
+"                                                                        "
+"  Fix flaky remote imag...  [Session] Debug a composer test failure     "
+"  Explore skill autocom...  [Session] Trace the $ mention popup path    "
+"                                                                        "
+"  Press enter to insert or esc to close                                 "
