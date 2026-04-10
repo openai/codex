@@ -1702,6 +1702,7 @@ async fn make_chatwidget_manual(
         retry_status_header: None,
         pending_status_indicator_restore: false,
         thread_id: None,
+        last_turn_id: None,
         thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
@@ -7934,6 +7935,23 @@ async fn replayed_turn_started_does_not_mark_task_running() {
 
     assert!(!chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_widget().is_none());
+    assert_eq!(chat.last_turn_id.as_deref(), Some("turn-1"));
+}
+
+#[tokio::test]
+async fn live_turn_started_records_last_turn_id_for_feedback() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-feedback".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-feedback".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    assert_eq!(chat.last_turn_id.as_deref(), Some("turn-feedback"));
 }
 
 #[tokio::test]

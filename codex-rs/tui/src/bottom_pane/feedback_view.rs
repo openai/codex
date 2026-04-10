@@ -47,6 +47,7 @@ pub(crate) enum FeedbackAudience {
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     snapshot: codex_feedback::CodexLogSnapshot,
+    turn_id: Option<String>,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
@@ -62,6 +63,7 @@ impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
         snapshot: codex_feedback::CodexLogSnapshot,
+        turn_id: Option<String>,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
@@ -70,6 +72,7 @@ impl FeedbackNoteView {
         Self {
             category,
             snapshot,
+            turn_id,
             rollout_path,
             app_event_tx,
             include_logs,
@@ -99,6 +102,7 @@ impl FeedbackNoteView {
         let result = self.snapshot.upload_feedback(
             classification,
             reason_opt,
+            self.turn_id.as_deref(),
             self.include_logs,
             &log_file_paths,
             Some(SessionSource::Cli),
@@ -592,6 +596,7 @@ mod tests {
         FeedbackNoteView::new(
             category,
             snapshot,
+            None,
             None,
             tx,
             true,

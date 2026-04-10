@@ -6887,6 +6887,7 @@ impl CodexMessageProcessor {
             classification,
             reason,
             thread_id,
+            turn_id,
             include_logs,
             extra_log_files,
         } = params;
@@ -6929,6 +6930,7 @@ impl CodexMessageProcessor {
             snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),
+                turn_id.as_deref(),
                 include_logs,
                 &attachment_paths,
                 Some(session_source),

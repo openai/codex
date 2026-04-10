@@ -218,16 +218,58 @@ impl CodexLogSnapshot {
         Ok(path)
     }
 
+    fn upload_tags(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        turn_id: Option<&str>,
+        session_source: Option<&SessionSource>,
+    ) -> BTreeMap<String, String> {
+        let cli_version = env!("CARGO_PKG_VERSION");
+        let mut tags = BTreeMap::from([
+            (String::from("thread_id"), self.thread_id.to_string()),
+            (String::from("classification"), classification.to_string()),
+            (String::from("cli_version"), cli_version.to_string()),
+        ]);
+        if let Some(turn_id) = turn_id {
+            tags.insert(String::from("turn_id"), turn_id.to_string());
+        }
+        if let Some(source) = session_source {
+            tags.insert(String::from("session_source"), source.to_string());
+        }
+        if let Some(r) = reason {
+            tags.insert(String::from("reason"), r.to_string());
+        }
+
+        let reserved = [
+            "thread_id",
+            "turn_id",
+            "classification",
+            "cli_version",
+            "session_source",
+            "reason",
+        ];
+        for (key, value) in &self.tags {
+            if reserved.contains(&key.as_str()) {
+                continue;
+            }
+            if let Entry::Vacant(entry) = tags.entry(key.clone()) {
+                entry.insert(value.clone());
+            }
+        }
+        tags
+    }
+
     /// Upload feedback to Sentry with optional attachments.
     pub fn upload_feedback(
         &self,
         classification: &str,
         reason: Option<&str>,
+        turn_id: Option<&str>,
         include_logs: bool,
         extra_log_files: &[PathBuf],
         session_source: Option<SessionSource>,
     ) -> Result<()> {
-        use std::collections::BTreeMap;
         use std::fs;
         use std::str::FromStr;
         use std::sync::Arc;
@@ -249,34 +291,7 @@ impl CodexLogSnapshot {
             ..Default::default()
         });
 
-        let cli_version = env!("CARGO_PKG_VERSION");
-        let mut tags = BTreeMap::from([
-            (String::from("thread_id"), self.thread_id.to_string()),
-            (String::from("classification"), classification.to_string()),
-            (String::from("cli_version"), cli_version.to_string()),
-        ]);
-        if let Some(source) = session_source.as_ref() {
-            tags.insert(String::from("session_source"), source.to_string());
-        }
-        if let Some(r) = reason {
-            tags.insert(String::from("reason"), r.to_string());
-        }
-
-        let reserved = [
-            "thread_id",
-            "classification",
-            "cli_version",
-            "session_source",
-            "reason",
-        ];
-        for (key, value) in &self.tags {
-            if reserved.contains(&key.as_str()) {
-                continue;
-            }
-            if let Entry::Vacant(entry) = tags.entry(key.clone()) {
-                entry.insert(value.clone());
-            }
-        }
+        let tags = self.upload_tags(classification, reason, turn_id, session_source.as_ref());
 
         let level = match classification {
             "bug" | "bad_result" | "safety_check" => Level::Error,
@@ -458,5 +473,29 @@ mod tests {
         let snap = fb.snapshot(None);
         pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
         pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn upload_tags_include_turn_id_and_preserve_reserved_fields() {
+        let snap = CodexLogSnapshot {
+            bytes: Vec::new(),
+            tags: BTreeMap::from([
+                (String::from("custom"), String::from("tag")),
+                (String::from("turn_id"), String::from("stale-turn")),
+            ]),
+            thread_id: String::from("thread-1"),
+        };
+
+        let tags = snap.upload_tags(
+            "bug",
+            Some("broken"),
+            Some("turn-123"),
+            Some(&SessionSource::Cli),
+        );
+
+        pretty_assertions::assert_eq!(tags.get("thread_id").map(String::as_str), Some("thread-1"));
+        pretty_assertions::assert_eq!(tags.get("turn_id").map(String::as_str), Some("turn-123"));
+        pretty_assertions::assert_eq!(tags.get("custom").map(String::as_str), Some("tag"));
+        pretty_assertions::assert_eq!(tags.get("reason").map(String::as_str), Some("broken"));
     }
 }

@@ -1741,6 +1741,8 @@ pub struct FeedbackUploadParams {
     pub reason: Option<String>,
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub turn_id: Option<String>,
     pub include_logs: bool,
     #[ts(optional = nullable)]
     pub extra_log_files: Option<Vec<PathBuf>>,

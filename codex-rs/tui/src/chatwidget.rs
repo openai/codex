@@ -127,6 +127,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -599,6 +600,7 @@ pub(crate) struct ChatWidget {
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
     thread_id: Option<ThreadId>,
+    last_turn_id: Option<String>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
@@ -1253,6 +1255,7 @@ impl ChatWidget {
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
             snapshot,
+            self.last_turn_id.clone(),
             rollout,
             self.app_event_tx.clone(),
             include_logs,
@@ -2865,6 +2868,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             thread_id: None,
+            last_turn_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -3044,6 +3048,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             thread_id: None,
+            last_turn_id: None,
             thread_name: None,
             forked_from: None,
             saw_plan_update_this_turn: false,
@@ -3212,6 +3217,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             thread_id: None,
+            last_turn_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -4360,7 +4366,8 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => {
+            EventMsg::TurnStarted(TurnStartedEvent { turn_id, .. }) => {
+                self.last_turn_id = Some(turn_id);
                 if !is_resume_initial_replay {
                     self.on_task_started();
                 }
