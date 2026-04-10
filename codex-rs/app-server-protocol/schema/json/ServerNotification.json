@@ -960,10 +960,19 @@
       ],
       "type": "object"
     },
-    "FileChangeInputDeltaNotification": {
+    "FileChangeChangesDeltaNotification": {
       "properties": {
-        "delta": {
-          "type": "string"
+        "activePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/definitions/FileUpdateChange"
+          },
+          "type": "array"
         },
         "itemId": {
           "type": "string"
@@ -976,14 +985,14 @@
         }
       },
       "required": [
-        "delta",
+        "changes",
         "itemId",
         "threadId",
         "turnId"
       ],
       "type": "object"
     },
-    "FileChangeInputStartedNotification": {
+    "FileChangeChangesStartedNotification": {
       "properties": {
         "itemId": {
           "type": "string"
@@ -4568,40 +4577,40 @@
       "properties": {
         "method": {
           "enum": [
-            "item/fileChange/inputStarted"
+            "item/fileChange/changesStarted"
           ],
-          "title": "Item/fileChange/inputStartedNotificationMethod",
+          "title": "Item/fileChange/changesStartedNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/FileChangeInputStartedNotification"
+          "$ref": "#/definitions/FileChangeChangesStartedNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Item/fileChange/inputStartedNotification",
+      "title": "Item/fileChange/changesStartedNotification",
       "type": "object"
     },
     {
       "properties": {
         "method": {
           "enum": [
-            "item/fileChange/inputDelta"
+            "item/fileChange/changesDelta"
           ],
-          "title": "Item/fileChange/inputDeltaNotificationMethod",
+          "title": "Item/fileChange/changesDeltaNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/FileChangeInputDeltaNotification"
+          "$ref": "#/definitions/FileChangeChangesDeltaNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Item/fileChange/inputDeltaNotification",
+      "title": "Item/fileChange/changesDeltaNotification",
       "type": "object"
     },
     {

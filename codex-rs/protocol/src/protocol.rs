@@ -1355,11 +1355,12 @@ pub enum EventMsg {
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
     PatchApplyBegin(PatchApplyBeginEvent),
 
-    /// Notification that the model has started streaming input for an `apply_patch` call.
-    ApplyPatchInputStarted(ApplyPatchInputStartedEvent),
+    /// Notification that the model has started streaming structured changes
+    /// for an `apply_patch` call.
+    ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent),
 
-    /// Incremental model-generated input for an `apply_patch` call.
-    ApplyPatchInputDelta(ApplyPatchInputDeltaEvent),
+    /// Incremental model-generated structured changes for an `apply_patch` call.
+    ApplyPatchChangesDelta(ApplyPatchChangesDeltaEvent),
 
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
@@ -3011,17 +3012,19 @@ pub struct PatchApplyBeginEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ApplyPatchInputStartedEvent {
+pub struct ApplyPatchChangesStartedEvent {
     /// Identifier for the originating `apply_patch` tool call.
     pub call_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ApplyPatchInputDeltaEvent {
+pub struct ApplyPatchChangesDeltaEvent {
     /// Identifier for the originating `apply_patch` tool call.
     pub call_id: String,
-    /// Incremental input emitted by the model for the tool call.
-    pub delta: String,
+    /// Structured file changes parsed from the model-generated patch input so far.
+    pub changes: HashMap<PathBuf, FileChange>,
+    /// File path currently being written, when known.
+    pub active_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

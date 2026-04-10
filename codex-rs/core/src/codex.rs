@@ -255,6 +255,8 @@ use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
+use crate::apply_patch_stream::ApplyPatchStreamProgress;
+use crate::apply_patch_stream::apply_patch_stream_progress;
 use crate::build_skill_injections;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
@@ -342,8 +344,8 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-use codex_protocol::protocol::ApplyPatchInputDeltaEvent;
-use codex_protocol::protocol::ApplyPatchInputStartedEvent;
+use codex_protocol::protocol::ApplyPatchChangesDeltaEvent;
+use codex_protocol::protocol::ApplyPatchChangesStartedEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -7068,8 +7070,8 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyBegin(_)
-        | EventMsg::ApplyPatchInputStarted(_)
-        | EventMsg::ApplyPatchInputDelta(_)
+        | EventMsg::ApplyPatchChangesStarted(_)
+        | EventMsg::ApplyPatchChangesDelta(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::ImageGenerationBegin(_)
@@ -7584,7 +7586,7 @@ async fn try_run_sampling_request(
                 if let Some((_, call_id)) = stream_ids
                     && response_item_is_apply_patch(&item)
                 {
-                    maybe_start_apply_patch_input_stream(
+                    maybe_start_apply_patch_changes_stream(
                         &sess,
                         &turn_context,
                         &mut tool_input_streams,
@@ -7734,32 +7736,10 @@ async fn try_run_sampling_request(
                 };
                 let state = tool_input_state_mut(&mut tool_input_streams, call_id.clone());
                 state.input.push_str(&delta);
-                let input_delta = if state.apply_patch_started {
-                    Some(delta)
-                } else if tool_input_looks_like_apply_patch(&state.input) {
-                    state.apply_patch_started = true;
-                    let buffered_input = state.input.clone();
-                    sess.send_event(
-                        &turn_context,
-                        EventMsg::ApplyPatchInputStarted(ApplyPatchInputStartedEvent {
-                            call_id: call_id.clone(),
-                        }),
-                    )
+                let should_start =
+                    state.apply_patch_started || tool_input_looks_like_apply_patch(&state.input);
+                maybe_emit_apply_patch_changes(&sess, &turn_context, call_id, state, should_start)
                     .await;
-                    Some(buffered_input)
-                } else {
-                    None
-                };
-                if let Some(delta) = input_delta {
-                    sess.send_event(
-                        &turn_context,
-                        EventMsg::ApplyPatchInputDelta(ApplyPatchInputDeltaEvent {
-                            call_id,
-                            delta,
-                        }),
-                    )
-                    .await;
-                };
             }
             ResponseEvent::ReasoningSummaryDelta {
                 delta,
@@ -7843,6 +7823,7 @@ async fn try_run_sampling_request(
 struct ToolInputStreamState {
     input: String,
     apply_patch_started: bool,
+    last_progress: Option<ApplyPatchStreamProgress>,
 }
 
 fn tool_input_state_mut(
@@ -7854,10 +7835,11 @@ fn tool_input_state_mut(
         .or_insert_with(|| ToolInputStreamState {
             input: String::new(),
             apply_patch_started: false,
+            last_progress: None,
         })
 }
 
-async fn maybe_start_apply_patch_input_stream(
+async fn maybe_start_apply_patch_changes_stream(
     sess: &Session,
     turn_context: &TurnContext,
     tool_input_streams: &mut HashMap<String, ToolInputStreamState>,
@@ -7868,21 +7850,21 @@ async fn maybe_start_apply_patch_input_stream(
         return;
     }
     state.apply_patch_started = true;
-    let buffered_input = (!state.input.is_empty()).then(|| state.input.clone());
     sess.send_event(
         turn_context,
-        EventMsg::ApplyPatchInputStarted(ApplyPatchInputStartedEvent {
+        EventMsg::ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent {
             call_id: call_id.clone(),
         }),
     )
     .await;
-    if let Some(delta) = buffered_input {
-        sess.send_event(
-            turn_context,
-            EventMsg::ApplyPatchInputDelta(ApplyPatchInputDeltaEvent { call_id, delta }),
-        )
-        .await;
-    }
+    maybe_emit_apply_patch_changes(
+        sess,
+        turn_context,
+        call_id,
+        state,
+        /*should_start*/ false,
+    )
+    .await;
 }
 
 fn tool_input_looks_like_apply_patch(input: &str) -> bool {
@@ -7911,54 +7893,47 @@ async fn maybe_emit_apply_patch_tool_input(
     if !delta.is_empty() {
         state.input.push_str(delta);
     }
-    let delta_chunks = chunk_str(delta, 512);
-    if !should_start && delta_chunks.is_empty() {
+    if !should_start && delta.is_empty() {
         return;
     }
-    if should_start {
-        state.apply_patch_started = true;
-    }
-
-    if should_start {
-        sess.send_event(
-            turn_context,
-            EventMsg::ApplyPatchInputStarted(ApplyPatchInputStartedEvent {
-                call_id: call_id.clone(),
-            }),
-        )
-        .await;
-    }
-    for delta in delta_chunks {
-        sess.send_event(
-            turn_context,
-            EventMsg::ApplyPatchInputDelta(ApplyPatchInputDeltaEvent {
-                call_id: call_id.clone(),
-                delta,
-            }),
-        )
-        .await;
-    }
+    maybe_emit_apply_patch_changes(sess, turn_context, call_id, state, should_start).await;
 }
 
-fn chunk_str(input: &str, max_bytes: usize) -> Vec<String> {
-    if input.is_empty() {
-        return Vec::new();
+async fn maybe_emit_apply_patch_changes(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: String,
+    state: &mut ToolInputStreamState,
+    should_start: bool,
+) {
+    let progress = apply_patch_stream_progress(&state.input);
+    if !state.apply_patch_started && (should_start || progress.is_some()) {
+        state.apply_patch_started = true;
+        sess.send_event(
+            turn_context,
+            EventMsg::ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent {
+                call_id: call_id.clone(),
+            }),
+        )
+        .await;
     }
-    let max_bytes = max_bytes.max(1);
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    let mut last_boundary = 0;
-    for (idx, _) in input.char_indices() {
-        if idx.saturating_sub(start) > max_bytes {
-            chunks.push(input[start..last_boundary].to_string());
-            start = last_boundary;
-        }
-        last_boundary = idx;
+
+    let Some(progress) = progress else {
+        return;
+    };
+    if state.last_progress.as_ref() == Some(&progress) {
+        return;
     }
-    if start < input.len() {
-        chunks.push(input[start..].to_string());
-    }
-    chunks
+    state.last_progress = Some(progress.clone());
+    sess.send_event(
+        turn_context,
+        EventMsg::ApplyPatchChangesDelta(ApplyPatchChangesDeltaEvent {
+            call_id,
+            changes: progress.changes,
+            active_path: progress.active_path,
+        }),
+    )
+    .await;
 }
 
 fn response_item_is_apply_patch(item: &ResponseItem) -> bool {

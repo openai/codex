@@ -33,8 +33,6 @@ use crate::exec_events::ErrorItem;
 use crate::exec_events::FileChangeItem;
 use crate::exec_events::FileUpdateChange;
 use crate::exec_events::ItemCompletedEvent;
-use crate::exec_events::ItemInputDeltaEvent;
-use crate::exec_events::ItemInputStartedEvent;
 use crate::exec_events::ItemStartedEvent;
 use crate::exec_events::ItemUpdatedEvent;
 use crate::exec_events::McpToolCallItem;
@@ -187,6 +185,7 @@ impl EventProcessorWithJsonOutput {
                         .into_iter()
                         .map(|change| FileUpdateChange {
                             path: change.path,
+                            diff: change.diff,
                             kind: match change.kind {
                                 PatchChangeKind::Add => ExecPatchChangeKind::Add,
                                 PatchChangeKind::Delete => ExecPatchChangeKind::Delete,
@@ -461,8 +460,17 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::ItemStarted(notification) => {
+                let already_started_file_change =
+                    matches!(notification.item, ThreadItem::FileChange { .. })
+                        && self
+                            .raw_to_exec_item_id
+                            .contains_key(notification.item.id());
                 if let Some(item) = self.map_started_item(notification.item) {
-                    events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
+                    if already_started_file_change {
+                        events.push(ThreadEvent::ItemUpdated(ItemUpdatedEvent { item }));
+                    } else {
+                        events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
+                    }
                 }
                 CodexStatus::Running
             }
@@ -477,19 +485,28 @@ impl EventProcessorWithJsonOutput {
                 }
                 CodexStatus::Running
             }
-            ServerNotification::FileChangeInputStarted(notification) => {
-                let item_id = self.started_item_id(&notification.item_id);
-                events.push(ThreadEvent::ItemInputStarted(ItemInputStartedEvent {
-                    item_id,
-                }));
+            ServerNotification::FileChangeChangesStarted(notification) => {
+                let item = ThreadItem::FileChange {
+                    id: notification.item_id,
+                    changes: Vec::new(),
+                    status: PatchApplyStatus::InProgress,
+                };
+                if let Some(item) = self.map_started_item(item) {
+                    events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
+                }
                 CodexStatus::Running
             }
-            ServerNotification::FileChangeInputDelta(notification) => {
-                let item_id = self.started_item_id(&notification.item_id);
-                events.push(ThreadEvent::ItemInputDelta(ItemInputDeltaEvent {
-                    item_id,
-                    delta: notification.delta,
-                }));
+            ServerNotification::FileChangeChangesDelta(notification) => {
+                let item_id = notification.item_id;
+                let item = ThreadItem::FileChange {
+                    id: item_id.clone(),
+                    changes: notification.changes,
+                    status: PatchApplyStatus::InProgress,
+                };
+                if let Some(item) = Self::map_item_with_id(item, || self.started_item_id(&item_id))
+                {
+                    events.push(ThreadEvent::ItemUpdated(ItemUpdatedEvent { item }));
+                }
                 CodexStatus::Running
             }
             ServerNotification::ModelRerouted(notification) => {

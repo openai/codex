@@ -362,10 +362,10 @@ fn server_notification_thread_target(
         ServerNotification::FileChangeOutputDelta(notification) => {
             Some(notification.thread_id.as_str())
         }
-        ServerNotification::FileChangeInputStarted(notification) => {
+        ServerNotification::FileChangeChangesStarted(notification) => {
             Some(notification.thread_id.as_str())
         }
-        ServerNotification::FileChangeInputDelta(notification) => {
+        ServerNotification::FileChangeChangesDelta(notification) => {
             Some(notification.thread_id.as_str())
         }
         ServerNotification::ServerRequestResolved(notification) => {

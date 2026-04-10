@@ -182,6 +182,7 @@ pub struct CommandExecutionItem {
 pub struct FileUpdateChange {
     pub path: String,
     pub kind: PatchChangeKind,
+    pub diff: String,
 }
 
 /// The status of a file change.

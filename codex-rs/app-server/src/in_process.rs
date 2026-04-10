@@ -99,8 +99,8 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
     matches!(
         notification,
         ServerNotification::TurnCompleted(_)
-            | ServerNotification::FileChangeInputStarted(_)
-            | ServerNotification::FileChangeInputDelta(_)
+            | ServerNotification::FileChangeChangesStarted(_)
+            | ServerNotification::FileChangeChangesDelta(_)
     )
 }
 

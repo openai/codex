@@ -20,8 +20,8 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeInputDeltaNotification;
-use codex_app_server_protocol::FileChangeInputStartedNotification;
+use codex_app_server_protocol::FileChangeChangesDeltaNotification;
+use codex_app_server_protocol::FileChangeChangesStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -1667,7 +1667,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_streams_apply_patch_input_deltas_v2() -> Result<()> {
+async fn turn_start_streams_apply_patch_change_deltas_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -1750,36 +1750,43 @@ async fn turn_start_streams_apply_patch_input_deltas_v2() -> Result<()> {
 
     let started_notif = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/fileChange/inputStarted"),
+        mcp.read_stream_until_notification_message("item/fileChange/changesStarted"),
     )
     .await??;
-    let started: FileChangeInputStartedNotification = serde_json::from_value(
+    let started: FileChangeChangesStartedNotification = serde_json::from_value(
         started_notif
             .params
             .clone()
-            .expect("item/fileChange/inputStarted params"),
+            .expect("item/fileChange/changesStarted params"),
     )?;
     assert_eq!(started.thread_id, thread.id);
     assert_eq!(started.turn_id, turn.id);
     assert_eq!(started.item_id, call_id);
 
-    let mut streamed_input = String::new();
-    while streamed_input != patch_arguments {
+    let mut streamed_content = String::new();
+    while streamed_content != "live line\n" {
         let delta_notif = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/fileChange/inputDelta"),
+            mcp.read_stream_until_notification_message("item/fileChange/changesDelta"),
         )
         .await??;
-        let delta: FileChangeInputDeltaNotification = serde_json::from_value(
+        let delta: FileChangeChangesDeltaNotification = serde_json::from_value(
             delta_notif
                 .params
                 .clone()
-                .expect("item/fileChange/inputDelta params"),
+                .expect("item/fileChange/changesDelta params"),
         )?;
         assert_eq!(delta.thread_id, thread.id);
         assert_eq!(delta.turn_id, turn.id);
         assert_eq!(delta.item_id, call_id);
-        streamed_input.push_str(&delta.delta);
+        assert_eq!(delta.active_path.as_deref(), Some("live.txt"));
+        let change = delta
+            .changes
+            .iter()
+            .find(|change| change.path == "live.txt")
+            .expect("live.txt change");
+        assert!(matches!(change.kind, PatchChangeKind::Add));
+        streamed_content = change.diff.clone();
     }
 
     timeout(

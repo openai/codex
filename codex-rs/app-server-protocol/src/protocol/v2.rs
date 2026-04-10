@@ -5379,7 +5379,7 @@ pub struct FileChangeOutputDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct FileChangeInputStartedNotification {
+pub struct FileChangeChangesStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
@@ -5388,11 +5388,12 @@ pub struct FileChangeInputStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct FileChangeInputDeltaNotification {
+pub struct FileChangeChangesDeltaNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    pub delta: String,
+    pub active_path: Option<String>,
+    pub changes: Vec<FileUpdateChange>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

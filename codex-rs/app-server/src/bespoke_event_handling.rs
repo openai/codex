@@ -38,8 +38,8 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeInputDeltaNotification;
-use codex_app_server_protocol::FileChangeInputStartedNotification;
+use codex_app_server_protocol::FileChangeChangesDeltaNotification;
+use codex_app_server_protocol::FileChangeChangesStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -1571,25 +1571,30 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
-        EventMsg::ApplyPatchInputStarted(event) => {
-            let notification = FileChangeInputStartedNotification {
+        EventMsg::ApplyPatchChangesStarted(event) => {
+            let notification = FileChangeChangesStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
                 item_id: event.call_id,
             };
             outgoing
-                .send_server_notification(ServerNotification::FileChangeInputStarted(notification))
+                .send_server_notification(ServerNotification::FileChangeChangesStarted(
+                    notification,
+                ))
                 .await;
         }
-        EventMsg::ApplyPatchInputDelta(event) => {
-            let notification = FileChangeInputDeltaNotification {
+        EventMsg::ApplyPatchChangesDelta(event) => {
+            let notification = FileChangeChangesDeltaNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
                 item_id: event.call_id,
-                delta: event.delta,
+                active_path: event
+                    .active_path
+                    .map(|path| path.to_string_lossy().into_owned()),
+                changes: convert_patch_changes(&event.changes),
             };
             outgoing
-                .send_server_notification(ServerNotification::FileChangeInputDelta(notification))
+                .send_server_notification(ServerNotification::FileChangeChangesDelta(notification))
                 .await;
         }
         EventMsg::PatchApplyEnd(patch_end_event) => {

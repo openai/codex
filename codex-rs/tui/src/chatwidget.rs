@@ -148,9 +148,9 @@ use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 #[cfg(test)]
-use codex_protocol::protocol::ApplyPatchInputDeltaEvent;
+use codex_protocol::protocol::ApplyPatchChangesDeltaEvent;
 #[cfg(test)]
-use codex_protocol::protocol::ApplyPatchInputStartedEvent;
+use codex_protocol::protocol::ApplyPatchChangesStartedEvent;
 #[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
 #[cfg(test)]
@@ -671,38 +671,64 @@ struct PendingGuardianReviewStatusEntry {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct PendingFileChangeInput {
-    input: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 struct FileChangeInputProgress {
     filename: Option<String>,
     char_count: usize,
 }
 
-impl PendingFileChangeInput {
-    fn append_delta(&mut self, delta: &str) {
-        self.input.push_str(delta);
+impl FileChangeInputProgress {
+    fn from_app_server_changes(
+        active_path: Option<&str>,
+        changes: &[codex_app_server_protocol::FileUpdateChange],
+    ) -> Self {
+        let active_change = active_path
+            .and_then(|active_path| {
+                changes.iter().find(|change| {
+                    change.path == active_path
+                        || matches!(
+                            &change.kind,
+                            codex_app_server_protocol::PatchChangeKind::Update { move_path }
+                                if move_path.as_deref() == Some(Path::new(active_path))
+                        )
+                })
+            })
+            .or_else(|| changes.last());
+        Self {
+            filename: active_path
+                .map(filename_from_path_str)
+                .or_else(|| active_change.map(|change| filename_from_path_str(&change.path))),
+            char_count: active_change
+                .map(|change| change.diff.chars().count())
+                .unwrap_or(0),
+        }
     }
 
-    fn progress(&self) -> FileChangeInputProgress {
-        let mut filename = None;
-        let mut char_count = self.input.chars().count();
-
-        for segment in self.input.split_inclusive('\n') {
-            let line = segment.trim_end_matches('\n');
-            if let Some(target_filename) = patch_target_filename(line) {
-                filename = Some(target_filename);
-                char_count = 0;
-            } else if filename.is_some() && !line.starts_with("*** End Patch") {
-                char_count += segment.chars().count();
-            }
-        }
-
-        FileChangeInputProgress {
-            filename,
-            char_count,
+    #[cfg(test)]
+    fn from_core_changes(
+        active_path: Option<&Path>,
+        changes: &HashMap<PathBuf, codex_protocol::protocol::FileChange>,
+    ) -> Self {
+        let active_change = active_path
+            .and_then(|active_path| {
+                changes.iter().find(|(path, change)| {
+                    path.as_path() == active_path
+                        || matches!(
+                            change,
+                            codex_protocol::protocol::FileChange::Update {
+                                move_path: Some(move_path),
+                                ..
+                            } if move_path == active_path
+                        )
+                })
+            })
+            .or_else(|| changes.iter().next());
+        Self {
+            filename: active_path
+                .map(filename_from_path)
+                .or_else(|| active_change.map(|(path, _)| filename_from_path(path))),
+            char_count: active_change
+                .map(|(_, change)| file_change_char_count(change))
+                .unwrap_or(0),
         }
     }
 }
@@ -829,7 +855,7 @@ pub(crate) struct ChatWidget {
     skills_initial_state: Option<HashMap<PathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
-    file_change_input_statuses: HashMap<String, PendingFileChangeInput>,
+    file_change_input_statuses: HashMap<String, FileChangeInputProgress>,
     active_file_change_input_id: Option<String>,
     turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
@@ -1500,27 +1526,27 @@ fn app_server_patch_changes_to_core(
         .collect()
 }
 
-fn patch_target_filename(line: &str) -> Option<String> {
-    const PREFIXES: [&str; 4] = [
-        "*** Add File:",
-        "*** Update File:",
-        "*** Delete File:",
-        "*** Move to:",
-    ];
-    let target = PREFIXES
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix))?
-        .trim();
-    if target.is_empty() {
-        return None;
-    }
+fn filename_from_path_str(path: &str) -> String {
+    filename_from_path(Path::new(path))
+}
 
-    let filename = Path::new(target)
-        .file_name()
+fn filename_from_path(path: &Path) -> String {
+    path.file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
-        .unwrap_or(target);
-    Some(filename.to_string())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+fn file_change_char_count(change: &codex_protocol::protocol::FileChange) -> usize {
+    match change {
+        codex_protocol::protocol::FileChange::Add { content }
+        | codex_protocol::protocol::FileChange::Delete { content } => content.chars().count(),
+        codex_protocol::protocol::FileChange::Update { unified_diff, .. } => {
+            unified_diff.chars().count()
+        }
+    }
 }
 
 fn app_server_collab_thread_id_to_core(thread_id: &str) -> Option<ThreadId> {
@@ -6434,11 +6460,15 @@ impl ChatWidget {
             ServerNotification::FileChangeOutputDelta(notification) => {
                 self.on_patch_apply_output_delta(notification.item_id, notification.delta);
             }
-            ServerNotification::FileChangeInputStarted(notification) => {
+            ServerNotification::FileChangeChangesStarted(notification) => {
                 self.on_apply_patch_input_started(notification.item_id);
             }
-            ServerNotification::FileChangeInputDelta(notification) => {
-                self.on_apply_patch_input_delta(notification.item_id, notification.delta);
+            ServerNotification::FileChangeChangesDelta(notification) => {
+                self.on_apply_patch_changes_delta(
+                    notification.item_id,
+                    notification.active_path.as_deref(),
+                    &notification.changes,
+                );
             }
             ServerNotification::TurnDiffUpdated(notification) => {
                 self.on_turn_diff(notification.diff)
@@ -6788,18 +6818,42 @@ impl ChatWidget {
 
     fn on_apply_patch_input_started(&mut self, call_id: String) {
         self.file_change_input_statuses
-            .insert(call_id.clone(), PendingFileChangeInput::default());
+            .insert(call_id.clone(), FileChangeInputProgress::default());
         self.active_file_change_input_id = Some(call_id);
         self.render_file_change_input_status();
     }
 
-    fn on_apply_patch_input_delta(&mut self, call_id: String, delta: String) {
+    fn on_apply_patch_changes_delta(
+        &mut self,
+        call_id: String,
+        active_path: Option<&str>,
+        changes: &[codex_app_server_protocol::FileUpdateChange],
+    ) {
         if !self.file_change_input_statuses.contains_key(&call_id) {
             self.on_apply_patch_input_started(call_id.clone());
         }
-        if let Some(status) = self.file_change_input_statuses.get_mut(&call_id) {
-            status.append_delta(&delta);
+        self.file_change_input_statuses.insert(
+            call_id.clone(),
+            FileChangeInputProgress::from_app_server_changes(active_path, changes),
+        );
+        self.active_file_change_input_id = Some(call_id);
+        self.render_file_change_input_status();
+    }
+
+    #[cfg(test)]
+    fn on_apply_patch_core_changes_delta(
+        &mut self,
+        call_id: String,
+        active_path: Option<&Path>,
+        changes: &HashMap<PathBuf, codex_protocol::protocol::FileChange>,
+    ) {
+        if !self.file_change_input_statuses.contains_key(&call_id) {
+            self.on_apply_patch_input_started(call_id.clone());
         }
+        self.file_change_input_statuses.insert(
+            call_id.clone(),
+            FileChangeInputProgress::from_core_changes(active_path, changes),
+        );
         self.active_file_change_input_id = Some(call_id);
         self.render_file_change_input_status();
     }
@@ -6827,13 +6881,12 @@ impl ChatWidget {
         else {
             return;
         };
-        let progress = status.progress();
-        let filename = progress.filename.as_deref().unwrap_or("file");
+        let filename = status.filename.as_deref().unwrap_or("file");
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
         self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-        self.set_status_header(format!("Writing {filename}. {} chars", progress.char_count));
+        self.set_status_header(format!("Writing {filename}. {} chars", status.char_count));
         self.request_redraw();
     }
 
@@ -7049,12 +7102,14 @@ impl ChatWidget {
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
-            EventMsg::ApplyPatchInputStarted(ApplyPatchInputStartedEvent { call_id }) => {
+            EventMsg::ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent { call_id }) => {
                 self.on_apply_patch_input_started(call_id)
             }
-            EventMsg::ApplyPatchInputDelta(ApplyPatchInputDeltaEvent { call_id, delta }) => {
-                self.on_apply_patch_input_delta(call_id, delta)
-            }
+            EventMsg::ApplyPatchChangesDelta(ApplyPatchChangesDeltaEvent {
+                call_id,
+                changes,
+                active_path,
+            }) => self.on_apply_patch_core_changes_delta(call_id, active_path.as_deref(), &changes),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),

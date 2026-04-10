@@ -168,8 +168,8 @@ async fn live_app_server_file_change_input_updates_writing_status() {
     );
 
     chat.handle_server_notification(
-        ServerNotification::FileChangeInputStarted(
-            codex_app_server_protocol::FileChangeInputStartedNotification {
+        ServerNotification::FileChangeChangesStarted(
+            codex_app_server_protocol::FileChangeChangesStartedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "call-1".to_string(),
@@ -180,30 +180,40 @@ async fn live_app_server_file_change_input_updates_writing_status() {
     assert_eq!(chat.current_status.header, "Writing file. 0 chars");
 
     chat.handle_server_notification(
-        ServerNotification::FileChangeInputDelta(
-            codex_app_server_protocol::FileChangeInputDeltaNotification {
+        ServerNotification::FileChangeChangesDelta(
+            codex_app_server_protocol::FileChangeChangesDeltaNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "call-1".to_string(),
-                delta: "*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+world".to_string(),
+                active_path: Some("src/hello.txt".to_string()),
+                changes: vec![FileUpdateChange {
+                    path: "src/hello.txt".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\nworld".to_string(),
+                }],
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.current_status.header, "Writing hello.txt. 11 chars");
+
+    chat.handle_server_notification(
+        ServerNotification::FileChangeChangesDelta(
+            codex_app_server_protocol::FileChangeChangesDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                active_path: Some("src/hello.txt".to_string()),
+                changes: vec![FileUpdateChange {
+                    path: "src/hello.txt".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\nworld!\n".to_string(),
+                }],
             },
         ),
         /*replay_kind*/ None,
     );
     assert_eq!(chat.current_status.header, "Writing hello.txt. 13 chars");
-
-    chat.handle_server_notification(
-        ServerNotification::FileChangeInputDelta(
-            codex_app_server_protocol::FileChangeInputDeltaNotification {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "call-1".to_string(),
-                delta: "!\n".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
-    assert_eq!(chat.current_status.header, "Writing hello.txt. 15 chars");
 
     chat.handle_server_notification(
         ServerNotification::ItemStarted(ItemStartedNotification {
@@ -340,21 +350,25 @@ fn app_server_patch_changes_to_core_preserves_diffs() {
 }
 
 #[test]
-fn pending_file_change_input_tracks_latest_patch_target() {
-    let mut status = PendingFileChangeInput::default();
-
-    status.append_delta("*** Begin Patch\n*** Add File: src/one.rs\n+one\n");
-    assert_eq!(
-        status.progress(),
-        FileChangeInputProgress {
-            filename: Some("one.rs".to_string()),
-            char_count: 5,
-        }
+fn file_change_input_progress_uses_active_change() {
+    let status = FileChangeInputProgress::from_app_server_changes(
+        Some("src/two.rs"),
+        &[
+            FileUpdateChange {
+                path: "src/one.rs".to_string(),
+                kind: PatchChangeKind::Add,
+                diff: "one\n".to_string(),
+            },
+            FileUpdateChange {
+                path: "src/two.rs".to_string(),
+                kind: PatchChangeKind::Update { move_path: None },
+                diff: "-two\n+two\n".to_string(),
+            },
+        ],
     );
 
-    status.append_delta("*** Update File: src/two.rs\n-two\n+two\n");
     assert_eq!(
-        status.progress(),
+        status,
         FileChangeInputProgress {
             filename: Some("two.rs".to_string()),
             char_count: 10,

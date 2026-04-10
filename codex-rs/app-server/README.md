@@ -988,8 +988,8 @@ There are additional item-specific events:
 
 #### fileChange
 
-- `item/fileChange/inputStarted` - emitted when the model starts generating provider tool input for `apply_patch`; `itemId` matches the subsequent `fileChange` item id.
-- `item/fileChange/inputDelta` - streams provider tool input before the patch is parsed or executed. For function-call models this is the JSON arguments stream; for custom-tool models this is the raw tool input. Concatenate `delta` values for the same `itemId` in order.
+- `item/fileChange/changesStarted` - emitted when the model starts generating an `apply_patch` file change; `itemId` matches the subsequent `fileChange` item id.
+- `item/fileChange/changesDelta` - streams structured file-change snapshots parsed from the model-generated patch before it is executed. Each notification includes `changes` and `activePath`; it does not expose the raw provider tool input.
 - `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
 
 ### Errors
