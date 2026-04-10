@@ -1931,6 +1931,13 @@
     }
   },
   "properties": {
+    "backwardsCursor": {
+      "description": "Opaque cursor to pass as `cursor` when reversing `sortDirection`. if None, the page was empty.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "data": {
       "items": {
         "$ref": "#/definitions/Thread"
