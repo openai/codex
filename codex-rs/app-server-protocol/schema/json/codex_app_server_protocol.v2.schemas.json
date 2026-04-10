@@ -12281,6 +12281,16 @@
               "type": "null"
             }
           ]
+        },
+        "sessionStartSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadStartSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "title": "ThreadStartParams",
@@ -12347,6 +12357,13 @@
       ],
       "title": "ThreadStartResponse",
       "type": "object"
+    },
+    "ThreadStartSource": {
+      "enum": [
+        "startup",
+        "clear"
+      ],
+      "type": "string"
     },
     "ThreadStartedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
