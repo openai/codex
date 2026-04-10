@@ -9,7 +9,7 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
-use crate::local_file_system::LocalFileSystem;
+use crate::local_file_system::DirectFileSystem;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
@@ -168,7 +168,7 @@ fn unexpected_response(expected: &str, actual: &str) -> JSONRPCErrorError {
 pub(crate) async fn run_direct_request(
     request: FsHelperRequest,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-    let file_system = LocalFileSystem;
+    let file_system = DirectFileSystem;
     match request {
         FsHelperRequest::ReadFile(params) => {
             let data = file_system

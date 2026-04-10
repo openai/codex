@@ -10,23 +10,234 @@ use tokio::io;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
+use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::FileMetadata;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::sandboxed_file_system::SandboxedFileSystem;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
-    LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem) });
+    LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem::unsandboxed()) });
 
 #[derive(Clone, Default)]
-pub(crate) struct LocalFileSystem;
+pub(crate) struct DirectFileSystem;
+
+#[derive(Clone, Default)]
+pub(crate) struct UnsandboxedFileSystem {
+    file_system: DirectFileSystem,
+}
+
+#[derive(Clone, Default)]
+pub struct LocalFileSystem {
+    unsandboxed: UnsandboxedFileSystem,
+    sandboxed: Option<SandboxedFileSystem>,
+}
+
+impl LocalFileSystem {
+    pub fn unsandboxed() -> Self {
+        Self {
+            unsandboxed: UnsandboxedFileSystem::default(),
+            sandboxed: None,
+        }
+    }
+
+    pub fn with_runtime_paths(runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self {
+            unsandboxed: UnsandboxedFileSystem::default(),
+            sandboxed: Some(SandboxedFileSystem::new(runtime_paths)),
+        }
+    }
+
+    fn sandboxed(&self) -> io::Result<&SandboxedFileSystem> {
+        self.sandboxed.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "sandboxed filesystem operations require configured runtime paths",
+            )
+        })
+    }
+
+    fn file_system_for<'a>(
+        &'a self,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> io::Result<(
+        &'a dyn ExecutorFileSystem,
+        Option<&'a FileSystemSandboxContext>,
+    )> {
+        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+            Ok((self.sandboxed()?, sandbox))
+        } else {
+            Ok((&self.unsandboxed, sandbox))
+        }
+    }
+}
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {
+    async fn read_file(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.read_file(path, sandbox).await
+    }
+
+    async fn write_file(
+        &self,
+        path: &AbsolutePathBuf,
+        contents: Vec<u8>,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.write_file(path, contents, sandbox).await
+    }
+
+    async fn create_directory(
+        &self,
+        path: &AbsolutePathBuf,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.create_directory(path, options, sandbox).await
+    }
+
+    async fn get_metadata(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.get_metadata(path, sandbox).await
+    }
+
+    async fn read_directory(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.read_directory(path, sandbox).await
+    }
+
+    async fn remove(
+        &self,
+        path: &AbsolutePathBuf,
+        options: RemoveOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.remove(path, options, sandbox).await
+    }
+
+    async fn copy(
+        &self,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
+        options: CopyOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system
+            .copy(source_path, destination_path, options, sandbox)
+            .await
+    }
+}
+
+#[async_trait]
+impl ExecutorFileSystem for UnsandboxedFileSystem {
+    async fn read_file(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system.read_file(path, /*sandbox*/ None).await
+    }
+
+    async fn write_file(
+        &self,
+        path: &AbsolutePathBuf,
+        contents: Vec<u8>,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .write_file(path, contents, /*sandbox*/ None)
+            .await
+    }
+
+    async fn create_directory(
+        &self,
+        path: &AbsolutePathBuf,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .create_directory(path, options, /*sandbox*/ None)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileMetadata> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system.get_metadata(path, /*sandbox*/ None).await
+    }
+
+    async fn read_directory(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .read_directory(path, /*sandbox*/ None)
+            .await
+    }
+
+    async fn remove(
+        &self,
+        path: &AbsolutePathBuf,
+        options: RemoveOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .remove(path, options, /*sandbox*/ None)
+            .await
+    }
+
+    async fn copy(
+        &self,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
+        options: CopyOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .copy(
+                source_path,
+                destination_path,
+                options,
+                /*sandbox*/ None,
+            )
+            .await
+    }
+}
+
+#[async_trait]
+impl ExecutorFileSystem for DirectFileSystem {
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,
@@ -186,7 +397,17 @@ fn reject_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -> io::Res
     if sandbox.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "sandboxed filesystem operations require SandboxedFileSystem",
+            "direct filesystem operations do not accept sandbox context",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_platform_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -> io::Result<()> {
+    if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sandboxed filesystem operations require configured runtime paths",
         ));
     }
     Ok(())
@@ -216,12 +437,8 @@ fn destination_is_same_or_descendant_of_source(
     destination: &Path,
 ) -> io::Result<bool> {
     let source = std::fs::canonicalize(source)?;
-    let destination = resolve_path_for_access_check(destination)?;
+    let destination = resolve_existing_path(destination)?;
     Ok(destination.starts_with(&source))
-}
-
-fn resolve_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
-    resolve_existing_path(path)
 }
 
 pub(crate) fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
@@ -299,7 +516,7 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     #[test]
-    fn resolve_path_for_access_check_rejects_symlink_parent_dotdot_escape() -> io::Result<()> {
+    fn resolve_existing_path_handles_symlink_parent_dotdot_escape() -> io::Result<()> {
         let temp_dir = tempfile::TempDir::new()?;
         let allowed_dir = temp_dir.path().join("allowed");
         let outside_dir = temp_dir.path().join("outside");
@@ -307,7 +524,7 @@ mod tests {
         std::fs::create_dir_all(&outside_dir)?;
         symlink(&outside_dir, allowed_dir.join("link"))?;
 
-        let resolved = resolve_path_for_access_check(
+        let resolved = resolve_existing_path(
             allowed_dir
                 .join("link")
                 .join("..")

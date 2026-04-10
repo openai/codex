@@ -115,6 +115,42 @@ Behavior notes:
 - Output is streamed asynchronously via `process/output`.
 - Exit is reported asynchronously via `process/exited`.
 
+### `process/read`
+
+Reads buffered output and terminal state for a managed process.
+
+Request params:
+
+```json
+{
+  "processId": "proc-1",
+  "afterSeq": null,
+  "maxBytes": 65536,
+  "waitMs": 1000
+}
+```
+
+Field definitions:
+
+- `processId`: managed process id returned by `process/start`.
+- `afterSeq`: optional sequence number cursor; when present, only newer chunks
+  are returned.
+- `maxBytes`: optional response byte budget.
+- `waitMs`: optional long-poll timeout in milliseconds.
+
+Response:
+
+```json
+{
+  "chunks": [],
+  "nextSeq": 1,
+  "exited": false,
+  "exitCode": null,
+  "closed": false,
+  "failure": null
+}
+```
+
 ### `process/write`
 
 Writes raw bytes to a running PTY-backed process stdin.
@@ -267,7 +303,7 @@ The crate exports:
 - `ExecServerError`
 - `ExecServerClientConnectOptions`
 - `RemoteExecServerConnectArgs`
-- protocol structs `InitializeParams` and `InitializeResponse`
+- protocol request/response structs for process and filesystem RPCs
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
 - `ExecServerRuntimePaths`
 - `run_main()` for embedding the websocket server

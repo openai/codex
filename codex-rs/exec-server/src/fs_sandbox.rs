@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::path::Path;
 
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -71,7 +69,7 @@ impl FileSystemSandboxRunner {
         cwd: &AbsolutePathBuf,
         sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
-        let helper = self.helper_program();
+        let helper = &self.runtime_paths.codex_self_exe;
         let sandbox_manager = SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
             file_system_policy,
@@ -85,10 +83,9 @@ impl FileSystemSandboxRunner {
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
             cwd: cwd.clone(),
             env: HashMap::new(),
-            additional_permissions: Some(self.helper_permissions(
-                helper.as_path(),
-                sandbox_context.additional_permissions.as_ref(),
-            )),
+            additional_permissions: Some(
+                self.helper_permissions(sandbox_context.additional_permissions.as_ref()),
+            ),
         };
         sandbox_manager
             .transform(SandboxTransformRequest {
@@ -108,41 +105,15 @@ impl FileSystemSandboxRunner {
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))
     }
 
-    fn helper_program(&self) -> &AbsolutePathBuf {
-        &self.runtime_paths.codex_self_exe
-    }
-
     fn helper_permissions(
         &self,
-        helper_path: &Path,
         additional_permissions: Option<&PermissionProfile>,
     ) -> PermissionProfile {
-        let mut profile = additional_permissions.cloned().unwrap_or_default();
-        let mut read = profile
-            .file_system
-            .as_ref()
-            .and_then(|permissions| permissions.read.clone())
-            .unwrap_or_default();
-
-        for path in [
-            Some(helper_path),
-            self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            for readable_path in readable_helper_paths(path) {
-                if !read.contains(&readable_path) {
-                    read.push(readable_path);
-                }
-            }
+        PermissionProfile {
+            network: None,
+            file_system: additional_permissions
+                .and_then(|permissions| permissions.file_system.clone()),
         }
-
-        let file_system = profile
-            .file_system
-            .get_or_insert_with(FileSystemPermissions::default);
-        file_system.read = Some(read);
-        profile
     }
 }
 
@@ -203,23 +174,6 @@ fn spawn_command(
     command.spawn().map_err(io_error)
 }
 
-fn readable_helper_paths(path: &Path) -> Vec<AbsolutePathBuf> {
-    let mut paths = Vec::new();
-    push_readable_path(&mut paths, path);
-    if let Ok(canonical) = std::fs::canonicalize(path) {
-        push_readable_path(&mut paths, canonical.as_path());
-    }
-    paths
-}
-
-fn push_readable_path(paths: &mut Vec<AbsolutePathBuf>, path: &Path) {
-    if let Ok(path) = AbsolutePathBuf::from_absolute_path(path)
-        && !paths.contains(&path)
-    {
-        paths.push(path);
-    }
-}
-
 fn sandbox_policy_with_helper_runtime_defaults(sandbox_policy: &SandboxPolicy) -> SandboxPolicy {
     let mut sandbox_policy = sandbox_policy.clone();
     match &mut sandbox_policy {
@@ -254,10 +208,17 @@ fn json_error(err: serde_json::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
+    use crate::ExecServerRuntimePaths;
+
+    use super::FileSystemSandboxRunner;
     use super::sandbox_policy_with_helper_runtime_defaults;
 
     #[test]
@@ -311,6 +272,49 @@ mod tests {
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }
+        );
+    }
+
+    #[test]
+    fn helper_permissions_strip_network_grants() {
+        let codex_self_exe = std::env::current_exe().expect("current exe");
+        let runtime_paths = ExecServerRuntimePaths::new(
+            codex_self_exe.clone(),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let runner = FileSystemSandboxRunner::new(runtime_paths);
+        let readable = AbsolutePathBuf::from_absolute_path(
+            codex_self_exe.parent().expect("current exe parent"),
+        )
+        .expect("absolute readable path");
+        let writable = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
+            .expect("absolute writable path");
+
+        let permissions = runner.helper_permissions(Some(&PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![readable.clone()]),
+                write: Some(vec![writable.clone()]),
+            }),
+        }));
+
+        assert_eq!(permissions.network, None);
+        assert_eq!(
+            permissions
+                .file_system
+                .as_ref()
+                .and_then(|fs| fs.write.clone()),
+            Some(vec![writable])
+        );
+        assert_eq!(
+            permissions
+                .file_system
+                .as_ref()
+                .and_then(|fs| fs.read.clone()),
+            Some(vec![readable])
         );
     }
 }

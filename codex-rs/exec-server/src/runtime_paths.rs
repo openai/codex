@@ -13,6 +13,19 @@ pub struct ExecServerRuntimePaths {
 }
 
 impl ExecServerRuntimePaths {
+    pub fn from_optional_paths(
+        codex_self_exe: Option<PathBuf>,
+        codex_linux_sandbox_exe: Option<PathBuf>,
+    ) -> std::io::Result<Self> {
+        let codex_self_exe = codex_self_exe.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Codex executable path is not configured",
+            )
+        })?;
+        Self::new(codex_self_exe, codex_linux_sandbox_exe)
+    }
+
     pub fn new(
         codex_self_exe: PathBuf,
         codex_linux_sandbox_exe: Option<PathBuf>,

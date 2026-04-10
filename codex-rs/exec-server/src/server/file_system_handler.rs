@@ -9,6 +9,7 @@ use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
+use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
@@ -28,17 +29,16 @@ use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
-use crate::sandboxed_file_system::SandboxedFileSystem;
 
 #[derive(Clone)]
 pub(crate) struct FileSystemHandler {
-    file_system: SandboxedFileSystem,
+    file_system: LocalFileSystem,
 }
 
 impl FileSystemHandler {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            file_system: SandboxedFileSystem::new(runtime_paths),
+            file_system: LocalFileSystem::with_runtime_paths(runtime_paths),
         }
     }
 
@@ -179,6 +179,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::FileSystemSandboxContext;
     use crate::protocol::FsReadFileParams;
     use crate::protocol::FsWriteFileParams;
 

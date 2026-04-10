@@ -36,6 +36,7 @@ pub use file_system::RemoveOptions;
 pub use fs_helper::CODEX_FS_HELPER_ARG1;
 pub use fs_helper_main::main as run_fs_helper_main;
 pub use local_file_system::LOCAL_FS;
+pub use local_file_system::LocalFileSystem;
 pub use process::ExecBackend;
 pub use process::ExecProcess;
 pub use process::StartedExecProcess;

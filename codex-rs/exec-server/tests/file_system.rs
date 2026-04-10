@@ -14,9 +14,9 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::LocalFileSystem;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
-use codex_exec_server::SandboxedFileSystem;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -45,7 +45,7 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
         let runtime_paths =
             ExecServerRuntimePaths::new(codex, /*codex_linux_sandbox_exe*/ None)?;
         Ok(FileSystemContext {
-            file_system: Arc::new(SandboxedFileSystem::new(runtime_paths)),
+            file_system: Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths)),
             _server: None,
         })
     }

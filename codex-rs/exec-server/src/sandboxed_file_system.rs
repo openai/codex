@@ -17,7 +17,6 @@ use crate::RemoveOptions;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_sandbox::FileSystemSandboxRunner;
-use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
@@ -28,14 +27,12 @@ use crate::protocol::FsWriteFileParams;
 
 #[derive(Clone)]
 pub struct SandboxedFileSystem {
-    file_system: LocalFileSystem,
     sandbox_runner: FileSystemSandboxRunner,
 }
 
 impl SandboxedFileSystem {
     pub fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            file_system: LocalFileSystem,
             sandbox_runner: FileSystemSandboxRunner::new(runtime_paths),
         }
     }
@@ -59,15 +56,13 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self.file_system.read_file(path, /*sandbox*/ None).await;
-        };
+        let sandbox = require_platform_sandbox(sandbox)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadFile(FsReadFileParams {
                     path: path.clone(),
-                    sandbox: Some(sandbox.clone()),
+                    sandbox: None,
                 }),
             )
             .await?
@@ -87,18 +82,13 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self
-                .file_system
-                .write_file(path, contents, /*sandbox*/ None)
-                .await;
-        };
+        let sandbox = require_platform_sandbox(sandbox)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::WriteFile(FsWriteFileParams {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
-                sandbox: Some(sandbox.clone()),
+                sandbox: None,
             }),
         )
         .await?
@@ -113,18 +103,13 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self
-                .file_system
-                .create_directory(path, options, /*sandbox*/ None)
-                .await;
-        };
+        let sandbox = require_platform_sandbox(sandbox)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
-                sandbox: Some(sandbox.clone()),
+                sandbox: None,
             }),
         )
         .await?
@@ -138,15 +123,13 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self.file_system.get_metadata(path, /*sandbox*/ None).await;
-        };
+        let sandbox = require_platform_sandbox(sandbox)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::GetMetadata(FsGetMetadataParams {
                     path: path.clone(),
-                    sandbox: Some(sandbox.clone()),
+                    sandbox: None,
                 }),
             )
             .await?
@@ -165,18 +148,13 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self
-                .file_system
-                .read_directory(path, /*sandbox*/ None)
-                .await;
-        };
+        let sandbox = require_platform_sandbox(sandbox)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadDirectory(FsReadDirectoryParams {
                     path: path.clone(),
-                    sandbox: Some(sandbox.clone()),
+                    sandbox: None,
                 }),
             )
             .await?
@@ -199,19 +177,14 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         remove_options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self
-                .file_system
-                .remove(path, remove_options, /*sandbox*/ None)
-                .await;
-        };
+        let sandbox = require_platform_sandbox(sandbox)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Remove(FsRemoveParams {
                 path: path.clone(),
                 recursive: Some(remove_options.recursive),
                 force: Some(remove_options.force),
-                sandbox: Some(sandbox.clone()),
+                sandbox: None,
             }),
         )
         .await?
@@ -227,24 +200,14 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let Some(sandbox) = sandbox.filter(|sandbox| sandbox.should_run_in_sandbox()) else {
-            return self
-                .file_system
-                .copy(
-                    source_path,
-                    destination_path,
-                    options,
-                    /*sandbox*/ None,
-                )
-                .await;
-        };
+        let sandbox = require_platform_sandbox(sandbox)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Copy(FsCopyParams {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
-                sandbox: Some(sandbox.clone()),
+                sandbox: None,
             }),
         )
         .await?
@@ -252,6 +215,19 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         .map_err(map_sandbox_error)?;
         Ok(())
     }
+}
+
+fn require_platform_sandbox(
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> FileSystemResult<&FileSystemSandboxContext> {
+    sandbox
+        .filter(|sandbox| sandbox.should_run_in_sandbox())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "sandboxed filesystem operations require ReadOnly or WorkspaceWrite sandbox policy",
+            )
+        })
 }
 
 fn map_sandbox_error(error: JSONRPCErrorError) -> io::Error {
