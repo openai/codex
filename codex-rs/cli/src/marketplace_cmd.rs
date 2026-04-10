@@ -2,10 +2,11 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
+use codex_config::MarketplaceConfigUpdate;
+use codex_config::record_user_marketplace;
 use codex_core::config::find_codex_home;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::marketplace_install_root;
-use codex_core::plugins::record_installed_marketplace_root;
 use codex_core::plugins::validate_marketplace_root;
 use codex_core::plugins::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
@@ -13,6 +14,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 mod metadata;
 
@@ -53,12 +56,10 @@ struct AddMarketplaceArgs {
 pub(super) enum MarketplaceSource {
     LocalDirectory {
         path: PathBuf,
-        source_id: String,
     },
     Git {
         url: String,
         ref_name: Option<String>,
-        source_id: String,
     },
 }
 
@@ -105,15 +106,18 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     })?;
     let install_metadata =
         metadata::MarketplaceInstallMetadata::from_source(&source, &sparse_paths);
-    if let Some(existing_root) =
-        metadata::installed_marketplace_root_for_source(&install_root, &install_metadata.source_id)?
-    {
+    if let Some(existing_root) = metadata::installed_marketplace_root_for_source(
+        &codex_home,
+        &install_root,
+        &install_metadata,
+    )? {
         let marketplace_name = validate_marketplace_root(&existing_root).with_context(|| {
             format!(
                 "failed to validate installed marketplace at {}",
                 existing_root.display()
             )
         })?;
+        record_added_marketplace(&codex_home, &marketplace_name, &install_metadata)?;
         println!(
             "Marketplace `{marketplace_name}` is already added from {}.",
             source.display()
@@ -141,7 +145,7 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     let staged_root = staged_dir.path().to_path_buf();
 
     match &source {
-        MarketplaceSource::LocalDirectory { path, .. } => {
+        MarketplaceSource::LocalDirectory { path } => {
             copy_dir_recursive(path, &staged_root).with_context(|| {
                 format!(
                     "failed to copy marketplace source {} into {}",
@@ -150,7 +154,7 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
                 )
             })?;
         }
-        MarketplaceSource::Git { url, ref_name, .. } => {
+        MarketplaceSource::Git { url, ref_name } => {
             clone_git_source(url, ref_name.as_deref(), &sparse_paths, &staged_root)?;
         }
     }
@@ -163,7 +167,6 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
             source.display()
         );
     }
-    metadata::write_marketplace_source_metadata(&staged_root, &install_metadata)?;
     let destination = install_root.join(safe_marketplace_dir_name(&marketplace_name)?);
     ensure_marketplace_destination_is_inside_install_root(&install_root, &destination)?;
     if destination.exists() {
@@ -174,8 +177,7 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     }
     replace_marketplace_root(&staged_root, &destination)
         .with_context(|| format!("failed to install marketplace at {}", destination.display()))?;
-    record_installed_marketplace_root(&codex_home, &marketplace_name, &destination)
-        .with_context(|| format!("failed to record marketplace `{marketplace_name}`"))?;
+    record_added_marketplace(&codex_home, &marketplace_name, &install_metadata)?;
 
     println!(
         "Added marketplace `{marketplace_name}` from {}.",
@@ -183,6 +185,26 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     );
     println!("Installed marketplace root: {}", destination.display());
 
+    Ok(())
+}
+
+fn record_added_marketplace(
+    codex_home: &Path,
+    marketplace_name: &str,
+    install_metadata: &metadata::MarketplaceInstallMetadata,
+) -> Result<()> {
+    let source = install_metadata.config_source();
+    let last_updated = utc_timestamp_now()?;
+    let update = MarketplaceConfigUpdate {
+        last_updated: &last_updated,
+        source_type: install_metadata.config_source_type(),
+        source: &source,
+        ref_name: install_metadata.ref_name(),
+        sparse_paths: install_metadata.sparse_paths(),
+    };
+    record_user_marketplace(codex_home, marketplace_name, &update).with_context(|| {
+        format!("failed to add marketplace `{marketplace_name}` to user config.toml")
+    })?;
     Ok(())
 }
 
@@ -243,10 +265,7 @@ fn parse_marketplace_source(
         let path = path
             .canonicalize()
             .with_context(|| format!("failed to resolve {}", path.display()))?;
-        return Ok(MarketplaceSource::LocalDirectory {
-            source_id: format!("directory:{}", path.display()),
-            path,
-        });
+        return Ok(MarketplaceSource::LocalDirectory { path });
     }
 
     let (base_source, parsed_ref) = split_source_ref(&source);
@@ -254,20 +273,12 @@ fn parse_marketplace_source(
 
     if is_ssh_git_url(&base_source) || is_http_git_url(&base_source) {
         let url = normalize_git_url(&base_source);
-        return Ok(MarketplaceSource::Git {
-            source_id: git_source_id("git", &url, ref_name.as_deref()),
-            url,
-            ref_name,
-        });
+        return Ok(MarketplaceSource::Git { url, ref_name });
     }
 
     if looks_like_github_shorthand(&base_source) {
         let url = format!("https://github.com/{base_source}.git");
-        return Ok(MarketplaceSource::Git {
-            source_id: git_source_id("github", &base_source, ref_name.as_deref()),
-            url,
-            ref_name,
-        });
+        return Ok(MarketplaceSource::Git { url, ref_name });
     }
 
     if base_source.starts_with("http://") || base_source.starts_with("https://") {
@@ -277,14 +288,6 @@ fn parse_marketplace_source(
     }
 
     bail!("invalid marketplace source format: {source}");
-}
-
-fn git_source_id(kind: &str, source: &str, ref_name: Option<&str>) -> String {
-    if let Some(ref_name) = ref_name {
-        format!("{kind}:{source}#{ref_name}")
-    } else {
-        format!("{kind}:{source}")
-    }
 }
 
 fn split_source_ref(source: &str) -> (String, Option<String>) {
@@ -521,17 +524,44 @@ fn ensure_marketplace_destination_is_inside_install_root(
     Ok(())
 }
 
-impl MarketplaceSource {
-    fn source_id(&self) -> &str {
-        match self {
-            Self::LocalDirectory { source_id, .. } | Self::Git { source_id, .. } => source_id,
-        }
-    }
+fn utc_timestamp_now() -> Result<String> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?;
+    Ok(format_utc_timestamp(duration.as_secs() as i64))
+}
 
+fn format_utc_timestamp(seconds_since_epoch: i64) -> String {
+    const SECONDS_PER_DAY: i64 = 86_400;
+    let days = seconds_since_epoch.div_euclid(SECONDS_PER_DAY);
+    let seconds_of_day = seconds_since_epoch.rem_euclid(SECONDS_PER_DAY);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let days = days_since_epoch + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    (year, month, day)
+}
+
+impl MarketplaceSource {
     fn display(&self) -> String {
         match self {
-            Self::LocalDirectory { path, .. } => path.display().to_string(),
-            Self::Git { url, ref_name, .. } => {
+            Self::LocalDirectory { path } => path.display().to_string(),
+            Self::Git { url, ref_name } => {
                 if let Some(ref_name) = ref_name {
                     format!("{url}#{ref_name}")
                 } else {
@@ -555,7 +585,6 @@ mod tests {
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: Some("main".to_string()),
-                source_id: "github:owner/repo#main".to_string(),
             }
         );
     }
@@ -571,7 +600,6 @@ mod tests {
             MarketplaceSource::Git {
                 url: "https://example.com/team/repo.git".to_string(),
                 ref_name: Some("v1".to_string()),
-                source_id: "git:https://example.com/team/repo.git#v1".to_string(),
             }
         );
     }
@@ -587,13 +615,12 @@ mod tests {
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: Some("release".to_string()),
-                source_id: "github:owner/repo#release".to_string(),
             }
         );
     }
 
     #[test]
-    fn github_shorthand_and_git_url_have_different_source_ids() {
+    fn github_shorthand_and_git_url_normalize_to_same_source() {
         let shorthand = parse_marketplace_source("owner/repo", /* explicit_ref */ None).unwrap();
         let git_url = parse_marketplace_source(
             "https://github.com/owner/repo.git",
@@ -601,23 +628,20 @@ mod tests {
         )
         .unwrap();
 
-        assert_ne!(shorthand.source_id(), git_url.source_id());
+        assert_eq!(shorthand, git_url);
         assert_eq!(
             shorthand,
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: None,
-                source_id: "github:owner/repo".to_string(),
             }
         );
-        assert_eq!(
-            git_url,
-            MarketplaceSource::Git {
-                url: "https://github.com/owner/repo.git".to_string(),
-                ref_name: None,
-                source_id: "git:https://github.com/owner/repo.git".to_string(),
-            }
-        );
+    }
+
+    #[test]
+    fn utc_timestamp_formats_unix_epoch_as_rfc3339_utc() {
+        assert_eq!(format_utc_timestamp(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_utc_timestamp(1_775_779_200), "2026-04-10T00:00:00Z");
     }
 
     #[test]

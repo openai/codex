@@ -47,7 +47,6 @@ pub use manager::load_plugin_apps;
 pub use manager::load_plugin_mcp_servers;
 pub use manager::marketplace_install_root;
 pub use manager::plugin_telemetry_metadata_from_root;
-pub use manager::record_installed_marketplace_root;
 pub use manifest::PluginManifestInterface;
 pub(crate) use manifest::PluginManifestPaths;
 pub(crate) use manifest::load_plugin_manifest;

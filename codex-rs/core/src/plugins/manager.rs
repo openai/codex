@@ -54,11 +54,11 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_plugin::validate_plugin_segment;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -81,7 +81,6 @@ const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
-const KNOWN_MARKETPLACES_FILE: &str = "known_marketplaces.json";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -877,7 +876,8 @@ impl PluginsManager {
         }
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let marketplace_outcome = list_marketplaces(&self.marketplace_roots(additional_roots))?;
+        let marketplace_outcome =
+            list_marketplaces(&self.marketplace_roots(config, additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1221,11 +1221,18 @@ impl PluginsManager {
         (installed_plugins, enabled_plugins)
     }
 
-    fn marketplace_roots(&self, additional_roots: &[AbsolutePathBuf]) -> Vec<AbsolutePathBuf> {
+    fn marketplace_roots(
+        &self,
+        config: &Config,
+        additional_roots: &[AbsolutePathBuf],
+    ) -> Vec<AbsolutePathBuf> {
         // Treat the curated catalog as an extra marketplace root so plugin listing can surface it
         // without requiring every caller to know where it is stored.
         let mut roots = additional_roots.to_vec();
-        roots.extend(installed_marketplace_roots(self.codex_home.as_path()));
+        roots.extend(installed_marketplace_roots_from_config(
+            config,
+            self.codex_home.as_path(),
+        ));
         let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
         if curated_repo_root.is_dir()
             && let Ok(curated_repo_root) = AbsolutePathBuf::try_from(curated_repo_root)
@@ -1242,135 +1249,48 @@ pub fn marketplace_install_root(codex_home: &Path) -> PathBuf {
     codex_home.join(INSTALLED_MARKETPLACES_DIR)
 }
 
-pub fn record_installed_marketplace_root(
+fn installed_marketplace_roots_from_config(
+    config: &Config,
     codex_home: &Path,
-    marketplace_name: &str,
-    install_location: &Path,
-) -> std::io::Result<()> {
-    let registry_path = marketplace_registry_path(codex_home);
-    let mut registry = if registry_path.is_file() {
-        read_marketplace_registry(&registry_path)?
-    } else {
-        KnownMarketplacesRegistry::default()
-    };
-
-    registry
-        .marketplaces
-        .retain(|marketplace| marketplace.name != marketplace_name);
-    registry.marketplaces.push(KnownMarketplaceRegistryEntry {
-        name: marketplace_name.to_string(),
-        install_location: install_location.to_path_buf(),
-    });
-    registry
-        .marketplaces
-        .sort_unstable_by(|left, right| left.name.cmp(&right.name));
-    write_marketplace_registry(&registry_path, &registry)
-}
-
-fn installed_marketplace_roots(codex_home: &Path) -> Vec<AbsolutePathBuf> {
-    let registry_path = marketplace_registry_path(codex_home);
-    if registry_path.is_file() {
-        match installed_marketplace_roots_from_registry(&registry_path) {
-            Ok(roots) => return roots,
-            Err(err) => {
-                warn!(
-                    path = %registry_path.display(),
-                    error = %err,
-                    "failed to read installed marketplace registry; falling back to installed marketplace directory scan"
-                );
-            }
-        }
-    }
-
-    let install_root = marketplace_install_root(codex_home);
-    let Ok(entries) = fs::read_dir(&install_root) else {
+) -> Vec<AbsolutePathBuf> {
+    let Some(user_layer) = config.config_layer_stack.get_user_layer() else {
         return Vec::new();
     };
-
-    let mut roots = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            let file_type = entry.file_type().ok()?;
-            (file_type.is_dir() && path.join(".agents/plugins/marketplace.json").is_file())
+    let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
+        return Vec::new();
+    };
+    let Some(marketplaces) = marketplaces_value.as_table() else {
+        warn!("invalid marketplaces config: expected table");
+        return Vec::new();
+    };
+    let default_install_root = marketplace_install_root(codex_home);
+    let mut roots = marketplaces
+        .iter()
+        .filter_map(|(marketplace_name, marketplace)| {
+            if !marketplace.is_table() {
+                warn!(
+                    marketplace_name,
+                    "ignoring invalid configured marketplace entry"
+                );
+                return None;
+            }
+            if let Err(err) = validate_plugin_segment(marketplace_name, "marketplace name") {
+                warn!(
+                    marketplace_name,
+                    error = %err,
+                    "ignoring invalid configured marketplace name"
+                );
+                return None;
+            }
+            let path = default_install_root.join(marketplace_name);
+            path.join(".agents/plugins/marketplace.json")
+                .is_file()
                 .then_some(path)
         })
         .filter_map(|path| AbsolutePathBuf::try_from(path).ok())
         .collect::<Vec<_>>();
     roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
     roots
-}
-
-fn marketplace_registry_path(codex_home: &Path) -> PathBuf {
-    codex_home.join(".tmp").join(KNOWN_MARKETPLACES_FILE)
-}
-
-fn installed_marketplace_roots_from_registry(
-    registry_path: &Path,
-) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    let registry = read_marketplace_registry(registry_path)?;
-
-    let mut roots = registry
-        .marketplaces
-        .into_iter()
-        .filter_map(|marketplace| {
-            let path = marketplace.install_location;
-            if path.join(".agents/plugins/marketplace.json").is_file() {
-                AbsolutePathBuf::try_from(path).ok()
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
-    Ok(roots)
-}
-
-fn read_marketplace_registry(path: &Path) -> std::io::Result<KnownMarketplacesRegistry> {
-    let contents = fs::read_to_string(path)?;
-    serde_json::from_str(&contents).map_err(|err| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "failed to parse marketplace registry {}: {err}",
-                path.display()
-            ),
-        )
-    })
-}
-
-fn write_marketplace_registry(
-    path: &Path,
-    registry: &KnownMarketplacesRegistry,
-) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let contents = serde_json::to_vec_pretty(registry).map_err(std::io::Error::other)?;
-    fs::write(path, contents)
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct KnownMarketplacesRegistry {
-    version: u32,
-    marketplaces: Vec<KnownMarketplaceRegistryEntry>,
-}
-
-impl Default for KnownMarketplacesRegistry {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            marketplaces: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct KnownMarketplaceRegistryEntry {
-    name: String,
-    install_location: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::plugins::marketplace_install_root;
 use codex_core::plugins::validate_marketplace_root;
@@ -63,13 +64,18 @@ async fn marketplace_add_local_directory_installs_valid_marketplace_root() -> Re
 
     let installed_root = marketplace_install_root(codex_home.path()).join("debug");
     assert_eq!(validate_marketplace_root(&installed_root)?, "debug");
-    let registry = std::fs::read_to_string(codex_home.path().join(".tmp/known_marketplaces.json"))?;
-    assert!(registry.contains(r#""name": "debug""#));
-    assert!(registry.contains(r#""installLocation""#));
+    assert_marketplace_config(codex_home.path(), "debug", &source.path().canonicalize()?)?;
     assert!(
         installed_root
             .join("plugins/sample/.codex-plugin/plugin.json")
             .is_file()
+    );
+    assert!(!installed_root.join(".codex-marketplace-source").exists());
+    assert!(
+        !codex_home
+            .path()
+            .join(".tmp/known_marketplaces.json")
+            .exists()
     );
 
     Ok(())
@@ -132,6 +138,14 @@ async fn marketplace_add_same_source_is_idempotent() -> Result<()> {
         std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt"))?,
         "first install"
     );
+    assert_marketplace_config(codex_home.path(), "debug", &source.path().canonicalize()?)?;
+    assert!(!installed_root.join(".codex-marketplace-source").exists());
+    assert!(
+        !codex_home
+            .path()
+            .join(".tmp/known_marketplaces.json")
+            .exists()
+    );
 
     Ok(())
 }
@@ -163,6 +177,45 @@ async fn marketplace_add_rejects_same_name_from_different_source() -> Result<()>
         std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt"))?,
         "first install"
     );
+
+    Ok(())
+}
+
+fn assert_marketplace_config(
+    codex_home: &Path,
+    marketplace_name: &str,
+    source: &Path,
+) -> Result<()> {
+    let config = std::fs::read_to_string(codex_home.join("config.toml"))?;
+    let config: toml::Value = toml::from_str(&config)?;
+    let marketplace = config
+        .get("marketplaces")
+        .and_then(|marketplaces| marketplaces.get(marketplace_name))
+        .context("marketplace config should be written")?;
+    let expected_source = source.to_string_lossy().to_string();
+
+    assert!(
+        marketplace
+            .get("last_updated")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|last_updated| {
+                last_updated.len() == "2026-04-10T12:34:56Z".len() && last_updated.ends_with('Z')
+            }),
+        "last_updated should be an RFC3339-like UTC timestamp"
+    );
+    assert_eq!(
+        marketplace.get("source_type").and_then(toml::Value::as_str),
+        Some("directory")
+    );
+    assert_eq!(
+        marketplace.get("source").and_then(toml::Value::as_str),
+        Some(expected_source.as_str())
+    );
+    assert_eq!(marketplace.get("ref").and_then(toml::Value::as_str), None);
+    assert!(marketplace.get("sparse_paths").is_none());
+    assert!(marketplace.get("source_id").is_none());
+    assert!(marketplace.get("install_root").is_none());
+    assert!(marketplace.get("install_location").is_none());
 
     Ok(())
 }

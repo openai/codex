@@ -1514,6 +1514,11 @@ async fn list_marketplaces_includes_installed_marketplace_roots() {
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
+
+[marketplaces.debug]
+last_updated = "2026-04-10T12:34:56Z"
+source_type = "directory"
+source = "/tmp/debug"
 "#,
     );
     fs::create_dir_all(marketplace_root.join(".agents/plugins")).unwrap();
@@ -1539,9 +1544,6 @@ plugins = true
         r#"{"name":"sample"}"#,
     )
     .unwrap();
-    record_installed_marketplace_root(tmp.path(), "debug", &marketplace_root)
-        .expect("record installed marketplace");
-
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
         .list_marketplaces_for_config(&config, &[])
@@ -1569,11 +1571,68 @@ plugins = true
 }
 
 #[tokio::test]
-async fn list_marketplaces_scans_installed_roots_when_registry_is_malformed() {
+async fn list_marketplaces_uses_config_when_known_registry_is_malformed() {
     let tmp = tempfile::tempdir().unwrap();
     let marketplace_root = marketplace_install_root(tmp.path()).join("debug");
     let plugin_root = marketplace_root.join("plugins/sample");
     let registry_path = tmp.path().join(".tmp/known_marketplaces.json");
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[marketplaces.debug]
+last_updated = "2026-04-10T12:34:56Z"
+source_type = "directory"
+source = "/tmp/debug"
+"#,
+    );
+    fs::create_dir_all(marketplace_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    fs::write(registry_path, "{not valid json").unwrap();
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[])
+        .unwrap()
+        .marketplaces;
+
+    let marketplace = marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "debug")
+        .expect("configured marketplace should be discovered");
+
+    assert_eq!(marketplace.plugins[0].id, "sample@debug");
+}
+
+#[tokio::test]
+async fn list_marketplaces_ignores_installed_roots_missing_from_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marketplace_root = marketplace_install_root(tmp.path()).join("debug");
+    let plugin_root = marketplace_root.join("plugins/sample");
 
     write_file(
         &tmp.path().join(CONFIG_TOML_FILE),
@@ -1604,20 +1663,13 @@ plugins = true
         r#"{"name":"sample"}"#,
     )
     .unwrap();
-    fs::write(registry_path, "{not valid json").unwrap();
-
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
         .list_marketplaces_for_config(&config, &[])
         .unwrap()
         .marketplaces;
 
-    let marketplace = marketplaces
-        .into_iter()
-        .find(|marketplace| marketplace.name == "debug")
-        .expect("installed marketplace should be discovered by disk scan fallback");
-
-    assert_eq!(marketplace.plugins[0].id, "sample@debug");
+    assert!(marketplaces.is_empty());
 }
 
 #[tokio::test]
