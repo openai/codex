@@ -150,7 +150,7 @@ enum Subcommand {
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
 
-    /// [EXPERIMENTAL] Run the standalone exec-server binary.
+    /// [EXPERIMENTAL] Run the standalone exec-server service.
     ExecServer(ExecServerCommand),
 
     /// Inspect feature flags.
@@ -1014,7 +1014,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd).await?;
+            run_exec_server_command(cmd, &arg0_paths).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1086,8 +1086,15 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_exec_server_command(cmd: ExecServerCommand) -> anyhow::Result<()> {
-    codex_exec_server::run_main_with_listen_url(&cmd.listen)
+async fn run_exec_server_command(
+    cmd: ExecServerCommand,
+    arg0_paths: &Arg0DispatchPaths,
+) -> anyhow::Result<()> {
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths {
+        codex_fs_exe: arg0_paths.codex_fs_exe.clone(),
+        codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+    };
+    codex_exec_server::run_main_with_listen_url_and_paths(&cmd.listen, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
 }

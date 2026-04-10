@@ -4,6 +4,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_exec_server::CODEX_FS_HELPER_ARG0;
+#[cfg(windows)]
+use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
@@ -25,6 +28,9 @@ pub struct Arg0DispatchPaths {
     /// a test harness, where `current_exe()` can point at the harness binary
     /// instead of the real Codex CLI.
     pub codex_self_exe: Option<PathBuf>,
+    /// Path to the `codex-fs` helper alias used by exec-server filesystem
+    /// sandboxing.
+    pub codex_fs_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
 }
@@ -88,11 +94,20 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
         // Safety: [`run_main`] never returns.
         codex_linux_sandbox::run_main();
+    } else if exe_name == CODEX_FS_HELPER_ARG0 {
+        codex_exec_server::run_fs_helper_main();
     } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
         codex_apply_patch::main();
     }
 
     let argv1 = args.next().unwrap_or_default();
+    #[cfg(windows)]
+    if argv1 == CODEX_FS_HELPER_ARG1 {
+        // Windows batch aliases cannot control the child process argv0, so
+        // codex-fs.bat uses this dispatch flag. The helper payload still
+        // travels over stdin/stdout.
+        codex_exec_server::run_fs_helper_main();
+    }
     if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {
@@ -150,16 +165,14 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// us to simulate deploying multiple executables as a single binary on Mac and
 /// Linux (but not Windows).
 ///
-/// When the current executable is invoked through the hard-link or alias named
-/// `codex-linux-sandbox` we *directly* execute
-/// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
+/// When the current executable is invoked through a helper alias, such as
+/// `codex-linux-sandbox` or `codex-fs`, we directly execute that helper's
+/// entrypoint. Otherwise we:
 ///
 /// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
-/// 3.  Capture the current executable path and derive the
-///     `codex-linux-sandbox` helper path (falling back to the current
-///     executable if needed) so children can re-invoke the sandbox when running
-///     on Linux.
+/// 3.  Capture the current executable path and derive the helper paths needed
+///     by child processes.
 /// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
 ///     error. Note that `main_fn` receives [`Arg0DispatchPaths`], which
 ///     contains the helper executable paths needed to construct
@@ -184,6 +197,9 @@ where
         let current_exe = std::env::current_exe().ok();
         let paths = Arg0DispatchPaths {
             codex_self_exe: current_exe.clone(),
+            codex_fs_exe: path_entry_guard
+                .as_ref()
+                .and_then(|path_entry| path_entry.paths().codex_fs_exe.clone()),
             codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
                 linux_sandbox_exe_path(path_entry_guard.as_ref(), current_exe)
             } else {
@@ -247,14 +263,14 @@ where
 
 /// Creates a temporary directory with either:
 ///
-/// - UNIX: `apply_patch` symlink to the current executable
-/// - WINDOWS: `apply_patch.bat` batch script to invoke the current executable
-///   with the "secret" --codex-run-as-apply-patch flag.
+/// - UNIX: helper symlinks to the current executable
+/// - WINDOWS: helper batch scripts to invoke the current executable with each
+///   helper's hidden dispatch flag.
 ///
 /// This temporary directory is prepended to the PATH environment variable so
-/// that `apply_patch` can be on the PATH without requiring the user to
-/// install a separate `apply_patch` executable, simplifying the deployment of
-/// Codex CLI.
+/// that helper commands like `apply_patch` and `codex-fs` can be on the PATH
+/// without requiring the user to install separate executables, simplifying the
+/// deployment of Codex CLI.
 /// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
@@ -306,16 +322,16 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         .open(&lock_path)?;
     lock_file.try_lock()?;
 
+    let exe = std::env::current_exe()?;
     for filename in &[
         APPLY_PATCH_ARG0,
         MISSPELLED_APPLY_PATCH_ARG0,
+        CODEX_FS_HELPER_ARG0,
         #[cfg(target_os = "linux")]
         CODEX_LINUX_SANDBOX_ARG0,
         #[cfg(unix)]
         EXECVE_WRAPPER_ARG0,
     ] {
-        let exe = std::env::current_exe()?;
-
         #[cfg(unix)]
         {
             let link = path.join(filename);
@@ -324,12 +340,17 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
 
         #[cfg(windows)]
         {
+            let arg1 = if *filename == CODEX_FS_HELPER_ARG0 {
+                CODEX_FS_HELPER_ARG1
+            } else {
+                CODEX_CORE_APPLY_PATCH_ARG1
+            };
             let batch_script = path.join(format!("{filename}.bat"));
             std::fs::write(
                 &batch_script,
                 format!(
                     r#"@echo off
-"{}" {CODEX_CORE_APPLY_PATCH_ARG1} %*
+"{}" {arg1} %*
 "#,
                     exe.display()
                 ),
@@ -360,7 +381,17 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
     }
 
     let paths = Arg0DispatchPaths {
-        codex_self_exe: std::env::current_exe().ok(),
+        codex_self_exe: Some(exe),
+        codex_fs_exe: {
+            #[cfg(windows)]
+            {
+                Some(path.join(format!("{CODEX_FS_HELPER_ARG0}.bat")))
+            }
+            #[cfg(not(windows))]
+            {
+                Some(path.join(CODEX_FS_HELPER_ARG0))
+            }
+        },
         codex_linux_sandbox_exe: {
             #[cfg(target_os = "linux")]
             {
@@ -463,6 +494,7 @@ mod tests {
             lock_file,
             Arg0DispatchPaths {
                 codex_self_exe: Some(PathBuf::from("/usr/bin/codex")),
+                codex_fs_exe: None,
                 codex_linux_sandbox_exe: Some(alias_path.clone()),
                 main_execve_wrapper_exe: None,
             },

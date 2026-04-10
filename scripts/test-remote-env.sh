@@ -17,10 +17,10 @@ is_sourced() {
 
 setup_remote_env() {
   local container_name
-  local codex_exec_server_binary_path
+  local codex_binary_path
 
   container_name="${CODEX_TEST_REMOTE_ENV_CONTAINER_NAME:-codex-remote-test-env-local-$(date +%s)-${RANDOM}}"
-  codex_exec_server_binary_path="${REPO_ROOT}/codex-rs/target/debug/codex-exec-server"
+  codex_binary_path="${REPO_ROOT}/codex-rs/target/debug/codex"
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "docker is required (Colima or Docker Desktop)" >&2
@@ -33,17 +33,17 @@ setup_remote_env() {
   fi
 
   if ! command -v cargo >/dev/null 2>&1; then
-    echo "cargo is required to build codex-exec-server" >&2
+    echo "cargo is required to build codex" >&2
     return 1
   fi
 
   (
     cd "${REPO_ROOT}/codex-rs"
-    cargo build -p codex-exec-server --bin codex-exec-server
+    cargo build -p codex-cli --bin codex
   )
 
-  if [[ ! -f "${codex_exec_server_binary_path}" ]]; then
-    echo "codex-exec-server binary not found at ${codex_exec_server_binary_path}" >&2
+  if [[ ! -f "${codex_binary_path}" ]]; then
+    echo "codex binary not found at ${codex_binary_path}" >&2
     return 1
   fi
 

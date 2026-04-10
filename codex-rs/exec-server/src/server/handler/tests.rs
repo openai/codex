@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::ExecServerHandler;
+use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeParams;
@@ -70,6 +71,7 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
     let handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(outgoing_tx),
+        ExecServerRuntimePaths::default(),
     ));
     let initialize_response = handler
         .initialize(InitializeParams {
@@ -147,6 +149,7 @@ async fn long_poll_read_fails_after_session_resume() {
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
+        ExecServerRuntimePaths::default(),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -187,6 +190,7 @@ async fn long_poll_read_fails_after_session_resume() {
     let second_handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(second_tx),
+        ExecServerRuntimePaths::default(),
     ));
     second_handler
         .initialize(InitializeParams {
@@ -219,6 +223,7 @@ async fn active_session_resume_is_rejected() {
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
+        ExecServerRuntimePaths::default(),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -232,6 +237,7 @@ async fn active_session_resume_is_rejected() {
     let second_handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(second_tx),
+        ExecServerRuntimePaths::default(),
     ));
     let err = second_handler
         .initialize(InitializeParams {
@@ -259,6 +265,7 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
     let handler = Arc::new(ExecServerHandler::new(
         SessionRegistry::new(),
         RpcNotificationSender::new(outgoing_tx),
+        ExecServerRuntimePaths::default(),
     ));
     handler
         .initialize(InitializeParams {

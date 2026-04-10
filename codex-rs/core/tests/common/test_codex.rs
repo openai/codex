@@ -170,10 +170,9 @@ struct RemoteExecServerStart {
 fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecServerStart> {
     let container_name = remote_env.container_name.as_str();
     let instance_id = remote_exec_server_instance_id();
-    let remote_exec_server_path = format!("/tmp/codex-exec-server-{instance_id}");
+    let remote_exec_server_path = format!("/tmp/codex-{instance_id}");
     let stdout_path = format!("/tmp/codex-exec-server-{instance_id}.stdout");
-    let local_binary = codex_utils_cargo_bin::cargo_bin("codex-exec-server")
-        .context("resolve codex-exec-server binary")?;
+    let local_binary = codex_utils_cargo_bin::cargo_bin("codex").context("resolve codex binary")?;
     let local_binary = local_binary.to_string_lossy().to_string();
     let remote_binary = format!("{container_name}:{remote_exec_server_path}");
 
@@ -188,7 +187,7 @@ fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecSe
 
     let start_script = format!(
         "rm -f {stdout_path}; \
-nohup {remote_exec_server_path} --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
+nohup {remote_exec_server_path} exec-server --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
 echo $!"
     );
     let pid_output =

@@ -1,27 +1,25 @@
 # codex-exec-server
 
-`codex-exec-server` is a small standalone JSON-RPC server for spawning
-and controlling subprocesses through `codex-utils-pty`.
+`codex-exec-server` is the library backing `codex exec-server`, a small
+JSON-RPC server for spawning and controlling subprocesses through
+`codex-utils-pty`.
 
-This PR intentionally lands only the standalone binary, client, wire protocol,
-and docs. Exec and filesystem methods are stubbed server-side here and are
-implemented in follow-up PRs.
+It provides:
 
-It currently provides:
-
-- a standalone binary: `codex-exec-server`
+- a CLI entrypoint: `codex exec-server`
 - a Rust client: `ExecServerClient`
 - a small protocol module with shared request/response types
 
-This crate is intentionally narrow. It is not wired into the main Codex CLI or
-unified-exec in this PR; it is only the standalone transport layer.
+This crate owns the transport, protocol, and filesystem/process handlers. The
+top-level `codex` binary owns arg0 dispatch for helper tools such as `codex-fs`
+and `codex-linux-sandbox`.
 
 ## Transport
 
 The server speaks the shared `codex-app-server-protocol` message envelope on
 the wire.
 
-The standalone binary supports:
+The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
 
@@ -243,7 +241,13 @@ The crate exports:
 - protocol structs `InitializeParams` and `InitializeResponse`
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
 - `run_main_with_listen_url()`
-- `run_main()` for embedding the websocket server in a binary
+- `run_main_with_listen_url_and_paths()` for callers that already resolved
+  helper paths through the top-level `codex` arg0 dispatcher
+- `run_main()` for embedding the websocket server
+
+Callers that need sandboxed filesystem RPCs should prefer
+`run_main_with_listen_url_and_paths()`, or run the service through
+`codex exec-server`, so the `codex-fs` helper path is available.
 
 ## Example session
 

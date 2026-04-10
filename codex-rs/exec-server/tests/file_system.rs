@@ -81,6 +81,26 @@ fn workspace_write_sandbox_policy(writable_root: std::path::PathBuf) -> SandboxP
     }
 }
 
+fn assert_sandbox_denied(error: &std::io::Error) {
+    assert!(
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput
+                | std::io::ErrorKind::PermissionDenied
+                | std::io::ErrorKind::NotFound
+        ),
+        "unexpected sandbox error kind: {error:?}",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("is not permitted")
+            || message.contains("Operation not permitted")
+            || message.contains("Permission denied")
+            || message.contains("No such file"),
+        "unexpected sandbox error message: {message}",
+    );
+}
+
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -292,14 +312,7 @@ async fn file_system_write_with_sandbox_policy_rejects_unwritable_path(
         Ok(()) => anyhow::bail!("write should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/write is not permitted for path {}",
-            blocked_path.display()
-        )
-    );
+    assert_sandbox_denied(&error);
     assert!(!blocked_path.exists());
 
     Ok(())
@@ -334,14 +347,7 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_escape(
         Ok(_) => anyhow::bail!("read should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/read is not permitted for path {}",
-            requested_path.display()
-        )
-    );
+    assert_sandbox_denied(&error);
 
     Ok(())
 }
@@ -373,7 +379,7 @@ async fn file_system_read_with_sandbox_policy_rejects_symlink_parent_dotdot_esca
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_sandbox_denied(&error);
 
     Ok(())
 }
@@ -407,14 +413,7 @@ async fn file_system_write_with_sandbox_policy_rejects_symlink_escape(
         Ok(()) => anyhow::bail!("write should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/write is not permitted for path {}",
-            requested_path.display()
-        )
-    );
+    assert_sandbox_denied(&error);
     assert!(!outside_dir.join("blocked.txt").exists());
 
     Ok(())
@@ -449,14 +448,7 @@ async fn file_system_create_directory_with_sandbox_policy_rejects_symlink_escape
         Ok(()) => anyhow::bail!("create_directory should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/write is not permitted for path {}",
-            requested_path.display()
-        )
-    );
+    assert_sandbox_denied(&error);
     assert!(!outside_dir.join("created").exists());
 
     Ok(())
@@ -491,14 +483,7 @@ async fn file_system_get_metadata_with_sandbox_policy_rejects_symlink_escape(
         Ok(_) => anyhow::bail!("get_metadata should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/read is not permitted for path {}",
-            requested_path.display()
-        )
-    );
+    assert_sandbox_denied(&error);
 
     Ok(())
 }
@@ -532,14 +517,7 @@ async fn file_system_read_directory_with_sandbox_policy_rejects_symlink_escape(
         Ok(_) => anyhow::bail!("read_directory should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/read is not permitted for path {}",
-            requested_path.display()
-        )
-    );
+    assert_sandbox_denied(&error);
 
     Ok(())
 }
@@ -575,14 +553,7 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_destination
         Ok(()) => anyhow::bail!("copy should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/write is not permitted for path {}",
-            requested_destination.display()
-        )
-    );
+    assert_sandbox_denied(&error);
     assert!(!outside_dir.join("copied.txt").exists());
 
     Ok(())
@@ -699,14 +670,7 @@ async fn file_system_remove_with_sandbox_policy_rejects_symlink_escape(
         Ok(()) => anyhow::bail!("remove should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/write is not permitted for path {}",
-            requested_path.display()
-        )
-    );
+    assert_sandbox_denied(&error);
     assert_eq!(std::fs::read_to_string(outside_file)?, "outside");
 
     Ok(())
@@ -745,14 +709,7 @@ async fn file_system_copy_with_sandbox_policy_rejects_symlink_escape_source(
         Ok(()) => anyhow::bail!("copy should be blocked"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "fs/read is not permitted for path {}",
-            requested_source.display()
-        )
-    );
+    assert_sandbox_denied(&error);
     assert!(!requested_destination.exists());
 
     Ok(())

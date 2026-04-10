@@ -225,7 +225,7 @@ impl ExecutorFileSystem for LocalFileSystem {
     }
 }
 
-fn enforce_read_access(
+pub(crate) fn enforce_read_access(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
 ) -> FileSystemResult<()> {
@@ -238,7 +238,7 @@ fn enforce_read_access(
     )
 }
 
-fn enforce_write_access(
+pub(crate) fn enforce_write_access(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
 ) -> FileSystemResult<()> {
@@ -251,7 +251,7 @@ fn enforce_write_access(
     )
 }
 
-fn enforce_write_access_preserving_leaf(
+pub(crate) fn enforce_write_access_preserving_leaf(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
 ) -> FileSystemResult<()> {
@@ -264,7 +264,7 @@ fn enforce_write_access_preserving_leaf(
     )
 }
 
-fn enforce_copy_source_read_access(
+pub(crate) fn enforce_copy_source_read_access(
     path: &AbsolutePathBuf,
     sandbox_policy: Option<&SandboxPolicy>,
 ) -> FileSystemResult<()> {
@@ -350,8 +350,9 @@ fn enforce_access(
     path_mode: AccessPathMode,
 ) -> FileSystemResult<()> {
     let resolved_path = resolve_path_for_access_check(path.as_path(), path_mode)?;
-    let file_system_policy =
-        canonicalize_file_system_policy_paths(FileSystemSandboxPolicy::from(sandbox_policy))?;
+    let file_system_policy = canonicalize_file_system_policy_paths(
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_cwd),
+    )?;
     if is_allowed(&file_system_policy, resolved_path.as_path(), sandbox_cwd) {
         Ok(())
     } else {
@@ -416,7 +417,7 @@ fn preserve_leaf_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved_parent)
 }
 
-fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
     let mut unresolved_suffix = Vec::new();
     let mut existing_path = path;
     while !existing_path.exists() {
@@ -437,7 +438,7 @@ fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
-fn current_sandbox_cwd() -> io::Result<PathBuf> {
+pub(crate) fn current_sandbox_cwd() -> io::Result<PathBuf> {
     let cwd = std::env::current_dir()
         .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
     resolve_existing_path(cwd.as_path())

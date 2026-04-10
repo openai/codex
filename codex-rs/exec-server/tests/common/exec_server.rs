@@ -41,9 +41,9 @@ impl Drop for ExecServerHarness {
 }
 
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
-    let binary = cargo_bin("codex-exec-server")?;
+    let binary = cargo_bin("codex")?;
     let mut child = Command::new(binary);
-    child.args(["--listen", "ws://127.0.0.1:0"]);
+    child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());
