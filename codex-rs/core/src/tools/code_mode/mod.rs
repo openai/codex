@@ -250,6 +250,8 @@ pub(super) async fn build_enabled_tools(
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
+    // Keep the code-mode runtime catalog complete: prompt deferral hides
+    // descriptions, but `ALL_TOOLS` and `tools[...]` should stay callable.
     let mcp_tools = exec
         .session
         .services

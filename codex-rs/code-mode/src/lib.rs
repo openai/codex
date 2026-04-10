@@ -5,6 +5,7 @@ mod service;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;
 pub use description::CodeModeToolKind;
+pub use description::ExecToolDescriptionOptions;
 pub use description::ToolDefinition;
 pub use description::ToolNamespaceDescription;
 pub use description::append_code_mode_sample;
