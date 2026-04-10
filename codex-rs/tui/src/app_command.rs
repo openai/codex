@@ -127,11 +127,6 @@ impl AppCommand {
         Self(Op::RealtimeConversationAudio(params))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn realtime_conversation_text(params: ConversationTextParams) -> Self {
-        Self(Op::RealtimeConversationText(params))
-    }
-
     pub(crate) fn realtime_conversation_close() -> Self {
         Self(Op::RealtimeConversationClose)
     }
@@ -264,16 +259,6 @@ impl AppCommand {
 
     pub(crate) fn review(review_request: ReviewRequest) -> Self {
         Self(Op::Review { review_request })
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn kind(&self) -> &'static str {
-        self.0.kind()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn as_core(&self) -> &Op {
-        &self.0
     }
 
     pub(crate) fn into_core(self) -> Op {

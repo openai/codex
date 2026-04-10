@@ -4657,14 +4657,6 @@ impl ChatWidget {
         Self::new_with_op_target(common, CodexOpTarget::AppEvent)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn new_with_op_sender(
-        common: ChatWidgetInit,
-        codex_op_tx: UnboundedSender<Op>,
-    ) -> Self {
-        Self::new_with_op_target(common, CodexOpTarget::Direct(codex_op_tx))
-    }
-
     fn new_with_op_target(common: ChatWidgetInit, codex_op_target: CodexOpTarget) -> Self {
         let ChatWidgetInit {
             config,
