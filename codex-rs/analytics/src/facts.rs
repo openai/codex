@@ -3,6 +3,8 @@ use crate::events::CodexRuntimeMetadata;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::NonSteerableTurnKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_plugin::PluginTelemetryMetadata;
@@ -93,6 +95,53 @@ pub enum TurnStatus {
     Interrupted,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+    InputTooLarge,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnSteerEvent {
+    pub expected_turn_id: Option<String>,
+    pub accepted_turn_id: Option<String>,
+    pub num_input_images: usize,
+    pub result: TurnSteerResult,
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AnalyticsJsonRpcError {
+    TurnSteer(TurnSteerRequestError),
+    Input(InputError),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TurnSteerRequestError {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    ActiveTurnNotSteerable { turn_kind: NonSteerableTurnKind },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum InputError {
+    Empty,
+    TooLarge,
+}
+
 #[derive(Clone, Debug)]
 pub struct SkillInvocation {
     pub skill_name: String,
@@ -143,6 +192,12 @@ pub(crate) enum AnalyticsFact {
     Response {
         connection_id: u64,
         response: Box<ClientResponse>,
+    },
+    ErrorResponse {
+        connection_id: u64,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+        error_type: Option<AnalyticsJsonRpcError>,
     },
     Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or
