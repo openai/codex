@@ -85,8 +85,8 @@ at `https://github.com/openai/codex/blob/main/docs/default-keymap.toml`.
 Preset semantics:
 
 1. `latest` is an alias to the newest shipped preset.
-2. `v2` is the current baseline; `v1` is frozen for historical behavior.
-3. Today, `latest -> v2`.
+2. `v3` is the current baseline; `v1` and `v2` are frozen for historical behavior.
+3. Today, `latest -> v3`.
 
 User guidance:
 
@@ -96,13 +96,16 @@ User guidance:
 Developer policy:
 
 1. Do not mutate old preset defaults after release.
-2. Add a new version (for example `v3`) for behavior changes.
+2. Add a new version (for example `v4`) for behavior changes.
 3. Update docs and migration notes whenever `latest` changes.
 
 Migration notes:
 
 `v2` restores `alt-d` as a `delete_forward_word` alias while preserving
 `alt-delete` from `v1`.
+
+`v3` exposes the Copy shortcut as `global.copy = "ctrl-o"` so it can be
+remapped or unbound through `[tui.keymap]`.
 
 TODO(docs): mirror this preset migration note on developers.openai.com.
 

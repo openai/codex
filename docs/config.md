@@ -36,18 +36,19 @@ Precedence is applied in this order (highest first):
 
 ### Presets
 
-- `latest`: moving alias for the newest preset; today `latest -> v2`
-- `v2`: current defaults, restoring `alt-d` as a `delete_forward_word` alias
+- `latest`: moving alias for the newest preset; today `latest -> v3`
+- `v3`: current defaults, exposing `copy = "ctrl-o"` in the keymap
+- `v2`: restores `alt-d` as a `delete_forward_word` alias
 - `v1`: frozen initial configurable keymap defaults
 
-When defaults change in the future, a new version (for example `v3`) is added and
+When defaults change in the future, a new version (for example `v4`) is added and
 `latest` may move to it. Pin to `v1` if you want stable historical behavior.
 
 TODO(docs): mirror this preset migration note on developers.openai.com.
 
 ### Supported actions
 
-- `global`: `open_transcript`, `open_external_editor`, `edit_previous_message`,
+- `global`: `open_transcript`, `open_external_editor`, `copy`, `edit_previous_message`,
   `confirm_edit_previous_message`, `submit`, `queue`, `toggle_shortcuts`,
   `toggle_vim_mode`
 - `chat`: `edit_previous_message`, `confirm_edit_previous_message`
