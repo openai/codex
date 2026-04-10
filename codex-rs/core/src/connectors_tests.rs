@@ -12,8 +12,8 @@ use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
 use codex_config::types::AppsDefaultConfig;
 use codex_features::Feature;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::ToolInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
@@ -110,8 +110,9 @@ fn codex_app_tool(
 
     ToolInfo {
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        tool_name: tool_name.to_string(),
-        tool_namespace,
+        callable_name: tool_name.to_string(),
+        callable_namespace: tool_namespace,
+        server_instructions: None,
         tool: test_tool_definition(tool_name),
         connector_id: Some(connector_id.to_string()),
         connector_name: connector_name.map(ToOwned::to_owned),
@@ -188,8 +189,9 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             "mcp__sample__echo".to_string(),
             ToolInfo {
                 server_name: "sample".to_string(),
-                tool_name: "echo".to_string(),
-                tool_namespace: "sample".to_string(),
+                callable_name: "echo".to_string(),
+                callable_namespace: "sample".to_string(),
+                server_instructions: None,
                 tool: test_tool_definition("echo"),
                 connector_id: None,
                 connector_name: None,
@@ -312,8 +314,9 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
         "mcp__codex_apps__calendar_create_event".to_string(),
         ToolInfo {
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool_name: "calendar_create_event".to_string(),
-            tool_namespace: "mcp__codex_apps__calendar".to_string(),
+            callable_name: "calendar_create_event".to_string(),
+            callable_namespace: "mcp__codex_apps__calendar".to_string(),
+            server_instructions: None,
             tool: Tool {
                 name: "calendar_create_event".to_string().into(),
                 title: None,

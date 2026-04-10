@@ -5,7 +5,7 @@ use tokio_tungstenite::accept_async;
 use tracing::warn;
 
 use crate::connection::JsonRpcConnection;
-use crate::server::processor::run_connection;
+use crate::server::processor::ConnectionProcessor;
 
 pub const DEFAULT_LISTEN_URL: &str = "ws://127.0.0.1:0";
 
@@ -58,19 +58,22 @@ async fn run_websocket_listener(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
+    let processor = ConnectionProcessor::new();
     tracing::info!("codex-exec-server listening on ws://{local_addr}");
     println!("ws://{local_addr}");
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
+        let processor = processor.clone();
         tokio::spawn(async move {
             match accept_async(stream).await {
                 Ok(websocket) => {
-                    run_connection(JsonRpcConnection::from_websocket(
-                        websocket,
-                        format!("exec-server websocket {peer_addr}"),
-                    ))
-                    .await;
+                    processor
+                        .run_connection(JsonRpcConnection::from_websocket(
+                            websocket,
+                            format!("exec-server websocket {peer_addr}"),
+                        ))
+                        .await;
                 }
                 Err(err) => {
                     warn!(

@@ -4,41 +4,41 @@
 // The process for this will change
 
 // Config
-pub mod config_file_response;
+pub(crate) mod config_file_response;
 pub use self::config_file_response::ConfigFileResponse;
 
 // Cloud Tasks
-pub mod code_task_details_response;
+pub(crate) mod code_task_details_response;
 pub use self::code_task_details_response::CodeTaskDetailsResponse;
 
-pub mod task_response;
+pub(crate) mod task_response;
 pub use self::task_response::TaskResponse;
 
-pub mod external_pull_request_response;
+pub(crate) mod external_pull_request_response;
 pub use self::external_pull_request_response::ExternalPullRequestResponse;
 
-pub mod git_pull_request;
+pub(crate) mod git_pull_request;
 pub use self::git_pull_request::GitPullRequest;
 
-pub mod task_list_item;
+pub(crate) mod task_list_item;
 pub use self::task_list_item::TaskListItem;
 
-pub mod paginated_list_task_list_item_;
+pub(crate) mod paginated_list_task_list_item_;
 pub use self::paginated_list_task_list_item_::PaginatedListTaskListItem;
 
 // Rate Limits
-pub mod additional_rate_limit_details;
+pub(crate) mod additional_rate_limit_details;
 pub use self::additional_rate_limit_details::AdditionalRateLimitDetails;
 
-pub mod rate_limit_status_payload;
+pub(crate) mod rate_limit_status_payload;
 pub use self::rate_limit_status_payload::PlanType;
 pub use self::rate_limit_status_payload::RateLimitStatusPayload;
 
-pub mod rate_limit_status_details;
+pub(crate) mod rate_limit_status_details;
 pub use self::rate_limit_status_details::RateLimitStatusDetails;
 
-pub mod rate_limit_window_snapshot;
+pub(crate) mod rate_limit_window_snapshot;
 pub use self::rate_limit_window_snapshot::RateLimitWindowSnapshot;
 
-pub mod credit_status_details;
+pub(crate) mod credit_status_details;
 pub use self::credit_status_details::CreditStatusDetails;

@@ -4,8 +4,11 @@ use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
 use codex_core::config::Config;
-use codex_core::project_doc::discover_project_doc_paths;
+use codex_core::discover_project_doc_paths;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::account::PlanType;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::io;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -33,51 +36,56 @@ pub(crate) fn compose_model_display(
     (model_name.to_string(), details)
 }
 
-pub(crate) fn compose_agents_summary(config: &Config) -> String {
-    match discover_project_doc_paths(config) {
-        Ok(paths) => {
-            let mut rels: Vec<String> = Vec::new();
-            for p in paths {
-                let file_name = p
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
-                let display = if let Some(parent) = p.parent() {
-                    if parent == config.cwd.as_path() {
-                        file_name.clone()
-                    } else {
-                        let mut cur = config.cwd.as_path();
-                        let mut ups = 0usize;
-                        let mut reached = false;
-                        while let Some(c) = cur.parent() {
-                            if cur == parent {
-                                reached = true;
-                                break;
-                            }
-                            cur = c;
-                            ups += 1;
-                        }
-                        if reached {
-                            let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                            format!("{}{}", up.repeat(ups), file_name)
-                        } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                            normalize_agents_display_path(stripped)
-                        } else {
-                            normalize_agents_display_path(&p)
-                        }
-                    }
-                } else {
-                    normalize_agents_display_path(&p)
-                };
-                rels.push(display);
-            }
-            if rels.is_empty() {
-                "<none>".to_string()
+pub(crate) async fn discover_agents_summary(config: &Config) -> io::Result<String> {
+    let paths = discover_project_doc_paths(config, LOCAL_FS.as_ref()).await?;
+    Ok(compose_agents_summary(config, &paths))
+}
+
+pub(crate) fn compose_agents_summary(config: &Config, paths: &[AbsolutePathBuf]) -> String {
+    let mut rels: Vec<String> = Vec::new();
+    if let Some(path) = config.user_instructions_path.as_deref() {
+        rels.push(format_directory_display(path, /*max_width*/ None));
+    }
+
+    for p in paths {
+        let file_name = p
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let display = if let Some(parent) = p.parent() {
+            if parent.as_path() == config.cwd.as_path() {
+                file_name.clone()
             } else {
-                rels.join(", ")
+                let mut cur = config.cwd.as_path();
+                let mut ups = 0usize;
+                let mut reached = false;
+                while let Some(c) = cur.parent() {
+                    if cur == parent.as_path() {
+                        reached = true;
+                        break;
+                    }
+                    cur = c;
+                    ups += 1;
+                }
+                if reached {
+                    let up = format!("..{}", std::path::MAIN_SEPARATOR);
+                    format!("{}{}", up.repeat(ups), file_name)
+                } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
+                    normalize_agents_display_path(stripped)
+                } else {
+                    normalize_agents_display_path(p)
+                }
             }
-        }
-        Err(_) => "<none>".to_string(),
+        } else {
+            normalize_agents_display_path(p)
+        };
+        rels.push(display);
+    }
+
+    if rels.is_empty() {
+        "<none>".to_string()
+    } else {
+        rels.join(", ")
     }
 }
 
@@ -185,7 +193,21 @@ fn title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
+    use codex_core::LOCAL_PROJECT_DOC_FILENAME;
+    use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use std::fs;
+    use tempfile::TempDir;
+
+    async fn test_config(codex_home: &TempDir, cwd: &TempDir) -> Config {
+        ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load config")
+    }
 
     #[test]
     fn plan_type_display_name_remaps_display_labels() {
@@ -206,5 +228,62 @@ mod tests {
         for (plan_type, expected) in cases {
             assert_eq!(plan_type_display_name(plan_type), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn discover_agents_summary_includes_global_agents_path() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+        fs::write(&global_agents_path, "global instructions").expect("write global agents");
+        let config = test_config(&codex_home, &cwd).await;
+
+        assert_eq!(
+            discover_agents_summary(&config).await.expect("summary"),
+            format_directory_display(&global_agents_path, /*max_width*/ None)
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_agents_summary_names_global_agents_override() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let cwd = TempDir::new().expect("temp cwd");
+        fs::write(
+            codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME),
+            "global instructions",
+        )
+        .expect("write global agents");
+        let override_path = codex_home.path().join(LOCAL_PROJECT_DOC_FILENAME);
+        fs::write(&override_path, "override instructions").expect("write global override");
+        let config = test_config(&codex_home, &cwd).await;
+
+        assert_eq!(
+            discover_agents_summary(&config).await.expect("summary"),
+            format_directory_display(&override_path, /*max_width*/ None)
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_agents_summary_orders_global_before_project_agents() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+        fs::write(&global_agents_path, "global instructions").expect("write global agents");
+        fs::write(
+            cwd.path().join(DEFAULT_PROJECT_DOC_FILENAME),
+            "project instructions",
+        )
+        .expect("write project agents");
+        let config = test_config(&codex_home, &cwd).await;
+
+        let summary = discover_agents_summary(&config).await.expect("summary");
+        let mut paths = summary.split(", ");
+        assert_eq!(
+            paths.next(),
+            Some(format_directory_display(&global_agents_path, /*max_width*/ None).as_str())
+        );
+        let project_path = paths.next().expect("project agents path");
+        assert!(project_path.ends_with(DEFAULT_PROJECT_DOC_FILENAME));
+        assert_eq!(paths.next(), None);
     }
 }

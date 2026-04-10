@@ -124,11 +124,16 @@ pub(crate) async fn execute_user_shell_command(
     let use_login_shell = true;
     let session_shell = session.user_shell();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
+    let exec_env_map = create_env(
+        &turn_context.shell_environment_policy,
+        Some(session.conversation_id),
+    );
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
         turn_context.cwd.as_path(),
         &turn_context.shell_environment_policy.r#set,
+        &exec_env_map,
     );
 
     let call_id = Uuid::new_v4().to_string();
@@ -155,11 +160,8 @@ pub(crate) async fn execute_user_shell_command(
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
-        cwd: cwd.to_path_buf(),
-        env: create_env(
-            &turn_context.shell_environment_policy,
-            Some(session.conversation_id),
-        ),
+        cwd: cwd.clone(),
+        env: exec_env_map,
         network: turn_context.network.clone(),
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
@@ -174,7 +176,7 @@ pub(crate) async fn execute_user_shell_command(
         sandbox_policy: sandbox_policy.clone(),
         file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-        windows_restricted_token_filesystem_overlay: None,
+        windows_sandbox_filesystem_overrides: None,
         arg0: None,
     };
 

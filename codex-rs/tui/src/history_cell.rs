@@ -42,14 +42,14 @@ use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_config::types::McpServerTransportConfig;
+#[cfg(test)]
+use codex_core::McpManager;
 use codex_core::config::Config;
 #[cfg(test)]
-use codex_core::mcp::McpManager;
-#[cfg(test)]
 use codex_core::plugins::PluginsManager;
-use codex_core::web_search::web_search_detail;
+use codex_core::web_search_detail;
 #[cfg(test)]
-use codex_mcp::mcp::qualified_mcp_tool_name_prefix;
+use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ServiceTier;
@@ -70,7 +70,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
-use codex_utils_cli::format_env_display::format_env_display;
+use codex_utils_cli::format_env_display;
 use image::DynamicImage;
 use image::ImageReader;
 use ratatui::prelude::*;
@@ -2160,10 +2160,17 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
+    new_error_event_with_hint(message, /*hint*/ None)
+}
+
+pub(crate) fn new_error_event_with_hint(message: String, hint: Option<String>) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
+    let mut lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
+    if let Some(hint) = hint {
+        lines.push(vec!["  ".into(), hint.dark_gray()].into());
+    }
     PlainHistoryCell { lines }
 }
 

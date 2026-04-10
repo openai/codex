@@ -12,7 +12,7 @@
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
-//! - Context usage (remaining %, used %, window size)
+//! - Context usage (meter, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (ID, tokens used)
 //! - Application version
@@ -22,7 +22,6 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use strum_macros::EnumString;
@@ -63,11 +62,15 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
-    /// Percentage of context window remaining.
-    ContextRemaining,
-
-    /// Percentage of context window used.
-    ContextUsed,
+    /// Visual meter of context window usage.
+    ///
+    /// Also accepts legacy `context-remaining` and `context-used` config values.
+    #[strum(
+        to_string = "context-usage",
+        serialize = "context-remaining",
+        serialize = "context-used"
+    )]
+    ContextUsage,
 
     /// Remaining usage on the 5-hour rate limit.
     FiveHourLimit,
@@ -106,11 +109,8 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
-            StatusLineItem::ContextRemaining => {
-                "Percentage of context window remaining (omitted when unknown)"
-            }
-            StatusLineItem::ContextUsed => {
-                "Percentage of context window used (omitted when unknown)"
+            StatusLineItem::ContextUsage => {
+                "Visual meter of context window usage (omitted when unknown)"
             }
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on 5-hour usage limit (omitted when unavailable)"
@@ -132,6 +132,24 @@ impl StatusLineItem {
         }
     }
 }
+
+const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
+    StatusLineItem::ModelName,
+    StatusLineItem::ModelWithReasoning,
+    StatusLineItem::CurrentDir,
+    StatusLineItem::ProjectRoot,
+    StatusLineItem::GitBranch,
+    StatusLineItem::ContextUsage,
+    StatusLineItem::FiveHourLimit,
+    StatusLineItem::WeeklyLimit,
+    StatusLineItem::CodexVersion,
+    StatusLineItem::ContextWindowSize,
+    StatusLineItem::UsedTokens,
+    StatusLineItem::TotalInputTokens,
+    StatusLineItem::TotalOutputTokens,
+    StatusLineItem::SessionId,
+    StatusLineItem::FastMode,
+];
 
 /// Runtime values used to preview the current status-line selection.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -209,7 +227,7 @@ impl StatusLineSetupView {
             }
         }
 
-        for item in StatusLineItem::iter() {
+        for item in SELECTABLE_STATUS_LINE_ITEMS.iter().cloned() {
             let item_id = item.to_string();
             if used_ids.contains(&item_id) {
                 continue;
@@ -292,6 +310,23 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use crate::app_event::AppEvent;
+
+    #[test]
+    fn context_usage_is_canonical_and_accepts_legacy_ids() {
+        assert_eq!(StatusLineItem::ContextUsage.to_string(), "context-usage");
+        assert_eq!(
+            "context-usage".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+        assert_eq!(
+            "context-remaining".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+        assert_eq!(
+            "context-used".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+    }
 
     #[test]
     fn preview_uses_runtime_values() {

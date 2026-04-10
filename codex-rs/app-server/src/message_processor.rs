@@ -19,6 +19,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
+use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
@@ -170,6 +171,7 @@ pub(crate) struct MessageProcessor {
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
     rpc_transport: AppServerRpcTransport,
+    remote_control_handle: Option<RemoteControlHandle>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -195,6 +197,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) rpc_transport: AppServerRpcTransport,
+    pub(crate) remote_control_handle: Option<RemoteControlHandle>,
 }
 
 impl MessageProcessor {
@@ -215,6 +218,7 @@ impl MessageProcessor {
             session_source,
             auth_manager,
             rpc_transport,
+            remote_control_handle,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -285,6 +289,7 @@ impl MessageProcessor {
             config,
             config_warnings: Arc::new(config_warnings),
             rpc_transport,
+            remote_control_handle,
         }
     }
 
@@ -293,7 +298,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(
-        &mut self,
+        &self,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         transport: AppServerTransport,
@@ -367,7 +372,7 @@ impl MessageProcessor {
     /// This bypasses JSON request deserialization but keeps identical request
     /// semantics by delegating to `handle_client_request`.
     pub(crate) async fn process_client_request(
-        &mut self,
+        &self,
         connection_id: ConnectionId,
         request: ClientRequest,
         session: &mut ConnectionSessionState,
@@ -465,7 +470,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn try_attach_thread_listener(
-        &mut self,
+        &self,
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
@@ -492,7 +497,7 @@ impl MessageProcessor {
         self.codex_message_processor.shutdown_threads().await;
     }
 
-    pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
         self.outgoing.connection_closed(connection_id).await;
         self.fs_watch_manager.connection_closed(connection_id).await;
         self.codex_message_processor
@@ -506,20 +511,20 @@ impl MessageProcessor {
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.
-    pub(crate) async fn process_response(&mut self, response: JSONRPCResponse) {
+    pub(crate) async fn process_response(&self, response: JSONRPCResponse) {
         tracing::info!("<- response: {:?}", response);
         let JSONRPCResponse { id, result, .. } = response;
         self.outgoing.notify_client_response(id, result).await
     }
 
     /// Handle an error object received from the peer.
-    pub(crate) async fn process_error(&mut self, err: JSONRPCError) {
+    pub(crate) async fn process_error(&self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
         self.outgoing.notify_client_error(err.id, err.error).await;
     }
 
     async fn handle_client_request(
-        &mut self,
+        &self,
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         session: &mut ConnectionSessionState,
@@ -969,10 +974,33 @@ impl MessageProcessor {
     ) {
         match result {
             Ok(response) => {
-                self.codex_message_processor.handle_config_mutation();
+                self.handle_config_mutation().await;
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_config_mutation(&self) {
+        self.codex_message_processor.handle_config_mutation();
+        let Some(remote_control_handle) = &self.remote_control_handle else {
+            return;
+        };
+
+        match self
+            .config_api
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => {
+                remote_control_handle.set_enabled(config.features.enabled(Feature::RemoteControl));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "failed to load config for remote control enablement refresh after config mutation: {}",
+                    error.message
+                );
+            }
         }
     }
 

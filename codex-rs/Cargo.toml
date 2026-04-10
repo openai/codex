@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "account",
     "analytics",
     "backend-client",
     "ansi-escape",
@@ -48,6 +49,7 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
+    "realtime-webrtc",
     "rollout",
     "rmcp-client",
     "responses-api-proxy",
@@ -103,6 +105,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
+codex-account = { path = "account" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
@@ -149,6 +152,7 @@ codex-otel = { path = "otel" }
 codex-plugin = { path = "plugin" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-realtime-webrtc = { path = "realtime-webrtc" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }
@@ -350,6 +354,7 @@ vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "8"
+whoami = "1.6.1"
 wildmatch = "2.6.1"
 zip = "2.4.2"
 zstd = "0.13"

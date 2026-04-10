@@ -16,6 +16,7 @@ use chrono::Utc;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::SpendControlSnapshot as CoreSpendControlSnapshot;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
@@ -50,6 +51,8 @@ pub(crate) enum StatusRateLimitData {
     Available(Vec<StatusRateLimitRow>),
     /// Snapshot data exists but is older than the staleness threshold.
     Stale(Vec<StatusRateLimitRow>),
+    /// The refresh completed, but the response did not include displayable usage data.
+    Unavailable,
     /// No snapshot data is currently available.
     Missing,
 }
@@ -96,6 +99,8 @@ pub(crate) struct RateLimitSnapshotDisplay {
     pub secondary: Option<RateLimitWindowDisplay>,
     /// Optional credits metadata when available.
     pub credits: Option<CreditsSnapshotDisplay>,
+    /// Optional spend-control metadata for usage-based workspace plans.
+    pub spend_control: Option<SpendControlSnapshotDisplay>,
 }
 
 /// Display-ready credits state extracted from protocol snapshots.
@@ -107,6 +112,13 @@ pub(crate) struct CreditsSnapshotDisplay {
     pub unlimited: bool,
     /// Raw balance text as provided by the backend.
     pub balance: Option<String>,
+}
+
+/// Display-ready spend-control state extracted from protocol snapshots.
+#[derive(Debug, Clone)]
+pub(crate) struct SpendControlSnapshotDisplay {
+    /// Whether a workspace spend cap is currently blocking usage.
+    pub reached: bool,
 }
 
 /// Converts a protocol snapshot into UI-friendly display data.
@@ -138,6 +150,10 @@ pub(crate) fn rate_limit_snapshot_display_for_limit(
             .as_ref()
             .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
         credits: snapshot.credits.as_ref().map(CreditsSnapshotDisplay::from),
+        spend_control: snapshot
+            .spend_control
+            .as_ref()
+            .map(SpendControlSnapshotDisplay::from),
     }
 }
 
@@ -147,6 +163,14 @@ impl From<&CoreCreditsSnapshot> for CreditsSnapshotDisplay {
             has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance.clone(),
+        }
+    }
+}
+
+impl From<&CoreSpendControlSnapshot> for SpendControlSnapshotDisplay {
+    fn from(value: &CoreSpendControlSnapshot) -> Self {
+        Self {
+            reached: value.reached,
         }
     }
 }
@@ -173,7 +197,7 @@ pub(crate) fn compose_rate_limit_data_many(
         return StatusRateLimitData::Missing;
     }
 
-    let mut rows = Vec::with_capacity(snapshots.len().saturating_mul(3));
+    let mut rows = Vec::with_capacity(snapshots.len().saturating_mul(4));
     let mut stale = false;
 
     for snapshot in snapshots {
@@ -261,6 +285,12 @@ pub(crate) fn compose_rate_limit_data_many(
             });
         }
 
+        if let Some(spend_control) = snapshot.spend_control.as_ref()
+            && let Some(row) = spend_control_status_row(spend_control)
+        {
+            rows.push(row);
+        }
+
         if let Some(credits) = snapshot.credits.as_ref()
             && let Some(row) = credit_status_row(credits)
         {
@@ -269,7 +299,7 @@ pub(crate) fn compose_rate_limit_data_many(
     }
 
     if rows.is_empty() {
-        StatusRateLimitData::Available(vec![])
+        StatusRateLimitData::Unavailable
     } else if stale {
         StatusRateLimitData::Stale(rows)
     } else {
@@ -320,6 +350,15 @@ fn credit_status_row(credits: &CreditsSnapshotDisplay) -> Option<StatusRateLimit
     })
 }
 
+fn spend_control_status_row(
+    spend_control: &SpendControlSnapshotDisplay,
+) -> Option<StatusRateLimitRow> {
+    spend_control.reached.then(|| StatusRateLimitRow {
+        label: "Spend cap".to_string(),
+        value: StatusRateLimitValue::Text("Reached".to_string()),
+    })
+}
+
 fn format_credit_balance(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -347,6 +386,7 @@ mod tests {
     use super::CreditsSnapshotDisplay;
     use super::RateLimitSnapshotDisplay;
     use super::RateLimitWindowDisplay;
+    use super::SpendControlSnapshotDisplay;
     use super::StatusRateLimitData;
     use super::compose_rate_limit_data_many;
     use chrono::Local;
@@ -373,6 +413,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("25".to_string()),
             }),
+            spend_control: None,
         };
         let other = RateLimitSnapshotDisplay {
             limit_name: "codex-other".to_string(),
@@ -384,6 +425,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("99".to_string()),
             }),
+            spend_control: None,
         };
 
         let rows = match compose_rate_limit_data_many(&[codex, other], now) {
@@ -421,6 +463,7 @@ mod tests {
                 window_minutes: None,
             }),
             credits: None,
+            spend_control: None,
         };
 
         let rows = match compose_rate_limit_data_many(&[other], now) {
@@ -436,5 +479,29 @@ mod tests {
                 "Weekly limit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn spend_cap_reached_renders_status_row_without_windows() {
+        let now = Local::now();
+        let snapshot = RateLimitSnapshotDisplay {
+            limit_name: "codex".to_string(),
+            captured_at: now,
+            primary: None,
+            secondary: None,
+            credits: Some(CreditsSnapshotDisplay {
+                has_credits: true,
+                unlimited: false,
+                balance: None,
+            }),
+            spend_control: Some(SpendControlSnapshotDisplay { reached: true }),
+        };
+
+        let rows = match compose_rate_limit_data_many(&[snapshot], now) {
+            StatusRateLimitData::Available(rows) => rows,
+            other => panic!("unexpected status: {other:?}"),
+        };
+        let labels: Vec<String> = rows.iter().map(|row| row.label.clone()).collect();
+        assert_eq!(labels, vec!["Spend cap".to_string()]);
     }
 }

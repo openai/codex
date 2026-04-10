@@ -17,8 +17,11 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 similar = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 

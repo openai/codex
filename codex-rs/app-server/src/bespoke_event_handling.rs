@@ -13,6 +13,8 @@ use crate::thread_state::resolve_server_request_on_thread_listener;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
+use codex_app_server_protocol::AddCreditsNudgeEmailNotification;
+use codex_app_server_protocol::AddCreditsNudgeEmailResult;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -80,6 +82,7 @@ use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
@@ -116,6 +119,7 @@ use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynam
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AddCreditsNudgeEmailStatus as CoreAddCreditsNudgeEmailStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -221,6 +225,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
+        }
+        EventMsg::AddCreditsNudgeEmailResponse(event) => {
+            if let ApiVersion::V2 = api_version {
+                let result = match event.result {
+                    Ok(CoreAddCreditsNudgeEmailStatus::Sent) => AddCreditsNudgeEmailResult::Sent,
+                    Ok(CoreAddCreditsNudgeEmailStatus::CooldownActive) => {
+                        AddCreditsNudgeEmailResult::CooldownActive
+                    }
+                    Err(message) => AddCreditsNudgeEmailResult::Failed { message },
+                };
+                let notification = AddCreditsNudgeEmailNotification {
+                    thread_id: conversation_id.to_string(),
+                    result,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::AddCreditsNudgeEmailCompleted(
+                        notification,
+                    ))
+                    .await;
+            }
         }
         EventMsg::SkillsUpdateAvailable => {
             if let ApiVersion::V2 = api_version {
@@ -354,6 +378,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_server_notification(ServerNotification::ThreadRealtimeStarted(
                         notification,
                     ))
+                    .await;
+            }
+        }
+        EventMsg::RealtimeConversationSdp(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadRealtimeSdpNotification {
+                    thread_id: conversation_id.to_string(),
+                    sdp: event.sdp,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadRealtimeSdp(notification))
                     .await;
             }
         }
@@ -1343,7 +1378,6 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let message = ev.message.clone();
             let codex_error_info = ev.codex_error_info.clone();
-
             // If this error belongs to an in-flight `thread/rollback` request, fail that request
             // (and clear pending state) so subsequent rollbacks are unblocked.
             //
@@ -2048,7 +2082,7 @@ async fn maybe_emit_raw_response_item_completed(
         .await;
 }
 
-async fn maybe_emit_hook_prompt_item_completed(
+pub(crate) async fn maybe_emit_hook_prompt_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
     turn_id: &str,
@@ -2843,6 +2877,7 @@ async fn construct_mcp_tool_call_end_notification(
             Some(McpToolCallResult {
                 content: value.content.clone(),
                 structured_content: value.structured_content.clone(),
+                meta: value.meta.clone(),
             }),
             None,
         ),
@@ -2968,16 +3003,16 @@ mod tests {
         turn_id: &str,
         status: GuardianAssessmentStatus,
     ) -> GuardianAssessmentEvent {
-        let (risk_score, risk_level, rationale) = match status {
+        let (risk_level, user_authorization, rationale) = match status {
             GuardianAssessmentStatus::InProgress => (None, None, None),
             GuardianAssessmentStatus::Approved => (
-                Some(12),
                 Some(codex_protocol::protocol::GuardianRiskLevel::Low),
+                Some(codex_protocol::protocol::GuardianUserAuthorization::High),
                 Some("looks safe".to_string()),
             ),
             GuardianAssessmentStatus::Denied => (
-                Some(88),
                 Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 Some("too risky".to_string()),
             ),
             GuardianAssessmentStatus::Aborted => (None, None, None),
@@ -2986,8 +3021,8 @@ mod tests {
             id: id.to_string(),
             turn_id: turn_id.to_string(),
             status,
-            risk_score,
             risk_level,
+            user_authorization,
             rationale,
             action: serde_json::from_value(json!({
                 "type": "command",
@@ -3046,8 +3081,8 @@ mod tests {
                 id: "item-1".to_string(),
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: action.clone(),
             },
@@ -3062,8 +3097,8 @@ mod tests {
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
                 );
-                assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.user_authorization, None);
                 assert_eq!(payload.review.rationale, None);
                 assert_eq!(payload.action, action.into());
             }
@@ -3086,8 +3121,8 @@ mod tests {
                 id: "item-2".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
-                risk_score: Some(91),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
                 action: action.clone(),
             },
@@ -3099,10 +3134,13 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
-                assert_eq!(payload.review.risk_score, Some(91));
                 assert_eq!(
                     payload.review.risk_level,
                     Some(codex_app_server_protocol::GuardianRiskLevel::High)
+                );
+                assert_eq!(
+                    payload.review.user_authorization,
+                    Some(codex_app_server_protocol::GuardianUserAuthorization::Low)
                 );
                 assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
                 assert_eq!(payload.action, action.into());
@@ -3127,8 +3165,8 @@ mod tests {
                 id: "item-3".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: action.clone(),
             },
@@ -3140,8 +3178,8 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-3");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
-                assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.user_authorization, None);
                 assert_eq!(payload.review.rationale, None);
                 assert_eq!(payload.action, action.into());
             }
@@ -3953,6 +3991,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
+            spend_control: None,
             plan_type: None,
         };
 
@@ -4233,7 +4272,9 @@ mod tests {
             content: content.clone(),
             is_error: Some(false),
             structured_content: None,
-            meta: None,
+            meta: Some(serde_json::json!({
+                "ui/resourceUri": "ui://widget/list-resources.html"
+            })),
         };
 
         let end_event = McpToolCallEndEvent {
@@ -4268,6 +4309,9 @@ mod tests {
                 result: Some(McpToolCallResult {
                     content,
                     structured_content: None,
+                    meta: Some(serde_json::json!({
+                        "ui/resourceUri": "ui://widget/list-resources.html"
+                    })),
                 }),
                 error: None,
                 duration_ms: Some(0),

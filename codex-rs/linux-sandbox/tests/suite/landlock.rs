@@ -174,7 +174,7 @@ async fn run_cmd_result_with_policies_in_cwd(
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
-    let cwd = cwd.to_path_buf();
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd).expect("cwd should be absolute");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
@@ -315,7 +315,7 @@ async fn bwrap_populates_minimal_dev_nodes() {
 }
 
 #[tokio::test]
-async fn bwrap_dev_nodes_work_when_workspace_dot_codex_is_missing() {
+async fn bwrap_dev_nodes_work_and_missing_workspace_dot_codex_stays_blocked() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
@@ -327,7 +327,11 @@ async fn bwrap_dev_nodes_work_when_workspace_dot_codex_is_missing() {
         &[
             "bash",
             "-lc",
-            ": >/dev/null && head -c 8 /dev/zero | od -An -tx1",
+            concat!(
+                ": >/dev/null && ",
+                "if mkdir .codex 2>/dev/null; then exit 42; fi && ",
+                "head -c 8 /dev/zero | od -An -tx1"
+            ),
         ],
         &writable_roots,
         tmpdir.path(),
@@ -342,10 +346,6 @@ async fn bwrap_dev_nodes_work_when_workspace_dot_codex_is_missing() {
     assert_eq!(
         output.stdout.text.split_whitespace().collect::<Vec<_>>(),
         vec!["00", "00", "00", "00", "00", "00", "00", "00"]
-    );
-    assert!(
-        !tmpdir.path().join(".codex").exists(),
-        "missing workspace .codex should not be materialized by bwrap startup"
     );
 }
 
@@ -466,7 +466,7 @@ async fn test_timeout() {
 /// suite remains green on leaner CI images.
 #[expect(clippy::expect_used)]
 async fn assert_network_blocked(cmd: &[&str]) {
-    let cwd = std::env::current_dir().expect("cwd should exist");
+    let cwd = AbsolutePathBuf::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),

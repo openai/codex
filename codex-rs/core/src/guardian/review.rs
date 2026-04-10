@@ -6,6 +6,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
@@ -14,28 +15,42 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 
-use super::GUARDIAN_APPROVAL_RISK_THRESHOLD;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
+use super::GuardianAssessmentOutcome;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_id;
 use super::approval_request::guardian_request_turn_id;
-use super::prompt::build_guardian_prompt_items;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
 
-pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
-    "This action was rejected due to unacceptable risk. ",
+const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "The agent must not attempt to achieve the same outcome via workaround, ",
     "indirect execution, or policy circumvention. ",
     "Proceed only with a materially safer alternative, ",
     "or if the user explicitly approves the action after being informed of the risk. ",
     "Otherwise, stop and request user input.",
 );
+
+pub(crate) async fn guardian_rejection_message(session: &Session, assessment_id: &str) -> String {
+    let rationale = session
+        .services
+        .guardian_rejection_rationales
+        .lock()
+        .await
+        .remove(assessment_id)
+        .filter(|rationale| !rationale.trim().is_empty())
+        .unwrap_or_else(|| "Guardian denied the action without a specific rationale.".to_string());
+    format!(
+        "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
+        rationale.trim(),
+        GUARDIAN_REJECTION_INSTRUCTIONS
+    )
+}
 
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
@@ -49,6 +64,7 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
         GuardianRiskLevel::Low => "low",
         GuardianRiskLevel::Medium => "medium",
         GuardianRiskLevel::High => "high",
+        GuardianRiskLevel::Critical => "critical",
     }
 }
 
@@ -89,8 +105,8 @@ async fn run_guardian_review(
                 id: assessment_id.clone(),
                 turn_id: assessment_turn_id.clone(),
                 status: GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
                 action: action_summary.clone(),
             }),
@@ -108,8 +124,8 @@ async fn run_guardian_review(
                     id: assessment_id,
                     turn_id: assessment_turn_id,
                     status: GuardianAssessmentStatus::Aborted,
-                    risk_score: None,
                     risk_level: None,
+                    user_authorization: None,
                     rationale: None,
                     action: action_summary,
                 }),
@@ -120,35 +136,31 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let outcome = match build_guardian_prompt_items(session.as_ref(), retry_reason, request).await {
-        Ok(prompt_items) => {
-            run_guardian_review_session(
-                session.clone(),
-                turn.clone(),
-                prompt_items,
-                schema,
-                external_cancel,
-            )
-            .await
-        }
-        Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
-    };
+    let outcome = run_guardian_review_session(
+        session.clone(),
+        turn.clone(),
+        request,
+        retry_reason,
+        schema,
+        external_cancel,
+    )
+    .await;
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
         GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Deny,
             rationale: format!("Automatic approval review failed: {err}"),
-            evidence: vec![],
         },
         GuardianReviewOutcome::TimedOut => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Deny,
             rationale:
                 "Automatic approval review timed out while evaluating the requested approval."
                     .to_string(),
-            evidence: vec![],
         },
         GuardianReviewOutcome::Aborted => {
             session
@@ -158,8 +170,8 @@ async fn run_guardian_review(
                         id: assessment_id,
                         turn_id: assessment_turn_id,
                         status: GuardianAssessmentStatus::Aborted,
-                        risk_score: None,
                         risk_level: None,
+                        user_authorization: None,
                         rationale: None,
                         action: action_summary,
                     }),
@@ -169,10 +181,19 @@ async fn run_guardian_review(
         }
     };
 
-    let approved = assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
+    let approved = match assessment.outcome {
+        GuardianAssessmentOutcome::Allow => true,
+        GuardianAssessmentOutcome::Deny => false,
+    };
     let verdict = if approved { "approved" } else { "denied" };
+    let user_authorization = match assessment.user_authorization {
+        GuardianUserAuthorization::Unknown => "unknown",
+        GuardianUserAuthorization::Low => "low",
+        GuardianUserAuthorization::Medium => "medium",
+        GuardianUserAuthorization::High => "high",
+    };
     let warning = format!(
-        "Automatic approval review {verdict} (risk: {}): {}",
+        "Automatic approval review {verdict} (risk: {}, authorization: {user_authorization}): {}",
         guardian_risk_level_str(assessment.risk_level),
         assessment.rationale
     );
@@ -187,6 +208,14 @@ async fn run_guardian_review(
     } else {
         GuardianAssessmentStatus::Denied
     };
+    {
+        let mut rationales = session.services.guardian_rejection_rationales.lock().await;
+        if approved {
+            rationales.remove(&assessment_id);
+        } else {
+            rationales.insert(assessment_id.clone(), assessment.rationale.clone());
+        }
+    }
     session
         .send_event(
             turn.as_ref(),
@@ -194,8 +223,8 @@ async fn run_guardian_review(
                 id: assessment_id,
                 turn_id: assessment_turn_id,
                 status,
-                risk_score: Some(assessment.risk_score),
                 risk_level: Some(assessment.risk_level),
+                user_authorization: Some(assessment.user_authorization),
                 rationale: Some(assessment.rationale.clone()),
                 action: terminal_action,
             }),
@@ -260,7 +289,8 @@ pub(crate) async fn review_approval_request_with_cancel(
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    prompt_items: Vec<codex_protocol::user_input::UserInput>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
 ) -> GuardianReviewOutcome {
@@ -326,7 +356,8 @@ pub(super) async fn run_guardian_review_session(
             parent_session: Arc::clone(&session),
             parent_turn: turn.clone(),
             spawn_config: guardian_config,
-            prompt_items,
+            request,
+            retry_reason,
             schema,
             model: guardian_model,
             reasoning_effort: guardian_reasoning_effort,

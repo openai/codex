@@ -439,9 +439,15 @@ fn append_read_only_subpath_args(
     }
 
     if !subpath.exists() {
-        // Bubblewrap must create bind targets before mounting over them. If the
-        // missing path lives under a writable host bind, that target creation
-        // leaks a real host-side placeholder or fails before command startup.
+        // A missing protected leaf, such as `<workspace>/.codex`, can be
+        // blocked with a file mask. Missing intermediate directories need
+        // mountpoint cleanup and are handled by a separate follow-up.
+        if let Some(first_missing_component) = find_first_non_existent_component(subpath)
+            && first_missing_component.as_path() == subpath
+            && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
+        {
+            append_empty_file_read_only_bind_args(args, preserved_files, &first_missing_component)?;
+        }
         return Ok(());
     }
 
@@ -534,9 +540,9 @@ fn is_within_allowed_write_paths(path: &Path, allowed_write_paths: &[PathBuf]) -
 
 /// Find the first symlink along `target_path` that is also under a writable root.
 ///
-/// This blocks symlink replacement attacks where a protected path is a symlink
-/// inside a writable root (e.g., `.codex -> ./decoy`). In that case we mount
-/// an inherited empty file on the symlink itself to prevent rewiring it.
+/// Protected symlink aliases such as `.codex -> ./decoy` need separate care
+/// because mount targets can resolve through symlinks. This lets callers mask
+/// the symlink component instead of silently treating it like a plain path.
 fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> Option<PathBuf> {
     let mut current = PathBuf::new();
 
@@ -774,7 +780,7 @@ mod tests {
             Path::new("/"),
         )
         .expect("bwrap fs args");
-        assert_eq!(args.preserved_files.len(), 0);
+        assert_eq!(args.preserved_files.len(), 1);
         assert_eq!(
             &args.args[..8],
             [
@@ -791,18 +797,25 @@ mod tests {
                 "/",
             ]
         );
+        let codex_mask_index = args
+            .args
+            .windows(3)
+            .position(|window| window[0] == "--ro-bind-data" && window[2] == "/.codex")
+            .expect("missing protected .codex should be masked under bwrap");
         assert!(
-            !args.args.iter().any(|arg| arg == "/.codex"),
-            "missing protected .codex should not be masked under bwrap: {:#?}",
-            args.args
-        );
-        assert!(
-            args.args
+            !args
+                .args
                 .windows(3)
-                .any(|window| window == ["--bind", "/dev", "/dev"]),
-            "expected /dev to be rebound after the writable root: {:#?}",
+                .any(|window| window == ["--ro-bind", "/dev/null", "/.codex"]),
+            "missing protected .codex should not use /dev/null as a path source: {:#?}",
             args.args
         );
+        let dev_rebind_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", "/dev", "/dev"])
+            .expect("expected /dev to be rebound after the writable root");
+        assert!(codex_mask_index < dev_rebind_index);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
-use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
@@ -18,7 +18,6 @@ use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
-use rmcp::model::Tool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
@@ -40,8 +39,8 @@ pub struct ToolRouter {
 }
 
 pub(crate) struct ToolRouterParams<'a> {
-    pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
-    pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
@@ -50,14 +49,14 @@ impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
         let ToolRouterParams {
             mcp_tools,
-            app_tools,
+            deferred_mcp_tools,
             discoverable_tools,
             dynamic_tools,
         } = params;
         let builder = build_specs_with_discoverable_tools(
             config,
             mcp_tools,
-            app_tools,
+            deferred_mcp_tools,
             discoverable_tools,
             dynamic_tools,
         );

@@ -69,6 +69,7 @@ pub use crate::approvals::GuardianAssessmentEvent;
 pub use crate::approvals::GuardianAssessmentStatus;
 pub use crate::approvals::GuardianCommandSource;
 pub use crate::approvals::GuardianRiskLevel;
+pub use crate::approvals::GuardianUserAuthorization;
 pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::approvals::NetworkPolicyAmendment;
@@ -132,9 +133,144 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationStartParams {
-    pub prompt: String,
+    #[serde(
+        default,
+        deserialize_with = "conversation_start_prompt_serde::deserialize",
+        serialize_with = "conversation_start_prompt_serde::serialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prompt: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ConversationStartTransport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<RealtimeVoice>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+pub enum ConversationStartTransport {
+    Websocket,
+    Webrtc { sdp: String },
+}
+
+mod conversation_start_prompt_serde {
+    use serde::Deserializer;
+    use serde::Serializer;
+
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        serde_with::rust::double_option::deserialize(deserializer)
+    }
+
+    pub(crate) fn serialize<S>(
+        value: &Option<Option<String>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_with::rust::double_option::serialize(value, serializer)
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS, Ord, PartialOrd,
+)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RealtimeVoice {
+    Alloy,
+    Arbor,
+    Ash,
+    Ballad,
+    Breeze,
+    Cedar,
+    Coral,
+    Cove,
+    Echo,
+    Ember,
+    Juniper,
+    Maple,
+    Marin,
+    Sage,
+    Shimmer,
+    Sol,
+    Spruce,
+    Vale,
+    Verse,
+}
+
+impl RealtimeVoice {
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Alloy => "alloy",
+            Self::Arbor => "arbor",
+            Self::Ash => "ash",
+            Self::Ballad => "ballad",
+            Self::Breeze => "breeze",
+            Self::Cedar => "cedar",
+            Self::Coral => "coral",
+            Self::Cove => "cove",
+            Self::Echo => "echo",
+            Self::Ember => "ember",
+            Self::Juniper => "juniper",
+            Self::Maple => "maple",
+            Self::Marin => "marin",
+            Self::Sage => "sage",
+            Self::Shimmer => "shimmer",
+            Self::Sol => "sol",
+            Self::Spruce => "spruce",
+            Self::Vale => "vale",
+            Self::Verse => "verse",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct RealtimeVoicesList {
+    pub v1: Vec<RealtimeVoice>,
+    pub v2: Vec<RealtimeVoice>,
+    pub default_v1: RealtimeVoice,
+    pub default_v2: RealtimeVoice,
+}
+
+impl RealtimeVoicesList {
+    pub fn builtin() -> Self {
+        Self {
+            v1: vec![
+                RealtimeVoice::Juniper,
+                RealtimeVoice::Maple,
+                RealtimeVoice::Spruce,
+                RealtimeVoice::Ember,
+                RealtimeVoice::Vale,
+                RealtimeVoice::Breeze,
+                RealtimeVoice::Arbor,
+                RealtimeVoice::Sol,
+                RealtimeVoice::Cove,
+            ],
+            v2: vec![
+                RealtimeVoice::Alloy,
+                RealtimeVoice::Ash,
+                RealtimeVoice::Ballad,
+                RealtimeVoice::Coral,
+                RealtimeVoice::Echo,
+                RealtimeVoice::Sage,
+                RealtimeVoice::Shimmer,
+                RealtimeVoice::Verse,
+                RealtimeVoice::Marin,
+                RealtimeVoice::Cedar,
+            ],
+            default_v1: RealtimeVoice::Cove,
+            default_v2: RealtimeVoice::Marin,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -232,6 +368,9 @@ pub enum Op {
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
 
+    /// Request the list of voices supported by realtime conversation streams.
+    RealtimeConversationListVoices,
+
     /// Legacy user input.
     ///
     /// Prefer [`Op::UserTurn`] so the caller provides full turn context
@@ -242,6 +381,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -493,6 +635,9 @@ pub enum Op {
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
+    /// Ask the workspace owner to add Codex credits to the current ChatGPT workspace.
+    SendAddCreditsNudgeEmail,
+
     /// Request to shut down codex instance.
     Shutdown,
 
@@ -515,6 +660,7 @@ impl From<Vec<UserInput>> for Op {
         Op::UserInput {
             items: value,
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         }
     }
 }
@@ -578,6 +724,7 @@ impl Op {
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
+            Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
@@ -601,6 +748,7 @@ impl Op {
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
+            Self::SendAddCreditsNudgeEmail => "send_add_credits_nudge_email",
             Self::Shutdown => "shutdown",
             Self::RunUserShellCommand { .. } => "run_user_shell_command",
             Self::ListModels => "list_models",
@@ -1095,10 +1243,7 @@ fn default_read_only_subpaths_for_writable_root(
     protect_missing_dot_codex: bool,
 ) -> Vec<AbsolutePathBuf> {
     let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
-    #[allow(clippy::expect_used)]
-    let top_level_git = writable_root
-        .join(".git")
-        .expect(".git is a valid relative path");
+    let top_level_git = writable_root.join(".git");
     // This applies to typical repos (directory .git), worktrees/submodules
     // (file .git with gitdir pointer), and bare repos when the gitdir is the
     // writable root itself.
@@ -1114,8 +1259,7 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_git);
     }
 
-    #[allow(clippy::expect_used)]
-    let top_level_agents = writable_root.join(".agents").expect("valid relative path");
+    let top_level_agents = writable_root.join(".agents");
     if top_level_agents.as_path().is_dir() {
         subpaths.push(top_level_agents);
     }
@@ -1124,8 +1268,7 @@ fn default_read_only_subpaths_for_writable_root(
     // default. For the workspace root itself, protect it even before the
     // directory exists so first-time creation still goes through the
     // protected-path approval flow.
-    #[allow(clippy::expect_used)]
-    let top_level_codex = writable_root.join(".codex").expect("valid relative path");
+    let top_level_codex = writable_root.join(".codex");
     if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
         subpaths.push(top_level_codex);
     }
@@ -1185,16 +1328,7 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf
             return None;
         }
     };
-    let gitdir_path = match AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base) {
-        Ok(path) => path,
-        Err(err) => {
-            error!(
-                "Failed to resolve gitdir path {gitdir_raw} from {path}: {err}",
-                path = dot_git.as_path().display()
-            );
-            return None;
-        }
-    };
+    let gitdir_path = AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base);
     if !gitdir_path.as_path().exists() {
         error!(
             "Resolved gitdir path {path} does not exist.",
@@ -1236,6 +1370,9 @@ pub enum EventMsg {
 
     /// Realtime conversation lifecycle close event.
     RealtimeConversationClosed(RealtimeConversationClosedEvent),
+
+    /// Realtime session description protocol payload.
+    RealtimeConversationSdp(RealtimeConversationSdpEvent),
 
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
@@ -1370,6 +1507,12 @@ pub enum EventMsg {
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
 
+    /// Response to SendAddCreditsNudgeEmail.
+    AddCreditsNudgeEmailResponse(AddCreditsNudgeEmailResponseEvent),
+
+    /// List of voices supported by realtime conversation streams.
+    RealtimeConversationListVoicesResponse(RealtimeConversationListVoicesResponseEvent),
+
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
@@ -1418,6 +1561,18 @@ pub enum EventMsg {
     CollabResumeBegin(CollabResumeBeginEvent),
     /// Collab interaction: resume end.
     CollabResumeEnd(CollabResumeEndEvent),
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AddCreditsNudgeEmailStatus {
+    Sent,
+    CooldownActive,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct AddCreditsNudgeEmailResponseEvent {
+    pub result: Result<AddCreditsNudgeEmailStatus, String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1517,8 +1672,8 @@ pub struct HookCompletedEvent {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeConversationVersion {
-    #[default]
     V1,
+    #[default]
     V2,
 }
 
@@ -1537,6 +1692,11 @@ pub struct RealtimeConversationRealtimeEvent {
 pub struct RealtimeConversationClosedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct RealtimeConversationSdpEvent {
+    pub sdp: String,
 }
 
 impl From<CollabAgentSpawnBeginEvent> for EventMsg {
@@ -1981,6 +2141,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub spend_control: Option<SpendControlSnapshot>,
     pub plan_type: Option<crate::account::PlanType>,
 }
 
@@ -2001,6 +2162,11 @@ pub struct CreditsSnapshot {
     pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpendControlSnapshot {
+    pub reached: bool,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -3114,6 +3280,11 @@ pub struct ListSkillsResponseEvent {
     pub skills: Vec<SkillsListEntry>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeConversationListVoicesResponseEvent {
+    pub voices: RealtimeVoicesList,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
@@ -3998,8 +4169,7 @@ mod tests {
             .last()
             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
             .expect("filesystem root");
-        let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path())
-            .expect("resolve blocked");
+        let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path());
         let expected_blocked = AbsolutePathBuf::from_absolute_path(
             cwd.path()
                 .canonicalize()
@@ -4050,8 +4220,7 @@ mod tests {
         let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
         let cwd_absolute =
             AbsolutePathBuf::from_absolute_path(&canonical_cwd).expect("absolute tempdir");
-        let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path())
-            .expect("resolve unreadable path");
+        let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path());
         let expected_secret = AbsolutePathBuf::from_absolute_path(canonical_cwd.join("secret"))
             .expect("canonical secret");
         let expected_agents = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".agents"))
@@ -4116,10 +4285,8 @@ mod tests {
     fn restricted_file_system_policy_treats_read_entries_as_read_only_subpaths() {
         let cwd = TempDir::new().expect("tempdir");
         let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
-        let docs_public = AbsolutePathBuf::resolve_path_against_base("docs/public", cwd.path())
-            .expect("resolve docs/public");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
+        let docs_public = AbsolutePathBuf::resolve_path_against_base("docs/public", cwd.path());
         let expected_docs = AbsolutePathBuf::from_absolute_path(canonical_cwd.join("docs"))
             .expect("canonical docs");
         let expected_docs_public =
@@ -4163,8 +4330,7 @@ mod tests {
     #[test]
     fn legacy_workspace_write_nested_readable_root_stays_writable() {
         let cwd = TempDir::new().expect("tempdir");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
         let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
@@ -4221,12 +4387,9 @@ mod tests {
     #[test]
     fn legacy_sandbox_policy_semantics_survive_split_bridge() {
         let cwd = TempDir::new().expect("tempdir");
-        let readable_root = AbsolutePathBuf::resolve_path_against_base("readable", cwd.path())
-            .expect("resolve readable root");
-        let writable_root = AbsolutePathBuf::resolve_path_against_base("writable", cwd.path())
-            .expect("resolve writable root");
-        let nested_readable_root = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path())
-            .expect("resolve nested readable root");
+        let readable_root = AbsolutePathBuf::resolve_path_against_base("readable", cwd.path());
+        let writable_root = AbsolutePathBuf::resolve_path_against_base("writable", cwd.path());
+        let nested_readable_root = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let policies = [
             SandboxPolicy::DangerFullAccess,
             SandboxPolicy::ExternalSandbox {
@@ -4413,13 +4576,36 @@ mod tests {
             },
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "be helpful".to_string(),
+            prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
+            transport: None,
+            voice: None,
+        });
+        let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("be helpful".to_string())),
+            session_id: Some("conv_1".to_string()),
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            voice: Some(RealtimeVoice::Cove),
         });
         let text = Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),
         });
         let close = Op::RealtimeConversationClose;
+        let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: None,
+            session_id: None,
+            transport: None,
+            voice: None,
+        });
+        let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(None),
+            session_id: None,
+            transport: None,
+            voice: None,
+        });
+        let list_voices = Op::RealtimeConversationListVoices;
 
         assert_eq!(
             serde_json::to_value(&start).unwrap(),
@@ -4428,6 +4614,34 @@ mod tests {
                 "prompt": "be helpful",
                 "session_id": "conv_1"
             })
+        );
+        assert_eq!(
+            serde_json::to_value(&default_prompt_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&null_prompt_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "prompt": null
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(json!({
+                "type": "realtime_conversation_start"
+            }))
+            .unwrap(),
+            default_prompt_start
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(json!({
+                "type": "realtime_conversation_start",
+                "prompt": null
+            }))
+            .unwrap(),
+            null_prompt_start
         );
         assert_eq!(
             serde_json::to_value(&audio).unwrap(),
@@ -4455,6 +4669,63 @@ mod tests {
             serde_json::from_value::<Op>(serde_json::to_value(&close).unwrap()).unwrap(),
             close
         );
+        assert_eq!(
+            serde_json::to_value(&list_voices).unwrap(),
+            json!({
+                "type": "realtime_conversation_list_voices"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&list_voices).unwrap()).unwrap(),
+            list_voices
+        );
+        assert_eq!(
+            serde_json::to_value(&webrtc_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "prompt": "be helpful",
+                "session_id": "conv_1",
+                "transport": {
+                    "type": "webrtc",
+                    "sdp": "v=offer\r\n"
+                },
+                "voice": "cove"
+            })
+        );
+    }
+
+    #[test]
+    fn realtime_voice_list_is_stable() {
+        assert_eq!(
+            RealtimeVoicesList::builtin(),
+            RealtimeVoicesList {
+                v1: vec![
+                    RealtimeVoice::Juniper,
+                    RealtimeVoice::Maple,
+                    RealtimeVoice::Spruce,
+                    RealtimeVoice::Ember,
+                    RealtimeVoice::Vale,
+                    RealtimeVoice::Breeze,
+                    RealtimeVoice::Arbor,
+                    RealtimeVoice::Sol,
+                    RealtimeVoice::Cove,
+                ],
+                v2: vec![
+                    RealtimeVoice::Alloy,
+                    RealtimeVoice::Ash,
+                    RealtimeVoice::Ballad,
+                    RealtimeVoice::Coral,
+                    RealtimeVoice::Echo,
+                    RealtimeVoice::Sage,
+                    RealtimeVoice::Shimmer,
+                    RealtimeVoice::Verse,
+                    RealtimeVoice::Marin,
+                    RealtimeVoice::Cedar,
+                ],
+                default_v1: RealtimeVoice::Cove,
+                default_v2: RealtimeVoice::Marin,
+            }
+        );
     }
 
     #[test]
@@ -4462,6 +4733,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4479,6 +4751,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             }
         );
 
@@ -4498,6 +4771,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4509,6 +4783,33 @@ mod tests {
                 "final_output_json_schema": schema,
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: None,
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "fiber_run_id".to_string(),
+                "fiber-123".to_string(),
+            )])),
+        };
+
+        let json_op = serde_json::to_value(&op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "responsesapi_client_metadata": {
+                    "fiber_run_id": "fiber-123",
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Op>(json_op)?, op);
 
         Ok(())
     }

@@ -1,0 +1,19 @@
+[package]
+name = "codex-realtime-webrtc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_realtime_webrtc"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libwebrtc = { version = "0.3.26", git = "https://github.com/juberti-oai/rust-sdks.git", rev = "e2d1d1d230c6fc9df171ccb181423f957bb3c1f0" }
+
+[lints]
+workspace = true

@@ -51,6 +51,12 @@
             }
           ]
         },
+        "isWorkspaceOwner": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "planType": {
           "anyOf": [
             {
@@ -60,9 +66,88 @@
               "type": "null"
             }
           ]
+        },
+        "workspaceRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
+    },
+    "AddCreditsNudgeEmailNotification": {
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailResult"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "AddCreditsNudgeEmailResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "sent"
+              ],
+              "title": "SentAddCreditsNudgeEmailResultStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "SentAddCreditsNudgeEmailResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "cooldownActive"
+              ],
+              "title": "CooldownActiveAddCreditsNudgeEmailResultStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "CooldownActiveAddCreditsNudgeEmailResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "AgentMessageDeltaNotification": {
       "properties": {
@@ -1013,7 +1098,7 @@
           "type": "array"
         },
         "watchId": {
-          "description": "Watch identifier returned by `fs/watch`.",
+          "description": "Watch identifier previously provided to `fs/watch`.",
           "type": "string"
         }
       },
@@ -1146,16 +1231,18 @@
             }
           ]
         },
-        "riskScore": {
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "status": {
           "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        },
+        "userAuthorization": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianUserAuthorization"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1353,6 +1440,17 @@
     "GuardianRiskLevel": {
       "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
       "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "GuardianUserAuthorization": {
+      "description": "[UNSTABLE] Authorization level assigned by guardian approval review.",
+      "enum": [
+        "unknown",
         "low",
         "medium",
         "high"
@@ -1736,6 +1834,7 @@
     },
     "McpToolCallResult": {
       "properties": {
+        "_meta": true,
         "content": {
           "items": true,
           "type": "array"
@@ -2031,6 +2130,16 @@
               "type": "null"
             }
           ]
+        },
+        "spendControl": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -2228,6 +2337,17 @@
     },
     "SkillsChangedNotification": {
       "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "type": "object"
+    },
+    "SpendControlSnapshot": {
+      "properties": {
+        "reached": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reached"
+      ],
       "type": "object"
     },
     "SubAgentSource": {
@@ -3303,6 +3423,22 @@
       ],
       "type": "object"
     },
+    "ThreadRealtimeSdpNotification": {
+      "description": "EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.",
+      "properties": {
+        "sdp": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sdp",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadRealtimeStartedNotification": {
       "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
       "properties": {
@@ -3998,6 +4134,14 @@
         "samplePaths"
       ],
       "type": "object"
+    },
+    "WorkspaceRole": {
+      "enum": [
+        "account-owner",
+        "account-admin",
+        "standard-user"
+      ],
+      "type": "string"
     }
   },
   "description": "Notification sent from the server to the client.",
@@ -4629,6 +4773,26 @@
       "properties": {
         "method": {
           "enum": [
+            "account/addCreditsNudgeEmail/completed"
+          ],
+          "title": "Account/addCreditsNudgeEmail/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Account/addCreditsNudgeEmail/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "app/list/updated"
           ],
           "title": "App/list/updatedNotificationMethod",
@@ -4924,6 +5088,26 @@
         "params"
       ],
       "title": "Thread/realtime/outputAudio/deltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/sdp"
+          ],
+          "title": "Thread/realtime/sdpNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeSdpNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/sdpNotification",
       "type": "object"
     },
     {

@@ -26,6 +26,7 @@ bm25 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-analytics = { workspace = true }
+codex-account = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
@@ -116,6 +117,7 @@ tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
+whoami = { workspace = true }
 zip = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

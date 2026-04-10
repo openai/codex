@@ -1,10 +1,10 @@
-pub mod amend;
-pub mod decision;
-pub mod error;
-pub mod execpolicycheck;
+pub(crate) mod amend;
+pub(crate) mod decision;
+pub(crate) mod error;
+pub(crate) mod execpolicycheck;
 mod executable_name;
-pub mod parser;
-pub mod policy;
+pub(crate) mod parser;
+pub(crate) mod policy;
 pub mod rule;
 
 pub use amend::AmendError;
@@ -22,6 +22,9 @@ pub use policy::Evaluation;
 pub use policy::MatchOptions;
 pub use policy::Policy;
 pub use rule::NetworkRuleProtocol;
+pub use rule::PatternToken;
+pub use rule::PrefixPattern;
+pub use rule::PrefixRule;
 pub use rule::Rule;
 pub use rule::RuleMatch;
 pub use rule::RuleRef;

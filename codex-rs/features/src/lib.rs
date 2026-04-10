@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use toml::Table;
 
+mod feature_configs;
 mod legacy;
+pub use feature_configs::MultiAgentV2ConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -396,7 +398,7 @@ impl Features {
             .apply(&mut features);
 
             if let Some(feature_entries) = source.features {
-                features.apply_map(&feature_entries.entries);
+                features.apply_toml(feature_entries);
             }
         }
 
@@ -490,8 +492,61 @@ pub fn is_known_feature_key(key: &str) -> bool {
 /// Deserializable features table for TOML.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
-    pub entries: BTreeMap<String, bool>,
+    entries: BTreeMap<String, bool>,
+}
+
+impl Features {
+    fn apply_toml(&mut self, features: &FeaturesToml) {
+        let entries = features.entries();
+        self.apply_map(&entries);
+    }
+}
+
+impl FeaturesToml {
+    pub fn entries(&self) -> BTreeMap<String, bool> {
+        let mut entries = self.entries.clone();
+        if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
+        }
+        entries
+    }
+}
+
+impl From<BTreeMap<String, bool>> for FeaturesToml {
+    fn from(entries: BTreeMap<String, bool>) -> Self {
+        Self {
+            entries,
+            ..Default::default()
+        }
+    }
+}
+
+// To be used for features that need more configuration than just enabled/disabled and
+// require a custom config struct under `[features]`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum FeatureToml<T> {
+    Enabled(bool),
+    Config(T),
+}
+
+impl<T: FeatureConfig> FeatureToml<T> {
+    pub fn enabled(&self) -> Option<bool> {
+        match self {
+            Self::Enabled(enabled) => Some(*enabled),
+            Self::Config(config) => config.enabled(),
+        }
+    }
+}
+
+// A trait to be implemented by custom feature config structs when defining a feature that needs more configuration than
+// just enabled/disabled.
+pub trait FeatureConfig {
+    fn enabled(&self) -> Option<bool>;
 }
 
 /// Single, easy-to-read registry of all feature definitions.

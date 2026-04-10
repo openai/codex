@@ -58,6 +58,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
@@ -67,6 +68,7 @@ use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
+use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -413,6 +415,16 @@ impl McpProcess {
         self.send_request("thread/shellCommand", params).await
     }
 
+    /// Send a `thread/addCreditsNudgeEmail` JSON-RPC request.
+    pub async fn send_thread_add_credits_nudge_email_request(
+        &mut self,
+        params: ThreadAddCreditsNudgeEmailParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/addCreditsNudgeEmail", params)
+            .await
+    }
+
     /// Send a `thread/rollback` JSON-RPC request.
     pub async fn send_thread_rollback_request(
         &mut self,
@@ -662,6 +674,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/realtime/stop", params).await
+    }
+
+    pub async fn send_thread_realtime_list_voices_request(
+        &mut self,
+        params: ThreadRealtimeListVoicesParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/realtime/listVoices", params)
+            .await
     }
 
     /// Deterministically clean up an intentionally in-flight turn.

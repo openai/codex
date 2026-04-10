@@ -23,6 +23,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use rmcp::model::ReadResourceRequestParams;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -81,8 +82,8 @@ impl CodexThread {
     }
 
     #[doc(hidden)]
-    pub async fn flush_rollout(&self) {
-        self.codex.session.flush_rollout().await;
+    pub async fn flush_rollout(&self) -> std::io::Result<()> {
+        self.codex.session.flush_rollout().await
     }
 
     pub async fn submit_with_trace(
@@ -97,8 +98,11 @@ impl CodexThread {
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
-        self.codex.steer_input(input, expected_turn_id).await
+        self.codex
+            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .await
     }
 
     pub async fn set_app_server_client_info(

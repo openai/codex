@@ -130,6 +130,8 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        initial_workspace_role: None,
+        initial_is_workspace_owner: None,
         initial_plan_type: None,
         model: Some(resolved_model),
         startup_tooltip_override: None,
@@ -234,6 +236,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
             unlimited: false,
             balance: Some("17.5".to_string()),
         }),
+        spend_control: None,
         plan_type: None,
     }));
     let initial_balance = chat
@@ -253,6 +256,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     }));
 
@@ -291,6 +295,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: None,
         }),
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Plus),
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Plus));
@@ -309,6 +314,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: Some(234),
         }),
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
@@ -327,6 +333,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: Some(567),
         }),
         credits: None,
+        spend_control: None,
         plan_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
@@ -350,6 +357,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
             unlimited: false,
             balance: Some("5.00".to_string()),
         }),
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
     }));
 
@@ -363,6 +371,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
     }));
 
@@ -385,6 +394,101 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
     );
     assert_eq!(other.primary.as_ref().map(|w| w.used_percent), Some(90.0));
     assert!(other.credits.is_none());
+}
+
+#[tokio::test]
+async fn core_usage_limit_error_shows_notify_owner_hint() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: false,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: None,
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    chat.handle_codex_event(Event {
+        id: "usage-limit".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "The usage limit has been reached".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Your workspace is out of credits."),
+        "expected usage-limit error, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected workspace-owner prompt, got {rendered:?}"
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Request more credits from your workspace owner?"),
+        "expected workspace-owner confirmation popup, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn core_usage_limit_error_shows_spend_cap_hint_when_reached() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        /*status_account_display*/ None,
+        /*workspace_role*/ None,
+        Some(false),
+        Some(PlanType::SelfServeBusinessUsageBased),
+        /*has_chatgpt_account*/ true,
+    );
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: None,
+        }),
+        spend_control: Some(codex_protocol::protocol::SpendControlSnapshot { reached: true }),
+        plan_type: Some(PlanType::SelfServeBusinessUsageBased),
+    }));
+
+    chat.handle_codex_event(Event {
+        id: "usage-limit".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "The usage limit has been reached".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Your workspace has reached its spend cap."),
+        "expected spend-cap hint, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("Request more from your workspace owner? [y/N]"),
+        "expected spend-cap hint instead of workspace-owner prompt, got {rendered:?}"
+    );
 }
 
 #[tokio::test]
@@ -415,6 +519,7 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
     }));
 
@@ -574,20 +679,28 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
 #[tokio::test]
 async fn fast_status_indicator_requires_chatgpt_auth() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     chat.set_service_tier(Some(ServiceTier::Fast));
 
     assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 
     set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
 
     assert!(chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 }
 
 #[tokio::test]
-async fn fast_status_indicator_is_hidden_for_non_gpt54_model() {
+async fn fast_status_indicator_is_hidden_for_models_without_fast_support() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(!get_available_model(&chat, "gpt-5.3-codex").supports_fast_mode());
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(!get_available_model(&chat, "gpt-5.3-codex").supports_fast_mode());
 
     assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 }
@@ -595,7 +708,11 @@ async fn fast_status_indicator_is_hidden_for_non_gpt54_model() {
 #[tokio::test]
 async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
 
     assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 }
@@ -855,6 +972,36 @@ async fn status_line_invalid_items_warn_once() {
 }
 
 #[tokio::test]
+async fn status_line_legacy_context_used_renders_context_meter() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["context-used".to_string()]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Context [     ]".to_string()));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "legacy context-used should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_legacy_context_remaining_renders_context_meter() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["context-remaining".to_string()]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Context [     ]".to_string()));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "legacy context-remaining should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("main".to_string());
@@ -946,23 +1093,27 @@ async fn status_line_fast_mode_footer_snapshot() {
 }
 
 #[tokio::test]
-async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
+async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     chat.config.cwd = test_project_path().abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
-        "context-remaining".to_string(),
+        "context-usage".to_string(),
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     chat.refresh_status_line();
     let test_cwd = test_path_display("/tmp/project");
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.4 xhigh fast · 100% left · {test_cwd}"))
+        Some(format!("gpt-5.4 xhigh fast · Context [     ] · {test_cwd}"))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -970,7 +1121,9 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.3-codex xhigh · 100% left · {test_cwd}"))
+        Some(format!(
+            "gpt-5.3-codex xhigh · Context [     ] · {test_cwd}"
+        ))
     );
 }
 
@@ -1051,16 +1204,20 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     use ratatui::backend::TestBackend;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     chat.show_welcome_banner = false;
     chat.config.cwd = test_project_path().abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
-        "context-remaining".to_string(),
+        "context-usage".to_string(),
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
+    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     chat.refresh_status_line();
 
     let width = 80;

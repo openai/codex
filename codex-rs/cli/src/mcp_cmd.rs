@@ -8,24 +8,24 @@ use anyhow::bail;
 use clap::ArgGroup;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::McpManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::mcp::McpManager;
 use codex_core::plugins::PluginsManager;
-use codex_mcp::mcp::auth::McpOAuthLoginSupport;
-use codex_mcp::mcp::auth::ResolvedMcpOAuthScopes;
-use codex_mcp::mcp::auth::compute_auth_statuses;
-use codex_mcp::mcp::auth::discover_supported_scopes;
-use codex_mcp::mcp::auth::oauth_login_support;
-use codex_mcp::mcp::auth::resolve_oauth_scopes;
-use codex_mcp::mcp::auth::should_retry_without_scopes;
+use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::ResolvedMcpOAuthScopes;
+use codex_mcp::compute_auth_statuses;
+use codex_mcp::discover_supported_scopes;
+use codex_mcp::oauth_login_support;
+use codex_mcp::resolve_oauth_scopes;
+use codex_mcp::should_retry_without_scopes;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
 use codex_utils_cli::CliConfigOverrides;
-use codex_utils_cli::format_env_display::format_env_display;
+use codex_utils_cli::format_env_display;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)

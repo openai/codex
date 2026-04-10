@@ -71,6 +71,8 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        initial_workspace_role: None,
+        initial_is_workspace_owner: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
@@ -1592,6 +1594,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
             description: "medium".to_string(),
         }],
         supports_personality: false,
+        additional_speed_tiers: Vec::new(),
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -1714,6 +1717,7 @@ async fn single_reasoning_option_skips_selection() {
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,
         supports_personality: false,
+        additional_speed_tiers: Vec::new(),
         is_default: false,
         upgrade: None,
         show_in_picker: true,
@@ -1761,13 +1765,11 @@ async fn feedback_upload_consent_popup_snapshot() {
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
-        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
-            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
-                headline: "Proxy environment variables are set and may affect connectivity."
-                    .to_string(),
-                details: vec!["HTTPS_PROXY = hello".to_string()],
-            },
-        ]),
+        &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTPS_PROXY = hello".to_string()],
+        }]),
     ));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -1782,13 +1784,11 @@ async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_fi
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::GoodResult,
         chat.current_rollout_path.clone(),
-        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
-            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
-                headline: "Proxy environment variables are set and may affect connectivity."
-                    .to_string(),
-                details: vec!["HTTPS_PROXY = hello".to_string()],
-            },
-        ]),
+        &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTPS_PROXY = hello".to_string()],
+        }]),
     ));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);

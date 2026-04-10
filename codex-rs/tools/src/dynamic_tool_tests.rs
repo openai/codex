@@ -25,16 +25,14 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
         ToolDefinition {
             name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
-            input_schema: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            input_schema: JsonSchema::object(
+                BTreeMap::from([(
                     "id".to_string(),
-                    JsonSchema::String {
-                        description: Some("Ticket identifier".to_string()),
-                    },
+                    JsonSchema::string(Some("Ticket identifier".to_string()),),
                 )]),
-                required: None,
-                additional_properties: None,
-            },
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             output_schema: None,
             defer_loading: false,
         }
@@ -58,11 +56,11 @@ fn parse_dynamic_tool_preserves_defer_loading() {
         ToolDefinition {
             name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
-            input_schema: JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
+            input_schema: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
             output_schema: None,
             defer_loading: true,
         }

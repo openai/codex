@@ -6,21 +6,36 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use bm25::Document;
 use bm25::Language;
+use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
-use codex_mcp::mcp_connection_manager::ToolInfo;
+use codex_mcp::ToolInfo;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchResultSource;
 use codex_tools::collect_tool_search_output_tools;
-use std::collections::HashMap;
 
 pub struct ToolSearchHandler {
-    tools: HashMap<String, ToolInfo>,
+    entries: Vec<(String, ToolInfo)>,
+    search_engine: SearchEngine<usize>,
 }
 
 impl ToolSearchHandler {
-    pub fn new(tools: HashMap<String, ToolInfo>) -> Self {
-        Self { tools }
+    pub fn new(tools: std::collections::HashMap<String, ToolInfo>) -> Self {
+        let mut entries: Vec<(String, ToolInfo)> = tools.into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let documents: Vec<Document<usize>> = entries
+            .iter()
+            .enumerate()
+            .map(|(idx, (name, info))| Document::new(idx, build_search_text(name, info)))
+            .collect();
+        let search_engine =
+            SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
+
+        Self {
+            entries,
+            search_engine,
+        }
     }
 }
 
@@ -60,29 +75,20 @@ impl ToolHandler for ToolSearchHandler {
             ));
         }
 
-        let mut entries: Vec<(String, ToolInfo)> = self.tools.clone().into_iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
-
-        if entries.is_empty() {
+        if self.entries.is_empty() {
             return Ok(ToolSearchOutput { tools: Vec::new() });
         }
 
-        let documents: Vec<Document<usize>> = entries
-            .iter()
-            .enumerate()
-            .map(|(idx, (name, info))| Document::new(idx, build_search_text(name, info)))
-            .collect();
-        let search_engine =
-            SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
-        let results = search_engine.search(query, limit);
+        let results = self.search_engine.search(query, limit);
 
         let tools = collect_tool_search_output_tools(
             results
                 .into_iter()
-                .filter_map(|result| entries.get(result.document.id))
-                .map(|(_name, tool)| ToolSearchResultSource {
-                    tool_namespace: tool.tool_namespace.as_str(),
-                    tool_name: tool.tool_name.as_str(),
+                .filter_map(|result| self.entries.get(result.document.id))
+                .map(|(_, tool)| ToolSearchResultSource {
+                    server_name: tool.server_name.as_str(),
+                    tool_namespace: tool.callable_namespace.as_str(),
+                    tool_name: tool.callable_name.as_str(),
                     tool: &tool.tool,
                     connector_name: tool.connector_name.as_deref(),
                     connector_description: tool.connector_description.as_deref(),
@@ -101,7 +107,8 @@ impl ToolHandler for ToolSearchHandler {
 fn build_search_text(name: &str, info: &ToolInfo) -> String {
     let mut parts = vec![
         name.to_string(),
-        info.tool_name.clone(),
+        info.callable_name.clone(),
+        info.tool.name.to_string(),
         info.server_name.clone(),
     ];
 
@@ -128,6 +135,15 @@ fn build_search_text(name: &str, info: &ToolInfo) -> String {
     {
         parts.push(connector_description.to_string());
     }
+
+    parts.extend(
+        info.plugin_display_names
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string),
+    );
 
     parts.extend(
         info.tool

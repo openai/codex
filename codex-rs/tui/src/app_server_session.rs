@@ -24,6 +24,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -42,6 +44,7 @@ use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
+use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -63,8 +66,10 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+#[cfg(test)]
+use codex_core::append_message_history_entry;
 use codex_core::config::Config;
-use codex_core::message_history;
+use codex_core::message_history_metadata;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -74,6 +79,7 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -88,17 +94,27 @@ use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Data collected during the TUI bootstrap phase that the main event loop
+/// needs to configure the UI, telemetry, and initial rate-limit prefetch.
+///
+/// Rate-limit snapshots are intentionally **not** included here; they are
+/// fetched asynchronously after bootstrap returns so that the TUI can render
+/// its first frame without waiting for the rate-limit round-trip.
 pub(crate) struct AppServerBootstrap {
-    pub(crate) account_auth_mode: Option<AuthMode>,
     pub(crate) account_email: Option<String>,
     pub(crate) auth_mode: Option<TelemetryAuthMode>,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) workspace_role: Option<codex_app_server_protocol::WorkspaceRole>,
+    pub(crate) is_workspace_owner: Option<bool>,
     pub(crate) plan_type: Option<codex_protocol::account::PlanType>,
+    /// Whether the configured model provider needs OpenAI-style auth. Combined
+    /// with `has_chatgpt_account` to decide if a startup rate-limit prefetch
+    /// should be fired.
+    pub(crate) requires_openai_auth: bool,
     pub(crate) default_model: String,
     pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) has_chatgpt_account: bool,
     pub(crate) available_models: Vec<ModelPreset>,
-    pub(crate) rate_limit_snapshots: Vec<RateLimitSnapshot>,
 }
 
 pub(crate) struct AppServerSession {
@@ -169,17 +185,7 @@ impl AppServerSession {
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
-        let account_request_id = self.next_request_id();
-        let account: GetAccountResponse = self
-            .client
-            .request_typed(ClientRequest::GetAccount {
-                request_id: account_request_id,
-                params: GetAccountParams {
-                    refresh_token: false,
-                },
-            })
-            .await
-            .wrap_err("account/read failed during TUI bootstrap")?;
+        let account = self.read_account().await?;
         let model_request_id = self.next_request_id();
         let models: ModelListResponse = self
             .client
@@ -211,19 +217,21 @@ impl AppServerSession {
             .wrap_err("model/list returned no models for TUI bootstrap")?;
 
         let (
-            account_auth_mode,
             account_email,
             auth_mode,
             status_account_display,
+            workspace_role,
+            is_workspace_owner,
             plan_type,
             feedback_audience,
             has_chatgpt_account,
         ) = match account.account {
             Some(Account::ApiKey {}) => (
-                Some(AuthMode::ApiKey),
                 None,
                 Some(TelemetryAuthMode::ApiKey),
                 Some(StatusAccountDisplay::ApiKey),
+                None,
+                None,
                 None,
                 FeedbackAudience::External,
                 false,
@@ -235,13 +243,14 @@ impl AppServerSession {
                     FeedbackAudience::External
                 };
                 (
-                    Some(AuthMode::Chatgpt),
                     Some(email.clone()),
                     Some(TelemetryAuthMode::Chatgpt),
                     Some(StatusAccountDisplay::ChatGpt {
                         email: Some(email),
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
+                    account.workspace_role,
+                    account.is_workspace_owner,
                     Some(plan_type),
                     feedback_audience,
                     true,
@@ -253,42 +262,41 @@ impl AppServerSession {
                 None,
                 None,
                 None,
+                None,
                 FeedbackAudience::External,
                 false,
             ),
         };
-        let rate_limit_snapshots = if account.requires_openai_auth && has_chatgpt_account {
-            let rate_limit_request_id = self.next_request_id();
-            match self
-                .client
-                .request_typed(ClientRequest::GetAccountRateLimits {
-                    request_id: rate_limit_request_id,
-                    params: None,
-                })
-                .await
-            {
-                Ok(rate_limits) => app_server_rate_limit_snapshots_to_core(rate_limits),
-                Err(err) => {
-                    tracing::warn!("account/rateLimits/read failed during TUI bootstrap: {err}");
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        };
-
         Ok(AppServerBootstrap {
-            account_auth_mode,
             account_email,
             auth_mode,
             status_account_display,
+            workspace_role,
+            is_workspace_owner,
             plan_type,
+            requires_openai_auth: account.requires_openai_auth,
             default_model,
             feedback_audience,
             has_chatgpt_account,
             available_models,
-            rate_limit_snapshots,
         })
+    }
+
+    /// Fetches the current account info without refreshing the auth token.
+    ///
+    /// Used by both `bootstrap` (to populate the initial UI) and `get_login_status`
+    /// (to check auth mode without the overhead of a full bootstrap).
+    pub(crate) async fn read_account(&mut self) -> Result<GetAccountResponse> {
+        let account_request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::GetAccount {
+                request_id: account_request_id,
+                params: GetAccountParams {
+                    refresh_token: false,
+                },
+            })
+            .await
+            .wrap_err("account/read failed during TUI bootstrap")
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
@@ -434,6 +442,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
+                    responsesapi_client_metadata: None,
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
@@ -484,6 +493,7 @@ impl AppServerSession {
                 params: TurnSteerParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
+                    responsesapi_client_metadata: None,
                     expected_turn_id: turn_id,
                 },
             })
@@ -557,6 +567,24 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_add_credits_nudge_email(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadAddCreditsNudgeEmailResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAddCreditsNudgeEmail {
+                request_id,
+                params: ThreadAddCreditsNudgeEmailParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/addCreditsNudgeEmail failed in TUI")?;
         Ok(())
     }
 
@@ -658,6 +686,15 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     prompt: params.prompt,
                     session_id: params.session_id,
+                    voice: params.voice,
+                    transport: params.transport.map(|transport| match transport {
+                        ConversationStartTransport::Websocket => {
+                            ThreadRealtimeStartTransport::Websocket
+                        }
+                        ConversationStartTransport::Webrtc { sdp } => {
+                            ThreadRealtimeStartTransport::Webrtc { sdp }
+                        }
+                    }),
                 },
             })
             .await
@@ -809,6 +846,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
             })
             .collect(),
         supports_personality: model.supports_personality,
+        additional_speed_tiers: model.additional_speed_tiers,
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
@@ -1076,7 +1114,7 @@ async fn thread_session_state_from_thread_response(
         .map(ThreadId::from_string)
         .transpose()
         .map_err(|err| format!("forked_from_id is invalid: {err}"))?;
-    let (history_log_id, history_entry_count) = message_history::history_metadata(config).await;
+    let (history_log_id, history_entry_count) = message_history_metadata(config).await;
     let history_entry_count = u64::try_from(history_entry_count).unwrap_or(u64::MAX);
 
     Ok(ThreadSessionState {
@@ -1122,6 +1160,9 @@ pub(crate) fn app_server_rate_limit_snapshot_to_core(
         primary: snapshot.primary.map(app_server_rate_limit_window_to_core),
         secondary: snapshot.secondary.map(app_server_rate_limit_window_to_core),
         credits: snapshot.credits.map(app_server_credits_snapshot_to_core),
+        spend_control: snapshot
+            .spend_control
+            .map(app_server_spend_control_snapshot_to_core),
         plan_type: snapshot.plan_type,
     }
 }
@@ -1143,6 +1184,14 @@ fn app_server_credits_snapshot_to_core(
         has_credits: snapshot.has_credits,
         unlimited: snapshot.unlimited,
         balance: snapshot.balance,
+    }
+}
+
+fn app_server_spend_control_snapshot_to_core(
+    snapshot: codex_app_server_protocol::SpendControlSnapshot,
+) -> codex_protocol::protocol::SpendControlSnapshot {
+    codex_protocol::protocol::SpendControlSnapshot {
+        reached: snapshot.reached,
     }
 }
 
@@ -1316,10 +1365,10 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
 
-        message_history::append_entry("older", &thread_id, &config)
+        append_message_history_entry("older", &thread_id, &config)
             .await
             .expect("history append should succeed");
-        message_history::append_entry("newer", &thread_id, &config)
+        append_message_history_entry("newer", &thread_id, &config)
             .await
             .expect("history append should succeed");
 

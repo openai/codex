@@ -116,6 +116,9 @@
       "visibility": "list",
       "minimal_client_version": "0.98.0",
       "supported_in_api": true,
+      "additional_speed_tiers": [
+        "fast"
+      ],
       "availability_nux": null,
       "upgrade": null,
       "priority": 0,

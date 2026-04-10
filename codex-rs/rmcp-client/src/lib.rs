@@ -1,4 +1,5 @@
 mod auth_status;
+mod elicitation_client_service;
 mod logging_client_handler;
 mod oauth;
 mod perform_oauth_login;

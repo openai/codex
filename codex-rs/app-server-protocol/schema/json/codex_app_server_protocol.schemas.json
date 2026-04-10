@@ -489,6 +489,30 @@
             },
             "method": {
               "enum": [
+                "thread/addCreditsNudgeEmail"
+              ],
+              "title": "Thread/addCreditsNudgeEmailRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadAddCreditsNudgeEmailParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/addCreditsNudgeEmailRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -4038,6 +4062,26 @@
           "properties": {
             "method": {
               "enum": [
+                "account/addCreditsNudgeEmail/completed"
+              ],
+              "title": "Account/addCreditsNudgeEmail/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AddCreditsNudgeEmailNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Account/addCreditsNudgeEmail/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "app/list/updated"
               ],
               "title": "App/list/updatedNotificationMethod",
@@ -4333,6 +4377,26 @@
             "params"
           ],
           "title": "Thread/realtime/outputAudio/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/sdp"
+              ],
+              "title": "Thread/realtime/sdpNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeSdpNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/sdpNotification",
           "type": "object"
         },
         {
@@ -4901,6 +4965,12 @@
               }
             ]
           },
+          "isWorkspaceOwner": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "planType": {
             "anyOf": [
               {
@@ -4910,10 +4980,91 @@
                 "type": "null"
               }
             ]
+          },
+          "workspaceRole": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WorkspaceRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "AccountUpdatedNotification",
         "type": "object"
+      },
+      "AddCreditsNudgeEmailNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "result": {
+            "$ref": "#/definitions/v2/AddCreditsNudgeEmailResult"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "threadId"
+        ],
+        "title": "AddCreditsNudgeEmailNotification",
+        "type": "object"
+      },
+      "AddCreditsNudgeEmailResult": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "sent"
+                ],
+                "title": "SentAddCreditsNudgeEmailResultStatus",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "title": "SentAddCreditsNudgeEmailResult",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "cooldownActive"
+                ],
+                "title": "CooldownActiveAddCreditsNudgeEmailResultStatus",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "title": "CooldownActiveAddCreditsNudgeEmailResult",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "AgentMessageDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7511,7 +7662,7 @@
             "type": "array"
           },
           "watchId": {
-            "description": "Watch identifier returned by `fs/watch`.",
+            "description": "Watch identifier previously provided to `fs/watch`.",
             "type": "string"
           }
         },
@@ -7781,7 +7932,7 @@
         "description": "Stop filesystem watch notifications for a prior `fs/watch`.",
         "properties": {
           "watchId": {
-            "description": "Watch identifier returned by `fs/watch`.",
+            "description": "Watch identifier previously provided to `fs/watch`.",
             "type": "string"
           }
         },
@@ -7808,25 +7959,6 @@
               }
             ],
             "description": "Absolute file or directory path to watch."
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "title": "FsWatchParams",
-        "type": "object"
-      },
-      "FsWatchResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Created watch handle returned by `fs/watch`.",
-        "properties": {
-          "path": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
-              }
-            ],
-            "description": "Canonicalized path associated with the watch."
           },
           "watchId": {
             "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
@@ -7836,6 +7968,25 @@
         "required": [
           "path",
           "watchId"
+        ],
+        "title": "FsWatchParams",
+        "type": "object"
+      },
+      "FsWatchResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `fs/watch`.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Canonicalized path associated with the watch."
+          }
+        },
+        "required": [
+          "path"
         ],
         "title": "FsWatchResponse",
         "type": "object"
@@ -7991,8 +8142,24 @@
               }
             ]
           },
+          "isWorkspaceOwner": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "requiresOpenaiAuth": {
             "type": "boolean"
+          },
+          "workspaceRole": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WorkspaceRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -8075,16 +8242,18 @@
               }
             ]
           },
-          "riskScore": {
-            "format": "uint8",
-            "minimum": 0.0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "status": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewStatus"
+          },
+          "userAuthorization": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GuardianUserAuthorization"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -8282,6 +8451,17 @@
       "GuardianRiskLevel": {
         "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
         "enum": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ],
+        "type": "string"
+      },
+      "GuardianUserAuthorization": {
+        "description": "[UNSTABLE] Authorization level assigned by guardian approval review.",
+        "enum": [
+          "unknown",
           "low",
           "medium",
           "high"
@@ -9184,6 +9364,7 @@
       },
       "McpToolCallResult": {
         "properties": {
+          "_meta": true,
           "content": {
             "items": true,
             "type": "array"
@@ -9287,6 +9468,13 @@
       },
       "Model": {
         "properties": {
+          "additionalSpeedTiers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "availabilityNux": {
             "anyOf": [
               {
@@ -10355,6 +10543,16 @@
                 "type": "null"
               }
             ]
+          },
+          "spendControl": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
@@ -10459,6 +10657,59 @@
           "v2"
         ],
         "type": "string"
+      },
+      "RealtimeVoice": {
+        "enum": [
+          "alloy",
+          "arbor",
+          "ash",
+          "ballad",
+          "breeze",
+          "cedar",
+          "coral",
+          "cove",
+          "echo",
+          "ember",
+          "juniper",
+          "maple",
+          "marin",
+          "sage",
+          "shimmer",
+          "sol",
+          "spruce",
+          "vale",
+          "verse"
+        ],
+        "type": "string"
+      },
+      "RealtimeVoicesList": {
+        "properties": {
+          "defaultV1": {
+            "$ref": "#/definitions/v2/RealtimeVoice"
+          },
+          "defaultV2": {
+            "$ref": "#/definitions/v2/RealtimeVoice"
+          },
+          "v1": {
+            "items": {
+              "$ref": "#/definitions/v2/RealtimeVoice"
+            },
+            "type": "array"
+          },
+          "v2": {
+            "items": {
+              "$ref": "#/definitions/v2/RealtimeVoice"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "defaultV1",
+          "defaultV2",
+          "v1",
+          "v2"
+        ],
+        "type": "object"
       },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -12125,6 +12376,17 @@
         "title": "SkillsListResponse",
         "type": "object"
       },
+      "SpendControlSnapshot": {
+        "properties": {
+          "reached": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reached"
+        ],
+        "type": "object"
+      },
       "SubAgentSource": {
         "oneOf": [
           {
@@ -12415,6 +12677,24 @@
           "waitingOnUserInput"
         ],
         "type": "string"
+      },
+      "ThreadAddCreditsNudgeEmailParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadAddCreditsNudgeEmailParams",
+        "type": "object"
+      },
+      "ThreadAddCreditsNudgeEmailResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadAddCreditsNudgeEmailResponse",
+        "type": "object"
       },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13653,6 +13933,66 @@
         ],
         "title": "ThreadRealtimeOutputAudioDeltaNotification",
         "type": "object"
+      },
+      "ThreadRealtimeSdpNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.",
+        "properties": {
+          "sdp": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sdp",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeSdpNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeStartTransport": {
+        "description": "EXPERIMENTAL - transport used by thread realtime.",
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "websocket"
+                ],
+                "title": "WebsocketThreadRealtimeStartTransportType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "WebsocketThreadRealtimeStartTransport",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "sdp": {
+                "description": "SDP offer generated by a WebRTC RTCPeerConnection after configuring audio and the realtime events data channel.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "webrtc"
+                ],
+                "title": "WebrtcThreadRealtimeStartTransportType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sdp",
+              "type"
+            ],
+            "title": "WebrtcThreadRealtimeStartTransport",
+            "type": "object"
+          }
+        ]
       },
       "ThreadRealtimeStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -15263,6 +15603,14 @@
         ],
         "title": "WindowsWorldWritableWarningNotification",
         "type": "object"
+      },
+      "WorkspaceRole": {
+        "enum": [
+          "account-owner",
+          "account-admin",
+          "standard-user"
+        ],
+        "type": "string"
       },
       "WriteStatus": {
         "enum": [

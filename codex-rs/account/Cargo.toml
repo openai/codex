@@ -1,0 +1,19 @@
+[package]
+name = "codex-account"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "codex_account"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-backend-client = { workspace = true }
+codex-login = { workspace = true }
+thiserror = { workspace = true }

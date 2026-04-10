@@ -8,7 +8,6 @@ use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
-use std::fs;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
@@ -30,6 +29,7 @@ use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
@@ -54,7 +54,7 @@ async fn apply_patch_harness_with(
     });
     // Box harness construction so apply_patch_cli tests do not inline the
     // full test-thread startup path into each test future.
-    Box::pin(TestCodexHarness::with_builder(builder)).await
+    Box::pin(TestCodexHarness::with_remote_aware_builder(builder)).await
 }
 
 pub async fn mount_apply_patch(
@@ -129,10 +129,7 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
         r"(?s)^Exit code: 0.*Success\. Updated the following files:\nA helper-alias\.txt\n?$",
         &out,
     );
-    assert_eq!(
-        fs::read_to_string(harness.path("helper-alias.txt"))?,
-        "hello\n"
-    );
+    assert_eq!(harness.read_file_text("helper-alias.txt").await?, "hello\n");
 
     Ok(())
 }
@@ -150,10 +147,8 @@ async fn apply_patch_cli_multiple_operations_integration(
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     // Seed workspace state
-    let modify_path = harness.path("modify.txt");
-    let delete_path = harness.path("delete.txt");
-    fs::write(&modify_path, "line1\nline2\n")?;
-    fs::write(&delete_path, "obsolete\n")?;
+    harness.write_file("modify.txt", "line1\nline2\n").await?;
+    harness.write_file("delete.txt", "obsolete\n").await?;
 
     let patch = "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** End Patch";
 
@@ -174,12 +169,12 @@ D delete.txt
 ?$";
     assert_regex_match(expected, &out);
 
+    assert_eq!(harness.read_file_text("nested/new.txt").await?, "created\n");
     assert_eq!(
-        fs::read_to_string(harness.path("nested/new.txt"))?,
-        "created\n"
+        harness.read_file_text("modify.txt").await?,
+        "line1\nchanged\n"
     );
-    assert_eq!(fs::read_to_string(&modify_path)?, "line1\nchanged\n");
-    assert!(!delete_path.exists());
+    assert!(!harness.path_exists("delete.txt").await?);
 
     Ok(())
 }
@@ -195,8 +190,9 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
 
     let harness = apply_patch_harness().await?;
 
-    let target = harness.path("multi.txt");
-    fs::write(&target, "line1\nline2\nline3\nline4\n")?;
+    harness
+        .write_file("multi.txt", "line1\nline2\nline3\nline4\n")
+        .await?;
 
     let patch = "*** Begin Patch\n*** Update File: multi.txt\n@@\n-line2\n+changed2\n@@\n-line4\n+changed4\n*** End Patch";
     let call_id = "apply-multi-chunks";
@@ -205,7 +201,7 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
     harness.submit("apply multi-chunk patch").await?;
 
     assert_eq!(
-        fs::read_to_string(&target)?,
+        harness.read_file_text("multi.txt").await?,
         "line1\nchanged2\nline3\nchanged4\n"
     );
     Ok(())
@@ -224,10 +220,7 @@ async fn apply_patch_cli_moves_file_to_new_directory(
 
     let harness = apply_patch_harness().await?;
 
-    let original = harness.path("old/name.txt");
-    let new_path = harness.path("renamed/dir/name.txt");
-    fs::create_dir_all(original.parent().expect("parent"))?;
-    fs::write(&original, "old content\n")?;
+    harness.write_file("old/name.txt", "old content\n").await?;
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-old content\n+new content\n*** End Patch";
     let call_id = "apply-move";
@@ -235,8 +228,11 @@ async fn apply_patch_cli_moves_file_to_new_directory(
 
     harness.submit("apply move patch").await?;
 
-    assert!(!original.exists());
-    assert_eq!(fs::read_to_string(&new_path)?, "new content\n");
+    assert!(!harness.path_exists("old/name.txt").await?);
+    assert_eq!(
+        harness.read_file_text("renamed/dir/name.txt").await?,
+        "new content\n"
+    );
     Ok(())
 }
 
@@ -253,8 +249,9 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
 
     let harness = apply_patch_harness().await?;
 
-    let target = harness.path("no_newline.txt");
-    fs::write(&target, "no newline at end")?;
+    harness
+        .write_file("no_newline.txt", "no newline at end")
+        .await?;
 
     let patch = "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch";
     let call_id = "apply-append-nl";
@@ -262,7 +259,7 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
 
     harness.submit("apply newline patch").await?;
 
-    let contents = fs::read_to_string(&target)?;
+    let contents = harness.read_file_text("no_newline.txt").await?;
     assert!(contents.ends_with('\n'));
     assert_eq!(contents, "first line\nsecond line\n");
     Ok(())
@@ -281,8 +278,9 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
 
     let harness = apply_patch_harness().await?;
 
-    let target = harness.path("insert_only.txt");
-    fs::write(&target, "alpha\nomega\n")?;
+    harness
+        .write_file("insert_only.txt", "alpha\nomega\n")
+        .await?;
 
     let patch = "*** Begin Patch\n*** Update File: insert_only.txt\n@@\n alpha\n+beta\n omega\n*** End Patch";
     let call_id = "apply-insert-only";
@@ -290,7 +288,10 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
 
     harness.submit("insert lines via apply_patch").await?;
 
-    assert_eq!(fs::read_to_string(&target)?, "alpha\nbeta\nomega\n");
+    assert_eq!(
+        harness.read_file_text("insert_only.txt").await?,
+        "alpha\nbeta\nomega\n"
+    );
     Ok(())
 }
 
@@ -307,12 +308,10 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
 
     let harness = apply_patch_harness().await?;
 
-    let original = harness.path("old/name.txt");
-    let destination = harness.path("renamed/dir/name.txt");
-    fs::create_dir_all(original.parent().expect("parent"))?;
-    fs::create_dir_all(destination.parent().expect("parent"))?;
-    fs::write(&original, "from\n")?;
-    fs::write(&destination, "existing\n")?;
+    harness.write_file("old/name.txt", "from\n").await?;
+    harness
+        .write_file("renamed/dir/name.txt", "existing\n")
+        .await?;
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-from\n+new\n*** End Patch";
     let call_id = "apply-move-overwrite";
@@ -320,8 +319,11 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
 
     harness.submit("apply move overwrite patch").await?;
 
-    assert!(!original.exists());
-    assert_eq!(fs::read_to_string(&destination)?, "new\n");
+    assert!(!harness.path_exists("old/name.txt").await?);
+    assert_eq!(
+        harness.read_file_text("renamed/dir/name.txt").await?,
+        "new\n"
+    );
     Ok(())
 }
 
@@ -335,16 +337,16 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
+    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd.clone();
 
-    let original = harness.path("old/name.txt");
-    let destination = harness.path("renamed/name.txt");
-    fs::create_dir_all(original.parent().expect("parent should exist"))?;
-    fs::write(&original, "same\n")?;
+    harness.write_file("old/name.txt", "same\n").await?;
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/name.txt\n@@\n same\n*** End Patch";
     let call_id = "apply-move-no-change";
@@ -358,7 +360,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -383,8 +385,8 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     .await;
 
     assert!(!saw_turn_diff, "pure rename should not emit a turn diff");
-    assert!(!original.exists());
-    assert_eq!(fs::read_to_string(&destination)?, "same\n");
+    assert!(!harness.path_exists("old/name.txt").await?);
+    assert_eq!(harness.read_file_text("renamed/name.txt").await?, "same\n");
     Ok(())
 }
 
@@ -401,8 +403,7 @@ async fn apply_patch_cli_add_overwrites_existing_file(
 
     let harness = apply_patch_harness().await?;
 
-    let path = harness.path("duplicate.txt");
-    fs::write(&path, "old content\n")?;
+    harness.write_file("duplicate.txt", "old content\n").await?;
 
     let patch = "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch";
     let call_id = "apply-add-overwrite";
@@ -410,7 +411,10 @@ async fn apply_patch_cli_add_overwrites_existing_file(
 
     harness.submit("apply add overwrite patch").await?;
 
-    assert_eq!(fs::read_to_string(&path)?, "new content\n");
+    assert_eq!(
+        harness.read_file_text("duplicate.txt").await?,
+        "new content\n"
+    );
     Ok(())
 }
 
@@ -459,8 +463,7 @@ async fn apply_patch_cli_reports_missing_context(
 
     let harness = apply_patch_harness().await?;
 
-    let target = harness.path("modify.txt");
-    fs::write(&target, "line1\nline2\n")?;
+    harness.write_file("modify.txt", "line1\nline2\n").await?;
 
     let patch =
         "*** Begin Patch\n*** Update File: modify.txt\n@@\n-missing\n+changed\n*** End Patch";
@@ -476,7 +479,10 @@ async fn apply_patch_cli_reports_missing_context(
         "expected verification failure message"
     );
     assert!(out.contains("Failed to find expected lines in"));
-    assert_eq!(fs::read_to_string(&target)?, "line1\nline2\n");
+    assert_eq!(
+        harness.read_file_text("modify.txt").await?,
+        "line1\nline2\n"
+    );
     Ok(())
 }
 
@@ -512,7 +518,7 @@ async fn apply_patch_cli_reports_missing_target_file(
         out.contains("missing.txt"),
         "expected missing file path in diagnostics: {out}"
     );
-    assert!(!harness.path("missing.txt").exists());
+    assert!(!harness.path_exists("missing.txt").await?);
     Ok(())
 }
 
@@ -549,7 +555,7 @@ async fn apply_patch_cli_delete_missing_file_reports_error(
         out.contains("missing.txt"),
         "missing delete diagnostics should surface target path: {out}"
     );
-    assert!(!harness.path("missing.txt").exists());
+    assert!(!harness.path_exists("missing.txt").await?);
     Ok(())
 }
 
@@ -591,7 +597,7 @@ async fn apply_patch_cli_delete_directory_reports_verification_error(
 
     let harness = apply_patch_harness().await?;
 
-    fs::create_dir(harness.path("dir"))?;
+    harness.create_dir_all("dir").await?;
 
     let patch = "*** Begin Patch\n*** Delete File: dir\n*** End Patch";
     let call_id = "apply-delete-dir";
@@ -620,12 +626,12 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
 
     let escape_path = harness
         .test()
+        .config
         .cwd
-        .path()
         .parent()
         .expect("cwd should have parent")
         .join("escape.txt");
-    let _ = fs::remove_file(&escape_path);
+    harness.remove_abs_path(&escape_path).await?;
 
     let patch = "*** Begin Patch\n*** Add File: ../escape.txt\n+outside\n*** End Patch";
     let call_id = "apply-path-traversal";
@@ -653,7 +659,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
         "expected rejection message for path traversal: {out}"
     );
     assert!(
-        !escape_path.exists(),
+        !harness.abs_path_exists(&escape_path).await?,
         "path traversal should be rejected; tool output: {out}"
     );
     Ok(())
@@ -674,15 +680,14 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 
     let escape_path = harness
         .test()
+        .config
         .cwd
-        .path()
         .parent()
         .expect("cwd should have parent")
         .join("escape-move.txt");
-    let _ = fs::remove_file(&escape_path);
+    harness.remove_abs_path(&escape_path).await?;
 
-    let source = harness.path("stay.txt");
-    fs::write(&source, "from\n")?;
+    harness.write_file("stay.txt", "from\n").await?;
 
     let patch = "*** Begin Patch\n*** Update File: stay.txt\n*** Move to: ../escape-move.txt\n@@\n-from\n+to\n*** End Patch";
     let call_id = "apply-move-traversal";
@@ -707,10 +712,10 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
         "expected rejection message for path traversal: {out}"
     );
     assert!(
-        !escape_path.exists(),
+        !harness.abs_path_exists(&escape_path).await?,
         "move path traversal should be rejected; tool output: {out}"
     );
-    assert_eq!(fs::read_to_string(&source)?, "from\n");
+    assert_eq!(harness.read_file_text("stay.txt").await?, "from\n");
     Ok(())
 }
 
@@ -743,9 +748,8 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 
     harness.submit("attempt partial apply patch").await?;
 
-    let created = harness.path("created.txt");
     assert!(
-        !created.exists(),
+        !harness.path_exists("created.txt").await?,
         "verification failure should prevent any filesystem changes"
     );
     Ok(())
@@ -758,10 +762,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     // Prepare a file inside a subdir; update it via cd && apply_patch heredoc form.
-    let sub = harness.path("sub");
-    fs::create_dir_all(&sub)?;
-    let target = sub.join("in_sub.txt");
-    fs::write(&target, "before\n")?;
+    harness.write_file("sub/in_sub.txt", "before\n").await?;
 
     let script = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: in_sub.txt\n@@\n-before\n+after\n*** End Patch\nEOF\n";
     let call_id = "shell-heredoc-cd";
@@ -785,21 +786,24 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
         out.contains("Success."),
         "expected successful apply_patch invocation via shell_command: {out}"
     );
-    assert_eq!(fs::read_to_string(&target)?, "after\n");
+    assert_eq!(harness.read_file_text("sub/in_sub.txt").await?, "after\n");
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "shell_command output producer runs in the test runner, not in the remote apply_patch workspace",
+    );
 
     let harness =
         apply_patch_harness_with(|builder| builder.with_model("gpt-5.1").with_windows_cmd_shell())
             .await?;
 
     let source_contents = "line1\nnaïve café\nline3\n";
-    let source_path = harness.path("source.txt");
-    fs::write(&source_path, source_contents)?;
+    harness.write_file("source.txt", source_contents).await?;
 
     let read_call_id = "read-source";
     let apply_call_id = "apply-from-read";
@@ -923,7 +927,7 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
         .submit("read source.txt, then apply it to target.txt")
         .await?;
 
-    let target_contents = fs::read_to_string(harness.path("target.txt"))?;
+    let target_contents = harness.read_file_text("target.txt").await?;
     assert_eq!(target_contents, source_contents);
 
     Ok(())
@@ -932,17 +936,17 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
+    );
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd.clone();
 
     // Prepare a file inside a subdir; update it via cd && apply_patch heredoc form.
-    let sub = test.workspace_path("sub");
-    fs::create_dir_all(&sub)?;
-    let target = sub.join("in_sub.txt");
-    fs::write(&target, "before\n")?;
+    harness.write_file("sub/in_sub.txt", "before\n").await?;
 
     let script = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: in_sub.txt\n@@\n-before\n+after\n*** End Patch\nEOF\n";
     let call_id = "shell-heredoc-cd";
@@ -968,7 +972,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1017,14 +1021,16 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
+    );
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd.clone();
 
-    let target = cwd.path().join("invalid.txt");
-    fs::write(&target, "ok\n")?;
+    harness.write_file("invalid.txt", "ok\n").await?;
 
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: invalid.txt\n@@\n-nope\n+changed\n*** End Patch\nEOF\n";
     let call_id = "shell-apply-failure";
@@ -1050,7 +1056,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1088,7 +1094,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
         out.contains("invalid.txt"),
         "expected file path in output: {out}"
     );
-    assert_eq!(fs::read_to_string(&target)?, "ok\n");
+    assert_eq!(harness.read_file_text("invalid.txt").await?, "ok\n");
     Ok(())
 }
 
@@ -1110,8 +1116,7 @@ async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
 
     harness.submit("apply lenient heredoc patch").await?;
 
-    let new_file = harness.path(file_name);
-    assert_eq!(fs::read_to_string(new_file)?, "lenient\n");
+    assert_eq!(harness.read_file_text(file_name).await?, "lenient\n");
     Ok(())
 }
 
@@ -1126,15 +1131,14 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
 
     let harness = apply_patch_harness().await?;
 
-    let target = harness.path("tail.txt");
-    fs::write(&target, "alpha\nlast\n")?;
+    harness.write_file("tail.txt", "alpha\nlast\n").await?;
 
     let patch = "*** Begin Patch\n*** Update File: tail.txt\n@@\n-last\n+end\n*** End of File\n*** End Patch";
     let call_id = "apply-eof";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
     harness.submit("apply EOF-anchored patch").await?;
-    assert_eq!(fs::read_to_string(&target)?, "alpha\nend\n");
+    assert_eq!(harness.read_file_text("tail.txt").await?, "alpha\nend\n");
     Ok(())
 }
 
@@ -1151,8 +1155,7 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
 
     let harness = apply_patch_harness().await?;
 
-    let target = harness.path("two_chunks.txt");
-    fs::write(&target, "a\nb\nc\nd\n")?;
+    harness.write_file("two_chunks.txt", "a\nb\nc\nd\n").await?;
 
     // First chunk has @@, second chunk intentionally omits @@ to trigger parse error.
     let patch =
@@ -1169,7 +1172,10 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
         "expected hunk context diagnostics: {out}"
     );
     // Original file unchanged on failure
-    assert_eq!(fs::read_to_string(&target)?, "a\nb\nc\nd\n");
+    assert_eq!(
+        harness.read_file_text("two_chunks.txt").await?,
+        "a\nb\nc\nd\n"
+    );
     Ok(())
 }
 
@@ -1183,11 +1189,14 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
+    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd.clone();
 
     let call_id = "apply-diff-event";
     let file = "udiff.txt";
@@ -1202,7 +1211,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1244,15 +1253,17 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
+    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd.clone();
 
     // Seed original file
-    let old = cwd.path().join("old.txt");
-    fs::write(&old, "old\n")?;
+    harness.write_file("old.txt", "old\n").await?;
 
     // Patch: update + move
     let call_id = "apply-rename-change";
@@ -1267,7 +1278,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1305,11 +1316,14 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
+    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd.clone();
 
     let call1 = "agg-1";
     let call2 = "agg-2";
@@ -1340,7 +1354,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1375,11 +1389,14 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
+    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
-    let cwd = test.cwd.clone();
 
     let call_success = "agg-success";
     let call_failure = "agg-failure";
@@ -1413,7 +1430,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1457,10 +1474,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
         "expected missing context diagnostics: {failure_out}"
     );
 
-    assert_eq!(
-        fs::read_to_string(cwd.path().join("partial/success.txt"))?,
-        "ok\n"
-    );
+    assert_eq!(harness.read_file_text("partial/success.txt").await?, "ok\n");
     Ok(())
 }
 
@@ -1477,8 +1491,9 @@ async fn apply_patch_change_context_disambiguates_target(
 
     let harness = apply_patch_harness().await?;
 
-    let target = harness.path("multi_ctx.txt");
-    fs::write(&target, "fn a\nx=10\ny=2\nfn b\nx=10\ny=20\n")?;
+    harness
+        .write_file("multi_ctx.txt", "fn a\nx=10\ny=2\nfn b\nx=10\ny=20\n")
+        .await?;
 
     let patch =
         "*** Begin Patch\n*** Update File: multi_ctx.txt\n@@ fn b\n-x=10\n+x=11\n*** End Patch";
@@ -1487,7 +1502,7 @@ async fn apply_patch_change_context_disambiguates_target(
 
     harness.submit("apply with change_context").await?;
 
-    let contents = fs::read_to_string(&target)?;
+    let contents = harness.read_file_text("multi_ctx.txt").await?;
     assert_eq!(contents, "fn a\nx=10\ny=2\nfn b\nx=11\ny=20\n");
     Ok(())
 }

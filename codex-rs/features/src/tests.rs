@@ -1,6 +1,7 @@
 use crate::Feature;
 use crate::FeatureConfigSource;
 use crate::FeatureOverrides;
+use crate::FeatureToml;
 use crate::Features;
 use crate::FeaturesToml;
 use crate::Stage;
@@ -211,12 +212,14 @@ fn from_sources_applies_base_profile_and_overrides() {
     base_entries.insert("plugins".to_string(), true);
     let base_features = FeaturesToml {
         entries: base_entries,
+        ..Default::default()
     };
 
     let mut profile_entries = BTreeMap::new();
     profile_entries.insert("code_mode_only".to_string(), true);
     let profile_features = FeaturesToml {
         entries: profile_entries,
+        ..Default::default()
     };
 
     let features = Features::from_sources(
@@ -240,6 +243,81 @@ fn from_sources_applies_base_profile_and_overrides() {
     assert_eq!(features.enabled(Feature::CodeMode), true);
     assert_eq!(features.enabled(Feature::ApplyPatchFreeform), true);
     assert_eq!(features.enabled(Feature::WebSearchRequest), false);
+}
+
+#[test]
+fn multi_agent_v2_feature_config_deserializes_boolean_toggle() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+multi_agent_v2 = true
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("multi_agent_v2".to_string(), true)])
+    );
+    assert_eq!(features.multi_agent_v2, Some(FeatureToml::Enabled(true)));
+}
+
+#[test]
+fn multi_agent_v2_feature_config_deserializes_table() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[multi_agent_v2]
+enabled = true
+usage_hint_enabled = false
+usage_hint_text = "Custom delegation guidance."
+hide_spawn_agent_metadata = true
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("multi_agent_v2".to_string(), true)])
+    );
+    assert_eq!(
+        features.multi_agent_v2,
+        Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
+            enabled: Some(true),
+            usage_hint_enabled: Some(false),
+            usage_hint_text: Some("Custom delegation guidance.".to_string()),
+            hide_spawn_agent_metadata: Some(true),
+        }))
+    );
+}
+
+#[test]
+fn multi_agent_v2_feature_config_usage_hint_enabled_does_not_enable_feature() {
+    let features_toml: FeaturesToml = toml::from_str(
+        r#"
+[multi_agent_v2]
+usage_hint_enabled = false
+"#,
+    )
+    .expect("features table should deserialize");
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features.enabled(Feature::MultiAgentV2), false);
+    assert_eq!(features_toml.entries(), BTreeMap::new());
+    assert_eq!(
+        features_toml.multi_agent_v2,
+        Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
+            enabled: None,
+            usage_hint_enabled: Some(false),
+            usage_hint_text: None,
+            hide_spawn_agent_metadata: None,
+        }))
+    );
 }
 
 #[test]

@@ -11,7 +11,7 @@ use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
 
-const CODEX_TOOL_NAME: &str = "codex";
+const BACKGROUND_AGENT_TOOL_NAME: &str = "background_agent";
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const DEFAULT_AUDIO_CHANNELS: u16 = 1;
 const TOOL_ARGUMENT_KEYS: [&str; 5] = ["input_transcript", "input", "text", "prompt", "query"];
@@ -48,7 +48,6 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
             .map(RealtimeEvent::ConversationItemAdded),
         "conversation.item.done" => parse_conversation_item_done_event(&parsed),
         "response.created" => Some(RealtimeEvent::ConversationItemAdded(parsed)),
-        "response.done" => parse_response_done_event(parsed),
         "response.cancelled" => Some(RealtimeEvent::ResponseCancelled(
             RealtimeResponseCancelled {
                 response_id: parsed
@@ -116,34 +115,10 @@ fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
         .map(|item_id| RealtimeEvent::ConversationItemDone { item_id })
 }
 
-fn parse_response_done_event(parsed: Value) -> Option<RealtimeEvent> {
-    if let Some(handoff) = parse_response_done_handoff_requested_event(&parsed) {
-        return Some(handoff);
-    }
-
-    Some(RealtimeEvent::ConversationItemAdded(parsed))
-}
-
-fn parse_response_done_handoff_requested_event(parsed: &Value) -> Option<RealtimeEvent> {
-    let item = parsed
-        .get("response")
-        .and_then(Value::as_object)
-        .and_then(|response| response.get("output"))
-        .and_then(Value::as_array)?
-        .iter()
-        .find(|item| {
-            item.get("type").and_then(Value::as_str) == Some("function_call")
-                && item.get("name").and_then(Value::as_str) == Some(CODEX_TOOL_NAME)
-        })?
-        .as_object()?;
-
-    parse_handoff_requested_event(item)
-}
-
 fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
     let item_type = item.get("type").and_then(Value::as_str);
     let item_name = item.get("name").and_then(Value::as_str);
-    if item_type != Some("function_call") || item_name != Some(CODEX_TOOL_NAME) {
+    if item_type != Some("function_call") || item_name != Some(BACKGROUND_AGENT_TOOL_NAME) {
         return None;
     }
 

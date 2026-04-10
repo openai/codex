@@ -38,8 +38,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
-use codex_config::types::NotificationMethod;
-use codex_config::types::Notifications;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
@@ -47,14 +45,18 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
+use codex_features::FeatureToml;
 use codex_features::Features;
+use codex_features::FeaturesToml;
+use codex_features::MultiAgentV2ConfigToml;
 use codex_login::AuthManagerConfig;
-use codex_mcp::mcp::McpConfig;
+use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -100,7 +102,7 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub mod service;
+pub(crate) mod service;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -124,7 +126,6 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
-const PROJECT_LOCAL_CODEX_DIR: &str = ".codex";
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -138,42 +139,6 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     } else {
         Some(resolved_cwd.join(path))
     }
-}
-
-fn maybe_warn_missing_project_dot_codex_for_linux_bwrap(
-    startup_warnings: &mut Vec<String>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-) {
-    if !cfg!(target_os = "linux")
-        || !should_warn_missing_project_dot_codex_for_linux_bwrap(file_system_sandbox_policy, cwd)
-    {
-        return;
-    }
-
-    let dot_codex = cwd.join(PROJECT_LOCAL_CODEX_DIR);
-    let dot_codex_display = dot_codex.display();
-    let warning = format!(
-        "Project-local `.codex` does not exist at `{dot_codex_display}`. On Linux, Codex will not create a sandbox mount target for it, so shell commands may create `.codex` without approval until it exists; existing `.codex` paths and `apply_patch` edits remain protected."
-    );
-    tracing::warn!("{warning}");
-    startup_warnings.push(warning);
-}
-
-fn should_warn_missing_project_dot_codex_for_linux_bwrap(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-) -> bool {
-    let dot_codex = cwd.join(PROJECT_LOCAL_CODEX_DIR);
-    let dot_codex_is_missing = match dot_codex.symlink_metadata() {
-        Ok(_) => false,
-        Err(err) if err.kind() == ErrorKind::NotFound => true,
-        Err(_) => false,
-    };
-
-    dot_codex_is_missing
-        && file_system_sandbox_policy.can_write_path_with_cwd(cwd, cwd)
-        && !file_system_sandbox_policy.can_write_path_with_cwd(&dot_codex, cwd)
 }
 
 #[cfg(test)]
@@ -279,14 +244,20 @@ pub struct Config {
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
+    /// Path to the global AGENTS file loaded into `user_instructions`.
+    pub user_instructions_path: Option<PathBuf>,
+
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
-    /// Guardian-specific developer instructions override from requirements.toml.
-    pub guardian_developer_instructions: Option<String>,
+    /// Guardian-specific tenant policy config override from requirements.toml.
+    /// This is inserted into the fixed guardian prompt template under the
+    /// `# Policy Configuration` section rather than replacing the whole
+    /// guardian developer prompt.
+    pub guardian_policy_config: Option<String>,
 
     /// Whether to inject the `<permissions instructions>` developer block.
     pub include_permissions_instructions: bool,
@@ -329,12 +300,8 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// TUI notifications preference. When set, the TUI will send terminal notifications on
-    /// approvals and turn completions when not focused.
-    pub tui_notifications: Notifications,
-
-    /// Notification method for terminal notifications (osc9 or bel).
-    pub tui_notification_method: NotificationMethod,
+    /// TUI notification settings, including enabled events, delivery method, and focus condition.
+    pub tui_notifications: TuiNotificationSettings,
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
@@ -557,6 +524,9 @@ pub struct Config {
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
 
+    /// Settings specific to the task-path-based multi-agent tool surface.
+    pub multi_agent_v2: MultiAgentV2Config,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
 
@@ -599,6 +569,23 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiAgentV2Config {
+    pub usage_hint_enabled: bool,
+    pub usage_hint_text: Option<String>,
+    pub hide_spawn_agent_metadata: bool,
+}
+
+impl Default for MultiAgentV2Config {
+    fn default() -> Self {
+        Self {
+            usage_hint_enabled: true,
+            usage_hint_text: None,
+            hide_spawn_agent_metadata: false,
+        }
+    }
 }
 
 impl AuthManagerConfig for Config {
@@ -822,12 +809,12 @@ impl Config {
 /// applied yet, which risks failing to enforce required constraints.
 pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
-    cwd: &AbsolutePathBuf,
+    cwd: Option<&AbsolutePathBuf>,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         codex_home,
-        Some(cwd.clone()),
+        cwd.cloned(),
         &cli_overrides,
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
@@ -1316,6 +1303,42 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_multi_agent_v2_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> MultiAgentV2Config {
+    let base = multi_agent_v2_toml_config(config_toml.features.as_ref());
+    let profile = multi_agent_v2_toml_config(config_profile.features.as_ref());
+    let default = MultiAgentV2Config::default();
+
+    let usage_hint_enabled = profile
+        .and_then(|config| config.usage_hint_enabled)
+        .or_else(|| base.and_then(|config| config.usage_hint_enabled))
+        .unwrap_or(default.usage_hint_enabled);
+    let usage_hint_text = profile
+        .and_then(|config| config.usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.usage_hint_text);
+    let hide_spawn_agent_metadata = profile
+        .and_then(|config| config.hide_spawn_agent_metadata)
+        .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
+        .unwrap_or(default.hide_spawn_agent_metadata);
+
+    MultiAgentV2Config {
+        usage_hint_enabled,
+        usage_hint_text,
+        hide_spawn_agent_metadata,
+    }
+}
+
+fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
+    match features?.multi_agent_v2.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -1386,7 +1409,10 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let (user_instructions, user_instructions_path) =
+            Self::load_instructions(Some(&codex_home))
+                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
+                .unwrap_or((None, None));
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1482,7 +1508,7 @@ impl Config {
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
             .unwrap_or(ProjectConfig { trust_level: None });
@@ -1644,6 +1670,7 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -1811,9 +1838,8 @@ impl Config {
             .include_environment_context
             .or(cfg.include_environment_context)
             .unwrap_or(true);
-        let guardian_developer_instructions = guardian_developer_instructions_from_requirements(
-            config_layer_stack.requirements_toml(),
-        );
+        let guardian_policy_config =
+            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml());
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
@@ -1953,11 +1979,6 @@ impl Config {
             } else {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
-        maybe_warn_missing_project_dot_codex_for_linux_bwrap(
-            &mut startup_warnings,
-            &effective_file_system_sandbox_policy,
-            resolved_cwd.as_path(),
-        );
         let config = Self {
             model,
             service_tier,
@@ -1983,6 +2004,7 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
+            user_instructions_path,
             base_instructions,
             personality,
             developer_instructions,
@@ -2040,7 +2062,7 @@ impl Config {
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
-            guardian_developer_instructions,
+            guardian_policy_config,
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
@@ -2067,9 +2089,14 @@ impl Config {
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             realtime: cfg
                 .realtime
-                .map_or_else(RealtimeConfig::default, |realtime| RealtimeConfig {
-                    version: realtime.version.unwrap_or_default(),
-                    session_type: realtime.session_type.unwrap_or_default(),
+                .map_or_else(RealtimeConfig::default, |realtime| {
+                    let defaults = RealtimeConfig::default();
+                    RealtimeConfig {
+                        version: realtime.version.unwrap_or(defaults.version),
+                        session_type: realtime.session_type.unwrap_or(defaults.session_type),
+                        transport: realtime.transport.unwrap_or(defaults.transport),
+                        voice: realtime.voice,
+                    }
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
@@ -2082,6 +2109,7 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
+            multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -2106,12 +2134,7 @@ impl Config {
             tui_notifications: cfg
                 .tui
                 .as_ref()
-                .map(|t| t.notifications.clone())
-                .unwrap_or_default(),
-            tui_notification_method: cfg
-                .tui
-                .as_ref()
-                .map(|t| t.notification_method)
+                .map(|t| t.notification_settings.clone())
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
@@ -2149,7 +2172,7 @@ impl Config {
         Ok(config)
     }
 
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
+    fn load_instructions(codex_dir: Option<&Path>) -> Option<LoadedUserInstructions> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
             let mut path = base.to_path_buf();
@@ -2157,7 +2180,10 @@ impl Config {
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
+                    return Some(LoadedUserInstructions {
+                        contents: trimmed.to_string(),
+                        path,
+                    });
                 }
             }
         }
@@ -2231,6 +2257,11 @@ impl Config {
     }
 }
 
+struct LoadedUserInstructions {
+    contents: String,
+    path: PathBuf,
+}
+
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
     config_layer_stack
         .layers_high_to_low()
@@ -2238,11 +2269,11 @@ pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayer
         .any(|layer| toml_uses_deprecated_instructions_file(&layer.config))
 }
 
-fn guardian_developer_instructions_from_requirements(
+fn guardian_policy_config_from_requirements(
     requirements_toml: &ConfigRequirementsToml,
 ) -> Option<String> {
     requirements_toml
-        .guardian_developer_instructions
+        .guardian_policy_config
         .as_deref()
         .and_then(|value| {
             let trimmed = value.trim();
