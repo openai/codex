@@ -340,15 +340,14 @@ impl HistoryCell for HookCell {
 
     /// Produces a coarse cache key for transcript overlays while hook animations are active.
     fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled {
+            return None;
+        }
         let elapsed = self
             .runs
             .iter()
-            .find_map(|run| {
-                run.state
-                    .is_active()
-                    .then(|| run.state.start_time())
-                    .flatten()
-            })?
+            .filter(|run| run.state.is_running_visible())
+            .find_map(|run| run.state.start_time())?
             .elapsed();
         Some(elapsed.as_millis() as u64 / 600)
     }
@@ -714,6 +713,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
+    use std::path::PathBuf;
 
     #[test]
     fn completed_hook_with_warning_uses_default_bold_bullet() {
@@ -727,5 +727,53 @@ mod tests {
         assert_eq!(bullet.content.as_ref(), "•");
         assert_eq!(bullet.style.fg, None);
         assert!(bullet.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn pending_hook_does_not_animate_transcript() {
+        let cell =
+            HookCell::new_active(hook_run_summary("hook-1"), /*animations_enabled*/ true);
+
+        assert_eq!(cell.transcript_animation_tick(), None);
+    }
+
+    #[test]
+    fn visible_hook_animates_transcript_when_animations_enabled() {
+        let mut cell =
+            HookCell::new_active(hook_run_summary("hook-1"), /*animations_enabled*/ true);
+        cell.reveal_running_runs_now_for_test();
+        cell.advance_time(Instant::now());
+
+        assert_eq!(cell.transcript_animation_tick(), Some(0));
+    }
+
+    #[test]
+    fn visible_hook_does_not_animate_transcript_when_animations_disabled() {
+        let mut cell = HookCell::new_active(
+            hook_run_summary("hook-1"),
+            /*animations_enabled*/ false,
+        );
+        cell.reveal_running_runs_now_for_test();
+        cell.advance_time(Instant::now());
+
+        assert_eq!(cell.transcript_animation_tick(), None);
+    }
+
+    fn hook_run_summary(id: &str) -> HookRunSummary {
+        HookRunSummary {
+            id: id.to_string(),
+            event_name: HookEventName::PostToolUse,
+            handler_type: codex_protocol::protocol::HookHandlerType::Command,
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+            scope: codex_protocol::protocol::HookScope::Turn,
+            source_path: PathBuf::from("/tmp/hooks.json"),
+            display_order: 0,
+            status: HookRunStatus::Running,
+            status_message: Some("checking output policy".to_string()),
+            started_at: 1,
+            completed_at: None,
+            duration_ms: None,
+            entries: Vec::new(),
+        }
     }
 }

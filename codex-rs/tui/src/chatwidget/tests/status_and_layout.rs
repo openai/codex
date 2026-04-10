@@ -1796,6 +1796,47 @@ async fn running_hook_does_not_displace_active_exec_cell() {
 }
 
 #[tokio::test]
+async fn hidden_active_hook_does_not_add_transcript_separator() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    begin_exec(&mut chat, "call-1", "echo done");
+    let exec_only_line_count = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("active exec transcript lines")
+        .len();
+
+    chat.handle_codex_event(hook_started_event(
+        "post-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        Some("checking output policy"),
+    ));
+    let hidden_hook_transcript = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("active exec transcript lines");
+    assert_eq!(hidden_hook_transcript.len(), exec_only_line_count);
+
+    reveal_running_hooks(&mut chat);
+    let visible_hook_lines = chat
+        .active_hook_cell
+        .as_ref()
+        .expect("active hook cell")
+        .transcript_lines(/*width*/ 80);
+    let visible_hook_transcript = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("active exec and hook transcript lines");
+    assert_eq!(
+        visible_hook_transcript.len(),
+        exec_only_line_count + 1 + visible_hook_lines.len()
+    );
+    assert_eq!(
+        lines_to_single_string(
+            &visible_hook_transcript[exec_only_line_count..exec_only_line_count + 1],
+        ),
+        "\n"
+    );
+}
+
+#[tokio::test]
 async fn hook_completed_before_reveal_renders_completed_without_running_flash() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

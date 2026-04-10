@@ -10940,10 +10940,12 @@ impl ChatWidget {
             lines.extend(cell.transcript_lines(width));
         }
         if let Some(hook_cell) = self.active_hook_cell.as_ref() {
-            if !lines.is_empty() {
+            // Compute hook lines first so hidden hooks do not add a separator.
+            let hook_lines = hook_cell.transcript_lines(width);
+            if !hook_lines.is_empty() && !lines.is_empty() {
                 lines.push("".into());
             }
-            lines.extend(hook_cell.transcript_lines(width));
+            lines.extend(hook_lines);
         }
         (!lines.is_empty()).then_some(lines)
     }
