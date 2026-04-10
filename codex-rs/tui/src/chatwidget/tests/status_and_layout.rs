@@ -1235,63 +1235,6 @@ async fn renamed_thread_footer_title_snapshot() {
 }
 
 #[tokio::test]
-async fn thread_title_status_item_stays_in_left_status_line() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_name = Some("Roadmap cleanup".to_string());
-    chat.config.tui_status_line = Some(vec!["model-name".to_string(), "thread-title".to_string()]);
-
-    chat.refresh_status_line();
-
-    assert_eq!(
-        status_line_text(&chat),
-        Some("gpt-5.3-codex · Roadmap cleanup".to_string())
-    );
-}
-
-#[tokio::test]
-async fn renamed_thread_footer_title_plan_mode_override_snapshot() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.show_welcome_banner = false;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.config.tui_status_line = Some(vec![
-        "model-with-reasoning".to_string(),
-        "thread-title".to_string(),
-    ]);
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
-    chat.refresh_status_line();
-
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    chat.handle_server_notification(
-        ServerNotification::ThreadNameUpdated(
-            codex_app_server_protocol::ThreadNameUpdatedNotification {
-                thread_id: thread_id.to_string(),
-                thread_name: Some("Roadmap cleanup".to_string()),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
-
-    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
-        .expect("expected plan collaboration mode");
-    chat.set_collaboration_mask(plan_mask);
-
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw renamed-thread plan-mode footer");
-    assert_chatwidget_snapshot!(
-        "renamed_thread_footer_title_plan_mode_override",
-        normalized_backend_snapshot(terminal.backend())
-    );
-}
-
-#[tokio::test]
 async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

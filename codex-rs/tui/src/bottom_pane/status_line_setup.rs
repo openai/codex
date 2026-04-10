@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_includes_thread_title_in_left_sequence() {
+    fn preview_includes_thread_title() {
         let preview_data = StatusLinePreviewData::from_iter([
             (StatusLineItem::ModelName, "gpt-5".to_string()),
             (StatusLineItem::ThreadTitle, "Roadmap cleanup".to_string()),
