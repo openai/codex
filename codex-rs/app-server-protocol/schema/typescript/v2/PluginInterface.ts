@@ -8,4 +8,28 @@ export type PluginInterface = { displayName: string | null, shortDescription: st
  * Starter prompts for the plugin. Capped at 3 entries with a maximum of
  * 128 characters per entry.
  */
-defaultPrompt: Array<string> | null, brandColor: string | null, composerIcon: AbsolutePathBuf | null, logo: AbsolutePathBuf | null, screenshots: Array<AbsolutePathBuf>, };
+defaultPrompt: Array<string> | null, brandColor: string | null, 
+/**
+ * Local composer icon path, resolved from the installed plugin package.
+ */
+composerIcon: AbsolutePathBuf | null, 
+/**
+ * Remote composer icon URL from the plugin catalog.
+ */
+composerIconUrl: string | null, 
+/**
+ * Local logo path, resolved from the installed plugin package.
+ */
+logo: AbsolutePathBuf | null, 
+/**
+ * Remote logo URL from the plugin catalog.
+ */
+logoUrl: string | null, 
+/**
+ * Local screenshot paths, resolved from the installed plugin package.
+ */
+screenshots: Array<AbsolutePathBuf>, 
+/**
+ * Remote screenshot URLs from the plugin catalog.
+ */
+screenshotUrls: Array<string>, };

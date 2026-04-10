@@ -3229,10 +3229,6 @@ pub struct PluginListParams {
     /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
-    /// When true, reconcile the official curated marketplace against the remote plugin state
-    /// before listing marketplaces.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3242,7 +3238,6 @@ pub struct PluginListResponse {
     pub marketplaces: Vec<PluginMarketplaceEntry>,
     #[serde(default)]
     pub marketplace_load_errors: Vec<MarketplaceLoadErrorInfo>,
-    pub remote_sync_error: Option<String>,
     #[serde(default)]
     pub featured_plugin_ids: Vec<String>,
 }
@@ -3259,7 +3254,10 @@ pub struct MarketplaceLoadErrorInfo {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginReadParams {
-    pub marketplace_path: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub marketplace_path: Option<AbsolutePathBuf>,
+    #[ts(optional = nullable)]
+    pub remote_marketplace_name: Option<String>,
     pub plugin_name: String,
 }
 
@@ -3371,7 +3369,9 @@ pub struct SkillsListEntry {
 #[ts(export_to = "v2/")]
 pub struct PluginMarketplaceEntry {
     pub name: String,
-    pub path: AbsolutePathBuf,
+    /// Local marketplace file path when the marketplace is backed by a local file.
+    /// Remote-only catalog marketplaces do not have a local path.
+    pub path: Option<AbsolutePathBuf>,
     pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<PluginSummary>,
 }
@@ -3464,9 +3464,18 @@ pub struct PluginInterface {
     /// 128 characters per entry.
     pub default_prompt: Option<Vec<String>>,
     pub brand_color: Option<String>,
+    /// Local composer icon path, resolved from the installed plugin package.
     pub composer_icon: Option<AbsolutePathBuf>,
+    /// Remote composer icon URL from the plugin catalog.
+    pub composer_icon_url: Option<String>,
+    /// Local logo path, resolved from the installed plugin package.
     pub logo: Option<AbsolutePathBuf>,
+    /// Remote logo URL from the plugin catalog.
+    pub logo_url: Option<String>,
+    /// Local screenshot paths, resolved from the installed plugin package.
     pub screenshots: Vec<AbsolutePathBuf>,
+    /// Remote screenshot URLs from the plugin catalog.
+    pub screenshot_urls: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3477,6 +3486,9 @@ pub enum PluginSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Local { path: AbsolutePathBuf },
+    /// The plugin is available in the remote catalog. Download metadata is
+    /// kept server-side and is not exposed through the app-server API.
+    Remote,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3503,11 +3515,11 @@ pub struct SkillsConfigWriteResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginInstallParams {
-    pub marketplace_path: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub marketplace_path: Option<AbsolutePathBuf>,
+    #[ts(optional = nullable)]
+    pub remote_marketplace_name: Option<String>,
     pub plugin_name: String,
-    /// When true, apply the remote plugin change before the local install flow.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3523,9 +3535,6 @@ pub struct PluginInstallResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginUninstallParams {
     pub plugin_id: String,
-    /// When true, apply the remote plugin change before the local uninstall flow.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -8170,33 +8179,169 @@ mod tests {
     }
 
     #[test]
-    fn plugin_list_params_serialization_uses_force_remote_sync() {
+    fn plugin_source_serializes_local_and_remote_variants() {
+        let local_path = if cfg!(windows) {
+            r"C:\plugins\linear"
+        } else {
+            "/plugins/linear"
+        };
+        let local_path = AbsolutePathBuf::try_from(PathBuf::from(local_path)).unwrap();
+        let local_path_json = local_path.as_path().display().to_string();
+
         assert_eq!(
-            serde_json::to_value(PluginListParams {
-                cwds: None,
-                force_remote_sync: false,
-            })
-            .unwrap(),
+            serde_json::to_value(PluginSource::Local { path: local_path }).unwrap(),
             json!({
-                "cwds": null,
+                "type": "local",
+                "path": local_path_json,
             }),
         );
 
         assert_eq!(
-            serde_json::to_value(PluginListParams {
-                cwds: None,
-                force_remote_sync: true,
-            })
-            .unwrap(),
+            serde_json::to_value(PluginSource::Remote).unwrap(),
             json!({
-                "cwds": null,
-                "forceRemoteSync": true,
+                "type": "remote",
             }),
         );
     }
 
     #[test]
-    fn plugin_install_params_serialization_uses_force_remote_sync() {
+    fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
+        assert_eq!(
+            serde_json::to_value(PluginMarketplaceEntry {
+                name: "openai-curated".to_string(),
+                path: None,
+                interface: None,
+                plugins: Vec::new(),
+            })
+            .unwrap(),
+            json!({
+                "name": "openai-curated",
+                "path": null,
+                "interface": null,
+                "plugins": [],
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_interface_serializes_local_paths_and_remote_urls_separately() {
+        let composer_icon = if cfg!(windows) {
+            r"C:\plugins\linear\icon.png"
+        } else {
+            "/plugins/linear/icon.png"
+        };
+        let composer_icon = AbsolutePathBuf::try_from(PathBuf::from(composer_icon)).unwrap();
+        let composer_icon_json = composer_icon.as_path().display().to_string();
+
+        let interface = PluginInterface {
+            display_name: Some("Linear".to_string()),
+            short_description: None,
+            long_description: None,
+            developer_name: None,
+            category: Some("Productivity".to_string()),
+            capabilities: Vec::new(),
+            website_url: None,
+            privacy_policy_url: None,
+            terms_of_service_url: None,
+            default_prompt: None,
+            brand_color: None,
+            composer_icon: Some(composer_icon),
+            composer_icon_url: Some("https://example.com/linear/icon.png".to_string()),
+            logo: None,
+            logo_url: Some("https://example.com/linear/logo.png".to_string()),
+            screenshots: Vec::new(),
+            screenshot_urls: vec!["https://example.com/linear/screenshot.png".to_string()],
+        };
+
+        assert_eq!(
+            serde_json::to_value(interface).unwrap(),
+            json!({
+                "displayName": "Linear",
+                "shortDescription": null,
+                "longDescription": null,
+                "developerName": null,
+                "category": "Productivity",
+                "capabilities": [],
+                "websiteUrl": null,
+                "privacyPolicyUrl": null,
+                "termsOfServiceUrl": null,
+                "defaultPrompt": null,
+                "brandColor": null,
+                "composerIcon": composer_icon_json,
+                "composerIconUrl": "https://example.com/linear/icon.png",
+                "logo": null,
+                "logoUrl": "https://example.com/linear/logo.png",
+                "screenshots": [],
+                "screenshotUrls": ["https://example.com/linear/screenshot.png"],
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_list_params_ignore_removed_force_remote_sync_field() {
+        assert_eq!(
+            serde_json::from_value::<PluginListParams>(json!({
+                "cwds": null,
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginListParams { cwds: None },
+        );
+    }
+
+    #[test]
+    fn plugin_read_params_serialization_uses_install_source_fields() {
+        let marketplace_path = if cfg!(windows) {
+            r"C:\plugins\marketplace.json"
+        } else {
+            "/plugins/marketplace.json"
+        };
+        let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+        let marketplace_path_json = marketplace_path.as_path().display().to_string();
+        assert_eq!(
+            serde_json::to_value(PluginReadParams {
+                marketplace_path: Some(marketplace_path.clone()),
+                remote_marketplace_name: None,
+                plugin_name: "gmail".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "marketplacePath": marketplace_path_json,
+                "remoteMarketplaceName": null,
+                "pluginName": "gmail",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginReadParams>(json!({
+                "marketplacePath": marketplace_path_json,
+                "pluginName": "gmail",
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginReadParams {
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
+                plugin_name: "gmail".to_string(),
+            },
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginReadParams>(json!({
+                "remoteMarketplaceName": "openai-curated",
+                "pluginName": "gmail",
+            }))
+            .unwrap(),
+            PluginReadParams {
+                marketplace_path: None,
+                remote_marketplace_name: Some("openai-curated".to_string()),
+                plugin_name: "gmail".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn plugin_install_params_serialization_omits_force_remote_sync() {
         let marketplace_path = if cfg!(windows) {
             r"C:\plugins\marketplace.json"
         } else {
@@ -8206,38 +8351,52 @@ mod tests {
         let marketplace_path_json = marketplace_path.as_path().display().to_string();
         assert_eq!(
             serde_json::to_value(PluginInstallParams {
-                marketplace_path: marketplace_path.clone(),
+                marketplace_path: Some(marketplace_path.clone()),
+                remote_marketplace_name: None,
                 plugin_name: "gmail".to_string(),
-                force_remote_sync: false,
             })
             .unwrap(),
             json!({
                 "marketplacePath": marketplace_path_json,
+                "remoteMarketplaceName": null,
                 "pluginName": "gmail",
             }),
         );
 
         assert_eq!(
-            serde_json::to_value(PluginInstallParams {
-                marketplace_path,
-                plugin_name: "gmail".to_string(),
-                force_remote_sync: true,
-            })
-            .unwrap(),
-            json!({
+            serde_json::from_value::<PluginInstallParams>(json!({
                 "marketplacePath": marketplace_path_json,
                 "pluginName": "gmail",
                 "forceRemoteSync": true,
-            }),
+            }))
+            .unwrap(),
+            PluginInstallParams {
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
+                plugin_name: "gmail".to_string(),
+            },
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginInstallParams>(json!({
+                "remoteMarketplaceName": "openai-curated",
+                "pluginName": "gmail",
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginInstallParams {
+                marketplace_path: None,
+                remote_marketplace_name: Some("openai-curated".to_string()),
+                plugin_name: "gmail".to_string(),
+            },
         );
     }
 
     #[test]
-    fn plugin_uninstall_params_serialization_uses_force_remote_sync() {
+    fn plugin_uninstall_params_serialization_omits_force_remote_sync() {
         assert_eq!(
             serde_json::to_value(PluginUninstallParams {
                 plugin_id: "gmail@openai-curated".to_string(),
-                force_remote_sync: false,
             })
             .unwrap(),
             json!({
@@ -8246,15 +8405,14 @@ mod tests {
         );
 
         assert_eq!(
-            serde_json::to_value(PluginUninstallParams {
-                plugin_id: "gmail@openai-curated".to_string(),
-                force_remote_sync: true,
-            })
-            .unwrap(),
-            json!({
+            serde_json::from_value::<PluginUninstallParams>(json!({
                 "pluginId": "gmail@openai-curated",
                 "forceRemoteSync": true,
-            }),
+            }))
+            .unwrap(),
+            PluginUninstallParams {
+                plugin_id: "gmail@openai-curated".to_string(),
+            },
         );
     }
 

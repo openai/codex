@@ -5992,54 +5992,18 @@ impl CodexMessageProcessor {
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
-        let PluginListParams {
-            cwds,
-            force_remote_sync,
-        } = params;
+        let PluginListParams { cwds } = params;
         let roots = cwds.unwrap_or_default();
         plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
 
-        let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
                 return;
             }
         };
-        let mut remote_sync_error = None;
         let auth = self.auth_manager.auth().await;
-
-        if force_remote_sync {
-            match plugins_manager
-                .sync_plugins_from_remote(&config, auth.as_ref(), /*additive_only*/ false)
-                .await
-            {
-                Ok(sync_result) => {
-                    info!(
-                        installed_plugin_ids = ?sync_result.installed_plugin_ids,
-                        enabled_plugin_ids = ?sync_result.enabled_plugin_ids,
-                        disabled_plugin_ids = ?sync_result.disabled_plugin_ids,
-                        uninstalled_plugin_ids = ?sync_result.uninstalled_plugin_ids,
-                        "completed plugin/list remote sync"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "plugin/list remote sync failed; returning local marketplace state"
-                    );
-                    remote_sync_error = Some(err.to_string());
-                }
-            }
-
-            config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-                Ok(config) => config,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
-        }
 
         let config_for_marketplace_listing = config.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
@@ -6058,7 +6022,7 @@ impl CodexMessageProcessor {
                     .into_iter()
                     .map(|marketplace| PluginMarketplaceEntry {
                         name: marketplace.name,
-                        path: marketplace.path,
+                        path: Some(marketplace.path),
                         interface: marketplace.interface.map(|interface| MarketplaceInterface {
                             display_name: interface.display_name,
                         }),
@@ -6073,7 +6037,7 @@ impl CodexMessageProcessor {
                                 source: marketplace_plugin_source_to_info(plugin.source),
                                 install_policy: plugin.policy.installation.into(),
                                 auth_policy: plugin.policy.authentication.into(),
-                                interface: plugin.interface.map(plugin_interface_to_info),
+                                interface: plugin.interface.map(local_plugin_interface_to_info),
                             })
                             .collect(),
                     })
@@ -6133,7 +6097,6 @@ impl CodexMessageProcessor {
                 PluginListResponse {
                     marketplaces: data,
                     marketplace_load_errors,
-                    remote_sync_error,
                     featured_plugin_ids,
                 },
             )
@@ -6144,8 +6107,40 @@ impl CodexMessageProcessor {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
             marketplace_path,
+            remote_marketplace_name,
             plugin_name,
         } = params;
+        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
+            (Some(marketplace_path), None) => marketplace_path,
+            (None, Some(remote_marketplace_name)) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "remote plugin read is not supported yet for marketplace {remote_marketplace_name}"
+                            ),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+            (Some(_), Some(_)) | (None, None) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "plugin/read requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let config = match self.load_latest_config(config_cwd).await {
@@ -6205,7 +6200,7 @@ impl CodexMessageProcessor {
                 enabled: outcome.plugin.enabled,
                 install_policy: outcome.plugin.policy.installation.into(),
                 auth_policy: outcome.plugin.policy.authentication.into(),
-                interface: outcome.plugin.interface.map(plugin_interface_to_info),
+                interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
             },
             description: outcome.plugin.description,
             skills: plugin_skills_to_info(&visible_skills, &outcome.plugin.disabled_skill_paths),
@@ -6279,9 +6274,40 @@ impl CodexMessageProcessor {
     async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
         let PluginInstallParams {
             marketplace_path,
+            remote_marketplace_name,
             plugin_name,
-            force_remote_sync,
         } = params;
+        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
+            (Some(marketplace_path), None) => marketplace_path,
+            (None, Some(remote_marketplace_name)) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "remote plugin install is not supported yet for marketplace {remote_marketplace_name}"
+                            ),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+            (Some(_), Some(_)) | (None, None) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "plugin/install requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -6290,21 +6316,7 @@ impl CodexMessageProcessor {
             marketplace_path,
         };
 
-        let install_result = if force_remote_sync {
-            let config = match self.load_latest_config(config_cwd.clone()).await {
-                Ok(config) => config,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
-            let auth = self.auth_manager.auth().await;
-            plugins_manager
-                .install_plugin_with_remote_sync(&config, auth.as_ref(), request)
-                .await
-        } else {
-            plugins_manager.install_plugin(request).await
-        };
+        let install_result = plugins_manager.install_plugin(request).await;
 
         match install_result {
             Ok(result) => {
@@ -6455,27 +6467,10 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: PluginUninstallParams,
     ) {
-        let PluginUninstallParams {
-            plugin_id,
-            force_remote_sync,
-        } = params;
+        let PluginUninstallParams { plugin_id } = params;
         let plugins_manager = self.thread_manager.plugins_manager();
 
-        let uninstall_result = if force_remote_sync {
-            let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-                Ok(config) => config,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
-            let auth = self.auth_manager.auth().await;
-            plugins_manager
-                .uninstall_plugin_with_remote_sync(&config, auth.as_ref(), plugin_id)
-                .await
-        } else {
-            plugins_manager.uninstall_plugin(plugin_id).await
-        };
+        let uninstall_result = plugins_manager.uninstall_plugin(plugin_id).await;
 
         match uninstall_result {
             Ok(()) => {
@@ -8374,7 +8369,7 @@ fn plugin_skills_to_info(
         .collect()
 }
 
-fn plugin_interface_to_info(
+fn local_plugin_interface_to_info(
     interface: codex_core::plugins::PluginManifestInterface,
 ) -> PluginInterface {
     PluginInterface {
@@ -8390,8 +8385,11 @@ fn plugin_interface_to_info(
         default_prompt: interface.default_prompt,
         brand_color: interface.brand_color,
         composer_icon: interface.composer_icon,
+        composer_icon_url: None,
         logo: interface.logo,
+        logo_url: None,
         screenshots: interface.screenshots,
+        screenshot_urls: Vec::new(),
     }
 }
 

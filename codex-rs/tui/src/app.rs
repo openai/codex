@@ -4504,7 +4504,8 @@ impl App {
                             app_server,
                             cwd,
                             PluginReadParams {
-                                marketplace_path,
+                                marketplace_path: Some(marketplace_path),
+                                remote_marketplace_name: None,
                                 plugin_name,
                             },
                         );
@@ -6175,7 +6176,6 @@ async fn fetch_plugins_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
-                force_remote_sync: false,
             },
         })
         .await
@@ -6203,9 +6203,9 @@ async fn fetch_plugin_install(
         .request_typed(ClientRequest::PluginInstall {
             request_id,
             params: PluginInstallParams {
-                marketplace_path,
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
                 plugin_name,
-                force_remote_sync: false,
             },
         })
         .await
@@ -6220,10 +6220,7 @@ async fn fetch_plugin_uninstall(
     request_handle
         .request_typed(ClientRequest::PluginUninstall {
             request_id,
-            params: PluginUninstallParams {
-                plugin_id,
-                force_remote_sync: false,
-            },
+            params: PluginUninstallParams { plugin_id },
         })
         .await
         .wrap_err("plugin/uninstall failed in TUI")
