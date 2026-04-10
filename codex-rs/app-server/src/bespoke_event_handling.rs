@@ -38,6 +38,8 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeInputDeltaNotification;
+use codex_app_server_protocol::FileChangeInputStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -1568,6 +1570,27 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_server_notification(ServerNotification::ItemStarted(notification))
                     .await;
             }
+        }
+        EventMsg::ApplyPatchInputStarted(event) => {
+            let notification = FileChangeInputStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id: event.call_id,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::FileChangeInputStarted(notification))
+                .await;
+        }
+        EventMsg::ApplyPatchInputDelta(event) => {
+            let notification = FileChangeInputDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id: event.call_id,
+                delta: event.delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::FileChangeInputDelta(notification))
+                .await;
         }
         EventMsg::PatchApplyEnd(patch_end_event) => {
             // Until we migrate the core to be aware of a first class FileChangeItem

@@ -3918,6 +3918,46 @@
           "properties": {
             "method": {
               "enum": [
+                "item/fileChange/inputStarted"
+              ],
+              "title": "Item/fileChange/inputStartedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FileChangeInputStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/fileChange/inputStartedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/fileChange/inputDelta"
+              ],
+              "title": "Item/fileChange/inputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FileChangeInputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/fileChange/inputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "serverRequest/resolved"
               ],
               "title": "ServerRequest/resolvedNotificationMethod",
@@ -7466,6 +7506,52 @@
           "threadId"
         ],
         "title": "FeedbackUploadResponse",
+        "type": "object"
+      },
+      "FileChangeInputDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "delta": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta",
+          "itemId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "FileChangeInputDeltaNotification",
+        "type": "object"
+      },
+      "FileChangeInputStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "FileChangeInputStartedNotification",
         "type": "object"
       },
       "FileChangeOutputDeltaNotification": {

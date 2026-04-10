@@ -322,6 +322,37 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
 }
 
 #[test]
+fn should_process_notification_allows_file_change_input_events() {
+    let thread_id = "thread-1";
+    let turn_id = "turn-1";
+
+    assert!(should_process_notification(
+        &ServerNotification::FileChangeInputStarted(
+            codex_app_server_protocol::FileChangeInputStartedNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "call-1".to_string(),
+            }
+        ),
+        thread_id,
+        turn_id,
+    ));
+
+    assert!(should_process_notification(
+        &ServerNotification::FileChangeInputDelta(
+            codex_app_server_protocol::FileChangeInputDeltaNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: "call-1".to_string(),
+                delta: "*** Begin Patch".to_string(),
+            }
+        ),
+        thread_id,
+        turn_id,
+    ));
+}
+
+#[test]
 fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
     let value = canceled_mcp_server_elicitation_response()
         .expect("mcp elicitation cancel response should serialize");

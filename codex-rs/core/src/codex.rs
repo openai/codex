@@ -342,6 +342,8 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::ApplyPatchInputDeltaEvent;
+use codex_protocol::protocol::ApplyPatchInputStartedEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -7066,6 +7068,8 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyBegin(_)
+        | EventMsg::ApplyPatchInputStarted(_)
+        | EventMsg::ApplyPatchInputDelta(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::ImageGenerationBegin(_)
@@ -7438,6 +7442,8 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut response_tool_item_ids: HashMap<String, String> = HashMap::new();
+    let mut tool_input_streams: HashMap<String, ToolInputStreamState> = HashMap::new();
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -7480,6 +7486,23 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                if let Some((response_item_id, call_id)) = response_item_stream_ids(&item) {
+                    response_tool_item_ids.insert(response_item_id, call_id.clone());
+                    response_tool_item_ids.insert(call_id.clone(), call_id.clone());
+                    let is_apply_patch_item = response_item_is_apply_patch(&item);
+                    if let Some(input) = response_item_tool_input(&item)
+                        && (is_apply_patch_item || tool_input_looks_like_apply_patch(input))
+                    {
+                        maybe_emit_apply_patch_tool_input(
+                            &sess,
+                            &turn_context,
+                            &mut tool_input_streams,
+                            call_id,
+                            input,
+                        )
+                        .await;
+                    }
+                }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7553,6 +7576,22 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
+                let stream_ids = response_item_stream_ids(&item);
+                if let Some((response_item_id, call_id)) = stream_ids.clone() {
+                    response_tool_item_ids.insert(response_item_id, call_id.clone());
+                    response_tool_item_ids.insert(call_id.clone(), call_id);
+                }
+                if let Some((_, call_id)) = stream_ids
+                    && response_item_is_apply_patch(&item)
+                {
+                    maybe_start_apply_patch_input_stream(
+                        &sess,
+                        &turn_context,
+                        &mut tool_input_streams,
+                        call_id,
+                    )
+                    .await;
+                }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -7682,6 +7721,46 @@ async fn try_run_sampling_request(
                     error_or_panic("OutputTextDelta without active item".to_string());
                 }
             }
+            ResponseEvent::ToolCallInputDelta {
+                item_id,
+                call_id,
+                delta,
+            } => {
+                let Some(call_id) = call_id
+                    .or_else(|| response_tool_item_ids.get(&item_id).cloned())
+                    .or(Some(item_id))
+                else {
+                    continue;
+                };
+                let state = tool_input_state_mut(&mut tool_input_streams, call_id.clone());
+                state.input.push_str(&delta);
+                let input_delta = if state.apply_patch_started {
+                    Some(delta)
+                } else if tool_input_looks_like_apply_patch(&state.input) {
+                    state.apply_patch_started = true;
+                    let buffered_input = state.input.clone();
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::ApplyPatchInputStarted(ApplyPatchInputStartedEvent {
+                            call_id: call_id.clone(),
+                        }),
+                    )
+                    .await;
+                    Some(buffered_input)
+                } else {
+                    None
+                };
+                if let Some(delta) = input_delta {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::ApplyPatchInputDelta(ApplyPatchInputDeltaEvent {
+                            call_id,
+                            delta,
+                        }),
+                    )
+                    .await;
+                };
+            }
             ResponseEvent::ReasoningSummaryDelta {
                 delta,
                 summary_index,
@@ -7759,6 +7838,160 @@ async fn try_run_sampling_request(
     }
 
     outcome
+}
+
+struct ToolInputStreamState {
+    input: String,
+    apply_patch_started: bool,
+}
+
+fn tool_input_state_mut(
+    tool_input_streams: &mut HashMap<String, ToolInputStreamState>,
+    call_id: String,
+) -> &mut ToolInputStreamState {
+    tool_input_streams
+        .entry(call_id)
+        .or_insert_with(|| ToolInputStreamState {
+            input: String::new(),
+            apply_patch_started: false,
+        })
+}
+
+async fn maybe_start_apply_patch_input_stream(
+    sess: &Session,
+    turn_context: &TurnContext,
+    tool_input_streams: &mut HashMap<String, ToolInputStreamState>,
+    call_id: String,
+) {
+    let state = tool_input_state_mut(tool_input_streams, call_id.clone());
+    if state.apply_patch_started {
+        return;
+    }
+    state.apply_patch_started = true;
+    let buffered_input = (!state.input.is_empty()).then(|| state.input.clone());
+    sess.send_event(
+        turn_context,
+        EventMsg::ApplyPatchInputStarted(ApplyPatchInputStartedEvent {
+            call_id: call_id.clone(),
+        }),
+    )
+    .await;
+    if let Some(delta) = buffered_input {
+        sess.send_event(
+            turn_context,
+            EventMsg::ApplyPatchInputDelta(ApplyPatchInputDeltaEvent { call_id, delta }),
+        )
+        .await;
+    }
+}
+
+fn tool_input_looks_like_apply_patch(input: &str) -> bool {
+    input.contains("apply_patch") || input.contains("\"name\":\"apply_patch\"")
+}
+
+async fn maybe_emit_apply_patch_tool_input(
+    sess: &Session,
+    turn_context: &TurnContext,
+    tool_input_streams: &mut HashMap<String, ToolInputStreamState>,
+    call_id: String,
+    completed_input: &str,
+) {
+    if completed_input.is_empty() {
+        return;
+    }
+
+    let state = tool_input_state_mut(tool_input_streams, call_id.clone());
+    let should_start = !state.apply_patch_started;
+    let delta_start = if completed_input.starts_with(&state.input) {
+        state.input.len()
+    } else {
+        state.input.len().min(completed_input.len())
+    };
+    let delta = completed_input.get(delta_start..).unwrap_or_default();
+    if !delta.is_empty() {
+        state.input.push_str(delta);
+    }
+    let delta_chunks = chunk_str(delta, 512);
+    if !should_start && delta_chunks.is_empty() {
+        return;
+    }
+    if should_start {
+        state.apply_patch_started = true;
+    }
+
+    if should_start {
+        sess.send_event(
+            turn_context,
+            EventMsg::ApplyPatchInputStarted(ApplyPatchInputStartedEvent {
+                call_id: call_id.clone(),
+            }),
+        )
+        .await;
+    }
+    for delta in delta_chunks {
+        sess.send_event(
+            turn_context,
+            EventMsg::ApplyPatchInputDelta(ApplyPatchInputDeltaEvent {
+                call_id: call_id.clone(),
+                delta,
+            }),
+        )
+        .await;
+    }
+}
+
+fn chunk_str(input: &str, max_bytes: usize) -> Vec<String> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    let max_bytes = max_bytes.max(1);
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    let mut last_boundary = 0;
+    for (idx, _) in input.char_indices() {
+        if idx.saturating_sub(start) > max_bytes {
+            chunks.push(input[start..last_boundary].to_string());
+            start = last_boundary;
+        }
+        last_boundary = idx;
+    }
+    if start < input.len() {
+        chunks.push(input[start..].to_string());
+    }
+    chunks
+}
+
+fn response_item_is_apply_patch(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::FunctionCall { name, .. } | ResponseItem::CustomToolCall { name, .. } => {
+            name == "apply_patch"
+        }
+        _ => false,
+    }
+}
+
+fn response_item_stream_ids(item: &ResponseItem) -> Option<(String, String)> {
+    match item {
+        ResponseItem::FunctionCall { id, call_id, .. }
+        | ResponseItem::CustomToolCall { id, call_id, .. } => {
+            let response_item_id = id.clone().unwrap_or_else(|| call_id.clone());
+            Some((response_item_id, call_id.clone()))
+        }
+        ResponseItem::LocalShellCall { id, call_id, .. } => {
+            let call_id = call_id.clone()?;
+            let response_item_id = id.clone().unwrap_or_else(|| call_id.clone());
+            Some((response_item_id, call_id))
+        }
+        _ => None,
+    }
+}
+
+fn response_item_tool_input(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCall { arguments, .. } => Some(arguments),
+        ResponseItem::CustomToolCall { input, .. } => Some(input),
+        _ => None,
+    }
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {

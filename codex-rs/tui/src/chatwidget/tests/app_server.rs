@@ -148,6 +148,86 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 }
 
 #[tokio::test]
+async fn live_app_server_file_change_input_updates_writing_status() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::FileChangeInputStarted(
+            codex_app_server_protocol::FileChangeInputStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.current_status.header, "Writing file. 0 chars");
+
+    chat.handle_server_notification(
+        ServerNotification::FileChangeInputDelta(
+            codex_app_server_protocol::FileChangeInputDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                delta: "*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+world".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.current_status.header, "Writing hello.txt. 13 chars");
+
+    chat.handle_server_notification(
+        ServerNotification::FileChangeInputDelta(
+            codex_app_server_protocol::FileChangeInputDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                delta: "!\n".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.current_status.header, "Writing hello.txt. 15 chars");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::FileChange {
+                id: "call-1".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "/tmp/hello.txt".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\nworld!\n".to_string(),
+                }],
+                status: AppServerPatchApplyStatus::Completed,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_status.header, "Working");
+    assert!(chat.file_change_input_statuses.is_empty());
+    assert_eq!(drain_insert_history(&mut rx).len(), 1);
+}
+
+#[tokio::test]
 async fn live_app_server_file_change_item_started_preserves_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -256,6 +336,29 @@ fn app_server_patch_changes_to_core_preserves_diffs() {
                 content: "hello\n".to_string(),
             },
         )])
+    );
+}
+
+#[test]
+fn pending_file_change_input_tracks_latest_patch_target() {
+    let mut status = PendingFileChangeInput::default();
+
+    status.append_delta("*** Begin Patch\n*** Add File: src/one.rs\n+one\n");
+    assert_eq!(
+        status.progress(),
+        FileChangeInputProgress {
+            filename: Some("one.rs".to_string()),
+            char_count: 5,
+        }
+    );
+
+    status.append_delta("*** Update File: src/two.rs\n-two\n+two\n");
+    assert_eq!(
+        status.progress(),
+        FileChangeInputProgress {
+            filename: Some("two.rs".to_string()),
+            char_count: 10,
+        }
     );
 }
 

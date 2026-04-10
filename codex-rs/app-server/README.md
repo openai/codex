@@ -988,6 +988,8 @@ There are additional item-specific events:
 
 #### fileChange
 
+- `item/fileChange/inputStarted` - emitted when the model starts generating provider tool input for `apply_patch`; `itemId` matches the subsequent `fileChange` item id.
+- `item/fileChange/inputDelta` - streams provider tool input before the patch is parsed or executed. For function-call models this is the JSON arguments stream; for custom-tool models this is the raw tool input. Concatenate `delta` values for the same `itemId` in order.
 - `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
 
 ### Errors

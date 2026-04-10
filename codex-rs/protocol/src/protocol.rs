@@ -1355,6 +1355,12 @@ pub enum EventMsg {
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
     PatchApplyBegin(PatchApplyBeginEvent),
 
+    /// Notification that the model has started streaming input for an `apply_patch` call.
+    ApplyPatchInputStarted(ApplyPatchInputStartedEvent),
+
+    /// Incremental model-generated input for an `apply_patch` call.
+    ApplyPatchInputDelta(ApplyPatchInputDeltaEvent),
+
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
 
@@ -3002,6 +3008,20 @@ pub struct PatchApplyBeginEvent {
     pub auto_approved: bool,
     /// The changes to be applied.
     pub changes: HashMap<PathBuf, FileChange>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ApplyPatchInputStartedEvent {
+    /// Identifier for the originating `apply_patch` tool call.
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ApplyPatchInputDeltaEvent {
+    /// Identifier for the originating `apply_patch` tool call.
+    pub call_id: String,
+    /// Incremental input emitted by the model for the tool call.
+    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

@@ -20,6 +20,8 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeInputDeltaNotification;
+use codex_app_server_protocol::FileChangeInputStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -1654,6 +1656,131 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 
     let readme_contents = std::fs::read_to_string(expected_readme_path)?;
     assert_eq!(readme_contents, "new line\n");
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_streams_apply_patch_input_deltas_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let call_id = "patch-call";
+    let item_id = "fc-patch-call";
+    let patch = "*** Begin Patch\n*** Add File: live.txt\n+live line\n*** End Patch\n";
+    let patch_arguments = serde_json::to_string(&serde_json::json!({ "input": patch }))?;
+    let (arg_delta_1, arg_delta_2) = patch_arguments.split_at(patch_arguments.len() / 2);
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            serde_json::json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "function_call",
+                    "id": item_id,
+                    "call_id": call_id,
+                    "name": "apply_patch",
+                    "arguments": "",
+                    "status": "in_progress"
+                }
+            }),
+            serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": item_id,
+                "delta": arg_delta_1,
+            }),
+            serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": item_id,
+                "delta": arg_delta_2,
+            }),
+            responses::ev_apply_patch_function_call(call_id, patch),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("patch applied")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(&codex_home, &server.uri(), "never", &BTreeMap::default())?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "apply patch".into(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let started_notif = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/fileChange/inputStarted"),
+    )
+    .await??;
+    let started: FileChangeInputStartedNotification = serde_json::from_value(
+        started_notif
+            .params
+            .clone()
+            .expect("item/fileChange/inputStarted params"),
+    )?;
+    assert_eq!(started.thread_id, thread.id);
+    assert_eq!(started.turn_id, turn.id);
+    assert_eq!(started.item_id, call_id);
+
+    let mut streamed_input = String::new();
+    while streamed_input != patch_arguments {
+        let delta_notif = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("item/fileChange/inputDelta"),
+        )
+        .await??;
+        let delta: FileChangeInputDeltaNotification = serde_json::from_value(
+            delta_notif
+                .params
+                .clone()
+                .expect("item/fileChange/inputDelta params"),
+        )?;
+        assert_eq!(delta.thread_id, thread.id);
+        assert_eq!(delta.turn_id, turn.id);
+        assert_eq!(delta.item_id, call_id);
+        streamed_input.push_str(&delta.delta);
+    }
 
     timeout(
         DEFAULT_READ_TIMEOUT,
