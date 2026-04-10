@@ -1,0 +1,22 @@
+---
+source: tui/src/keymap_setup.rs
+expression: "render_picker(params, 78)"
+---
+                                                                              
+  Remap Shortcut                                                              
+  Search actions. Enter edits the selected shortcut.                          
+                                                                              
+  Search actions...                                                           
+› Global       Open Transcript                ctrl-t                          
+  Global       Open External Editor           ctrl-g                          
+  Global       Toggle Vim Mode                unbound                         
+  Chat         Edit Previous Message          esc                             
+  Chat         Confirm Edit Previous Message  enter                           
+  Composer     Submit                         enter                           
+  Composer     Queue                          tab                             
+  Composer     Toggle Shortcuts               ?, shift-?                      
+                                                                              
+  Open the transcript overlay.                                                
+                                                                              
+  Saves to root `tui.keymap.*` so shortcuts stay consistent across profiles.  
+  Press enter to confirm or esc to go back
