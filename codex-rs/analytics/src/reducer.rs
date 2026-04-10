@@ -323,12 +323,28 @@ impl AnalyticsReducer {
 
     fn ingest_compaction(&mut self, input: CodexCompactionEvent, out: &mut Vec<TrackEventRequest>) {
         let Some(connection_id) = self.thread_connections.get(&input.thread_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping compaction analytics event: missing thread connection metadata"
+            );
             return;
         };
         let Some(connection_state) = self.connections.get(connection_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                connection_id,
+                "dropping compaction analytics event: missing connection metadata"
+            );
             return;
         };
         let Some(thread_metadata) = self.thread_metadata.get(&input.thread_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping compaction analytics event: missing thread lifecycle metadata"
+            );
             return;
         };
         out.push(TrackEventRequest::Compaction(Box::new(

@@ -316,11 +316,7 @@ impl CompactionAnalyticsAttempt {
         phase: CompactionPhase,
     ) -> Self {
         let enabled = sess.enabled(Feature::GeneralAnalytics);
-        let active_context_tokens_before = if enabled {
-            sess.get_total_token_usage().await
-        } else {
-            0
-        };
+        let active_context_tokens_before = sess.get_total_token_usage().await;
         Self {
             enabled,
             thread_id: sess.conversation_id.to_string(),
