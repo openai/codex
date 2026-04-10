@@ -2130,6 +2130,7 @@ impl App {
             self.handle_feedback_thread_event(event);
         }
     }
+
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
     /// render either the full tool/resource listing or an error into chat history.
     ///
@@ -7878,14 +7879,6 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let guardian_approvals = guardian_approvals_mode();
-        app.config
-            .features
-            .set_enabled(Feature::GuardianApproval, /*enabled*/ false)?;
-        app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
-        app.config.approvals_reviewer = ApprovalsReviewer::User;
-        app.chat_widget
-            .set_approvals_reviewer(ApprovalsReviewer::User);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
@@ -7973,7 +7966,9 @@ mod tests {
         let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
-        app.config.config_layer_stack = codex_core::config_loader::ConfigLayerStack::default()
+        app.config.config_layer_stack = app
+            .config
+            .config_layer_stack
             .with_user_config(&config_toml_path, user_config);
         app.config
             .features
