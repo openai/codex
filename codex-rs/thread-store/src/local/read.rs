@@ -70,6 +70,7 @@ impl LocalThreadStore {
 
         Ok(stored_thread_from_metadata(
             metadata,
+            Some(path.to_path_buf()),
             name,
             memory_mode,
             include_history.then_some(StoredThreadHistory { thread_id, items }),
@@ -104,7 +105,8 @@ impl LocalThreadStore {
             None
         };
         Ok(stored_thread_from_metadata(
-            metadata,
+            metadata.clone(),
+            Some(metadata.rollout_path.clone()),
             name,
             memory_mode,
             history,

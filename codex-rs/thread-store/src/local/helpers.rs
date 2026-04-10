@@ -63,6 +63,7 @@ pub(crate) fn metadata_from_items(
 
 pub(crate) fn stored_thread_from_metadata(
     metadata: ThreadMetadata,
+    legacy_path: Option<std::path::PathBuf>,
     name: Option<String>,
     memory_mode: Option<String>,
     history: Option<StoredThreadHistory>,
@@ -72,6 +73,7 @@ pub(crate) fn stored_thread_from_metadata(
     StoredThread {
         thread_id,
         forked_from_id: None,
+        legacy_path,
         owner: Default::default(),
         preview: metadata.title.clone(),
         name,

@@ -162,7 +162,7 @@ pub struct ListThreadsParams {
     pub cursor: Option<String>,
     /// Sort order requested by the caller.
     pub sort_key: ThreadSortKey,
-    /// Allowed session sources. Empty means implementation default.
+    /// Allowed session sources. Empty means all sources.
     pub allowed_sources: Vec<SessionSource>,
     /// Optional model provider filter. `None` means implementation default, while an empty vector
     /// means all providers.
@@ -193,6 +193,8 @@ pub struct StoredThread {
     pub thread_id: ThreadId,
     /// Source thread id when this thread was forked from another thread.
     pub forked_from_id: Option<ThreadId>,
+    /// Legacy local rollout path, when the backing store has one.
+    pub legacy_path: Option<PathBuf>,
     /// Tenant/owner metadata for multi-tenant stores.
     pub owner: ThreadOwner,
     /// Best available user-facing preview, usually the first user message.
@@ -306,7 +308,7 @@ pub struct FindThreadByNameParams {
     pub include_archived: bool,
     /// Optional exact working-directory filter.
     pub cwd: Option<PathBuf>,
-    /// Allowed session sources. Empty means implementation default.
+    /// Allowed session sources. Empty means all sources.
     pub allowed_sources: Vec<SessionSource>,
     /// Optional model provider filter. `None` means implementation default, while an empty vector
     /// means all providers.

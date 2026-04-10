@@ -22,6 +22,20 @@ pub use codex_rollout::parse_cursor;
 pub use codex_rollout::read_head_for_summary;
 pub use codex_rollout::read_session_meta_line;
 pub use codex_rollout::rollout_date_parts;
+pub use codex_thread_store::ArchiveThreadParams;
+pub use codex_thread_store::FindThreadByNameParams;
+pub use codex_thread_store::GitInfoPatch;
+pub use codex_thread_store::ListThreadsParams;
+pub use codex_thread_store::LocalThreadStore;
+pub use codex_thread_store::ReadThreadParams;
+pub use codex_thread_store::SetThreadNameParams;
+pub use codex_thread_store::StoredThread;
+pub use codex_thread_store::ThreadMetadataPatch;
+pub use codex_thread_store::ThreadOwner;
+pub use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
+pub use codex_thread_store::ThreadStore;
+pub use codex_thread_store::ThreadStoreError;
+pub use codex_thread_store::UpdateThreadMetadataParams;
 
 impl codex_rollout::RolloutConfigView for Config {
     fn codex_home(&self) -> &std::path::Path {
@@ -43,6 +57,10 @@ impl codex_rollout::RolloutConfigView for Config {
     fn generate_memories(&self) -> bool {
         self.memories.generate_memories
     }
+}
+
+pub fn local_thread_store(config: &impl codex_rollout::RolloutConfigView) -> LocalThreadStore {
+    LocalThreadStore::from_config_view(config)
 }
 
 pub(crate) mod list {

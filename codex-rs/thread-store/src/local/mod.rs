@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -10,6 +11,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::RolloutConfig;
+use codex_rollout::RolloutConfigView;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
 use codex_rollout::SESSIONS_SUBDIR;
@@ -84,6 +86,11 @@ impl LocalThreadStore {
         }
     }
 
+    /// Create a local store from any rollout configuration view.
+    pub fn from_config_view(config: &impl RolloutConfigView) -> Self {
+        Self::new(RolloutConfig::from_view(config))
+    }
+
     /// Create a local store and initialize the local SQLite state database.
     pub async fn with_state_db(config: RolloutConfig) -> Self {
         let state_db = codex_rollout::state_db::init(&config).await;
@@ -134,10 +141,10 @@ impl LocalThreadStore {
             "local_thread_store_find_path",
         )
         .await
-        {
-            let archived = path.starts_with(self.archived_root());
-            return Ok((path, archived));
-        }
+            && path.exists() {
+                let archived = path.starts_with(self.archived_root());
+                return Ok((path, archived));
+            }
 
         match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await {
             Ok(Some(path)) => return Ok((path, false)),
@@ -275,11 +282,35 @@ impl ThreadStore for LocalThreadStore {
     }
 
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
-        let (path, archived) = self
+        match self
             .find_path(params.thread_id, params.include_archived)
-            .await?;
-        self.stored_thread_from_path(path.as_path(), archived, params.include_history)
             .await
+        {
+            Ok((path, archived)) => {
+                self.stored_thread_from_path(path.as_path(), archived, params.include_history)
+                    .await
+            }
+            Err(ThreadStoreError::ThreadNotFound { .. }) if !params.include_history => {
+                let state_db = self.state_db().await;
+                let Some(ctx) = state_db.as_deref() else {
+                    return Err(ThreadStoreError::ThreadNotFound {
+                        thread_id: params.thread_id,
+                    });
+                };
+                let Some(metadata) = ctx
+                    .get_thread(params.thread_id)
+                    .await
+                    .map_err(display_error)?
+                else {
+                    return Err(ThreadStoreError::ThreadNotFound {
+                        thread_id: params.thread_id,
+                    });
+                };
+                self.stored_thread_from_state_metadata(metadata, false)
+                    .await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
@@ -287,11 +318,7 @@ impl ThreadStore for LocalThreadStore {
         let mut last_cursor = cursor.clone();
         let requested_page_size = params.page_size.max(1);
         let sort_key = rollout_sort_key(params.sort_key);
-        let allowed_sources = if params.allowed_sources.is_empty() {
-            codex_rollout::INTERACTIVE_SESSION_SOURCES.clone()
-        } else {
-            params.allowed_sources
-        };
+        let allowed_sources = params.allowed_sources;
         let model_providers = params
             .model_providers
             .filter(|providers| !providers.is_empty());
@@ -381,21 +408,27 @@ impl ThreadStore for LocalThreadStore {
                 .iter()
                 .map(source_to_state_string)
                 .collect::<Vec<_>>();
-            let metadata = ctx
-                .find_thread_by_exact_title(
-                    params.name.as_str(),
-                    allowed_sources.as_slice(),
-                    params.model_providers.as_deref(),
-                    !params.include_archived,
-                    params.cwd.as_deref(),
-                )
-                .await
-                .map_err(display_error)?;
-            if let Some(metadata) = metadata {
-                return self
-                    .stored_thread_from_state_metadata(metadata, false)
+            for archived_only in
+                [false, true]
+                    .into_iter()
+                    .take(if params.include_archived { 2 } else { 1 })
+            {
+                let metadata = ctx
+                    .find_thread_by_exact_title(
+                        params.name.as_str(),
+                        allowed_sources.as_slice(),
+                        params.model_providers.as_deref(),
+                        archived_only,
+                        params.cwd.as_deref(),
+                    )
                     .await
-                    .map(Some);
+                    .map_err(display_error)?;
+                if let Some(metadata) = metadata {
+                    return self
+                        .stored_thread_from_state_metadata(metadata, archived_only)
+                        .await
+                        .map(Some);
+                }
             }
         }
 
@@ -485,17 +518,33 @@ impl ThreadStore for LocalThreadStore {
                     message: "sqlite state db unavailable for git metadata update".to_string(),
                 });
             };
-            let (path, archived) = self.find_path(params.thread_id, true).await?;
-            codex_rollout::state_db::reconcile_rollout(
-                Some(ctx),
-                path.as_path(),
-                self.config.model_provider_id.as_str(),
-                None,
-                &[],
-                Some(archived),
-                None,
-            )
-            .await;
+            match self.find_path(params.thread_id, true).await {
+                Ok((path, archived)) => {
+                    codex_rollout::state_db::reconcile_rollout(
+                        Some(ctx),
+                        path.as_path(),
+                        self.config.model_provider_id.as_str(),
+                        None,
+                        &[],
+                        Some(archived),
+                        None,
+                    )
+                    .await;
+                }
+                Err(ThreadStoreError::ThreadNotFound { .. }) => {
+                    if ctx
+                        .get_thread(params.thread_id)
+                        .await
+                        .map_err(display_error)?
+                        .is_none()
+                    {
+                        return Err(ThreadStoreError::ThreadNotFound {
+                            thread_id: params.thread_id,
+                        });
+                    }
+                }
+                Err(err) => return Err(err),
+            }
             ctx.update_thread_git_info(
                 params.thread_id,
                 git_info.sha.as_ref().map(|value| value.as_deref()),
@@ -578,6 +627,20 @@ impl ThreadStore for LocalThreadStore {
         tokio::fs::rename(&canonical_path, &restored_path)
             .await
             .map_err(io_error)?;
+        tokio::task::spawn_blocking({
+            let restored_path = restored_path.clone();
+            move || -> std::io::Result<()> {
+                let times = std::fs::FileTimes::new().set_modified(SystemTime::now());
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&restored_path)?
+                    .set_times(times)?;
+                Ok(())
+            }
+        })
+        .await
+        .map_err(display_error)?
+        .map_err(io_error)?;
         if let Some(ctx) = self.state_db().await {
             ctx.mark_unarchived(params.thread_id, restored_path.as_path())
                 .await

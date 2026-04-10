@@ -1932,6 +1932,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-state",
  "codex-terminal-detection",
+ "codex-thread-store",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
