@@ -349,7 +349,7 @@ pub(crate) fn subagent_thread_started_event_request(
     }
 }
 
-fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
+pub(crate) fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
     match subagent_source {
         SubAgentSource::Review => "review".to_string(),
         SubAgentSource::Compact => "compact".to_string(),
@@ -359,7 +359,7 @@ fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
     }
 }
 
-fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
+pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
     match subagent_source {
         SubAgentSource::ThreadSpawn {
             parent_thread_id, ..

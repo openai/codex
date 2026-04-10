@@ -18,6 +18,8 @@ use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
 use crate::events::codex_turn_steer_event_params;
 use crate::events::plugin_state_event_type;
+use crate::events::subagent_parent_thread_id;
+use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
 use crate::facts::AnalyticsFact;
@@ -70,11 +72,42 @@ pub(crate) struct AnalyticsReducer {
     requests: HashMap<(u64, RequestId), RequestState>,
     turns: HashMap<String, TurnState>,
     connections: HashMap<u64, ConnectionState>,
+    thread_connections: HashMap<String, u64>,
+    thread_metadata: HashMap<String, ThreadMetadataState>,
 }
 
 struct ConnectionState {
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
+}
+
+#[derive(Clone)]
+struct ThreadMetadataState {
+    thread_source: Option<&'static str>,
+    subagent_source: Option<String>,
+    parent_thread_id: Option<String>,
+}
+
+impl ThreadMetadataState {
+    fn from_session_source(session_source: &SessionSource) -> Self {
+        let (subagent_source, parent_thread_id) = match session_source {
+            SessionSource::SubAgent(subagent_source) => (
+                Some(subagent_source_name(subagent_source)),
+                subagent_parent_thread_id(subagent_source),
+            ),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::Unknown => (None, None),
+        };
+        Self {
+            thread_source: thread_source_name(session_source),
+            subagent_source,
+            parent_thread_id,
+        }
+    }
 }
 
 enum RequestState {
@@ -576,22 +609,28 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let thread_source: SessionSource = thread.source.into();
+        let thread_id = thread.id;
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
+        let thread_metadata = ThreadMetadataState::from_session_source(&thread_source);
+        self.thread_connections
+            .insert(thread_id.clone(), connection_id);
+        self.thread_metadata
+            .insert(thread_id.clone(), thread_metadata.clone());
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
                 event_params: ThreadInitializedEventParams {
-                    thread_id: thread.id,
+                    thread_id,
                     app_server_client: connection_state.app_server_client.clone(),
                     runtime: connection_state.runtime.clone(),
                     model,
                     ephemeral: thread.ephemeral,
-                    thread_source: thread_source_name(&thread_source),
+                    thread_source: thread_metadata.thread_source,
                     initialization_mode,
-                    subagent_source: None,
-                    parent_thread_id: None,
+                    subagent_source: thread_metadata.subagent_source,
+                    parent_thread_id: thread_metadata.parent_thread_id,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },
@@ -685,6 +724,12 @@ impl AnalyticsReducer {
         let Some((app_server_client, runtime)) = connection_metadata else {
             return;
         };
+        let Some(thread_id) = turn_state.thread_id.as_ref() else {
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(thread_id) else {
+            return;
+        };
         out.push(TrackEventRequest::TurnEvent(Box::new(
             CodexTurnEventRequest {
                 event_type: "codex_turn_event",
@@ -693,6 +738,7 @@ impl AnalyticsReducer {
                     runtime,
                     turn_id.to_string(),
                     turn_state,
+                    thread_metadata,
                 ),
             },
         )));
@@ -705,6 +751,7 @@ fn codex_turn_event_params(
     runtime: CodexRuntimeMetadata,
     turn_id: String,
     turn_state: &TurnState,
+    thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
     let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
         turn_state.thread_id.clone(),
@@ -721,7 +768,7 @@ fn codex_turn_event_params(
         num_input_images: _resolved_num_input_images,
         submission_type,
         ephemeral,
-        session_source,
+        session_source: _session_source,
         initialization_mode,
         model,
         model_provider,
@@ -744,10 +791,10 @@ fn codex_turn_event_params(
         runtime,
         submission_type,
         ephemeral,
-        thread_source: thread_source_name(&session_source).map(str::to_string),
+        thread_source: thread_metadata.thread_source.map(str::to_string),
         initialization_mode,
-        subagent_source: None,
-        parent_thread_id: None,
+        subagent_source: thread_metadata.subagent_source.clone(),
+        parent_thread_id: thread_metadata.parent_thread_id.clone(),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),
