@@ -8,6 +8,7 @@ caching).
 */
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -22,6 +23,8 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use codex_hooks::PermissionRequestDecision;
+use codex_otel::SessionTelemetry;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -112,10 +115,6 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
-        let otel_user = ToolDecisionSource::User;
-        let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
-        let otel_cfg = ToolDecisionSource::Config;
-
         // 1) Approval
         let mut already_approved = false;
 
@@ -124,7 +123,12 @@ impl ToolOrchestrator {
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
+                otel.tool_decision(
+                    otel_tn,
+                    otel_ci,
+                    &ReviewDecision::Approved,
+                    ToolDecisionSource::Config,
+                );
             }
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
@@ -137,14 +141,16 @@ impl ToolOrchestrator {
                     retry_reason: reason,
                     network_approval_context: None,
                 };
-                let decision = tool.start_approval_async(req, approval_ctx).await;
-                let otel_source = if routes_approval_to_guardian(turn_ctx) {
-                    otel_automated_reviewer.clone()
-                } else {
-                    otel_user.clone()
-                };
-
-                otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+                let decision = Self::request_approval(
+                    tool,
+                    req,
+                    approval_ctx,
+                    turn_ctx,
+                    &otel,
+                    otel_tn,
+                    otel_ci,
+                )
+                .await?;
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -292,13 +298,16 @@ impl ToolOrchestrator {
                         network_approval_context: network_approval_context.clone(),
                     };
 
-                    let decision = tool.start_approval_async(req, approval_ctx).await;
-                    let otel_source = if routes_approval_to_guardian(turn_ctx) {
-                        otel_automated_reviewer
-                    } else {
-                        otel_user
-                    };
-                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+                    let decision = Self::request_approval(
+                        tool,
+                        req,
+                        approval_ctx,
+                        turn_ctx,
+                        &otel,
+                        otel_tn,
+                        otel_ci,
+                    )
+                    .await?;
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -360,6 +369,64 @@ impl ToolOrchestrator {
             }
             Err(err) => Err(err),
         }
+    }
+
+    // PermissionRequest hooks get the first chance to answer approval prompts
+    // for tools that expose a hook payload. Today this is Bash-only; if no
+    // matching hook returns a decision, fall back to the normal user or guardian
+    // approval path.
+    async fn request_approval<Rq, Out, T>(
+        tool: &mut T,
+        req: &Rq,
+        approval_ctx: ApprovalCtx<'_>,
+        turn_ctx: &crate::codex::TurnContext,
+        otel: &SessionTelemetry,
+        otel_tn: &str,
+        otel_ci: &str,
+    ) -> Result<ReviewDecision, ToolError>
+    where
+        T: ToolRuntime<Rq, Out>,
+    {
+        if let Some(permission_request) = tool.permission_request_payload(req) {
+            match run_permission_request_hooks(
+                approval_ctx.session,
+                approval_ctx.turn,
+                approval_ctx.call_id.to_string(),
+                permission_request.tool_name,
+                permission_request.command,
+            )
+            .await
+            {
+                Some(PermissionRequestDecision::Allow) => {
+                    otel.tool_decision(
+                        otel_tn,
+                        otel_ci,
+                        &ReviewDecision::Approved,
+                        ToolDecisionSource::Config,
+                    );
+                    return Ok(ReviewDecision::Approved);
+                }
+                Some(PermissionRequestDecision::Deny { message }) => {
+                    otel.tool_decision(
+                        otel_tn,
+                        otel_ci,
+                        &ReviewDecision::Denied,
+                        ToolDecisionSource::Config,
+                    );
+                    return Err(ToolError::Rejected(message));
+                }
+                None => {}
+            }
+        }
+
+        let decision = tool.start_approval_async(req, approval_ctx).await;
+        let otel_source = if routes_approval_to_guardian(turn_ctx) {
+            ToolDecisionSource::AutomatedReviewer
+        } else {
+            ToolDecisionSource::User
+        };
+        otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+        Ok(decision)
     }
 }
 

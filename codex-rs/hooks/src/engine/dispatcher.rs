@@ -32,6 +32,7 @@ pub(crate) fn select_handlers(
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
             HookEventName::PreToolUse
+            | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
             | HookEventName::SessionStart => {
                 matches_matcher(handler.matcher.as_deref(), matcher_input)
@@ -109,6 +110,7 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
         HookEventName::SessionStart => HookScope::Thread,
         HookEventName::PreToolUse
+        | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop => HookScope::Turn,
