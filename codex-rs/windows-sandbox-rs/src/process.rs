@@ -27,6 +27,8 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
+const ERROR_FILENAME_EXCED_RANGE: i32 = 206;
+
 pub struct CreatedProcess {
     pub process_info: PROCESS_INFORMATION,
     pub startup_info: STARTUPINFOW,
@@ -50,6 +52,52 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     }
     w.push(0);
     w
+}
+
+fn create_process_error_message(
+    err: i32,
+    cwd: &Path,
+    cmdline_str: &str,
+    env_block_len: usize,
+    si_flags: u32,
+    creation_flags: u32,
+) -> String {
+    let base = format!(
+        "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | cmd_u16_len={} | env_u16_len={} | si_flags={} | creation_flags={}",
+        err,
+        format_last_error(err),
+        cwd.display(),
+        cmdline_str,
+        cmdline_str.encode_utf16().count() + 1,
+        env_block_len,
+        si_flags,
+        creation_flags,
+    );
+    if err == ERROR_FILENAME_EXCED_RANGE {
+        return format!(
+            "{base} | command line exceeded the Windows process creation limit; pass large payloads through stdin or a temporary file instead of argv"
+        );
+    }
+    base
+}
+
+fn create_process_return_error_message(
+    err: i32,
+    cwd: &Path,
+    cmdline_str: &str,
+    env_block_len: usize,
+) -> String {
+    if err == ERROR_FILENAME_EXCED_RANGE {
+        return format!(
+            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd_u16_len={} | env_u16_len={} | command line exceeded the Windows process creation limit; pass large payloads through stdin or a temporary file instead of argv",
+            err,
+            format_last_error(err),
+            cwd.display(),
+            cmdline_str.encode_utf16().count() + 1,
+            env_block_len,
+        );
+    }
+    format!("CreateProcessAsUserW failed: {err}")
 }
 
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
@@ -138,24 +186,66 @@ pub unsafe fn create_process_as_user(
     );
     if ok == 0 {
         let err = GetLastError() as i32;
-        let msg = format!(
-            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+        let msg = create_process_error_message(
             err,
-            format_last_error(err),
-            cwd.display(),
-            cmdline_str,
+            cwd,
+            &cmdline_str,
             env_block_len,
             si.dwFlags,
             creation_flags,
         );
         logging::debug_log(&msg, logs_base_dir);
-        return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
+        return Err(anyhow!(create_process_return_error_message(
+            err,
+            cwd,
+            &cmdline_str,
+            env_block_len,
+        )));
     }
     Ok(CreatedProcess {
         process_info: pi,
         startup_info: si,
         _desktop: desktop,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn create_process_error_message_explains_long_command_lines() {
+        let msg = create_process_error_message(
+            ERROR_FILENAME_EXCED_RANGE,
+            Path::new(r"C:\repo"),
+            "codex --codex-run-as-apply-patch <large patch>",
+            42,
+            0,
+            CREATE_UNICODE_ENVIRONMENT,
+        );
+
+        assert!(msg.contains("CreateProcessAsUserW failed: 206"));
+        assert!(msg.contains("command line exceeded the Windows process creation limit"));
+        assert!(msg.contains("cmd_u16_len="));
+        assert!(msg.contains("env_u16_len=42"));
+    }
+
+    #[test]
+    fn create_process_return_error_message_omits_large_command_text() {
+        let msg = create_process_return_error_message(
+            ERROR_FILENAME_EXCED_RANGE,
+            Path::new(r"C:\repo"),
+            "codex --codex-run-as-apply-patch <large patch>",
+            42,
+        );
+
+        assert!(msg.contains("CreateProcessAsUserW failed: 206"));
+        assert!(msg.contains("command line exceeded the Windows process creation limit"));
+        assert!(msg.contains("cmd_u16_len="));
+        assert!(msg.contains("env_u16_len=42"));
+        assert!(!msg.contains("<large patch>"));
+    }
 }
 
 /// Controls whether the child's stdin handle is kept open for writing.
