@@ -537,6 +537,9 @@ impl ThreadEventStore {
             ThreadBufferedEvent::Request(_)
                 | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
                 | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
+                | ThreadBufferedEvent::Notification(
+                    ServerNotification::AddCreditsNudgeEmailCompleted(_),
+                )
                 | ThreadBufferedEvent::FeedbackSubmission(_)
         )
     }
@@ -4566,8 +4569,14 @@ impl App {
             AppEvent::NotifyWorkspaceOwner => {
                 if self.active_thread_id.is_some() {
                     self.chat_widget.start_notify_workspace_owner();
-                    self.submit_active_thread_op(app_server, Op::SendAddCreditsNudgeEmail.into())
-                        .await?;
+                    if let Err(err) = self
+                        .submit_active_thread_op(app_server, Op::SendAddCreditsNudgeEmail.into())
+                        .await
+                    {
+                        self.chat_widget
+                            .finish_notify_workspace_owner(Err(err.to_string()));
+                        return Err(err);
+                    }
                 } else {
                     self.chat_widget.finish_notify_workspace_owner(Err(
                         "no active thread is available".to_string(),
@@ -6355,6 +6364,8 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::AddCreditsNudgeEmailNotification;
+    use codex_app_server_protocol::AddCreditsNudgeEmailResult;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -9644,6 +9655,29 @@ guardian_approval = true
                 serde_json::to_value(hook_completed_notification(thread_id, "turn-hook"))
                     .expect("hook notification should serialize"),
             ]
+        );
+    }
+
+    #[test]
+    fn thread_event_store_rebase_preserves_add_credits_nudge_email_completion() {
+        let thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        let notification =
+            ServerNotification::AddCreditsNudgeEmailCompleted(AddCreditsNudgeEmailNotification {
+                thread_id: thread_id.to_string(),
+                result: AddCreditsNudgeEmailResult::Sent,
+            });
+        store.push_notification(notification.clone());
+
+        store.rebase_buffer_after_session_refresh();
+
+        let snapshot = store.snapshot();
+        let [ThreadBufferedEvent::Notification(actual)] = snapshot.events.as_slice() else {
+            panic!("expected add-credits nudge email completion notification");
+        };
+        assert_eq!(
+            serde_json::to_value(actual).expect("notification should serialize"),
+            serde_json::to_value(notification).expect("notification should serialize"),
         );
     }
 

@@ -402,7 +402,9 @@ fn server_notification_thread_target(
         ServerNotification::ThreadRealtimeClosed(notification) => {
             Some(notification.thread_id.as_str())
         }
-        ServerNotification::AddCreditsNudgeEmailCompleted(_) => None,
+        ServerNotification::AddCreditsNudgeEmailCompleted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerStatusUpdated(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)
@@ -1069,15 +1071,16 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn add_credits_nudge_email_completion_is_global() {
+    fn add_credits_nudge_email_completion_targets_thread() {
+        let thread_id = ThreadId::new();
         let target = server_notification_thread_target(
             &ServerNotification::AddCreditsNudgeEmailCompleted(AddCreditsNudgeEmailNotification {
-                thread_id: ThreadId::new().to_string(),
+                thread_id: thread_id.to_string(),
                 result: AddCreditsNudgeEmailResult::Sent,
             }),
         );
 
-        assert_eq!(target, ServerNotificationThreadTarget::Global);
+        assert_eq!(target, ServerNotificationThreadTarget::Thread(thread_id));
     }
 
     #[test]
