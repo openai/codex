@@ -60,11 +60,6 @@ impl ChatGptAuthFixture {
         self
     }
 
-    pub fn is_org_owner(mut self, is_org_owner: bool) -> Self {
-        self.claims.is_org_owner = Some(is_org_owner);
-        self
-    }
-
     pub fn email(mut self, email: impl Into<String>) -> Self {
         self.claims.email = Some(email.into());
         self
@@ -87,7 +82,6 @@ pub struct ChatGptIdTokenClaims {
     pub plan_type: Option<String>,
     pub chatgpt_user_id: Option<String>,
     pub chatgpt_account_id: Option<String>,
-    pub is_org_owner: Option<bool>,
 }
 
 impl ChatGptIdTokenClaims {
@@ -114,11 +108,6 @@ impl ChatGptIdTokenClaims {
         self.chatgpt_account_id = Some(chatgpt_account_id.into());
         self
     }
-
-    pub fn is_org_owner(mut self, is_org_owner: bool) -> Self {
-        self.is_org_owner = Some(is_org_owner);
-        self
-    }
 }
 
 pub fn encode_id_token(claims: &ChatGptIdTokenClaims) -> Result<String> {
@@ -136,9 +125,6 @@ pub fn encode_id_token(claims: &ChatGptIdTokenClaims) -> Result<String> {
     }
     if let Some(chatgpt_account_id) = &claims.chatgpt_account_id {
         auth_payload.insert("chatgpt_account_id".to_string(), json!(chatgpt_account_id));
-    }
-    if let Some(is_org_owner) = claims.is_org_owner {
-        auth_payload.insert("is_org_owner".to_string(), json!(is_org_owner));
     }
     if !auth_payload.is_empty() {
         payload.insert(
