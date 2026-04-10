@@ -1094,6 +1094,14 @@ impl TurnContext {
     }
 }
 
+fn thread_initialization_mode(initial_history: &InitialHistory) -> ThreadInitializationMode {
+    match initial_history {
+        InitialHistory::New | InitialHistory::Cleared => ThreadInitializationMode::New,
+        InitialHistory::Forked(_) => ThreadInitializationMode::Forked,
+        InitialHistory::Resumed(_) => ThreadInitializationMode::Resumed,
+    }
+}
+
 fn local_time_context() -> (String, String) {
     match iana_time_zone::get_timezone() {
         Ok(timezone) => (Local::now().format("%Y-%m-%d").to_string(), timezone),
@@ -1622,6 +1630,8 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
+        session_configuration.thread_initialization_mode =
+            thread_initialization_mode(&initial_history);
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {

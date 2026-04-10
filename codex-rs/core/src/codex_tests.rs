@@ -15,6 +15,7 @@ use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_analytics::ThreadInitializationMode;
 use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
