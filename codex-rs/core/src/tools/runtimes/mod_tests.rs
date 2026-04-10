@@ -1,6 +1,7 @@
 use super::*;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
+use codex_network_proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::process::Command;
@@ -316,6 +317,58 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
 
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "nested-thread");
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_managed_proxy_env_from_process_env() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\n\
+         export PIP_PROXY='http://127.0.0.1:8080'\n\
+         export HTTP_PROXY='http://127.0.0.1:8080'\n\
+         export http_proxy='http://127.0.0.1:8080'\n\
+         export GIT_SSH_COMMAND='ssh -o ProxyCommand=stale'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s\\n%s\\n%s\\n%s' \"$PIP_PROXY\" \"$HTTP_PROXY\" \"$http_proxy\" \"$GIT_SSH_COMMAND\""
+            .to_string(),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env(ALLOW_LOCAL_BINDING_ENV_KEY, "0")
+        .env("PIP_PROXY", "http://127.0.0.1:4321")
+        .env("HTTP_PROXY", "http://127.0.0.1:4321")
+        .env("http_proxy", "http://127.0.0.1:4321")
+        .env("GIT_SSH_COMMAND", "ssh -o ProxyCommand=fresh")
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "http://127.0.0.1:4321\n\
+         http://127.0.0.1:4321\n\
+         http://127.0.0.1:4321\n\
+         ssh -o ProxyCommand=fresh"
+    );
 }
 
 #[test]
