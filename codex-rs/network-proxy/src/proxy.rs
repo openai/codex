@@ -377,7 +377,13 @@ pub const NO_PROXY_ENV_KEYS: &[&str] = &[
     "BUNDLE_NO_PROXY",
 ];
 
-pub const DEFAULT_NO_PROXY_VALUE: &str = "localhost,127.0.0.1,::1";
+pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
+    "localhost,127.0.0.1,::1,",
+    "169.254.0.0/16,",
+    "10.0.0.0/8,",
+    "172.16.0.0/12,",
+    "192.168.0.0/16"
+);
 
 pub fn proxy_url_env_value<'a>(
     env: &'a HashMap<String, String>,
@@ -448,8 +454,9 @@ fn apply_proxy_env_overrides(
     // HTTP(S)_PROXY. Keep them aligned with the managed HTTP proxy endpoint.
     set_env_keys(env, WEBSOCKET_PROXY_ENV_KEYS, &http_proxy_url);
 
-    // Keep loopback targets direct so local IPC avoids the proxy. Private/internal endpoints must
-    // still use the proxy because proxy-enforced sandboxes only allow outbound traffic to the proxy.
+    // Keep loopback and IP-literal private targets direct so local IPC/LAN access avoids the proxy.
+    // Do not include hostname suffixes here: those can force clients to resolve internal names
+    // locally instead of letting the proxy resolve them.
     set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
 
     env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
@@ -925,10 +932,12 @@ mod tests {
             Some(&DEFAULT_NO_PROXY_VALUE.to_string())
         );
         let no_proxy = env.get("NO_PROXY").expect("NO_PROXY should be set");
-        assert!(!no_proxy.contains("10.0.0.0/8"));
-        assert!(!no_proxy.contains("172.16.0.0/12"));
-        assert!(!no_proxy.contains("192.168.0.0/16"));
-        assert!(!no_proxy.contains("169.254.0.0/16"));
+        assert!(no_proxy.contains("10.0.0.0/8"));
+        assert!(no_proxy.contains("172.16.0.0/12"));
+        assert!(no_proxy.contains("192.168.0.0/16"));
+        assert!(no_proxy.contains("169.254.0.0/16"));
+        assert!(!no_proxy.contains("*.local"));
+        assert!(!no_proxy.contains(".local"));
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
         assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
         #[cfg(target_os = "macos")]
