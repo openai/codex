@@ -4409,6 +4409,9 @@ pub enum ThreadItem {
         cwd: PathBuf,
         /// Identifier for the underlying PTY process (when available).
         process_id: Option<String>,
+        /// The configured exec host, when the command ran outside the local host.
+        #[serde(default)]
+        host_id: Option<String>,
         #[serde(default)]
         source: CommandExecutionSource,
         status: CommandExecutionStatus,

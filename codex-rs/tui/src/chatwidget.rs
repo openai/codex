@@ -6195,6 +6195,7 @@ impl ChatWidget {
                 command,
                 cwd,
                 process_id,
+                host_id,
                 source,
                 status,
                 command_actions,
@@ -6217,7 +6218,7 @@ impl ChatWidget {
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
                         source: source.to_core(),
-                        host_id: None,
+                        host_id,
                         interaction_input: None,
                     });
                 } else {
@@ -6233,7 +6234,7 @@ impl ChatWidget {
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
                         source: source.to_core(),
-                        host_id: None,
+                        host_id,
                         interaction_input: None,
                         stdout: String::new(),
                         stderr: String::new(),
@@ -6790,6 +6791,7 @@ impl ChatWidget {
                 command,
                 cwd,
                 process_id,
+                host_id,
                 source,
                 command_actions,
                 ..
@@ -6805,7 +6807,7 @@ impl ChatWidget {
                         .map(codex_app_server_protocol::CommandAction::into_core)
                         .collect(),
                     source: source.to_core(),
-                    host_id: None,
+                    host_id,
                     interaction_input: None,
                 });
             }

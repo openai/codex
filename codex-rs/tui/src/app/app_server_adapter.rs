@@ -900,6 +900,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
         command,
         cwd,
         process_id,
+        host_id,
         source,
         command_actions,
         ..
@@ -922,7 +923,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
                 .map(codex_app_server_protocol::CommandAction::into_core)
                 .collect(),
             source: source.to_core(),
-            host_id: None,
+            host_id: host_id.clone(),
             interaction_input: None,
         }),
     }])
@@ -935,6 +936,7 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
         command,
         cwd,
         process_id,
+        host_id,
         source,
         status,
         command_actions,
@@ -983,7 +985,7 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
                 .map(codex_app_server_protocol::CommandAction::into_core)
                 .collect(),
             source: source.to_core(),
-            host_id: None,
+            host_id: host_id.clone(),
             interaction_input: None,
             stdout: String::new(),
             stderr: String::new(),
@@ -1183,6 +1185,7 @@ mod tests {
             command: "printf 'hello world\\n'".to_string(),
             cwd: PathBuf::from("/tmp"),
             process_id: None,
+            host_id: None,
             source: CommandExecutionSource::UserShell,
             status: CommandExecutionStatus::InProgress,
             command_actions: vec![CommandAction::Unknown {
@@ -1239,6 +1242,7 @@ mod tests {
             command: "printf 'hello world\\n'".to_string(),
             cwd: PathBuf::from("/tmp"),
             process_id: None,
+            host_id: None,
             source: CommandExecutionSource::UserShell,
             status: CommandExecutionStatus::Completed,
             command_actions: vec![CommandAction::Unknown {
@@ -1276,6 +1280,7 @@ mod tests {
             command: r#"C:\Program Files\Git\bin\bash.exe -lc "echo hi""#.to_string(),
             cwd: PathBuf::from("C:\\repo"),
             process_id: None,
+            host_id: None,
             source: CommandExecutionSource::UserShell,
             status: CommandExecutionStatus::InProgress,
             command_actions: vec![],
@@ -1324,6 +1329,7 @@ mod tests {
                     command: "printf 'hello world\\n'".to_string(),
                     cwd: PathBuf::from("/tmp"),
                     process_id: None,
+                    host_id: None,
                     source: CommandExecutionSource::UserShell,
                     status: CommandExecutionStatus::Completed,
                     command_actions: vec![CommandAction::Unknown {

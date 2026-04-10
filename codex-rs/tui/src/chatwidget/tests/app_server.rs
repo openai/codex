@@ -193,6 +193,7 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
                 command: command.clone(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: None,
+                host_id: None,
                 source: AppServerCommandExecutionSource::UserShell,
                 status: AppServerCommandExecutionStatus::InProgress,
                 command_actions: vec![AppServerCommandAction::Unknown {
@@ -214,6 +215,7 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
                 command,
                 cwd: PathBuf::from("/tmp"),
                 process_id: None,
+                host_id: None,
                 source: AppServerCommandExecutionSource::UserShell,
                 status: AppServerCommandExecutionStatus::Completed,
                 command_actions: vec![AppServerCommandAction::Unknown {
@@ -237,6 +239,51 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
     assert_chatwidget_snapshot!(
         "live_app_server_command_execution_strips_shell_wrapper",
         blob
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_command_execution_shows_remote_host() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    let script = "echo remote";
+    let command =
+        shlex::try_join(["/bin/zsh", "-lc", script]).expect("round-trippable shell wrapper");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-remote".to_string(),
+                command,
+                cwd: PathBuf::from("/Users/nlieb"),
+                process_id: Some("proc-remote".to_string()),
+                host_id: Some("mac".to_string()),
+                source: AppServerCommandExecutionSource::UnifiedExecStartup,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: Some("remote\n".to_string()),
+                exit_code: Some(0),
+                duration_ms: Some(5),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one completed command history cell"
+    );
+    let blob = lines_to_single_string(cells.first().expect("command cell"));
+    assert!(
+        blob.contains("• Ran on mac echo remote"),
+        "expected remote host in app-server command row: {blob:?}"
     );
 }
 
