@@ -542,6 +542,15 @@ impl Codex {
             .current()
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        if let Some(environment) = environment.as_ref()
+            && environment.is_remote()
+            && let Err(err) = environment.get_filesystem().get_metadata(&config.cwd).await
+        {
+            return Err(CodexErr::Fatal(format!(
+                "remote exec-server cannot access cwd `{}`: {err}",
+                config.cwd.display()
+            )));
+        }
         let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
