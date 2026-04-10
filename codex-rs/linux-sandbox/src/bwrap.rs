@@ -488,9 +488,14 @@ fn append_read_only_subpath_args(
     allowed_write_paths: &[PathBuf],
 ) {
     if let Some(target) = canonical_target_for_symlink_in_path(subpath, allowed_write_paths) {
+        // bwrap takes `--ro-bind <source> <destination>`. Use the resolved target
+        // for both operands so a protected symlinked directory is remounted
+        // read-only in place instead of binding onto the symlink path itself.
+        let mount_source = path_to_string(&target);
+        let mount_destination = path_to_string(&target);
         args.push("--ro-bind".to_string());
-        args.push(path_to_string(&target));
-        args.push(path_to_string(&target));
+        args.push(mount_source);
+        args.push(mount_destination);
         return;
     }
 
@@ -520,6 +525,8 @@ fn append_unreadable_root_args(
 ) -> Result<()> {
     if let Some(target) = canonical_target_for_symlink_in_path(unreadable_root, allowed_write_paths)
     {
+        // Apply unreadable handling to the resolved symlink target, not the
+        // logical symlink path, to avoid file-vs-directory bind mismatches.
         return append_existing_unreadable_path_args(
             args,
             preserved_files,
