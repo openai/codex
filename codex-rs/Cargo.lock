@@ -1509,6 +1509,7 @@ dependencies = [
  "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
+ "codex-utils-rustls-provider",
  "futures",
  "pretty_assertions",
  "serde",
