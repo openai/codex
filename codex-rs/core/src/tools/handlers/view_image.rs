@@ -92,10 +92,11 @@ impl ToolHandler for ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
+        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
 
         let metadata = environment
             .get_filesystem()
-            .get_metadata(&abs_path, /*sandbox*/ None)
+            .get_metadata(&abs_path, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -112,7 +113,7 @@ impl ToolHandler for ViewImageHandler {
         }
         let file_bytes = environment
             .get_filesystem()
-            .read_file(&abs_path, /*sandbox*/ None)
+            .read_file(&abs_path, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(

@@ -176,7 +176,14 @@ impl ToolHandler for ApplyPatchHandler {
             ));
         };
         let fs = environment.get_filesystem();
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd, fs.as_ref()).await
+        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
+        match codex_apply_patch::maybe_parse_apply_patch_verified(
+            &command,
+            &cwd,
+            fs.as_ref(),
+            Some(&sandbox),
+        )
+        .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
@@ -273,7 +280,10 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs).await {
+    let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
+    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
+        .await
+    {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
