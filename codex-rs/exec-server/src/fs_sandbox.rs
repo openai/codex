@@ -206,14 +206,8 @@ fn spawn_command(
 fn readable_helper_paths(path: &Path) -> Vec<AbsolutePathBuf> {
     let mut paths = Vec::new();
     push_readable_path(&mut paths, path);
-    if let Some(parent) = path.parent() {
-        push_readable_path(&mut paths, parent);
-    }
     if let Ok(canonical) = std::fs::canonicalize(path) {
         push_readable_path(&mut paths, canonical.as_path());
-        if let Some(parent) = canonical.parent() {
-            push_readable_path(&mut paths, parent);
-        }
     }
     paths
 }
