@@ -194,7 +194,7 @@ ORDER BY name
     #[tokio::test]
     async fn thread_message_rows_round_trip() {
         let runtime = test_runtime().await;
-        let params = message_params("message-1", "thread-1", 100);
+        let params = message_params("message-1", "thread-1", /*queued_at*/ 100);
 
         runtime
             .create_thread_message(&params)
@@ -221,15 +221,19 @@ ORDER BY name
     async fn claim_is_scoped_to_thread_id_and_ordered() {
         let runtime = test_runtime().await;
         runtime
-            .create_thread_message(&message_params("newer", "thread-1", 200))
+            .create_thread_message(&message_params("newer", "thread-1", /*queued_at*/ 200))
             .await
             .expect("create newer message");
         runtime
-            .create_thread_message(&message_params("other-thread", "thread-2", 50))
+            .create_thread_message(&message_params(
+                "other-thread",
+                "thread-2",
+                /*queued_at*/ 50,
+            ))
             .await
             .expect("create other thread message");
         runtime
-            .create_thread_message(&message_params("older", "thread-1", 100))
+            .create_thread_message(&message_params("older", "thread-1", /*queued_at*/ 100))
             .await
             .expect("create older message");
 
@@ -272,7 +276,11 @@ ORDER BY name
     async fn claim_consumes_message_once() {
         let runtime = test_runtime().await;
         runtime
-            .create_thread_message(&message_params("message-1", "thread-1", 100))
+            .create_thread_message(&message_params(
+                "message-1",
+                "thread-1",
+                /*queued_at*/ 100,
+            ))
             .await
             .expect("create message");
 
@@ -299,14 +307,14 @@ ORDER BY name
     #[tokio::test]
     async fn oldest_unclaimable_message_blocks_later_messages() {
         let runtime = test_runtime().await;
-        let mut steer = message_params("steer", "thread-1", 100);
+        let mut steer = message_params("steer", "thread-1", /*queued_at*/ 100);
         steer.delivery = "steer-current-turn".to_string();
         runtime
             .create_thread_message(&steer)
             .await
             .expect("create steer message");
         runtime
-            .create_thread_message(&message_params("after", "thread-1", 200))
+            .create_thread_message(&message_params("after", "thread-1", /*queued_at*/ 200))
             .await
             .expect("create after-turn message");
 
@@ -335,7 +343,7 @@ ORDER BY name
     #[tokio::test]
     async fn invalid_delivery_is_deleted_without_claiming() {
         let runtime = test_runtime().await;
-        let mut params = message_params("bad", "thread-1", 100);
+        let mut params = message_params("bad", "thread-1", /*queued_at*/ 100);
         params.delivery = "bad-delivery".to_string();
         runtime
             .create_thread_message(&params)
