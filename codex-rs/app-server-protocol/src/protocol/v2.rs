@@ -860,9 +860,69 @@ pub struct ConfigRequirements {
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
+    pub mcp_servers: Option<BTreeMap<String, ConfigRequirementsMcpServer>>,
+    pub apps: Option<BTreeMap<String, ConfigRequirementsApp>>,
+    pub rules: Option<ConfigRequirementsRules>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+    pub guardian_policy_config: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigRequirementsMcpServer {
+    pub identity: ConfigRequirementsMcpServerIdentity,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum ConfigRequirementsMcpServerIdentity {
+    Command { command: String },
+    Url { url: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigRequirementsApp {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigRequirementsRules {
+    pub prefix_rules: Vec<ConfigRequirementsPrefixRule>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigRequirementsPrefixRule {
+    pub pattern: Vec<ConfigRequirementsPatternToken>,
+    pub decision: Option<ConfigRequirementsRuleDecision>,
+    pub justification: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigRequirementsPatternToken {
+    pub token: Option<String>,
+    pub any_of: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum ConfigRequirementsRuleDecision {
+    Allow,
+    Prompt,
+    Forbidden,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7514,8 +7574,12 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                mcp_servers: None,
+                apps: None,
+                rules: None,
                 enforce_residency: None,
                 network: None,
+                guardian_policy_config: None,
             });
 
         assert_eq!(reason, Some("askForApproval.granular"));

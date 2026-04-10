@@ -820,7 +820,24 @@ mod tests {
     use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use codex_config::RequirementsExecPolicyDecisionToml;
+    use codex_config::RequirementsExecPolicyPatternTokenToml;
+    use codex_config::RequirementsExecPolicyPrefixRuleToml;
+    use codex_config::RequirementsExecPolicyToml;
     use codex_config::types::AuthCredentialsStoreMode;
+    use codex_core::config_loader::AppRequirementToml;
+    use codex_core::config_loader::AppsRequirementsToml;
+    use codex_core::config_loader::FeatureRequirementsToml;
+    use codex_core::config_loader::McpServerIdentity;
+    use codex_core::config_loader::McpServerRequirement;
+    use codex_core::config_loader::NetworkDomainPermissionToml;
+    use codex_core::config_loader::NetworkDomainPermissionsToml;
+    use codex_core::config_loader::NetworkRequirementsToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionsToml;
+    use codex_core::config_loader::ResidencyRequirement;
+    use codex_core::config_loader::SandboxModeRequirement;
+    use codex_core::config_loader::WebSearchModeRequirement;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1269,6 +1286,223 @@ mod tests {
                 enforce_residency: None,
                 network: None,
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_parses_every_requirements_toml_field() {
+        let result = parse_for_fetch(Some(
+            r#"
+allowed_approval_policies = ["never", "on-request"]
+allowed_approvals_reviewers = ["user", "guardian_subagent"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+allowed_web_search_modes = ["cached", "live"]
+enforce_residency = "us"
+guardian_policy_config = "Use managed guardian policy."
+
+[features]
+apps = false
+personality = true
+
+[mcp_servers.docs.identity]
+command = "codex-mcp"
+
+[mcp_servers.remote.identity]
+url = "https://example.com/mcp"
+
+[apps.calendar]
+enabled = false
+
+[rules]
+prefix_rules = [
+    { pattern = [{ token = "rm" }, { any_of = ["-rf", "-fr"] }], decision = "prompt", justification = "Needs review" },
+]
+
+[experimental_network]
+enabled = true
+allow_upstream_proxy = false
+dangerously_allow_all_unix_sockets = true
+managed_allowed_domains_only = true
+danger_full_access_denylist_only = true
+allow_local_binding = false
+
+[experimental_network.domains]
+"api.example.com" = "allow"
+"blocked.example.com" = "deny"
+
+[experimental_network.unix_sockets]
+"/tmp/example.sock" = "allow"
+"#,
+        ))
+        .expect("cloud requirements should parse");
+
+        assert_eq!(
+            result,
+            ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![
+                    AskForApproval::Never,
+                    AskForApproval::OnRequest,
+                ]),
+                allowed_approvals_reviewers: Some(vec![
+                    codex_protocol::config_types::ApprovalsReviewer::User,
+                    codex_protocol::config_types::ApprovalsReviewer::GuardianSubagent,
+                ]),
+                allowed_sandbox_modes: Some(vec![
+                    SandboxModeRequirement::ReadOnly,
+                    SandboxModeRequirement::WorkspaceWrite,
+                ]),
+                allowed_web_search_modes: Some(vec![
+                    WebSearchModeRequirement::Cached,
+                    WebSearchModeRequirement::Live,
+                ]),
+                feature_requirements: Some(FeatureRequirementsToml {
+                    entries: BTreeMap::from([
+                        ("apps".to_string(), false),
+                        ("personality".to_string(), true),
+                    ]),
+                }),
+                mcp_servers: Some(BTreeMap::from([
+                    (
+                        "docs".to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Command {
+                                command: "codex-mcp".to_string(),
+                            },
+                        },
+                    ),
+                    (
+                        "remote".to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Url {
+                                url: "https://example.com/mcp".to_string(),
+                            },
+                        },
+                    ),
+                ])),
+                apps: Some(AppsRequirementsToml {
+                    apps: BTreeMap::from([(
+                        "calendar".to_string(),
+                        AppRequirementToml {
+                            enabled: Some(false),
+                        },
+                    )]),
+                }),
+                rules: Some(RequirementsExecPolicyToml {
+                    prefix_rules: vec![RequirementsExecPolicyPrefixRuleToml {
+                        pattern: vec![
+                            RequirementsExecPolicyPatternTokenToml {
+                                token: Some("rm".to_string()),
+                                any_of: None,
+                            },
+                            RequirementsExecPolicyPatternTokenToml {
+                                token: None,
+                                any_of: Some(vec!["-rf".to_string(), "-fr".to_string()]),
+                            },
+                        ],
+                        decision: Some(RequirementsExecPolicyDecisionToml::Prompt),
+                        justification: Some("Needs review".to_string()),
+                    }],
+                }),
+                enforce_residency: Some(ResidencyRequirement::Us),
+                network: Some(NetworkRequirementsToml {
+                    enabled: Some(true),
+                    http_port: None,
+                    socks_port: None,
+                    allow_upstream_proxy: Some(false),
+                    dangerously_allow_non_loopback_proxy: None,
+                    dangerously_allow_all_unix_sockets: Some(true),
+                    domains: Some(NetworkDomainPermissionsToml {
+                        entries: BTreeMap::from([
+                            (
+                                "api.example.com".to_string(),
+                                NetworkDomainPermissionToml::Allow,
+                            ),
+                            (
+                                "blocked.example.com".to_string(),
+                                NetworkDomainPermissionToml::Deny,
+                            ),
+                        ]),
+                    }),
+                    managed_allowed_domains_only: Some(true),
+                    danger_full_access_denylist_only: Some(true),
+                    unix_sockets: Some(NetworkUnixSocketPermissionsToml {
+                        entries: BTreeMap::from([(
+                            "/tmp/example.sock".to_string(),
+                            NetworkUnixSocketPermissionToml::Allow,
+                        )]),
+                    }),
+                    allow_local_binding: Some(false),
+                }),
+                guardian_policy_config: Some("Use managed guardian policy.".to_string()),
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_parses_legacy_network_lists() {
+        let result = parse_for_fetch(Some(
+            r#"
+[experimental_network]
+enabled = true
+danger_full_access_denylist_only = true
+allow_local_binding = true
+denied_domains = [
+  "pastebin.com",
+  "*.pastebin.com",
+  "**.ngrok-free.dev",
+]
+allowed_domains = [
+  "127.0.0.1",
+  "localhost",
+  "::1",
+  "*.openai.com",
+  "region*.v2.argotunnel.com",
+]
+"#,
+        ))
+        .expect("cloud requirements should parse legacy network requirements");
+
+        assert_eq!(
+            result.network,
+            Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                http_port: None,
+                socks_port: None,
+                allow_upstream_proxy: None,
+                dangerously_allow_non_loopback_proxy: None,
+                dangerously_allow_all_unix_sockets: None,
+                domains: Some(NetworkDomainPermissionsToml {
+                    entries: BTreeMap::from([
+                        (
+                            "**.ngrok-free.dev".to_string(),
+                            NetworkDomainPermissionToml::Deny,
+                        ),
+                        (
+                            "*.openai.com".to_string(),
+                            NetworkDomainPermissionToml::Allow,
+                        ),
+                        (
+                            "*.pastebin.com".to_string(),
+                            NetworkDomainPermissionToml::Deny,
+                        ),
+                        ("127.0.0.1".to_string(), NetworkDomainPermissionToml::Allow),
+                        ("::1".to_string(), NetworkDomainPermissionToml::Allow),
+                        ("localhost".to_string(), NetworkDomainPermissionToml::Allow,),
+                        (
+                            "pastebin.com".to_string(),
+                            NetworkDomainPermissionToml::Deny,
+                        ),
+                        (
+                            "region*.v2.argotunnel.com".to_string(),
+                            NetworkDomainPermissionToml::Allow,
+                        ),
+                    ]),
+                }),
+                managed_allowed_domains_only: None,
+                danger_full_access_denylist_only: Some(true),
+                unix_sockets: None,
+                allow_local_binding: Some(true),
+            }),
         );
     }
 

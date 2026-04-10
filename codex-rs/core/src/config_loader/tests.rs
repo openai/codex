@@ -10,6 +10,10 @@ use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConfigRequirementsWithSources;
+use crate::config_loader::NetworkConstraints;
+use crate::config_loader::NetworkDomainPermissionToml;
+use crate::config_loader::NetworkDomainPermissionsToml;
+use crate::config_loader::NetworkRequirementsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
@@ -758,6 +762,59 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
             allowed: "[Never]".into(),
             requirement_source: RequirementSource::CloudRequirements,
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_includes_cloud_network_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let network = NetworkRequirementsToml {
+        enabled: Some(true),
+        domains: Some(NetworkDomainPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    "*.openai.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                ),
+                (
+                    "pastebin.com".to_string(),
+                    NetworkDomainPermissionToml::Deny,
+                ),
+            ]),
+        }),
+        danger_full_access_denylist_only: Some(true),
+        allow_local_binding: Some(true),
+        ..Default::default()
+    };
+    let expected_constraints = NetworkConstraints::from(network.clone());
+    let requirements = ConfigRequirementsToml {
+        network: Some(network.clone()),
+        ..Default::default()
+    };
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
+
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        cloud_requirements,
+    )
+    .await?;
+
+    assert_eq!(layers.requirements_toml().network, Some(network));
+    assert_eq!(
+        layers.requirements().network,
+        Some(crate::config_loader::Sourced::new(
+            expected_constraints,
+            RequirementSource::CloudRequirements,
+        )),
     );
 
     Ok(())
