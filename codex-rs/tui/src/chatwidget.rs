@@ -6930,8 +6930,8 @@ impl ChatWidget {
             }),
             rationale: review.rationale,
             decision_source: decision_source.map(|source| match source {
-                codex_app_server_protocol::GuardianApprovalReviewDecisionSource::Guardian => {
-                    GuardianAssessmentDecisionSource::Guardian
+                codex_app_server_protocol::GuardianApprovalReviewDecisionSource::Agent => {
+                    GuardianAssessmentDecisionSource::Agent
                 }
             }),
             action: action.into(),

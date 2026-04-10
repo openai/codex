@@ -5173,7 +5173,7 @@
     "GuardianApprovalReviewDecisionSource": {
       "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
       "enum": [
-        "guardian"
+        "agent"
       ],
       "type": "string"
     },

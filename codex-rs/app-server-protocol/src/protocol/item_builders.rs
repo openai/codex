@@ -258,7 +258,7 @@ pub fn guardian_auto_approval_review_notification(
                     decision_source: assessment
                         .decision_source
                         .map(GuardianApprovalReviewDecisionSource::from)
-                        .unwrap_or(GuardianApprovalReviewDecisionSource::Guardian),
+                        .unwrap_or(GuardianApprovalReviewDecisionSource::Agent),
                     review,
                     action,
                 },

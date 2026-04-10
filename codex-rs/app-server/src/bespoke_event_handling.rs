@@ -3034,7 +3034,7 @@ mod tests {
             decision_source: if matches!(status, GuardianAssessmentStatus::InProgress) {
                 None
             } else {
-                Some(codex_protocol::protocol::GuardianAssessmentDecisionSource::Guardian)
+                Some(codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent)
             },
             action: serde_json::from_value(json!({
                 "type": "command",
@@ -3141,7 +3141,7 @@ mod tests {
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
                 decision_source: Some(
-                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Guardian,
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
                 ),
                 action: action.clone(),
             },
@@ -3155,7 +3155,7 @@ mod tests {
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Guardian
+                    GuardianApprovalReviewDecisionSource::Agent
                 );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(
@@ -3194,7 +3194,7 @@ mod tests {
                 user_authorization: None,
                 rationale: None,
                 decision_source: Some(
-                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Guardian,
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
                 ),
                 action: action.clone(),
             },
@@ -3208,7 +3208,7 @@ mod tests {
                 assert_eq!(payload.target_item_id, None);
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Guardian
+                    GuardianApprovalReviewDecisionSource::Agent
                 );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_level, None);
@@ -3458,7 +3458,7 @@ mod tests {
                 );
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Guardian
+                    GuardianApprovalReviewDecisionSource::Agent
                 );
                 assert_eq!(
                     payload.review.status,
@@ -3528,7 +3528,7 @@ mod tests {
                 );
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Guardian
+                    GuardianApprovalReviewDecisionSource::Agent
                 );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
             }

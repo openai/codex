@@ -4561,13 +4561,13 @@ pub enum GuardianApprovalReviewStatus {
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Source that produced a terminal guardian approval review decision.
 pub enum GuardianApprovalReviewDecisionSource {
-    Guardian,
+    Agent,
 }
 
 impl From<CoreGuardianAssessmentDecisionSource> for GuardianApprovalReviewDecisionSource {
     fn from(value: CoreGuardianAssessmentDecisionSource) -> Self {
         match value {
-            CoreGuardianAssessmentDecisionSource::Guardian => Self::Guardian,
+            CoreGuardianAssessmentDecisionSource::Agent => Self::Agent,
         }
     }
 }

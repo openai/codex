@@ -54,10 +54,10 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
         .filter(|rejection| !rejection.rationale.trim().is_empty())
         .unwrap_or_else(|| GuardianRejection {
             rationale: "Guardian denied the action without a specific rationale.".to_string(),
-            source: GuardianAssessmentDecisionSource::Guardian,
+            source: GuardianAssessmentDecisionSource::Agent,
         });
     match rejection.source {
-        GuardianAssessmentDecisionSource::Guardian => format!(
+        GuardianAssessmentDecisionSource::Agent => format!(
             "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
             rejection.rationale.trim(),
             GUARDIAN_REJECTION_INSTRUCTIONS
@@ -149,7 +149,7 @@ async fn run_guardian_review(
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
-                    decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
+                    decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                     action: action_summary,
                 }),
             )
@@ -222,7 +222,7 @@ async fn run_guardian_review(
                         risk_level: None,
                         user_authorization: None,
                         rationale: None,
-                        decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
+                        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                         action: action_summary,
                     }),
                 )
@@ -265,7 +265,7 @@ async fn run_guardian_review(
         } else {
             let rejection = GuardianRejection {
                 rationale: assessment.rationale.clone(),
-                source: GuardianAssessmentDecisionSource::Guardian,
+                source: GuardianAssessmentDecisionSource::Agent,
             };
             rationales.insert(review_id.clone(), rejection);
         }
@@ -281,7 +281,7 @@ async fn run_guardian_review(
                 risk_level: Some(assessment.risk_level),
                 user_authorization: Some(assessment.user_authorization),
                 rationale: Some(assessment.rationale.clone()),
-                decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
+                decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                 action: terminal_action,
             }),
         )

@@ -5,4 +5,4 @@
 /**
  * [UNSTABLE] Source that produced a terminal guardian approval review decision.
  */
-export type GuardianApprovalReviewDecisionSource = "guardian";
+export type GuardianApprovalReviewDecisionSource = "agent";
