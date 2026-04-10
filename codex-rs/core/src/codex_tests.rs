@@ -162,8 +162,21 @@ fn generated_thread_names_are_sanitized_for_display() {
     );
     assert_eq!(
         sanitize_generated_thread_name("Fix   TypeScript\nschema\tgeneration").as_deref(),
-        Some("Fix TypeScript schema generation")
+        None
     );
+    assert_eq!(
+        sanitize_generated_thread_name("TITLE  Locate foo_bar creation?").as_deref(),
+        Some("Locate foo_bar creation")
+    );
+    assert_eq!(
+        sanitize_generated_thread_name("Title: Locate foo_bar creation?").as_deref(),
+        Some("Locate foo_bar creation")
+    );
+    assert_eq!(
+        sanitize_generated_thread_name("Refactor an especially noisy sidebar component").as_deref(),
+        Some("Refactor an especially noisy sideba…")
+    );
+    assert_eq!(sanitize_generated_thread_name("Fix bug"), None);
     assert_eq!(sanitize_generated_thread_name(" \n\t "), None);
 }
 

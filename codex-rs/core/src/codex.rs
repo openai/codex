@@ -446,21 +446,42 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 const DEFAULT_THREAD_TITLE_MODEL: &str = "gpt-5.4-mini";
-const THREAD_TITLE_PROMPT: &str = r#"Create a short activity label for this Codex session.
-
+const THREAD_TITLE_INPUT_CHAR_LIMIT: usize = 2_000;
+const THREAD_TITLE_MIN_CHARS: usize = 18;
+const THREAD_TITLE_MAX_CHARS: usize = 36;
+const THREAD_TITLE_PROMPT: &str = r#"You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task that will be created from that prompt.
+The tasks typically have to do with coding-related tasks, for example requests for bug fixes or questions about a codebase. The title you generate will be shown in the UI to represent the prompt.
+Generate a concise UI title (18-36 characters) for this task.
 Return JSON with exactly one field: {"title": "..."}.
-The title must be at least 2 words and at most 6 words, 48 characters or fewer, no markdown, no surrounding quotes, no trailing period.
-Name the user's concrete intent, not the wording of the prompt.
-Mention the most useful differentiating entity when one exists: a PR number, file, command, feature, error, ticket, or product name.
-Do not force paths, project names, or branch names when a clear plain-language task is better.
+The title value must be plain text. No quotes or trailing punctuation.
+Do not use markdown or formatting characters.
+If the task includes a ticket reference (e.g. ABC-123), include it verbatim.
 
-Style:
-- Write a compact activity label, not a document heading.
-- Prefer sentence case: capitalize only the first word, proper nouns, acronyms such as PR/API/MCP/SSH, commands, file paths, ticket IDs, and product names.
-- Prefer an -ing verb when it sounds natural: "Reviewing PR description", "Investigating startup regression", "Checking branch purpose".
-- Use simple familiar verbs. Avoid uncommon verbs like "inventorying"; use "Researching statusline options" or "Listing statusline options" instead.
-- Use an imperative verb only when it is the natural command/task wording: "Rebase and resolve conflicts", "Install timeout globally", "Run $documentation-pass".
-- Avoid title case like "Branch Purpose Inquiry" or "Review PR Description"."#;
+Generate a clear, informative task title based solely on the prompt provided. Follow the rules below to ensure consistency, readability, and usefulness.
+
+How to write a good title:
+Generate a single-line title that captures the question or core change requested. The title should be easy to scan and useful in changelogs or review queues.
+- Use an imperative verb first: "Add", "Fix", "Update", "Refactor", "Remove", "Locate", "Find", etc.
+- Aim for 18-36 characters; keep under 5 words where possible.
+- Capitalize only the first word unless locale requires otherwise.
+- Write the title in the user's locale.
+- Do not use punctuation at the end.
+- Output the title as plain text with no surrounding quotes or backticks.
+- Use precise, non-redundant language.
+- Translate fixed phrases into the user's locale (e.g., "Fix bug" -> "Corrige el error" in Spanish-ES), but leave code terms in English unless a widely adopted translation exists.
+- If the user provides a title explicitly, reuse it (translated if needed) and skip generation logic.
+- Make it clear when the user is requesting changes (use verbs like "Fix", "Add", etc) vs asking a question (use verbs like "Find", "Locate", "Count").
+- Do NOT respond to the user, answer questions, or attempt to solve the problem; just write a title that can represent the user's query.
+
+Examples:
+- User: "Can we add dark-mode support to the settings page?" -> Add dark-mode support
+- User: "Fehlerbehebung: Beim Anmelden erscheint 500." (de-DE) -> Login-Fehler 500 beheben
+- User: "Refactoriser le composant sidebar pour reduire le code duplique." (fr-FR) -> Refactoriser composant sidebar
+- User: "How do I fix our login bug?" -> Troubleshoot login bug
+- User: "Where in the codebase is foo_bar created" -> Locate foo_bar
+- User: "what's 2+2" -> Calculate 2+2
+
+By following these conventions, your titles will be readable, changelog-friendly, and helpful to both users and downstream tools."#;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -4118,8 +4139,10 @@ impl Session {
         let sess = Arc::clone(self);
         let title_request = ThreadNameGenerationRequest {
             sub_id: turn_context.sub_id.clone(),
-            user_message: truncate_string_chars(&initial_user_message, 4_000),
-            cwd: turn_context.cwd.to_path_buf(),
+            user_message: truncate_string_chars(
+                &initial_user_message,
+                THREAD_TITLE_INPUT_CHAR_LIMIT,
+            ),
             model_name: turn_context
                 .config
                 .session_titles
@@ -5068,7 +5091,6 @@ struct ThreadNameOutput {
 struct ThreadNameGenerationRequest {
     sub_id: String,
     user_message: String,
-    cwd: PathBuf,
     model_name: String,
     model_reasoning_summary: ReasoningSummaryConfig,
     service_tier: Option<ServiceTier>,
@@ -5117,7 +5139,7 @@ async fn generate_thread_name(
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: build_thread_name_input(request.cwd.as_path(), &request.user_message),
+                text: format!("User prompt:\n{}\n", request.user_message.trim()),
             }],
             end_turn: None,
             phase: None,
@@ -5170,40 +5192,60 @@ fn thread_name_output_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "title": { "type": "string" }
+            "title": {
+                "type": "string",
+                "minLength": THREAD_TITLE_MIN_CHARS,
+                "maxLength": THREAD_TITLE_MAX_CHARS,
+            }
         },
         "required": ["title"],
         "additionalProperties": false
     })
 }
 
-fn build_thread_name_input(cwd: &Path, user_message: &str) -> String {
-    let git_root = get_git_repo_root(cwd);
-    let project = git_root
-        .as_deref()
-        .and_then(Path::file_name)
-        .or_else(|| cwd.file_name())
-        .map(|name| name.to_string_lossy().to_string());
-    match project {
-        Some(project) => format!(
-            "Project: {project}\n\nUser's first message:\n{}\n",
-            user_message.trim()
-        ),
-        None => format!("User's first message:\n{}\n", user_message.trim()),
-    }
-}
-
 fn sanitize_generated_thread_name(name: &str) -> Option<String> {
-    let collapsed = name.split_whitespace().collect::<Vec<_>>().join(" ");
-    let stripped = collapsed
+    let first_line = name
+        .replace("\r\n", "\n")
+        .lines()
+        .find(|line| !line.trim().is_empty())?
         .trim()
-        .trim_matches(['"', '\'', '`', '*', '_'])
-        .trim_end_matches('.')
-        .trim();
-    if stripped.is_empty() {
+        .to_string();
+    let prefixed = first_line.trim();
+    let stripped_title = if prefixed
+        .get(.."title".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("title"))
+        && prefixed["title".len()..]
+            .chars()
+            .next()
+            .is_some_and(|separator| separator == ':' || separator.is_whitespace())
+    {
+        prefixed["title".len()..].trim_start_matches(|ch: char| ch == ':' || ch.is_whitespace())
+    } else {
+        prefixed
+    };
+    let stripped = stripped_title
+        .trim_matches(['"', '\'', '`', '“', '”', '‘', '’'])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(['.', '?', '!'])
+        .trim()
+        .to_string();
+    let stripped = stripped.as_str();
+    let char_count = stripped.chars().count();
+    if char_count < THREAD_TITLE_MIN_CHARS {
         return None;
     }
-    Some(truncate_string_chars(stripped, 48))
+    if char_count > THREAD_TITLE_MAX_CHARS {
+        let truncated = stripped
+            .chars()
+            .take(THREAD_TITLE_MAX_CHARS - 1)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        return Some(format!("{truncated}…"));
+    }
+    Some(stripped.to_string())
 }
 
 fn truncate_string_chars(value: &str, max_chars: usize) -> String {
