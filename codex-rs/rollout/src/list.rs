@@ -113,7 +113,7 @@ pub enum ThreadSortKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThreadSortDirection {
+pub enum SortDirection {
     Asc,
     Desc,
 }
