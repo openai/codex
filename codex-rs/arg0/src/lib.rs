@@ -120,6 +120,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                     &mut stdout,
                     &mut stderr,
                     codex_exec_server::LOCAL_FS.as_ref(),
+                    /*sandbox*/ None,
                 )) {
                     Ok(()) => 0,
                     Err(_) => 1,

@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::protocol::FileSystemPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
@@ -20,12 +18,6 @@ use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
-
-#[derive(Clone, Copy)]
-enum AccessPathMode {
-    ResolveAll,
-    PreserveLeaf,
-}
 
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem) });
@@ -224,25 +216,12 @@ fn destination_is_same_or_descendant_of_source(
     destination: &Path,
 ) -> io::Result<bool> {
     let source = std::fs::canonicalize(source)?;
-    let destination = resolve_path_for_access_check(destination, AccessPathMode::ResolveAll)?;
+    let destination = resolve_path_for_access_check(destination)?;
     Ok(destination.starts_with(&source))
 }
 
-fn resolve_path_for_access_check(path: &Path, path_mode: AccessPathMode) -> io::Result<PathBuf> {
-    match path_mode {
-        AccessPathMode::ResolveAll => resolve_existing_path(path),
-        AccessPathMode::PreserveLeaf => preserve_leaf_path_for_access_check(path),
-    }
-}
-
-fn preserve_leaf_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
-    let Some(file_name) = path.file_name() else {
-        return resolve_existing_path(path);
-    };
-    let parent = path.parent().unwrap_or_else(|| Path::new("/"));
-    let mut resolved_parent = resolve_existing_path(parent)?;
-    resolved_parent.push(file_name);
-    Ok(resolved_parent)
+fn resolve_path_for_access_check(path: &Path) -> io::Result<PathBuf> {
+    resolve_existing_path(path)
 }
 
 pub(crate) fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
@@ -270,27 +249,6 @@ pub(crate) fn current_sandbox_cwd() -> io::Result<PathBuf> {
     let cwd = std::env::current_dir()
         .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
     resolve_existing_path(cwd.as_path())
-}
-
-fn canonicalize_file_system_policy_paths(
-    mut file_system_policy: FileSystemSandboxPolicy,
-) -> io::Result<FileSystemSandboxPolicy> {
-    for entry in &mut file_system_policy.entries {
-        if let FileSystemPath::Path { path } = &mut entry.path {
-            *path = canonicalize_absolute_path(path)?;
-        }
-    }
-    Ok(file_system_policy)
-}
-
-fn canonicalize_absolute_path(path: &AbsolutePathBuf) -> io::Result<AbsolutePathBuf> {
-    let resolved = resolve_existing_path(path.as_path())?;
-    AbsolutePathBuf::from_absolute_path(resolved.as_path()).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("path must stay absolute after canonicalization: {err}"),
-        )
-    })
 }
 
 fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
@@ -355,7 +313,6 @@ mod tests {
                 .join("..")
                 .join("secret.txt")
                 .as_path(),
-            AccessPathMode::ResolveAll,
         )?;
 
         assert_eq!(
