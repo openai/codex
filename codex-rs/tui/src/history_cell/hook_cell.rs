@@ -135,20 +135,22 @@ impl HookCell {
             return false;
         };
         if hook_run_is_quiet_success(&run) {
-            if self.runs[index].start_quiet_linger_after_success() {
-                return true;
-            } else {
+            if !self.runs[index].start_quiet_linger_after_success() {
                 self.runs.remove(index);
             }
             return true;
         }
+        let HookRunSummary {
+            event_name,
+            status_message,
+            status,
+            entries,
+            ..
+        } = run;
         let existing = &mut self.runs[index];
-        existing.event_name = run.event_name;
-        existing.status_message = run.status_message;
-        existing.state = HookRunState::Completed(CompletedHookRun {
-            status: run.status,
-            entries: run.entries,
-        });
+        existing.event_name = event_name;
+        existing.status_message = status_message;
+        existing.state = HookRunState::completed(status, entries);
         true
     }
 
@@ -156,14 +158,19 @@ impl HookCell {
         if hook_run_is_quiet_success(&run) {
             return;
         }
+        let HookRunSummary {
+            id,
+            event_name,
+            status_message,
+            status,
+            entries,
+            ..
+        } = run;
         self.runs.push(HookRunCell {
-            id: run.id,
-            event_name: run.event_name,
-            status_message: run.status_message,
-            state: HookRunState::Completed(CompletedHookRun {
-                status: run.status,
-                entries: run.entries,
-            }),
+            id,
+            event_name,
+            status_message,
+            state: HookRunState::completed(status, entries),
         });
     }
 
@@ -176,9 +183,7 @@ impl HookCell {
     pub(crate) fn update_due_visibility(&mut self, now: Instant) -> bool {
         let mut changed = false;
         for run in &mut self.runs {
-            if run.state.reveal_if_due(now) {
-                changed = true;
-            }
+            changed |= run.state.reveal_if_due(now);
         }
         changed
     }
@@ -204,8 +209,10 @@ impl HookCell {
             run.reveal_running_now_for_test(now);
         }
     }
+}
 
-    fn display_lines_inner(&self) -> Vec<Line<'static>> {
+impl HistoryCell for HookCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let mut running_group: Option<RunningHookGroup> = None;
         for run in &self.runs {
@@ -218,15 +225,14 @@ impl HookCell {
                         group.count += 1;
                         group.start_time =
                             earliest_instant(group.start_time, run.state.start_time());
+                        continue;
                     }
                     Some(group) => {
                         push_running_hook_group(&mut lines, group, self.animations_enabled);
-                        running_group = Some(RunningHookGroup::new(key, run.state.start_time()));
                     }
-                    None => {
-                        running_group = Some(RunningHookGroup::new(key, run.state.start_time()));
-                    }
+                    None => {}
                 }
+                running_group = Some(RunningHookGroup::new(key, run.state.start_time()));
                 continue;
             }
             if let Some(group) = running_group.take() {
@@ -239,12 +245,6 @@ impl HookCell {
             push_running_hook_group(&mut lines, &group, self.animations_enabled);
         }
         lines
-    }
-}
-
-impl HistoryCell for HookCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        self.display_lines_inner()
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -360,6 +360,10 @@ impl HookRunState {
             start_time,
             reveal_deadline: start_time + HOOK_RUN_REVEAL_DELAY,
         }
+    }
+
+    fn completed(status: HookRunStatus, entries: Vec<HookOutputEntry>) -> Self {
+        Self::Completed(CompletedHookRun { status, entries })
     }
 
     fn is_active(&self) -> bool {
