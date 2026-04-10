@@ -43,10 +43,17 @@ pub use model::Stage1JobClaimOutcome;
 pub use model::Stage1Output;
 pub use model::Stage1OutputRef;
 pub use model::Stage1StartupClaimParams;
+pub use model::ThreadMessage;
+pub use model::ThreadMessageClaim;
+pub use model::ThreadMessageCreateParams;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
+pub use model::ThreadTimer;
+pub use model::ThreadTimerCreateParams;
+pub use model::ThreadTimerUpdateParams;
 pub use model::ThreadsPage;
 pub use runtime::RemoteControlEnrollmentRecord;
+pub use runtime::TimerDataVersionChecker;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
 pub use runtime::state_db_filename;
@@ -58,7 +65,7 @@ pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 pub const LOGS_DB_FILENAME: &str = "logs";
 pub const LOGS_DB_VERSION: u32 = 2;
 pub const STATE_DB_FILENAME: &str = "state";
-pub const STATE_DB_VERSION: u32 = 5;
+pub const STATE_DB_VERSION: u32 = 6;
 
 /// Errors encountered during DB operations. Tags: [stage]
 pub const DB_ERROR_METRIC: &str = "codex.db.error";

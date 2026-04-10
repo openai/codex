@@ -158,6 +158,7 @@ pub(crate) mod update_action;
 pub use update_action::UpdateAction;
 mod update_prompt;
 mod updates;
+mod user_message_display;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;

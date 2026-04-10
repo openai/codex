@@ -713,7 +713,6 @@ async fn build_thread_item(
     {
         return None;
     }
-    // Apply filters: must have session meta and at least one user message event
     if summary.saw_session_meta && summary.saw_user_event {
         let HeadTailSummary {
             thread_id,
