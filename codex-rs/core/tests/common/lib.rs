@@ -282,8 +282,15 @@ where
     use tokio::time::Duration;
     use tokio::time::timeout;
     loop {
-        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(10)), codex.next_event())
+        // Allow extra time to accommodate async startup work (e.g. config IO,
+        // tool discovery). Windows CI can take longer to launch helper
+        // processes inside large aggregate test binaries.
+        let min_wait = if cfg!(windows) {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(10)
+        };
+        let ev = timeout(wait_time.max(min_wait), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
