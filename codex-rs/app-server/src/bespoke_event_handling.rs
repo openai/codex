@@ -99,6 +99,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::build_command_execution_end_item;
 use codex_app_server_protocol::build_file_change_approval_request_item;
 use codex_app_server_protocol::build_file_change_begin_item;
@@ -1476,6 +1477,24 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
+        }
+        EventMsg::InjectedMessage(event) => {
+            if !event.content.trim().is_empty() {
+                let notification = ItemCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item: ThreadItem::UserMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        content: vec![V2UserInput::Text {
+                            text: event.content,
+                            text_elements: Vec::new(),
+                        }],
+                    },
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemCompleted(notification))
+                    .await;
+            }
         }
         EventMsg::HookStarted(event) => {
             if let ApiVersion::V2 = api_version {

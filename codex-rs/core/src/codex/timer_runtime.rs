@@ -1,3 +1,10 @@
+//! SQLite-backed runtime bridge for thread timers and queued thread messages.
+//!
+//! This module connects [`Session`] to the persistent state database, keeps the
+//! in-memory timer scheduler reconciled with cross-instance changes, and
+//! converts claimed timers/messages into generated model input plus
+//! transcript-safe delivery events.
+
 use super::BackgroundEventEvent;
 use super::Event;
 use super::EventMsg;
@@ -7,8 +14,11 @@ use crate::messages::MessageInvocationContext;
 use crate::messages::MessagePayload;
 use crate::messages::ThreadMessage;
 use crate::messages::db_message_to_thread_message;
+use crate::messages::injected_message_event;
 use crate::messages::message_prompt_input_item;
 use crate::messages::validate_meta;
+use crate::pending_input::GeneratedMessageInput;
+use crate::pending_input::PendingInputItem;
 use crate::timers::ClaimedTimer;
 use crate::timers::CreateTimer;
 use crate::timers::PersistedTimer;
@@ -20,10 +30,9 @@ use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;
 use crate::timers::TimerTaskSpec;
 use crate::timers::TimersState;
-use crate::timers::timer_prompt_input_item;
+use crate::timers::timer_message_invocation_context;
 use chrono::Utc;
 use codex_features::Feature;
-use codex_protocol::models::ResponseInputItem;
 use codex_rollout::state_db;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -236,17 +245,21 @@ impl Session {
         if deleted_one_shot_timer {
             self.emit_timer_updated_notification().await;
         }
-        let input_item = timer_prompt_input_item(&context);
+        let message_context = timer_message_invocation_context(&context);
+        let input_item = PendingInputItem::GeneratedMessage(GeneratedMessageInput {
+            item: message_prompt_input_item(&message_context),
+            injected_event: injected_message_event(&message_context),
+        });
         match context.delivery {
             TimerDelivery::SteerCurrentTurn => {
                 if !self.inject_timer_into_active_turn(input_item.clone()).await {
-                    self.queue_response_items_for_next_turn(vec![input_item])
+                    self.queue_pending_input_for_next_turn(vec![input_item])
                         .await;
                     self.maybe_start_turn_for_pending_work().await;
                 }
             }
             TimerDelivery::AfterTurn => {
-                self.queue_response_items_for_next_turn(vec![input_item])
+                self.queue_pending_input_for_next_turn(vec![input_item])
                     .await;
                 self.maybe_start_turn_for_pending_work().await;
             }
@@ -266,13 +279,13 @@ impl Session {
                     .inject_message_into_active_turn(input_item.clone())
                     .await
                 {
-                    self.queue_response_items_for_next_turn(vec![input_item])
+                    self.queue_pending_input_for_next_turn(vec![input_item])
                         .await;
                     self.maybe_start_turn_for_pending_work().await;
                 }
             }
             TimerDelivery::AfterTurn => {
-                self.queue_response_items_for_next_turn(vec![input_item])
+                self.queue_pending_input_for_next_turn(vec![input_item])
                     .await;
                 self.maybe_start_turn_for_pending_work().await;
             }
@@ -282,7 +295,7 @@ impl Session {
 
     async fn claim_next_message_for_delivery(
         self: &Arc<Self>,
-    ) -> Option<(ResponseInputItem, TimerDelivery)> {
+    ) -> Option<(PendingInputItem, TimerDelivery)> {
         if !self.features.enabled(Feature::TimerScheduler) {
             return None;
         }
@@ -342,12 +355,16 @@ impl Session {
                         }
                     };
                     let delivery = message.delivery;
-                    let input_item = message_prompt_input_item(&MessageInvocationContext {
+                    let message_context = MessageInvocationContext {
                         source: message.source.clone(),
                         content: message.content.clone(),
                         instructions: message.instructions.clone(),
                         meta: message.meta.clone(),
                         queued_at: message.queued_at,
+                    };
+                    let input_item = PendingInputItem::GeneratedMessage(GeneratedMessageInput {
+                        item: message_prompt_input_item(&message_context),
+                        injected_event: injected_message_event(&message_context),
                     });
                     return Some((input_item, delivery));
                 }
@@ -402,11 +419,11 @@ impl Session {
         Some(claimed)
     }
 
-    async fn inject_timer_into_active_turn(&self, item: ResponseInputItem) -> bool {
+    async fn inject_timer_into_active_turn(&self, item: PendingInputItem) -> bool {
         self.inject_message_into_active_turn(item).await
     }
 
-    async fn inject_message_into_active_turn(&self, item: ResponseInputItem) -> bool {
+    async fn inject_message_into_active_turn(&self, item: PendingInputItem) -> bool {
         let turn_state = {
             let active = self.active_turn.lock().await;
             let Some(active_turn) = active.as_ref() else {

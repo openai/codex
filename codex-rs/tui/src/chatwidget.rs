@@ -66,10 +66,6 @@ use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
-use crate::user_message_display::UserMessageDisplay;
-use crate::user_message_display::UserMessageDisplayOptions;
-use crate::user_message_display::classify_user_message;
-use crate::user_message_display::user_message_history_text;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
@@ -5889,20 +5885,19 @@ impl ChatWidget {
 
         // Show replayable user content in conversation history.
         if render_in_history && !text.is_empty() {
-            let history_text = user_message_history_text(&text).unwrap_or_else(|| text.clone());
             let local_image_paths = local_images
                 .into_iter()
                 .map(|img| img.path)
                 .collect::<Vec<_>>();
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
-                    text,
+                    text.clone(),
                     text_elements.clone(),
                     local_image_paths.clone(),
                     remote_image_urls.clone(),
                 ));
             self.add_to_history(history_cell::new_user_prompt(
-                history_text,
+                text,
                 text_elements,
                 local_image_paths,
                 remote_image_urls,
@@ -7080,6 +7075,17 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
+            EventMsg::InjectedMessage(ev) => {
+                if !ev.content.trim().is_empty() {
+                    self.add_to_history(history_cell::new_user_prompt(
+                        ev.content,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    ));
+                    self.needs_final_message_separator = false;
+                }
+            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }
@@ -7276,32 +7282,16 @@ impl ChatWidget {
         self.last_rendered_user_message_event =
             Some(Self::rendered_user_message_event_from_event(&event));
         let remote_image_urls = event.images.unwrap_or_default();
-        let message_is_empty = event.message.trim().is_empty();
-        let allow_timer_info = remote_image_urls.is_empty()
-            && event.local_images.is_empty()
-            && event.text_elements.is_empty();
-        match classify_user_message(
-            event.message,
-            UserMessageDisplayOptions { allow_timer_info },
-        ) {
-            UserMessageDisplay::TimerInfo { prompt, schedule } => {
-                self.add_info_message(prompt, Some(schedule));
-                self.needs_final_message_separator = false;
-                return;
-            }
-            UserMessageDisplay::History(message) => {
-                if !message_is_empty
-                    || !event.text_elements.is_empty()
-                    || !remote_image_urls.is_empty()
-                {
-                    self.add_to_history(history_cell::new_user_prompt(
-                        message,
-                        event.text_elements,
-                        event.local_images,
-                        remote_image_urls,
-                    ));
-                }
-            }
+        if !event.message.trim().is_empty()
+            || !event.text_elements.is_empty()
+            || !remote_image_urls.is_empty()
+        {
+            self.add_to_history(history_cell::new_user_prompt(
+                event.message,
+                event.text_elements,
+                event.local_images,
+                remote_image_urls,
+            ));
         }
 
         // User messages reset separator state so the next agent response doesn't add a stray break.
