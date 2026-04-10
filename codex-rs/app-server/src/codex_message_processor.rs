@@ -4850,8 +4850,8 @@ impl CodexMessageProcessor {
         let allowed_sources = allowed_sources_vec.as_slice();
         let state_db_ctx = get_state_db(&self.config).await;
         let core_sort_direction = match sort_direction {
-            SortDirection::Asc => codex_core::ThreadSortDirection::Asc,
-            SortDirection::Desc => codex_core::ThreadSortDirection::Desc,
+            SortDirection::Asc => codex_core::SortDirection::Asc,
+            SortDirection::Desc => codex_core::SortDirection::Desc,
         };
 
         while remaining > 0 {

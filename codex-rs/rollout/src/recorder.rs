@@ -32,10 +32,10 @@ use tracing::warn;
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::list::Cursor;
+use super::list::SortDirection;
 use super::list::ThreadItem;
 use super::list::ThreadListConfig;
 use super::list::ThreadListLayout;
-use super::list::ThreadSortDirection;
 use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
 use super::list::get_threads;
@@ -220,7 +220,7 @@ impl RolloutRecorder {
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
-        sort_direction: ThreadSortDirection,
+        sort_direction: SortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -248,7 +248,7 @@ impl RolloutRecorder {
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
-        sort_direction: ThreadSortDirection,
+        sort_direction: SortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -275,7 +275,7 @@ impl RolloutRecorder {
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
-        sort_direction: ThreadSortDirection,
+        sort_direction: SortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -308,7 +308,7 @@ impl RolloutRecorder {
         // SQLite rollout paths before the final DB-backed page is returned.
         let fs_page_size = page_size.saturating_mul(2).max(page_size);
         let fs_page = match sort_direction {
-            ThreadSortDirection::Asc => {
+            SortDirection::Asc => {
                 list_threads_from_files_asc(
                     codex_home,
                     page_size,
@@ -322,7 +322,7 @@ impl RolloutRecorder {
                 )
                 .await?
             }
-            ThreadSortDirection::Desc => {
+            SortDirection::Desc => {
                 list_threads_from_files_desc(
                     codex_home,
                     fs_page_size,
@@ -341,8 +341,8 @@ impl RolloutRecorder {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
             return Ok(match sort_direction {
-                ThreadSortDirection::Asc => fs_page,
-                ThreadSortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
+                SortDirection::Asc => fs_page,
+                SortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
             });
         }
 
@@ -377,8 +377,8 @@ impl RolloutRecorder {
         tracing::error!("Falling back on rollout system");
         tracing::warn!("state db discrepancy during list_threads_with_db_fallback: falling_back");
         Ok(match sort_direction {
-            ThreadSortDirection::Asc => fs_page,
-            ThreadSortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
+            SortDirection::Asc => fs_page,
+            SortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
         })
     }
 
@@ -405,7 +405,7 @@ impl RolloutRecorder {
                     page_size,
                     db_cursor.as_ref(),
                     sort_key,
-                    ThreadSortDirection::Desc,
+                    SortDirection::Desc,
                     allowed_sources,
                     model_providers,
                     /*archived*/ false,
