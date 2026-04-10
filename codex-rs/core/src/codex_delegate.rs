@@ -4,7 +4,6 @@ use std::sync::Arc;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
-use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -79,9 +78,7 @@ pub(crate) async fn run_codex_thread_interactive(
         auth_manager,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::from_environment(
-            parent_ctx.environment.as_deref(),
-        )),
+        environment_manager: Arc::clone(&parent_session.services.environment_manager),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),

@@ -13127,6 +13127,14 @@
                   "null"
                 ]
               },
+              "hostId": {
+                "default": null,
+                "description": "The configured exec host, when the command ran outside the local host.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },

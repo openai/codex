@@ -347,6 +347,82 @@ async fn exec_history_cell_shows_working_then_failed() {
 }
 
 #[tokio::test]
+async fn exec_history_cell_shows_remote_host_while_running() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "printf remote".to_string(),
+    ];
+    let parsed_cmd = vec![ParsedCommand::Unknown {
+        cmd: "printf remote".to_string(),
+    }];
+    chat.handle_codex_event(Event {
+        id: "call-remote-running".to_string(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-remote-running".to_string(),
+            process_id: Some("proc-remote".to_string()),
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            host_id: Some("remote-host".to_string()),
+            interaction_input: None,
+        }),
+    });
+
+    let blob = active_blob(&chat);
+    assert!(
+        blob.contains("• Running on remote-host"),
+        "expected remote host in running header: {blob:?}"
+    );
+}
+
+#[tokio::test]
+async fn exec_history_cell_shows_remote_host_after_completion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo remote".to_string(),
+    ];
+    let parsed_cmd = codex_shell_command::parse_command::parse_command(&command);
+    chat.handle_codex_event(Event {
+        id: "call-remote-complete".to_string(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-remote-complete".to_string(),
+            process_id: Some("proc-remote".to_string()),
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd,
+            source: ExecCommandSource::UnifiedExecStartup,
+            host_id: Some("remote-host".to_string()),
+            interaction_input: None,
+            stdout: "remote\n".to_string(),
+            stderr: String::new(),
+            aggregated_output: "remote\n".to_string(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "remote\n".to_string(),
+            status: CoreExecCommandStatus::Completed,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized remote exec cell");
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("• Ran on remote-host echo remote"),
+        "expected remote host in completed header: {blob:?}"
+    );
+}
+
+#[tokio::test]
 async fn exec_end_without_begin_uses_event_command() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let command = vec![
@@ -366,6 +442,7 @@ async fn exec_end_without_begin_uses_event_command() {
             cwd,
             parsed_cmd,
             source: ExecCommandSource::Agent,
+            host_id: None,
             interaction_input: None,
             stdout: "done".to_string(),
             stderr: String::new(),

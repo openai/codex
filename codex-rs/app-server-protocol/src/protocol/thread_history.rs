@@ -1790,6 +1790,7 @@ mod tests {
                     cmd: "echo hello world".into(),
                 }],
                 source: ExecCommandSource::Agent,
+                host_id: None,
                 interaction_input: None,
                 stdout: String::new(),
                 stderr: String::new(),
@@ -1836,6 +1837,7 @@ mod tests {
                 command: "echo 'hello world'".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: Some("pid-1".into()),
+                host_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
                 command_actions: vec![CommandAction::Unknown {
@@ -2007,6 +2009,7 @@ mod tests {
                 cwd: PathBuf::from("/tmp"),
                 parsed_cmd: vec![ParsedCommand::Unknown { cmd: "ls".into() }],
                 source: ExecCommandSource::Agent,
+                host_id: None,
                 interaction_input: None,
                 stdout: String::new(),
                 stderr: "exec command rejected by user".into(),
@@ -2048,6 +2051,7 @@ mod tests {
                 command: "ls".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: Some("pid-2".into()),
+                host_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
                 command_actions: vec![CommandAction::Unknown {
@@ -2133,6 +2137,7 @@ mod tests {
                 command: "rm -rf /tmp/guardian".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: None,
+                host_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
                 command_actions: vec![CommandAction::Unknown {
@@ -2192,6 +2197,7 @@ mod tests {
                 command: "/bin/rm -f /tmp/file.sqlite".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: None,
+                host_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::InProgress,
                 command_actions: vec![CommandAction::Unknown {
@@ -2247,6 +2253,7 @@ mod tests {
                     cmd: "echo done".into(),
                 }],
                 source: ExecCommandSource::Agent,
+                host_id: None,
                 interaction_input: None,
                 stdout: "done\n".into(),
                 stderr: String::new(),
@@ -2281,6 +2288,7 @@ mod tests {
                 command: "echo done".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: Some("pid-42".into()),
+                host_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
                 command_actions: vec![CommandAction::Unknown {
@@ -2336,6 +2344,7 @@ mod tests {
                     cmd: "echo done".into(),
                 }],
                 source: ExecCommandSource::Agent,
+                host_id: None,
                 interaction_input: None,
                 stdout: "done\n".into(),
                 stderr: String::new(),

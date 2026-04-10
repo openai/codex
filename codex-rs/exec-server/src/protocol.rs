@@ -53,6 +53,7 @@ pub struct InitializeParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
+    #[serde(default, alias = "session_id")]
     pub session_id: String,
 }
 
@@ -291,5 +292,17 @@ mod base64_bytes {
         BASE64_STANDARD
             .decode(encoded)
             .map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InitializeResponse;
+
+    #[test]
+    fn initialize_response_accepts_legacy_empty_payload() {
+        let response: InitializeResponse =
+            serde_json::from_str("{}").expect("legacy initialize response should deserialize");
+        assert!(response.session_id.is_empty());
     }
 }

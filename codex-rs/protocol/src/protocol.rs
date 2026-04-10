@@ -3027,6 +3027,10 @@ pub struct ExecCommandBeginEvent {
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
     pub source: ExecCommandSource,
+    /// Remote host id when the command is executed outside the local environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub host_id: Option<String>,
     /// Raw input sent to a unified exec session (if this is an interaction event).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -3051,6 +3055,10 @@ pub struct ExecCommandEndEvent {
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
     pub source: ExecCommandSource,
+    /// Remote host id when the command is executed outside the local environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub host_id: Option<String>,
     /// Raw input sent to a unified exec session (if this is an interaction event).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

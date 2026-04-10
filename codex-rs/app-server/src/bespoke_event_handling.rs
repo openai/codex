@@ -1618,6 +1618,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let command = shlex_join(&exec_command_begin_event.command);
             let cwd = exec_command_begin_event.cwd;
             let process_id = exec_command_begin_event.process_id;
+            let host_id = exec_command_begin_event.host_id;
             let first_start = {
                 let mut state = thread_state.lock().await;
                 state
@@ -1631,6 +1632,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     command,
                     cwd,
                     process_id,
+                    host_id,
                     source: exec_command_begin_event.source.into(),
                     status: CommandExecutionStatus::InProgress,
                     command_actions,
@@ -2002,6 +2004,7 @@ async fn start_command_execution_item(
                 command,
                 cwd,
                 process_id: None,
+                host_id: None,
                 source,
                 status: CommandExecutionStatus::InProgress,
                 command_actions,
@@ -2046,6 +2049,7 @@ async fn complete_command_execution_item(
         command,
         cwd,
         process_id,
+        host_id: None,
         source,
         status,
         command_actions,
@@ -3228,6 +3232,7 @@ mod tests {
                         command: completion_item.command.clone(),
                         cwd: completion_item.cwd.clone(),
                         process_id: None,
+                        host_id: None,
                         source: CommandExecutionSource::Agent,
                         status: CommandExecutionStatus::InProgress,
                         command_actions: completion_item.command_actions.clone(),

@@ -44,6 +44,8 @@ pub(crate) struct ExecCommandArgs {
     #[serde(default)]
     shell: Option<String>,
     #[serde(default)]
+    host_id: Option<String>,
+    #[serde(default)]
     login: Option<bool>,
     #[serde(default = "default_tty")]
     tty: bool,
@@ -176,13 +178,6 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let Some(environment) = turn.environment.as_ref() else {
-            return Err(FunctionCallError::RespondToModel(
-                "unified exec is unavailable in this session".to_string(),
-            ));
-        };
-        let fs = environment.get_filesystem();
-
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
@@ -190,7 +185,33 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
-                let workdir = context.turn.resolve_path(args.workdir.clone());
+                let resolved_environment = resolve_exec_environment(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    args.host_id.as_deref(),
+                )
+                .await?;
+                let environment = resolved_environment.environment;
+                let default_host_cwd = if environment.is_remote() && args.workdir.is_none() {
+                    environment
+                        .default_cwd()
+                        .map(|cwd| {
+                            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd)
+                                .map_err(|err| {
+                                    FunctionCallError::RespondToModel(format!(
+                                        "exec host default cwd `{}` is not usable on this client: {err}",
+                                        cwd.display()
+                                    ))
+                                })
+                        })
+                        .transpose()?
+                } else {
+                    None
+                };
+                let fs = environment.get_filesystem();
+                let workdir = default_host_cwd
+                    .clone()
+                    .unwrap_or_else(|| context.turn.resolve_path(args.workdir.clone()));
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     context.turn.as_ref(),
@@ -199,14 +220,20 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await;
                 let process_id = manager.allocate_process_id().await;
-                let command = get_command(
+                let command = get_command_with_shell_override(
                     &args,
                     session.user_shell(),
                     &turn.tools_config.unified_exec_shell_mode,
                     turn.tools_config.allow_login_shell,
+                    if environment.is_remote() {
+                        environment.default_shell()
+                    } else {
+                        None
+                    },
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
                 let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+                let request_host_id = resolved_environment.host_id;
 
                 let ExecCommandArgs {
                     workdir,
@@ -253,7 +280,9 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.filter(|value| !value.is_empty());
 
-                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
+                let workdir = workdir
+                    .map(|dir| context.turn.resolve_path(Some(dir)))
+                    .or(default_host_cwd);
                 let cwd = workdir.clone().unwrap_or(cwd);
                 let normalized_additional_permissions = match implicit_granted_permissions(
                     sandbox_permissions,
@@ -312,6 +341,8 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
+                            environment,
+                            host_id: request_host_id,
                             process_id,
                             yield_time_ms,
                             max_output_tokens,
@@ -379,11 +410,76 @@ fn emit_unified_exec_tty_metric(session_telemetry: &SessionTelemetry, tty: bool)
     );
 }
 
+struct ResolvedExecEnvironment {
+    environment: Arc<codex_exec_server::Environment>,
+    host_id: Option<String>,
+}
+
+async fn resolve_exec_environment(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    host_id: Option<&str>,
+) -> Result<ResolvedExecEnvironment, FunctionCallError> {
+    let environment = match host_id {
+        Some(host_id) => session
+            .services
+            .environment_manager
+            .current_for_host(host_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to resolve exec host `{host_id}`: {err}"
+                ))
+            })?,
+        None => turn.environment.clone(),
+    };
+
+    let environment = environment.ok_or_else(|| {
+        FunctionCallError::RespondToModel("unified exec is unavailable in this session".to_string())
+    })?;
+    let host_id = if environment.is_remote() {
+        Some(match host_id {
+            Some(host_id) => host_id.to_string(),
+            None => {
+                let default_host_id = session.services.environment_manager.default_host_id();
+                if default_host_id == codex_exec_server::LOCAL_HOST_ID {
+                    "remote".to_string()
+                } else {
+                    default_host_id
+                }
+            }
+        })
+    } else {
+        None
+    };
+
+    Ok(ResolvedExecEnvironment {
+        environment,
+        host_id,
+    })
+}
+
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
     shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
+) -> Result<Vec<String>, String> {
+    get_command_with_shell_override(
+        args,
+        session_shell,
+        shell_mode,
+        allow_login_shell,
+        /*shell_override*/ None,
+    )
+}
+
+fn get_command_with_shell_override(
+    args: &ExecCommandArgs,
+    session_shell: Arc<Shell>,
+    shell_mode: &UnifiedExecShellMode,
+    allow_login_shell: bool,
+    shell_override: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let use_login_shell = match args.login {
         Some(true) if !allow_login_shell => {
@@ -397,7 +493,8 @@ pub(crate) fn get_command(
 
     match shell_mode {
         UnifiedExecShellMode::Direct => {
-            let model_shell = args.shell.as_ref().map(|shell_str| {
+            let selected_shell = args.shell.as_deref().or(shell_override);
+            let model_shell = selected_shell.map(|shell_str| {
                 let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
                 shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
                 shell

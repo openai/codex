@@ -61,27 +61,20 @@ pub(crate) enum ToolEventFailure {
     Rejected(String),
 }
 
-pub(crate) async fn emit_exec_command_begin(
-    ctx: ToolEventCtx<'_>,
-    command: &[String],
-    cwd: &Path,
-    parsed_cmd: &[ParsedCommand],
-    source: ExecCommandSource,
-    interaction_input: Option<String>,
-    process_id: Option<&str>,
-) {
+async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommandInput<'_>) {
     ctx.session
         .send_event(
             ctx.turn,
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: ctx.call_id.to_string(),
-                process_id: process_id.map(str::to_owned),
+                process_id: exec_input.process_id.map(str::to_owned),
                 turn_id: ctx.turn.sub_id.clone(),
-                command: command.to_vec(),
-                cwd: cwd.to_path_buf(),
-                parsed_cmd: parsed_cmd.to_vec(),
-                source,
-                interaction_input,
+                command: exec_input.command.to_vec(),
+                cwd: exec_input.cwd.to_path_buf(),
+                parsed_cmd: exec_input.parsed_cmd.to_vec(),
+                source: exec_input.source,
+                host_id: exec_input.host_id.map(str::to_owned),
+                interaction_input: exec_input.interaction_input.map(str::to_owned),
             }),
         )
         .await;
@@ -105,6 +98,7 @@ pub(crate) enum ToolEmitter {
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
+        host_id: Option<String>,
     },
 }
 
@@ -137,6 +131,7 @@ impl ToolEmitter {
         cwd: PathBuf,
         source: ExecCommandSource,
         process_id: Option<String>,
+        host_id: Option<String>,
     ) -> Self {
         let parsed_cmd = parse_command(command);
         Self::UnifiedExec {
@@ -145,6 +140,7 @@ impl ToolEmitter {
             source,
             parsed_cmd,
             process_id,
+            host_id,
         }
     }
 
@@ -169,6 +165,7 @@ impl ToolEmitter {
                         *source,
                         /*interaction_input*/ None,
                         /*process_id*/ None,
+                        /*host_id*/ None,
                     ),
                     stage,
                 )
@@ -266,6 +263,7 @@ impl ToolEmitter {
                     source,
                     parsed_cmd,
                     process_id,
+                    host_id,
                 },
                 stage,
             ) => {
@@ -278,6 +276,7 @@ impl ToolEmitter {
                         *source,
                         /*interaction_input*/ None,
                         process_id.as_deref(),
+                        host_id.as_deref(),
                     ),
                     stage,
                 )
@@ -370,6 +369,7 @@ struct ExecCommandInput<'a> {
     source: ExecCommandSource,
     interaction_input: Option<&'a str>,
     process_id: Option<&'a str>,
+    host_id: Option<&'a str>,
 }
 
 impl<'a> ExecCommandInput<'a> {
@@ -380,6 +380,7 @@ impl<'a> ExecCommandInput<'a> {
         source: ExecCommandSource,
         interaction_input: Option<&'a str>,
         process_id: Option<&'a str>,
+        host_id: Option<&'a str>,
     ) -> Self {
         Self {
             command,
@@ -388,6 +389,7 @@ impl<'a> ExecCommandInput<'a> {
             source,
             interaction_input,
             process_id,
+            host_id,
         }
     }
 }
@@ -409,16 +411,7 @@ async fn emit_exec_stage(
 ) {
     match stage {
         ToolEventStage::Begin => {
-            emit_exec_command_begin(
-                ctx,
-                exec_input.command,
-                exec_input.cwd,
-                exec_input.parsed_cmd,
-                exec_input.source,
-                exec_input.interaction_input.map(str::to_owned),
-                exec_input.process_id,
-            )
-            .await;
+            emit_exec_command_begin(ctx, &exec_input).await;
         }
         ToolEventStage::Success(output)
         | ToolEventStage::Failure(ToolEventFailure::Output(output)) => {
@@ -482,6 +475,7 @@ async fn emit_exec_end(
                 cwd: exec_input.cwd.to_path_buf(),
                 parsed_cmd: exec_input.parsed_cmd.to_vec(),
                 source: exec_input.source,
+                host_id: exec_input.host_id.map(str::to_owned),
                 interaction_input: exec_input.interaction_input.map(str::to_owned),
                 stdout: exec_result.stdout,
                 stderr: exec_result.stderr,

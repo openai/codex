@@ -27,6 +27,7 @@ pub(crate) struct ExecCall {
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
     pub(crate) source: ExecCommandSource,
+    pub(crate) host_id: Option<String>,
     pub(crate) start_time: Option<Instant>,
     pub(crate) duration: Option<Duration>,
     pub(crate) interaction_input: Option<String>,
@@ -52,6 +53,7 @@ impl ExecCell {
         command: Vec<String>,
         parsed: Vec<ParsedCommand>,
         source: ExecCommandSource,
+        host_id: Option<String>,
         interaction_input: Option<String>,
     ) -> Option<Self> {
         let call = ExecCall {
@@ -60,11 +62,18 @@ impl ExecCell {
             parsed,
             output: None,
             source,
+            host_id,
             start_time: Some(Instant::now()),
             duration: None,
             interaction_input,
         };
-        if self.is_exploring_cell() && Self::is_exploring_call(&call) {
+        if self.is_exploring_cell()
+            && Self::is_exploring_call(&call)
+            && self
+                .calls
+                .iter()
+                .all(|existing| existing.host_id == call.host_id)
+        {
             Some(Self {
                 calls: [self.calls.clone(), vec![call]].concat(),
                 animations_enabled: self.animations_enabled,

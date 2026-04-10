@@ -2129,6 +2129,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             cwd: cwd.clone(),
             parsed_cmd: parsed_cmd.clone(),
             source: ExecCommandSource::Agent,
+            host_id: None,
             interaction_input: None,
         }),
     });
@@ -2142,6 +2143,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             cwd,
             parsed_cmd,
             source: ExecCommandSource::Agent,
+            host_id: None,
             interaction_input: None,
             stdout: String::new(),
             stderr: String::new(),
