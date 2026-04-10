@@ -11,7 +11,9 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
+use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -20,8 +22,8 @@ use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
 use super::GuardianAssessmentOutcome;
+use super::GuardianRejection;
 use super::approval_request::guardian_assessment_action;
-use super::approval_request::guardian_request_id;
 use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
 use super::prompt::guardian_output_schema;
@@ -38,20 +40,29 @@ const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "Otherwise, stop and request user input.",
 );
 
-pub(crate) async fn guardian_rejection_message(session: &Session, assessment_id: &str) -> String {
-    let rationale = session
+pub(crate) fn new_guardian_review_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &str) -> String {
+    let rejection = session
         .services
         .guardian_rejection_rationales
         .lock()
         .await
-        .remove(assessment_id)
-        .filter(|rationale| !rationale.trim().is_empty())
-        .unwrap_or_else(|| "Guardian denied the action without a specific rationale.".to_string());
-    format!(
-        "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-        rationale.trim(),
-        GUARDIAN_REJECTION_INSTRUCTIONS
-    )
+        .remove(review_id)
+        .filter(|rejection| !rejection.rationale.trim().is_empty())
+        .unwrap_or_else(|| GuardianRejection {
+            rationale: "Guardian denied the action without a specific rationale.".to_string(),
+            source: GuardianAssessmentDecisionSource::Guardian,
+        });
+    match rejection.source {
+        GuardianAssessmentDecisionSource::Guardian => format!(
+            "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
+            rejection.rationale.trim(),
+            GUARDIAN_REJECTION_INSTRUCTIONS
+        ),
+    }
 }
 
 #[derive(Debug)]
@@ -59,6 +70,11 @@ pub(super) enum GuardianReviewOutcome {
     Completed(anyhow::Result<GuardianAssessment>),
     TimedOut,
     Aborted,
+}
+
+enum GuardianReviewSelection {
+    Review(GuardianReviewOutcome),
+    ExternalCancel,
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -93,12 +109,11 @@ pub(crate) fn is_guardian_reviewer_source(
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
-    let rationale_lookup_id = guardian_request_id(&request).to_string();
-    let assessment_id = uuid::Uuid::new_v4().to_string();
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
@@ -106,7 +121,7 @@ async fn run_guardian_review(
         .send_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: assessment_id.clone(),
+                id: review_id.clone(),
                 target_item_id: target_item_id.clone(),
                 turn_id: assessment_turn_id.clone(),
                 status: GuardianAssessmentStatus::InProgress,
@@ -127,14 +142,14 @@ async fn run_guardian_review(
             .send_event(
                 turn.as_ref(),
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                    id: assessment_id,
+                    id: review_id,
                     target_item_id,
                     turn_id: assessment_turn_id,
                     status: GuardianAssessmentStatus::Aborted,
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
-                    decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+                    decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
                     action: action_summary,
                 }),
             )
@@ -144,15 +159,40 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let outcome = run_guardian_review_session(
+    let review_cancel = CancellationToken::new();
+    let mut review_task = tokio::spawn(run_guardian_review_session(
         session.clone(),
         turn.clone(),
         request,
         retry_reason,
         schema,
-        external_cancel,
-    )
-    .await;
+        Some(review_cancel.clone()),
+    ));
+    let external_cancelled = async {
+        if let Some(cancel_token) = external_cancel.as_ref() {
+            cancel_token.cancelled().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::pin!(external_cancelled);
+    let selection = tokio::select! {
+        result = &mut review_task => {
+            GuardianReviewSelection::Review(guardian_review_task_result(result))
+        }
+        _ = &mut external_cancelled => GuardianReviewSelection::ExternalCancel,
+    };
+
+    let outcome = match selection {
+        GuardianReviewSelection::Review(outcome) => outcome,
+        GuardianReviewSelection::ExternalCancel => {
+            review_cancel.cancel();
+            if let Err(err) = review_task.await {
+                warn!("guardian review task failed after external cancellation: {err}");
+            }
+            GuardianReviewOutcome::Aborted
+        }
+    };
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
@@ -175,14 +215,14 @@ async fn run_guardian_review(
                 .send_event(
                     turn.as_ref(),
                     EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                        id: assessment_id,
+                        id: review_id,
                         target_item_id,
                         turn_id: assessment_turn_id,
                         status: GuardianAssessmentStatus::Aborted,
                         risk_level: None,
                         user_authorization: None,
                         rationale: None,
-                        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+                        decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
                         action: action_summary,
                     }),
                 )
@@ -221,27 +261,27 @@ async fn run_guardian_review(
     {
         let mut rationales = session.services.guardian_rejection_rationales.lock().await;
         if approved {
-            rationales.remove(&assessment_id);
-            rationales.remove(&rationale_lookup_id);
+            rationales.remove(&review_id);
         } else {
-            rationales.insert(assessment_id.clone(), assessment.rationale.clone());
-            if rationale_lookup_id != assessment_id {
-                rationales.insert(rationale_lookup_id, assessment.rationale.clone());
-            }
+            let rejection = GuardianRejection {
+                rationale: assessment.rationale.clone(),
+                source: GuardianAssessmentDecisionSource::Guardian,
+            };
+            rationales.insert(review_id.clone(), rejection);
         }
     }
     session
         .send_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: assessment_id,
+                id: review_id,
                 target_item_id,
                 turn_id: assessment_turn_id,
                 status,
                 risk_level: Some(assessment.risk_level),
                 user_authorization: Some(assessment.user_authorization),
                 rationale: Some(assessment.rationale.clone()),
-                decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+                decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
                 action: terminal_action,
             }),
         )
@@ -254,16 +294,29 @@ async fn run_guardian_review(
     }
 }
 
+fn guardian_review_task_result(
+    result: Result<GuardianReviewOutcome, JoinError>,
+) -> GuardianReviewOutcome {
+    match result {
+        Ok(outcome) => outcome,
+        Err(err) => GuardianReviewOutcome::Completed(Err(anyhow::anyhow!(
+            "guardian review task failed: {err}"
+        ))),
+    }
+}
+
 /// Public entrypoint for approval requests that should be reviewed by guardian.
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
     run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        review_id,
         request,
         retry_reason,
         /*external_cancel*/ None,
@@ -274,6 +327,7 @@ pub(crate) async fn review_approval_request(
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
@@ -281,6 +335,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        review_id,
         request,
         retry_reason,
         Some(cancel_token),

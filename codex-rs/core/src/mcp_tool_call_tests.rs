@@ -816,7 +816,7 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
     assert_eq!(
         mcp_tool_approval_decision_from_guardian(
             session.as_ref(),
-            "approval-id",
+            "review-id",
             ReviewDecision::Approved
         )
         .await,
@@ -827,10 +827,16 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
         .guardian_rejection_rationales
         .lock()
         .await
-        .insert("approval-id".to_string(), "too risky".to_string());
+        .insert(
+            "review-id".to_string(),
+            crate::guardian::GuardianRejection {
+                rationale: "too risky".to_string(),
+                source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Guardian,
+            },
+        );
     let denial = mcp_tool_approval_decision_from_guardian(
         session.as_ref(),
-        "approval-id",
+        "review-id",
         ReviewDecision::Denied,
     )
     .await;
@@ -845,7 +851,7 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
     assert_eq!(
         mcp_tool_approval_decision_from_guardian(
             session.as_ref(),
-            "approval-id",
+            "review-id",
             ReviewDecision::Abort
         )
         .await,

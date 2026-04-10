@@ -143,7 +143,7 @@ pub fn build_item_from_guardian_event(
 ) -> Option<ThreadItem> {
     match &assessment.action {
         GuardianAssessmentAction::Command { command, cwd, .. } => {
-            let id = assessment.target_item_id.as_ref().unwrap_or(&assessment.id);
+            let id = assessment.target_item_id.as_ref()?;
             let command = command.clone();
             let command_actions = vec![CommandAction::Unknown {
                 command: command.clone(),
@@ -164,7 +164,7 @@ pub fn build_item_from_guardian_event(
         GuardianAssessmentAction::Execve {
             program, argv, cwd, ..
         } => {
-            let id = assessment.target_item_id.as_ref().unwrap_or(&assessment.id);
+            let id = assessment.target_item_id.as_ref()?;
             let argv = if argv.is_empty() {
                 vec![program.clone()]
             } else {
@@ -258,7 +258,7 @@ pub fn guardian_auto_approval_review_notification(
                     decision_source: assessment
                         .decision_source
                         .map(GuardianApprovalReviewDecisionSource::from)
-                        .unwrap_or(GuardianApprovalReviewDecisionSource::Agent),
+                        .unwrap_or(GuardianApprovalReviewDecisionSource::Guardian),
                     review,
                     action,
                 },

@@ -42,7 +42,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
             risk_level: Some(GuardianRiskLevel::High),
             user_authorization: Some(GuardianUserAuthorization::Low),
             rationale: Some("Would exfiltrate local source code.".into()),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+            decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
             action,
         }),
     });
@@ -87,7 +87,7 @@ async fn guardian_approved_exec_renders_approved_request() {
             risk_level: Some(GuardianRiskLevel::Low),
             user_authorization: Some(GuardianUserAuthorization::High),
             rationale: Some("Narrowly scoped to the requested file.".into()),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+            decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
             action: GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
                 command: "rm -f /tmp/guardian-approved.sqlite".to_string(),
@@ -198,7 +198,7 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
                 turn_id: "turn-1".to_string(),
                 review_id: "guardian-1".to_string(),
                 target_item_id: Some("guardian-target-1".to_string()),
-                decision_source: AppServerGuardianApprovalReviewDecisionSource::Agent,
+                decision_source: AppServerGuardianApprovalReviewDecisionSource::Guardian,
                 review: GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::Denied,
                     risk_level: Some(AppServerGuardianRiskLevel::High),
@@ -323,7 +323,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
             risk_level: Some(GuardianRiskLevel::High),
             user_authorization: Some(GuardianUserAuthorization::Low),
             rationale: Some("Would delete important data.".to_string()),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+            decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
             action: GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
                 command: "rm -rf '/tmp/guardian target 1'".to_string(),

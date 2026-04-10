@@ -7,6 +7,7 @@ retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -130,10 +131,13 @@ impl ToolOrchestrator {
                 return Err(ToolError::Rejected(reason));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+                let guardian_review_id =
+                    routes_approval_to_guardian(turn_ctx).then(new_guardian_review_id);
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
+                    guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason,
                     network_approval_context: None,
                 };
@@ -148,9 +152,8 @@ impl ToolOrchestrator {
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if routes_approval_to_guardian(turn_ctx) {
-                            guardian_rejection_message(tool_ctx.session.as_ref(), &tool_ctx.call_id)
-                                .await
+                        let reason = if let Some(review_id) = guardian_review_id.as_deref() {
+                            guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
                         } else {
                             "rejected by user".to_string()
                         };
@@ -284,10 +287,13 @@ impl ToolOrchestrator {
                     .should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
+                    let guardian_review_id =
+                        routes_approval_to_guardian(turn_ctx).then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
@@ -302,12 +308,9 @@ impl ToolOrchestrator {
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if routes_approval_to_guardian(turn_ctx) {
-                                guardian_rejection_message(
-                                    tool_ctx.session.as_ref(),
-                                    &tool_ctx.call_id,
-                                )
-                                .await
+                            let reason = if let Some(review_id) = guardian_review_id.as_deref() {
+                                guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
+                                    .await
                             } else {
                                 "rejected by user".to_string()
                             };

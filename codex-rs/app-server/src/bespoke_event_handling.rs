@@ -291,15 +291,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                     CommandExecutionStatus::InProgress,
                 ) {
                     Some(ThreadItem::CommandExecution {
+                        id,
                         command,
                         cwd,
                         command_actions,
                         ..
-                    }) => Some(CommandExecutionCompletionItem {
-                        command,
-                        cwd,
-                        command_actions,
-                    }),
+                    }) => Some((
+                        id,
+                        CommandExecutionCompletionItem {
+                            command,
+                            cwd,
+                            command_actions,
+                        },
+                    )),
                     Some(_) | None => None,
                 };
                 let assessment_turn_id = if assessment.turn_id.is_empty() {
@@ -307,16 +311,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 } else {
                     assessment.turn_id.clone()
                 };
-                let assessment_target_item_id =
-                    assessment.target_item_id.as_ref().unwrap_or(&assessment.id);
                 if assessment.status
                     == codex_protocol::protocol::GuardianAssessmentStatus::InProgress
-                    && let Some(completion_item) = pending_command_execution.as_ref()
+                    && let Some((target_item_id, completion_item)) =
+                        pending_command_execution.as_ref()
                 {
                     start_command_execution_item(
                         &conversation_id,
                         assessment_turn_id.clone(),
-                        assessment_target_item_id.to_string(),
+                        target_item_id.clone(),
                         completion_item.command.clone(),
                         completion_item.cwd.clone(),
                         completion_item.command_actions.clone(),
@@ -336,12 +339,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                     assessment.status,
                     codex_protocol::protocol::GuardianAssessmentStatus::Denied
                         | codex_protocol::protocol::GuardianAssessmentStatus::Aborted
-                ) && let Some(completion_item) = pending_command_execution
+                ) && let Some((target_item_id, completion_item)) = pending_command_execution
                 {
                     complete_command_execution_item(
                         &conversation_id,
                         assessment_turn_id,
-                        assessment_target_item_id.to_string(),
+                        target_item_id,
                         completion_item.command,
                         completion_item.cwd,
                         /*process_id*/ None,
@@ -3031,7 +3034,7 @@ mod tests {
             decision_source: if matches!(status, GuardianAssessmentStatus::InProgress) {
                 None
             } else {
-                Some(codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent)
+                Some(codex_protocol::protocol::GuardianAssessmentDecisionSource::Guardian)
             },
             action: serde_json::from_value(json!({
                 "type": "command",
@@ -3138,7 +3141,7 @@ mod tests {
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
                 decision_source: Some(
-                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Guardian,
                 ),
                 action: action.clone(),
             },
@@ -3152,7 +3155,7 @@ mod tests {
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
+                    GuardianApprovalReviewDecisionSource::Guardian
                 );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(
@@ -3191,7 +3194,7 @@ mod tests {
                 user_authorization: None,
                 rationale: None,
                 decision_source: Some(
-                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Guardian,
                 ),
                 action: action.clone(),
             },
@@ -3205,7 +3208,7 @@ mod tests {
                 assert_eq!(payload.target_item_id, None);
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
+                    GuardianApprovalReviewDecisionSource::Guardian
                 );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_level, None);
@@ -3455,7 +3458,7 @@ mod tests {
                 );
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
+                    GuardianApprovalReviewDecisionSource::Guardian
                 );
                 assert_eq!(
                     payload.review.status,
@@ -3525,7 +3528,7 @@ mod tests {
                 );
                 assert_eq!(
                     payload.decision_source,
-                    GuardianApprovalReviewDecisionSource::Agent
+                    GuardianApprovalReviewDecisionSource::Guardian
                 );
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
             }
@@ -3539,6 +3542,30 @@ mod tests {
                 };
                 assert_eq!(id, "cmd-guardian-denied");
                 assert_eq!(status, CommandExecutionStatus::Declined);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        let mut missing_target = guardian_command_assessment(
+            "cmd-guardian-missing-target",
+            "turn-guardian-missing-target",
+            GuardianAssessmentStatus::InProgress,
+        );
+        missing_target.target_item_id = None;
+        guardian_context
+            .apply_guardian_assessment_event(missing_target)
+            .await;
+        let eighth = recv_broadcast_message(&mut rx).await?;
+        match eighth {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::ItemGuardianApprovalReviewStarted(payload),
+            ) => {
+                assert_eq!(payload.review_id, "review-cmd-guardian-missing-target");
+                assert_eq!(payload.target_item_id, None);
+                assert_eq!(
+                    payload.review.status,
+                    GuardianApprovalReviewStatus::InProgress
+                );
             }
             other => bail!("unexpected message: {other:?}"),
         }

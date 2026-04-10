@@ -152,11 +152,17 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
+        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
+                let Some(review_id) = guardian_review_id else {
+                    tracing::warn!("guardian approval missing review id");
+                    return ReviewDecision::Denied;
+                };
                 return review_approval_request(
                     session,
                     turn,
+                    review_id,
                     GuardianApprovalRequest::Shell {
                         id: call_id,
                         command,

@@ -128,11 +128,17 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let cwd = req.cwd.to_path_buf();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
+        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
+                let Some(review_id) = guardian_review_id else {
+                    tracing::warn!("guardian approval missing review id");
+                    return ReviewDecision::Denied;
+                };
                 return review_approval_request(
                     session,
                     turn,
+                    review_id,
                     GuardianApprovalRequest::ExecCommand {
                         id: call_id,
                         command,
