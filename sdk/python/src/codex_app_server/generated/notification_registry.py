@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from .v2_all import AccountLoginCompletedNotification
 from .v2_all import AccountRateLimitsUpdatedNotification
 from .v2_all import AccountUpdatedNotification
-from .v2_all import AddCreditsNudgeEmailNotification
 from .v2_all import AgentMessageDeltaNotification
 from .v2_all import AppListUpdatedNotification
 from .v2_all import CommandExecOutputDeltaNotification
@@ -45,7 +44,6 @@ from .v2_all import ThreadRealtimeClosedNotification
 from .v2_all import ThreadRealtimeErrorNotification
 from .v2_all import ThreadRealtimeItemAddedNotification
 from .v2_all import ThreadRealtimeOutputAudioDeltaNotification
-from .v2_all import ThreadRealtimeSdpNotification
 from .v2_all import ThreadRealtimeStartedNotification
 from .v2_all import ThreadRealtimeTranscriptUpdatedNotification
 from .v2_all import ThreadStartedNotification
@@ -60,7 +58,6 @@ from .v2_all import WindowsSandboxSetupCompletedNotification
 from .v2_all import WindowsWorldWritableWarningNotification
 
 NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
-    "account/addCreditsNudgeEmail/completed": AddCreditsNudgeEmailNotification,
     "account/login/completed": AccountLoginCompletedNotification,
     "account/rateLimits/updated": AccountRateLimitsUpdatedNotification,
     "account/updated": AccountUpdatedNotification,
@@ -100,7 +97,6 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "thread/realtime/error": ThreadRealtimeErrorNotification,
     "thread/realtime/itemAdded": ThreadRealtimeItemAddedNotification,
     "thread/realtime/outputAudio/delta": ThreadRealtimeOutputAudioDeltaNotification,
-    "thread/realtime/sdp": ThreadRealtimeSdpNotification,
     "thread/realtime/started": ThreadRealtimeStartedNotification,
     "thread/realtime/transcriptUpdated": ThreadRealtimeTranscriptUpdatedNotification,
     "thread/started": ThreadStartedNotification,
