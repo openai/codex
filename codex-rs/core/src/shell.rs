@@ -3,6 +3,10 @@ use crate::shell_snapshot::ShellSnapshot;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::process::Command;
+#[cfg(windows)]
+use std::process::Stdio;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -315,7 +319,11 @@ pub fn default_user_shell() -> Shell {
 
 fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
     if cfg!(windows) {
-        get_shell(ShellType::PowerShell, /*path*/ None).unwrap_or(ultimate_fallback_shell())
+        default_windows_shell(
+            get_shell(ShellType::PowerShell, /*path*/ None),
+            get_shell(ShellType::Cmd, /*path*/ None),
+            shell_starts_successfully,
+        )
     } else {
         let user_default_shell = user_shell_path
             .and_then(|shell| detect_shell_type(&shell))
@@ -333,6 +341,38 @@ fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
 
         shell_with_fallback.unwrap_or(ultimate_fallback_shell())
     }
+}
+
+fn default_windows_shell(
+    powershell_shell: Option<Shell>,
+    cmd_shell: Option<Shell>,
+    powershell_probe: impl Fn(&Shell) -> bool,
+) -> Shell {
+    powershell_shell
+        .filter(powershell_probe)
+        .or(cmd_shell)
+        .unwrap_or_else(ultimate_fallback_shell)
+}
+
+#[cfg(windows)]
+fn shell_starts_successfully(shell: &Shell) -> bool {
+    let args = shell.derive_exec_args("$PSVersionTable.PSVersion | Out-Null", false);
+    let Some((program, args)) = args.split_first() else {
+        return false;
+    };
+
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(windows))]
+fn shell_starts_successfully(_shell: &Shell) -> bool {
+    true
 }
 
 #[cfg(test)]

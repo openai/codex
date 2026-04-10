@@ -86,6 +86,44 @@ fn can_run_on_shell_test() {
     }
 }
 
+#[test]
+fn windows_default_shell_prefers_healthy_powershell() {
+    let powershell = Shell {
+        shell_type: ShellType::PowerShell,
+        shell_path: PathBuf::from("pwsh.exe"),
+        shell_snapshot: empty_shell_snapshot_receiver(),
+    };
+    let cmd = Shell {
+        shell_type: ShellType::Cmd,
+        shell_path: PathBuf::from("cmd.exe"),
+        shell_snapshot: empty_shell_snapshot_receiver(),
+    };
+
+    assert_eq!(
+        default_windows_shell(Some(powershell), Some(cmd), |_| true).shell_type,
+        ShellType::PowerShell
+    );
+}
+
+#[test]
+fn windows_default_shell_falls_back_to_cmd_when_powershell_fails_probe() {
+    let powershell = Shell {
+        shell_type: ShellType::PowerShell,
+        shell_path: PathBuf::from("pwsh.exe"),
+        shell_snapshot: empty_shell_snapshot_receiver(),
+    };
+    let cmd = Shell {
+        shell_type: ShellType::Cmd,
+        shell_path: PathBuf::from("cmd.exe"),
+        shell_snapshot: empty_shell_snapshot_receiver(),
+    };
+
+    assert_eq!(
+        default_windows_shell(Some(powershell), Some(cmd), |_| false).shell_type,
+        ShellType::Cmd
+    );
+}
+
 fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
     if let Some(shell) = shell {
         let args = shell.derive_exec_args(command, /*use_login_shell*/ false);
@@ -173,10 +211,21 @@ async fn detects_powershell_as_default() {
         return;
     }
 
-    let powershell_shell = default_user_shell();
-    let shell_path = powershell_shell.shell_path;
+    let default_shell = default_user_shell();
 
-    assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+    match default_shell.shell_type {
+        ShellType::PowerShell => {
+            let shell_path = default_shell.shell_path;
+            assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+        }
+        ShellType::Cmd => {
+            assert!(
+                !get_shell(ShellType::PowerShell, /*path*/ None)
+                    .is_some_and(|shell| shell_starts_successfully(&shell))
+            );
+        }
+        other => panic!("unexpected Windows default shell: {other:?}"),
+    }
 }
 
 #[test]
