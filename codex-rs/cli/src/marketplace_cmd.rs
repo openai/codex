@@ -229,6 +229,14 @@ fn parse_marketplace_source(
     }
 
     let source = expand_home(source);
+    let (base_source, parsed_ref) = split_source_ref(&source);
+    let ref_name = explicit_ref.or(parsed_ref);
+
+    if is_ssh_git_url(&base_source) || is_http_git_url(&base_source) {
+        let url = normalize_git_url(&base_source);
+        return Ok(MarketplaceSource::Git { url, ref_name });
+    }
+
     let path = PathBuf::from(&source);
     let path_exists = path.try_exists().with_context(|| {
         format!(
@@ -271,14 +279,6 @@ fn parse_marketplace_source(
             .canonicalize()
             .with_context(|| format!("failed to resolve {}", path.display()))?;
         return Ok(MarketplaceSource::LocalDirectory { path });
-    }
-
-    let (base_source, parsed_ref) = split_source_ref(&source);
-    let ref_name = explicit_ref.or(parsed_ref);
-
-    if is_ssh_git_url(&base_source) || is_http_git_url(&base_source) {
-        let url = normalize_git_url(&base_source);
-        return Ok(MarketplaceSource::Git { url, ref_name });
     }
 
     if looks_like_github_shorthand(&base_source) {
@@ -335,7 +335,7 @@ fn expand_home(source: &str) -> String {
 }
 
 fn is_ssh_git_url(source: &str) -> bool {
-    source.starts_with("git@") && source.contains(':')
+    source.starts_with("ssh://") || source.starts_with("git@") && source.contains(':')
 }
 
 fn is_http_git_url(source: &str) -> bool {
@@ -531,6 +531,21 @@ mod tests {
             MarketplaceSource::Git {
                 url: "https://gitlab.com/owner/repo".to_string(),
                 ref_name: None,
+            }
+        );
+    }
+
+    #[test]
+    fn ssh_url_parses_as_git_url() {
+        assert_eq!(
+            parse_marketplace_source(
+                "ssh://git@github.com/owner/repo.git#main",
+                /* explicit_ref */ None,
+            )
+            .unwrap(),
+            MarketplaceSource::Git {
+                url: "ssh://git@github.com/owner/repo.git".to_string(),
+                ref_name: Some("main".to_string()),
             }
         );
     }
