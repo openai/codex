@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex WASM Harness Prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          ui-serif, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+        background: #f2eddf;
+        color: #1f2a24;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 20% 10%, #ffc96b 0 9rem, transparent 9rem),
+          linear-gradient(135deg, #f8f2e3 0%, #dfecdc 48%, #c7dde7 100%);
+      }
+
+      main {
+        box-sizing: border-box;
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 48px 20px;
+      }
+
+      h1 {
+        max-width: 760px;
+        margin: 0 0 12px;
+        font-size: clamp(2.4rem, 7vw, 5.5rem);
+        line-height: 0.92;
+        letter-spacing: -0.06em;
+      }
+
+      p {
+        max-width: 720px;
+        font-size: 1.1rem;
+      }
+
+      form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        margin: 32px 0;
+      }
+
+      input,
+      button {
+        border: 2px solid #1f2a24;
+        border-radius: 999px;
+        font: inherit;
+        font-size: 1.05rem;
+        padding: 14px 18px;
+      }
+
+      input {
+        background: #fffaf0;
+      }
+
+      button {
+        background: #1f2a24;
+        color: #fffaf0;
+        cursor: pointer;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.82rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .api-key-panel {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: end;
+        margin: 28px 0 0;
+        border: 2px solid rgb(31 42 36 / 0.26);
+        border-radius: 28px;
+        background: rgb(255 250 240 / 0.68);
+        padding: 18px;
+      }
+
+      .api-key-panel h2 {
+        margin: 0 0 8px;
+        font-size: 1.1rem;
+        letter-spacing: -0.03em;
+      }
+
+      .api-key-panel p {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+
+      .api-key-panel label {
+        grid-column: 1 / -1;
+      }
+
+      .api-key-actions {
+        display: flex;
+        flex-wrap: wrap;
+        grid-column: 1 / -1;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .secondary-button {
+        background: transparent;
+        color: #1f2a24;
+      }
+
+      .api-key-status {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.85rem;
+      }
+
+      #events {
+        display: grid;
+        gap: 12px;
+      }
+
+      .event {
+        border: 2px solid rgb(31 42 36 / 0.22);
+        border-radius: 20px;
+        background: rgb(255 250 240 / 0.75);
+        padding: 14px 16px;
+        box-shadow: 0 16px 40px rgb(31 42 36 / 0.08);
+      }
+
+      .event strong {
+        display: block;
+        margin-bottom: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.82rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      pre {
+        margin: 0;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 640px) {
+        form,
+        .api-key-panel {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Codex WASM harness prototype</h1>
+      <p>
+        This page exercises the browser boundary: submit a prompt, stream
+        Codex-shaped events from WASM, and resolve when the turn completes.
+      </p>
+      <section class="api-key-panel" aria-labelledby="api-key-title">
+        <div>
+          <h2 id="api-key-title">Responses API key</h2>
+          <p>
+            Local prototype only. The key is stored in this browser's
+            localStorage and is sent directly from this page to the Responses
+            API when you run a turn.
+          </p>
+        </div>
+        <label>
+          API key
+          <input
+            id="api-key"
+            type="password"
+            placeholder="sk-..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
+        <div class="api-key-actions">
+          <button id="clear-api-key" class="secondary-button" type="button">
+            Forget key
+          </button>
+          <output id="api-key-status" class="api-key-status"></output>
+        </div>
+      </section>
+      <form id="prompt-form">
+        <input id="prompt" value="write hello world" autocomplete="off" />
+        <button type="submit">Run turn</button>
+      </form>
+      <section id="events" aria-live="polite"></section>
+    </main>
+    <script type="module">
+      import init, { BrowserCodex } from "../pkg/codex_wasm_harness.js";
+
+      await init();
+
+      const form = document.querySelector("#prompt-form");
+      const input = document.querySelector("#prompt");
+      const events = document.querySelector("#events");
+      const apiKeyInput = document.querySelector("#api-key");
+      const apiKeyStatus = document.querySelector("#api-key-status");
+      const clearApiKeyButton = document.querySelector("#clear-api-key");
+      const API_KEY_STORAGE_KEY = "codexWasmHarness.apiKey";
+      const RESPONSE_MODEL = "gpt-5.1";
+
+      apiKeyInput.value = readStoredApiKey();
+      updateApiKeyStatus();
+
+      apiKeyInput.addEventListener("input", () => {
+        writeStoredApiKey(apiKeyInput.value.trim());
+        updateApiKeyStatus();
+      });
+
+      clearApiKeyButton.addEventListener("click", () => {
+        apiKeyInput.value = "";
+        writeStoredApiKey("");
+        updateApiKeyStatus();
+      });
+
+      const sampler = async ({ prompt, instructions }) => {
+        const apiKey = readStoredApiKey();
+        if (apiKey) {
+          return sampleWithResponsesApi({ apiKey, prompt, instructions });
+        }
+
+        if (prompt.toLowerCase().includes("hello world")) {
+          return {
+            message:
+              'Here is a minimal hello world example:\\n\\n```js\\nconsole.log("hello world");\\n```',
+          };
+        }
+        return {
+          message: `Browser sampler placeholder response for: ${prompt}`,
+        };
+      };
+
+      const codex = new BrowserCodex(sampler);
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        events.replaceChildren();
+        await codex.submit_turn(input.value, renderEvent);
+      });
+
+      async function sampleWithResponsesApi({ apiKey, prompt, instructions }) {
+        try {
+          const response = await fetch("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: RESPONSE_MODEL,
+              instructions,
+              input: prompt,
+            }),
+          });
+          const body = await response.json();
+          if (!response.ok) {
+            const message =
+              body?.error?.message ?? `Responses API returned ${response.status}`;
+            throw new Error(message);
+          }
+
+          return { message: extractResponseText(body) };
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          return {
+            message:
+              `Responses API request failed: ${errorMessage}\n\n` +
+              "This browser prototype sends the stored key directly from the page. " +
+              "If the request is blocked, use a local dev proxy or an ephemeral-token flow.",
+          };
+        }
+      }
+
+      function extractResponseText(response) {
+        if (typeof response.output_text === "string" && response.output_text) {
+          return response.output_text;
+        }
+
+        const chunks = [];
+        for (const item of response.output ?? []) {
+          for (const content of item.content ?? []) {
+            if (typeof content.text === "string") {
+              chunks.push(content.text);
+            } else if (typeof content.output_text === "string") {
+              chunks.push(content.output_text);
+            }
+          }
+        }
+
+        return chunks.join("\n") || JSON.stringify(response, null, 2);
+      }
+
+      function readStoredApiKey() {
+        try {
+          return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+        } catch {
+          return "";
+        }
+      }
+
+      function writeStoredApiKey(apiKey) {
+        try {
+          if (apiKey) {
+            localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
+          } else {
+            localStorage.removeItem(API_KEY_STORAGE_KEY);
+          }
+        } catch {
+          apiKeyStatus.textContent =
+            "localStorage is unavailable in this browser context.";
+        }
+      }
+
+      function updateApiKeyStatus() {
+        apiKeyStatus.textContent = apiKeyInput.value
+          ? "API key stored in localStorage for this browser."
+          : "No API key stored. The deterministic demo sampler will be used.";
+      }
+
+      function renderEvent(event) {
+        const card = document.createElement("article");
+        card.className = "event";
+        const title = document.createElement("strong");
+        title.textContent = event.type;
+        const body = document.createElement("pre");
+        body.textContent = JSON.stringify(event, null, 2);
+        card.append(title, body);
+        events.append(card);
+      }
+    </script>
+  </body>
+</html>

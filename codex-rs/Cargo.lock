@@ -2924,6 +2924,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-wasm-harness"
+version = "0.0.0"
+dependencies = [
+ "js-sys",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "codex-windows-sandbox"
 version = "0.0.0"
 dependencies = [

@@ -52,6 +52,7 @@ members = [
     "tui",
     "tools",
     "v8-poc",
+    "wasm-harness",
     "utils/absolute-path",
     "utils/cargo-bin",
     "git-utils",
@@ -229,6 +230,7 @@ insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
 jsonwebtoken = "9.3.1"
+js-sys = "0.3.85"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
@@ -335,6 +337,8 @@ urlencoding = "2.1"
 uuid = "1"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4.58"
 webbrowser = "1.0"
 which = "8"
 wildmatch = "2.6.1"
