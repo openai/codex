@@ -1,4 +1,4 @@
-# Codex TUI keymap template (v1 defaults)
+# Codex TUI keymap template (latest defaults)
 #
 # Copy the sections you need into ~/.codex/config.toml.
 #
@@ -18,7 +18,7 @@
 
 [tui.keymap]
 # Preset alias for built-in defaults.
-# "latest" currently points to "v1".
+# "latest" currently points to "v3".
 preset = "latest"
 
 [tui.keymap.global]
@@ -26,6 +26,8 @@ preset = "latest"
 open_transcript = "ctrl-t"
 # Open external editor for current draft.
 open_external_editor = "ctrl-g"
+# Copy the last agent response to the clipboard.
+copy = "ctrl-o"
 # Begin/advance "edit previous message" when composer is empty.
 edit_previous_message = "esc"
 # Confirm selected message in edit-previous flow.

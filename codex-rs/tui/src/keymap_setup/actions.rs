@@ -34,6 +34,7 @@ const fn action(
 pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("global", "Global", "open_transcript", "Open the transcript overlay."),
     action("global", "Global", "open_external_editor", "Open the current draft in an external editor."),
+    action("global", "Global", "copy", "Copy the last agent response to the clipboard."),
     action("global", "Global", "toggle_vim_mode", "Turn Vim composer mode on or off."),
     action("chat", "Chat", "edit_previous_message", "Begin or advance edit-previous-message when the composer is empty."),
     action("chat", "Chat", "confirm_edit_previous_message", "Confirm the selected previous message to edit."),
@@ -147,6 +148,7 @@ pub(super) fn binding_slot<'a>(
     match (context, action) {
         ("global", "open_transcript") => Some(&mut keymap.global.open_transcript),
         ("global", "open_external_editor") => Some(&mut keymap.global.open_external_editor),
+        ("global", "copy") => Some(&mut keymap.global.copy),
         ("global", "toggle_vim_mode") => Some(&mut keymap.global.toggle_vim_mode),
         ("chat", "edit_previous_message") => Some(&mut keymap.chat.edit_previous_message),
         ("chat", "confirm_edit_previous_message") => Some(&mut keymap.chat.confirm_edit_previous_message),
@@ -248,6 +250,7 @@ pub(super) fn bindings_for_action<'a>(
     match (context, action) {
         ("global", "open_transcript") => Some(runtime_keymap.app.open_transcript.as_slice()),
         ("global", "open_external_editor") => Some(runtime_keymap.app.open_external_editor.as_slice()),
+        ("global", "copy") => Some(runtime_keymap.app.copy.as_slice()),
         ("global", "toggle_vim_mode") => Some(runtime_keymap.app.toggle_vim_mode.as_slice()),
         ("chat", "edit_previous_message") => Some(runtime_keymap.chat.edit_previous_message.as_slice()),
         ("chat", "confirm_edit_previous_message") => Some(runtime_keymap.chat.confirm_edit_previous_message.as_slice()),

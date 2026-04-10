@@ -340,6 +340,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
 use crate::keymap_setup;
 #[cfg(test)]
@@ -815,6 +816,7 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    copy_last_response_binding: Vec<KeyBinding>,
     /// Raw markdown of the most recently completed agent response.
     ///
     /// This cache is intentionally best-effort: if the user rolls back the
@@ -4821,6 +4823,12 @@ impl ChatWidget {
 
         let current_cwd = Some(config.cwd.to_path_buf());
         let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
+        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
+        let copy_last_response_binding = runtime_keymap
+            .as_ref()
+            .map(|keymap| keymap.app.copy.clone())
+            .unwrap_or_else(|| RuntimeKeymap::defaults().app.copy);
+
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -4863,6 +4871,7 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             clipboard_lease: None,
+            copy_last_response_binding,
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
@@ -4947,7 +4956,7 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        if let Ok(keymap) = RuntimeKeymap::from_config(&widget.config.tui_keymap) {
+        if let Some(keymap) = runtime_keymap {
             widget.bottom_pane.set_keymap_bindings(&keymap);
         }
         widget
@@ -4990,20 +4999,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Press
+            && self.copy_last_response_binding.is_pressed(key_event)
+        {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.copy_last_agent_markdown();
+            return;
+        }
+
         match key_event {
-            // Ctrl+O - copy last agent response from the main view.
-            KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                self.bottom_pane.clear_quit_shortcut_hint();
-                self.quit_shortcut_expires_at = None;
-                self.quit_shortcut_key = None;
-                self.copy_last_agent_markdown();
-                return;
-            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -7775,6 +7781,7 @@ impl ChatWidget {
         runtime_keymap: &RuntimeKeymap,
     ) {
         self.config.tui_keymap = keymap_config;
+        self.copy_last_response_binding = runtime_keymap.app.copy.clone();
         self.bottom_pane.set_keymap_bindings(runtime_keymap);
         self.request_redraw();
     }

@@ -29,13 +29,15 @@ use std::collections::BTreeMap;
 pub enum TuiKeymapPreset {
     /// Pointer alias to the latest shipped preset.
     ///
-    /// Today this resolves to `v2`.
+    /// Today this resolves to `v3`.
     #[default]
     Latest,
     /// Frozen initial configurable keymap defaults.
     V1,
     /// Current defaults with post-`v1` compatibility aliases.
     V2,
+    /// Current defaults with the copy shortcut exposed through keymap config.
+    V3,
 }
 
 /// Normalized string representation of a keybinding (for example `ctrl-a`).
@@ -100,6 +102,8 @@ pub struct TuiGlobalKeymap {
     pub open_transcript: Option<KeybindingsSpec>,
     /// Open the external editor for the current draft.
     pub open_external_editor: Option<KeybindingsSpec>,
+    /// Copy the last agent response to the clipboard.
+    pub copy: Option<KeybindingsSpec>,
     /// In an empty composer, begin or advance "edit previous message" flow.
     pub edit_previous_message: Option<KeybindingsSpec>,
     /// Confirm editing the selected previous message.

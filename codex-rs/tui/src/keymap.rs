@@ -33,7 +33,7 @@ use std::collections::HashMap;
 ///
 /// 1. Context-specific binding (`tui.keymap.<context>`).
 /// 2. `tui.keymap.global` for actions that support global fallback.
-/// 3. Built-in preset defaults (`latest` currently points to `v1`).
+/// 3. Built-in preset defaults (`latest` currently points to `v3`).
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeKeymap {
     pub(crate) app: AppKeymap,
@@ -54,6 +54,8 @@ pub(crate) struct AppKeymap {
     pub(crate) open_transcript: Vec<KeyBinding>,
     /// Open external editor for the current draft.
     pub(crate) open_external_editor: Vec<KeyBinding>,
+    /// Copy the last agent response to the clipboard.
+    pub(crate) copy: Vec<KeyBinding>,
     /// Toggle Vim mode for the composer input.
     pub(crate) toggle_vim_mode: Vec<KeyBinding>,
 }
@@ -349,6 +351,11 @@ impl RuntimeKeymap {
                 &defaults.app.open_external_editor,
                 "tui.keymap.global.open_external_editor",
             )?,
+            copy: resolve_bindings(
+                keymap.global.copy.as_ref(),
+                &defaults.app.copy,
+                "tui.keymap.global.copy",
+            )?,
             toggle_vim_mode: resolve_bindings(
                 keymap.global.toggle_vim_mode.as_ref(),
                 &defaults.app.toggle_vim_mode,
@@ -514,7 +521,8 @@ impl RuntimeKeymap {
 
     fn defaults_for_preset(preset: TuiKeymapPreset) -> Self {
         match preset {
-            TuiKeymapPreset::Latest | TuiKeymapPreset::V2 => Self::defaults_v2(),
+            TuiKeymapPreset::Latest | TuiKeymapPreset::V3 => Self::defaults_v3(),
+            TuiKeymapPreset::V2 => Self::defaults_v2(),
             TuiKeymapPreset::V1 => Self::defaults_v1(),
         }
     }
@@ -529,6 +537,7 @@ impl RuntimeKeymap {
             app: AppKeymap {
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
+                copy: default_bindings![],
                 toggle_vim_mode: default_bindings![],
             },
             chat: ChatKeymap {
@@ -732,6 +741,16 @@ impl RuntimeKeymap {
         defaults
     }
 
+    /// Current keymap defaults for preset `v3`.
+    ///
+    /// This keeps earlier presets intact while moving the existing Copy
+    /// shortcut into configurable keymap defaults.
+    fn defaults_v3() -> Self {
+        let mut defaults = Self::defaults_v2();
+        defaults.app.copy = default_bindings![ctrl(KeyCode::Char('o'))];
+        defaults
+    }
+
     /// Reject ambiguous bindings in scopes that are evaluated together.
     ///
     /// We validate in multiple passes because runtime handling has mixed
@@ -753,6 +772,7 @@ impl RuntimeKeymap {
                     "open_external_editor",
                     self.app.open_external_editor.as_slice(),
                 ),
+                ("copy", self.app.copy.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 (
                     "edit_previous_message",
@@ -773,6 +793,7 @@ impl RuntimeKeymap {
                     "open_external_editor",
                     self.app.open_external_editor.as_slice(),
                 ),
+                ("copy", self.app.copy.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),
@@ -1252,6 +1273,21 @@ mod tests {
 
         let err = RuntimeKeymap::from_config(&keymap).expect_err("expected parse error");
         assert!(err.contains("tui.keymap.global.open_external_editor"));
+    }
+
+    #[test]
+    fn default_latest_copy_binding_is_ctrl_o() {
+        let runtime = RuntimeKeymap::defaults();
+        assert_eq!(runtime.app.copy, vec![key_hint::ctrl(KeyCode::Char('o'))]);
+    }
+
+    #[test]
+    fn invalid_global_copy_binding_reports_global_path() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.copy = Some(one("meta-o"));
+
+        let err = RuntimeKeymap::from_config(&keymap).expect_err("expected parse error");
+        assert!(err.contains("tui.keymap.global.copy"));
     }
 
     #[test]

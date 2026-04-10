@@ -1,20 +1,20 @@
 # TUI Keymap Action Matrix
 
-This file defines the supported keymap actions and their default `v1` bindings.
+This file defines the supported keymap actions and their current default bindings.
 For runtime behavior, safety invariants, and testing guidance, see
 `docs/tui-keymap.md`.
 
 ## Preset behavior
 
 - `latest` is an alias to the newest shipped preset.
-- Today, `latest -> v1`.
+- Today, `latest -> v3`.
 - To keep stable behavior over time, pin `preset = "v1"`.
 
 ## Precedence
 
 1. `tui.keymap.<context>.<action>`
 2. `tui.keymap.global.<action>` (chat/composer fallback actions only)
-3. Preset default (`v1` today)
+3. Preset default (`v3` today)
 
 ## Default `v1` Compatibility Notes
 
@@ -36,6 +36,7 @@ For runtime behavior, safety invariants, and testing guidance, see
 
 - `open_transcript`: open transcript overlay
 - `open_external_editor`: open external editor for current draft
+- `copy`: copy last agent response to the clipboard
 - `edit_previous_message`: begin/advance edit-previous flow when composer is empty
 - `confirm_edit_previous_message`: confirm selected previous message for editing
 - `submit`: submit current draft
