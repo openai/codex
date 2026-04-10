@@ -80,6 +80,30 @@ pub(super) enum GuardianReviewOutcome {
     Aborted,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GuardianApprovalReviewResult {
+    pub(crate) decision: ReviewDecision,
+    pub(crate) review: GuardianApprovalReview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GuardianApprovalReview {
+    pub(crate) status: GuardianApprovalReviewStatus,
+    pub(crate) decision: Option<GuardianAssessmentOutcome>,
+    pub(crate) risk_level: Option<GuardianRiskLevel>,
+    pub(crate) user_authorization: Option<GuardianUserAuthorization>,
+    pub(crate) rationale: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GuardianApprovalReviewStatus {
+    Approved,
+    Denied,
+    Aborted,
+    Failed,
+    TimedOut,
+}
+
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
     match level {
         GuardianRiskLevel::Low => "low",
@@ -117,7 +141,7 @@ async fn run_guardian_review(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     external_cancel: Option<CancellationToken>,
-) -> ReviewDecision {
+) -> GuardianApprovalReviewResult {
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
@@ -158,7 +182,16 @@ async fn run_guardian_review(
                 }),
             )
             .await;
-        return ReviewDecision::Abort;
+        return GuardianApprovalReviewResult {
+            decision: ReviewDecision::Abort,
+            review: GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Aborted,
+                decision: None,
+                risk_level: None,
+                user_authorization: None,
+                rationale: None,
+            },
+        };
     }
 
     let schema = guardian_output_schema();
@@ -173,14 +206,17 @@ async fn run_guardian_review(
     )
     .await;
 
-    let assessment = match outcome {
-        GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
-        GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            user_authorization: GuardianUserAuthorization::Unknown,
-            outcome: GuardianAssessmentOutcome::Deny,
-            rationale: format!("Automatic approval review failed: {err}"),
-        },
+    let (assessment, advisory_status) = match outcome {
+        GuardianReviewOutcome::Completed(Ok(assessment)) => (assessment, None),
+        GuardianReviewOutcome::Completed(Err(err)) => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                user_authorization: GuardianUserAuthorization::Unknown,
+                outcome: GuardianAssessmentOutcome::Deny,
+                rationale: format!("Automatic approval review failed: {err}"),
+            },
+            Some(GuardianApprovalReviewStatus::Failed),
+        ),
         GuardianReviewOutcome::TimedOut => {
             let rationale =
                 "Automatic approval review timed out while evaluating the requested approval."
@@ -203,13 +239,22 @@ async fn run_guardian_review(
                         status: GuardianAssessmentStatus::TimedOut,
                         risk_level: None,
                         user_authorization: None,
-                        rationale: Some(rationale),
+                        rationale: Some(rationale.clone()),
                         decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                         action: terminal_action,
                     }),
                 )
                 .await;
-            return ReviewDecision::TimedOut;
+            return GuardianApprovalReviewResult {
+                decision: ReviewDecision::TimedOut,
+                review: GuardianApprovalReview {
+                    status: GuardianApprovalReviewStatus::TimedOut,
+                    decision: None,
+                    risk_level: None,
+                    user_authorization: None,
+                    rationale: Some(rationale),
+                },
+            };
         }
         GuardianReviewOutcome::Aborted => {
             session
@@ -228,7 +273,16 @@ async fn run_guardian_review(
                     }),
                 )
                 .await;
-            return ReviewDecision::Abort;
+            return GuardianApprovalReviewResult {
+                decision: ReviewDecision::Abort,
+                review: GuardianApprovalReview {
+                    status: GuardianApprovalReviewStatus::Aborted,
+                    decision: None,
+                    risk_level: None,
+                    user_authorization: None,
+                    rationale: None,
+                },
+            };
         }
     };
 
@@ -259,6 +313,23 @@ async fn run_guardian_review(
     } else {
         GuardianAssessmentStatus::Denied
     };
+    let advisory_status = advisory_status.unwrap_or(if approved {
+        GuardianApprovalReviewStatus::Approved
+    } else {
+        GuardianApprovalReviewStatus::Denied
+    });
+    let decision = if approved {
+        ReviewDecision::Approved
+    } else {
+        ReviewDecision::Denied
+    };
+    let review = GuardianApprovalReview {
+        status: advisory_status,
+        decision: Some(assessment.outcome),
+        risk_level: Some(assessment.risk_level),
+        user_authorization: Some(assessment.user_authorization),
+        rationale: Some(assessment.rationale.clone()),
+    };
     {
         let mut rationales = session.services.guardian_rejections.lock().await;
         if approved {
@@ -288,11 +359,26 @@ async fn run_guardian_review(
         )
         .await;
 
-    if approved {
-        ReviewDecision::Approved
-    } else {
-        ReviewDecision::Denied
-    }
+    GuardianApprovalReviewResult { decision, review }
+}
+
+/// Runs guardian and returns both the approval decision and hook-visible review data.
+pub(crate) async fn review_approval_request_with_review(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+) -> GuardianApprovalReviewResult {
+    run_guardian_review(
+        Arc::clone(session),
+        Arc::clone(turn),
+        review_id,
+        request,
+        retry_reason,
+        /*external_cancel*/ None,
+    )
+    .await
 }
 
 /// Public entrypoint for approval requests that should be reviewed by guardian.
@@ -303,15 +389,9 @@ pub(crate) async fn review_approval_request(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    run_guardian_review(
-        Arc::clone(session),
-        Arc::clone(turn),
-        review_id,
-        request,
-        retry_reason,
-        /*external_cancel*/ None,
-    )
-    .await
+    review_approval_request_with_review(session, turn, review_id, request, retry_reason)
+        .await
+        .decision
 }
 
 pub(crate) async fn review_approval_request_with_cancel(
@@ -331,6 +411,7 @@ pub(crate) async fn review_approval_request_with_cancel(
         Some(cancel_token),
     )
     .await
+    .decision
 }
 
 /// Runs the guardian in a locked-down reusable review session.

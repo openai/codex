@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 
+use crate::permission_review::PermissionRequestGuardianReview;
+
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
@@ -264,6 +266,10 @@ pub(crate) struct PermissionRequestCommandInput {
     pub tool_name: String,
     pub tool_input: PermissionRequestToolInput,
     pub approval_context: PermissionRequestApprovalContext,
+    #[schemars(
+        schema_with = "crate::permission_review::nullable_permission_request_guardian_review_schema"
+    )]
+    pub guardian_review: Option<PermissionRequestGuardianReview>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

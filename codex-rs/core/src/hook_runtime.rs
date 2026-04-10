@@ -26,6 +26,7 @@ use serde_json::Value;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
+use crate::tools::sandboxing::PermissionRequestHookRequest;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -152,9 +153,20 @@ pub(crate) async fn run_pre_tool_use_hooks(
 pub(crate) async fn run_permission_request_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    run_id_suffix: String,
-    payload: PermissionRequestPayload,
+    hook_request: PermissionRequestHookRequest,
 ) -> Option<PermissionRequestDecision> {
+    let PermissionRequestHookRequest {
+        run_id_suffix,
+        payload,
+        guardian_review,
+    } = hook_request;
+    let PermissionRequestPayload {
+        tool_name,
+        command,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
+    } = payload;
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
@@ -162,12 +174,13 @@ pub(crate) async fn run_permission_request_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: payload.tool_name,
+        tool_name,
         run_id_suffix,
-        command: payload.command,
-        sandbox_permissions: payload.sandbox_permissions,
-        additional_permissions: payload.additional_permissions,
-        justification: payload.justification,
+        command,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
+        guardian_review,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;

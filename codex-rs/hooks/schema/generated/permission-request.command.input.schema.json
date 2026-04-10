@@ -23,6 +23,24 @@
       },
       "type": "object"
     },
+    "GuardianRiskLevel": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "GuardianUserAuthorization": {
+      "enum": [
+        "unknown",
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "NetworkPermissions": {
       "properties": {
         "enabled": {
@@ -65,6 +83,75 @@
         "sandbox_permissions"
       ],
       "type": "object"
+    },
+    "PermissionRequestGuardianReview": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestGuardianReviewDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "risk_level": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/PermissionRequestGuardianReviewStatus"
+        },
+        "user_authorization": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianUserAuthorization"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decision",
+        "rationale",
+        "risk_level",
+        "status",
+        "user_authorization"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestGuardianReviewDecision": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestGuardianReviewStatus": {
+      "enum": [
+        "approved",
+        "denied",
+        "aborted",
+        "failed",
+        "timed_out"
+      ],
+      "type": "string"
     },
     "PermissionRequestToolInput": {
       "additionalProperties": false,
@@ -112,6 +199,16 @@
     "cwd": {
       "type": "string"
     },
+    "guardian_review": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PermissionRequestGuardianReview"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "hook_event_name": {
       "const": "PermissionRequest",
       "type": "string"
@@ -150,6 +247,7 @@
   "required": [
     "approval_context",
     "cwd",
+    "guardian_review",
     "hook_event_name",
     "model",
     "permission_mode",

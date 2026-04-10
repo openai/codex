@@ -6,10 +6,12 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::guardian::GuardianApprovalRequest;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_hooks::PermissionRequestGuardianReview;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -158,6 +160,13 @@ impl PermissionRequestPayload {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PermissionRequestHookRequest {
+    pub run_id_suffix: String,
+    pub payload: PermissionRequestPayload,
+    pub guardian_review: Option<PermissionRequestGuardianReview>,
+}
+
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExecApprovalRequirement {
@@ -301,6 +310,19 @@ pub(crate) trait Approvable<Req> {
     }
 
     fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
+        None
+    }
+
+    /// Build the guardian request that corresponds to this approval prompt.
+    ///
+    /// Runtimes that can route approvals through guardian should return the
+    /// same request they would pass to `review_approval_request`, so shared
+    /// orchestration can run guardian once and reuse that decision as fallback.
+    fn guardian_approval_request(
+        &self,
+        _req: &Req,
+        _ctx: &ApprovalCtx<'_>,
+    ) -> Option<GuardianApprovalRequest> {
         None
     }
 

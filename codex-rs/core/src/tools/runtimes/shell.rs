@@ -117,6 +117,17 @@ impl ShellRuntime {
             tx_event: ctx.session.get_tx_event(),
         })
     }
+
+    fn guardian_request(req: &ShellRequest, ctx: &ApprovalCtx<'_>) -> GuardianApprovalRequest {
+        GuardianApprovalRequest::Shell {
+            id: ctx.call_id.to_string(),
+            command: req.command.clone(),
+            cwd: req.cwd.to_path_buf(),
+            sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
+            justification: req.justification.clone(),
+        }
+    }
 }
 
 impl Sandboxable for ShellRuntime {
@@ -160,14 +171,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     session,
                     turn,
                     review_id,
-                    GuardianApprovalRequest::Shell {
-                        id: call_id,
-                        command,
-                        cwd,
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                    },
+                    Self::guardian_request(req, &ctx),
                     retry_reason,
                 )
                 .await;
@@ -206,6 +210,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
             req.additional_permissions.clone(),
             req.justification.clone(),
         ))
+    }
+
+    fn guardian_approval_request(
+        &self,
+        req: &ShellRequest,
+        ctx: &ApprovalCtx<'_>,
+    ) -> Option<GuardianApprovalRequest> {
+        Some(Self::guardian_request(req, ctx))
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {

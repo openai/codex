@@ -6,9 +6,14 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::guardian::GuardianApprovalReview;
+use crate::guardian::GuardianApprovalReviewResult;
+use crate::guardian::GuardianApprovalReviewStatus;
+use crate::guardian::GuardianAssessmentOutcome;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
+use crate::guardian::review_approval_request_with_review;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
@@ -19,6 +24,7 @@ use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::network_approval::finish_immediate_network_approval;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::PermissionRequestHookRequest;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::ToolCtx;
@@ -26,6 +32,9 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestGuardianReview;
+use codex_hooks::PermissionRequestGuardianReviewDecision;
+use codex_hooks::PermissionRequestGuardianReviewStatus as HookGuardianReviewStatus;
 use codex_otel::SessionTelemetry;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::error::CodexErr;
@@ -52,10 +61,17 @@ enum ApprovalAttempt {
     Retry,
 }
 
+#[derive(Clone, Copy)]
 struct ApprovalTelemetry<'a> {
     otel: &'a SessionTelemetry,
     tool_name: &'a str,
     call_id: &'a str,
+}
+
+struct ApprovalRequestCtx<'a> {
+    approval: ApprovalCtx<'a>,
+    routes_to_guardian: bool,
+    telemetry: ApprovalTelemetry<'a>,
 }
 
 impl ToolOrchestrator {
@@ -130,7 +146,6 @@ impl ToolOrchestrator {
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
         let use_guardian = routes_approval_to_guardian(turn_ctx);
-
         // 1) Approval
         let mut already_approved = false;
 
@@ -163,12 +178,14 @@ impl ToolOrchestrator {
                     tool,
                     req,
                     ApprovalAttempt::Initial,
-                    approval_ctx,
-                    turn_ctx,
-                    ApprovalTelemetry {
-                        otel: &otel,
-                        tool_name: otel_tn,
-                        call_id: otel_ci,
+                    ApprovalRequestCtx {
+                        routes_to_guardian: use_guardian,
+                        approval: approval_ctx,
+                        telemetry: ApprovalTelemetry {
+                            otel: &otel,
+                            tool_name: otel_tn,
+                            call_id: otel_ci,
+                        },
                     },
                 )
                 .await?;
@@ -322,17 +339,18 @@ impl ToolOrchestrator {
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
-
                     let decision = Self::request_approval(
                         tool,
                         req,
                         ApprovalAttempt::Retry,
-                        approval_ctx,
-                        turn_ctx,
-                        ApprovalTelemetry {
-                            otel: &otel,
-                            tool_name: otel_tn,
-                            call_id: otel_ci,
+                        ApprovalRequestCtx {
+                            routes_to_guardian: use_guardian,
+                            approval: approval_ctx,
+                            telemetry: ApprovalTelemetry {
+                                otel: &otel,
+                                tool_name: otel_tn,
+                                call_id: otel_ci,
+                            },
                         },
                     )
                     .await?;
@@ -399,21 +417,55 @@ impl ToolOrchestrator {
         }
     }
 
-    // PermissionRequest hooks get the first chance to answer approval prompts
-    // for tools that expose a hook payload. Today this is Bash-only; if no
-    // matching hook returns a decision, fall back to the normal user or guardian
-    // approval path.
+    // Centralize one approval prompt for three possible decision makers. If
+    // this prompt would normally route to guardian, run guardian first and pass
+    // its result to PermissionRequest hooks as advisory context. The hook can
+    // still answer the prompt; if it stays quiet, reuse the guardian decision
+    // instead of asking guardian again. Without a hook or reusable guardian
+    // result, fall back to the runtime's normal approval path.
     async fn request_approval<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,
         approval_attempt: ApprovalAttempt,
-        approval_ctx: ApprovalCtx<'_>,
-        turn_ctx: &crate::codex::TurnContext,
-        telemetry: ApprovalTelemetry<'_>,
+        request_ctx: ApprovalRequestCtx<'_>,
     ) -> Result<ReviewDecision, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
     {
+        let ApprovalRequestCtx {
+            approval: approval_ctx,
+            routes_to_guardian,
+            telemetry,
+        } = request_ctx;
+        let ApprovalTelemetry {
+            otel,
+            tool_name: otel_tn,
+            call_id: otel_ci,
+        } = telemetry;
+
+        let guardian_review = if routes_to_guardian {
+            if let Some(review_id) = approval_ctx.guardian_review_id.clone() {
+                if let Some(request) = tool.guardian_approval_request(req, &approval_ctx) {
+                    Some(
+                        review_approval_request_with_review(
+                            approval_ctx.session,
+                            approval_ctx.turn,
+                            review_id,
+                            request,
+                            approval_ctx.retry_reason.clone(),
+                        )
+                        .await,
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if let Some(permission_request) = tool.permission_request_payload(req) {
             let run_id_suffix = match approval_attempt {
                 ApprovalAttempt::Initial => format!("{}:initial", approval_ctx.call_id),
@@ -422,24 +474,29 @@ impl ToolOrchestrator {
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
-                run_id_suffix,
-                permission_request,
+                PermissionRequestHookRequest {
+                    run_id_suffix,
+                    payload: permission_request,
+                    guardian_review: guardian_review
+                        .as_ref()
+                        .map(|review| permission_request_guardian_review(review.review.clone())),
+                },
             )
             .await
             {
                 Some(PermissionRequestDecision::Allow) => {
-                    telemetry.otel.tool_decision(
-                        telemetry.tool_name,
-                        telemetry.call_id,
+                    otel.tool_decision(
+                        otel_tn,
+                        otel_ci,
                         &ReviewDecision::Approved,
                         ToolDecisionSource::Config,
                     );
                     return Ok(ReviewDecision::Approved);
                 }
                 Some(PermissionRequestDecision::Deny { message }) => {
-                    telemetry.otel.tool_decision(
-                        telemetry.tool_name,
-                        telemetry.call_id,
+                    otel.tool_decision(
+                        otel_tn,
+                        otel_ci,
                         &ReviewDecision::Denied,
                         ToolDecisionSource::Config,
                     );
@@ -449,18 +506,23 @@ impl ToolOrchestrator {
             }
         }
 
+        if let Some(GuardianApprovalReviewResult { decision, .. }) = guardian_review {
+            otel.tool_decision(
+                otel_tn,
+                otel_ci,
+                &decision,
+                ToolDecisionSource::AutomatedReviewer,
+            );
+            return Ok(decision);
+        }
+
         let decision = tool.start_approval_async(req, approval_ctx).await;
-        let otel_source = if routes_approval_to_guardian(turn_ctx) {
+        let otel_source = if routes_to_guardian {
             ToolDecisionSource::AutomatedReviewer
         } else {
             ToolDecisionSource::User
         };
-        telemetry.otel.tool_decision(
-            telemetry.tool_name,
-            telemetry.call_id,
-            &decision,
-            otel_source,
-        );
+        otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
         Ok(decision)
     }
 }
@@ -469,4 +531,25 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // Keep approval reason terse and stable for UX/tests, but accept the
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
+}
+
+fn permission_request_guardian_review(
+    review: GuardianApprovalReview,
+) -> PermissionRequestGuardianReview {
+    PermissionRequestGuardianReview {
+        status: match review.status {
+            GuardianApprovalReviewStatus::Approved => HookGuardianReviewStatus::Approved,
+            GuardianApprovalReviewStatus::Denied => HookGuardianReviewStatus::Denied,
+            GuardianApprovalReviewStatus::Aborted => HookGuardianReviewStatus::Aborted,
+            GuardianApprovalReviewStatus::Failed => HookGuardianReviewStatus::Failed,
+            GuardianApprovalReviewStatus::TimedOut => HookGuardianReviewStatus::TimedOut,
+        },
+        decision: review.decision.map(|decision| match decision {
+            GuardianAssessmentOutcome::Allow => PermissionRequestGuardianReviewDecision::Allow,
+            GuardianAssessmentOutcome::Deny => PermissionRequestGuardianReviewDecision::Deny,
+        }),
+        risk_level: review.risk_level,
+        user_authorization: review.user_authorization,
+        rationale: review.rationale,
+    }
 }

@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
@@ -12,6 +13,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -578,10 +580,9 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            if let Err(error) = config.features.enable(Feature::CodexHooks) {
+                panic!("test config should allow feature update: {error}");
+            }
         });
     let test = builder.build(&server).await?;
 
@@ -677,10 +678,9 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            if let Err(error) = config.features.enable(Feature::CodexHooks) {
+                panic!("test config should allow feature update: {error}");
+            }
         });
     let test = builder.build(&server).await?;
 
@@ -1142,7 +1142,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     test.submit_turn_with_policies(
         "run the shell command after hook approval",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -1167,6 +1167,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
             "justification": null,
         })
     );
+    assert_eq!(hook_inputs[0]["guardian_review"], Value::Null);
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
@@ -1175,6 +1176,137 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         hook_inputs[0]["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[test]
+fn permission_request_hook_receives_guardian_review_before_fallback() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current-thread tokio runtime")
+                .block_on(permission_request_hook_receives_guardian_review_before_fallback_inner())
+        })
+        .expect("spawn guardian permission request hook test thread")
+        .join()
+        .expect("guardian permission request hook test thread panicked")
+}
+
+async fn permission_request_hook_receives_guardian_review_before_fallback_inner() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-guardian-review";
+    let marker = std::env::temp_dir().join("permissionrequest-guardian-review-marker");
+    let command = format!("rm -f {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "medium",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The user asked to delete this local marker file.",
+    })
+    .to_string();
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message("msg-guardian", &guardian_assessment),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "guardian fallback allowed it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_permission_request_hook(home, Some("^Bash$"), "quiet", "unused")
+            {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            if let Err(error) = config.features.enable(Feature::CodexHooks) {
+                panic!("test config should allow feature update: {error}");
+            }
+            if let Err(error) = config.features.enable(Feature::ExecPermissionApprovals) {
+                panic!("test config should allow feature update: {error}");
+            }
+            if let Err(error) = config.features.enable(Feature::GuardianApproval) {
+                panic!("test config should allow feature update: {error}");
+            }
+            config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        });
+    let test = builder.build(&server).await?;
+
+    fs::write(&marker, "seed").context("create guardian review marker")?;
+
+    test.submit_turn_with_policies(
+        "run the shell command after guardian review",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "guardian decision should be reused instead of running a second review",
+    );
+    assert!(
+        requests[2]
+            .input()
+            .iter()
+            .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output")),
+        "guardian-approved fallback should continue with tool output",
+    );
+    assert!(
+        !marker.exists(),
+        "guardian-approved fallback should remove marker file",
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["approval_context"],
+        serde_json::json!({
+            "sandbox_permissions": "use_default",
+            "additional_permissions": null,
+            "justification": null,
+        })
+    );
+    assert_eq!(
+        hook_inputs[0]["guardian_review"],
+        serde_json::json!({
+            "status": "approved",
+            "decision": "allow",
+            "risk_level": "medium",
+            "user_authorization": "high",
+            "rationale": "The user asked to delete this local marker file.",
+        })
     );
 
     Ok(())
