@@ -386,7 +386,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
-            let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            let processor = MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,

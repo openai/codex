@@ -371,6 +371,18 @@ pub(crate) fn guardian_request_id(request: &GuardianApprovalRequest) -> &str {
     }
 }
 
+pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest) -> Option<&str> {
+    match request {
+        GuardianApprovalRequest::Shell { id, .. }
+        | GuardianApprovalRequest::ExecCommand { id, .. }
+        | GuardianApprovalRequest::ApplyPatch { id, .. }
+        | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
+        GuardianApprovalRequest::NetworkAccess { .. } => None,
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { id, .. } => Some(id),
+    }
+}
+
 pub(crate) fn guardian_request_turn_id<'a>(
     request: &'a GuardianApprovalRequest,
     default_turn_id: &'a str,

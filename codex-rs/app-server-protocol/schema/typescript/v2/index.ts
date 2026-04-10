@@ -124,6 +124,7 @@ export type { GitInfo } from "./GitInfo";
 export type { GrantedPermissionProfile } from "./GrantedPermissionProfile";
 export type { GuardianApprovalReview } from "./GuardianApprovalReview";
 export type { GuardianApprovalReviewAction } from "./GuardianApprovalReviewAction";
+export type { GuardianApprovalReviewDecisionSource } from "./GuardianApprovalReviewDecisionSource";
 export type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatus";
 export type { GuardianCommandSource } from "./GuardianCommandSource";
 export type { GuardianRiskLevel } from "./GuardianRiskLevel";

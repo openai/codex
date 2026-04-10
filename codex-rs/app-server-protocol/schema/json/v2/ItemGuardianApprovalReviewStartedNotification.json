@@ -264,8 +264,14 @@
     "review": {
       "$ref": "#/definitions/GuardianApprovalReview"
     },
-    "targetItemId": {
+    "reviewId": {
       "type": "string"
+    },
+    "targetItemId": {
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "threadId": {
       "type": "string"
@@ -277,7 +283,7 @@
   "required": [
     "action",
     "review",
-    "targetItemId",
+    "reviewId",
     "threadId",
     "turnId"
   ],

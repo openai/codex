@@ -16,6 +16,7 @@ use crate::protocol::v2::CommandExecutionSource;
 use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::FileUpdateChange;
 use crate::protocol::v2::GuardianApprovalReview;
+use crate::protocol::v2::GuardianApprovalReviewDecisionSource;
 use crate::protocol::v2::GuardianApprovalReviewStatus;
 use crate::protocol::v2::ItemGuardianApprovalReviewCompletedNotification;
 use crate::protocol::v2::ItemGuardianApprovalReviewStartedNotification;
@@ -142,12 +143,13 @@ pub fn build_item_from_guardian_event(
 ) -> Option<ThreadItem> {
     match &assessment.action {
         GuardianAssessmentAction::Command { command, cwd, .. } => {
+            let id = assessment.target_item_id.as_ref().unwrap_or(&assessment.id);
             let command = command.clone();
             let command_actions = vec![CommandAction::Unknown {
                 command: command.clone(),
             }];
             Some(ThreadItem::CommandExecution {
-                id: assessment.id.clone(),
+                id: id.clone(),
                 command,
                 cwd: cwd.clone(),
                 process_id: None,
@@ -162,6 +164,7 @@ pub fn build_item_from_guardian_event(
         GuardianAssessmentAction::Execve {
             program, argv, cwd, ..
         } => {
+            let id = assessment.target_item_id.as_ref().unwrap_or(&assessment.id);
             let argv = if argv.is_empty() {
                 vec![program.clone()]
             } else {
@@ -179,7 +182,7 @@ pub fn build_item_from_guardian_event(
                 parsed_cmd.into_iter().map(CommandAction::from).collect()
             };
             Some(ThreadItem::CommandExecution {
-                id: assessment.id.clone(),
+                id: id.clone(),
                 command,
                 cwd: cwd.clone(),
                 process_id: None,
@@ -236,7 +239,8 @@ pub fn guardian_auto_approval_review_notification(
                 ItemGuardianApprovalReviewStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
-                    target_item_id: assessment.id.clone(),
+                    review_id: assessment.id.clone(),
+                    target_item_id: assessment.target_item_id.clone(),
                     review,
                     action,
                 },
@@ -249,7 +253,12 @@ pub fn guardian_auto_approval_review_notification(
                 ItemGuardianApprovalReviewCompletedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
-                    target_item_id: assessment.id.clone(),
+                    review_id: assessment.id.clone(),
+                    target_item_id: assessment.target_item_id.clone(),
+                    decision_source: assessment
+                        .decision_source
+                        .map(GuardianApprovalReviewDecisionSource::from)
+                        .unwrap_or(GuardianApprovalReviewDecisionSource::Guardian),
                     review,
                     action,
                 },

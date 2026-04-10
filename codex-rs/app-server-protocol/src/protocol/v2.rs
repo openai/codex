@@ -9,6 +9,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
+use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
@@ -4525,6 +4526,24 @@ pub enum GuardianApprovalReviewStatus {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Source that produced a terminal guardian approval review decision.
+pub enum GuardianApprovalReviewDecisionSource {
+    Guardian,
+    ClientOverride,
+}
+
+impl From<CoreGuardianAssessmentDecisionSource> for GuardianApprovalReviewDecisionSource {
+    fn from(value: CoreGuardianAssessmentDecisionSource) -> Self {
+        match value {
+            CoreGuardianAssessmentDecisionSource::Guardian => Self::Guardian,
+            CoreGuardianAssessmentDecisionSource::ClientOverride => Self::ClientOverride,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Risk level assigned by guardian approval review.
@@ -5287,7 +5306,8 @@ pub struct ItemStartedNotification {
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub target_item_id: String,
+    pub review_id: String,
+    pub target_item_id: Option<String>,
     pub review: GuardianApprovalReview,
     pub action: GuardianApprovalReviewAction,
 }
@@ -5304,7 +5324,9 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub target_item_id: String,
+    pub review_id: String,
+    pub target_item_id: Option<String>,
+    pub decision_source: GuardianApprovalReviewDecisionSource,
     pub review: GuardianApprovalReview,
     pub action: GuardianApprovalReviewAction,
 }

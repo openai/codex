@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
@@ -21,6 +22,7 @@ use super::GuardianAssessment;
 use super::GuardianAssessmentOutcome;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_id;
+use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
@@ -95,7 +97,9 @@ async fn run_guardian_review(
     retry_reason: Option<String>,
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
-    let assessment_id = guardian_request_id(&request).to_string();
+    let rationale_lookup_id = guardian_request_id(&request).to_string();
+    let assessment_id = uuid::Uuid::new_v4().to_string();
+    let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
     session
@@ -103,11 +107,13 @@ async fn run_guardian_review(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id.clone(),
+                target_item_id: target_item_id.clone(),
                 turn_id: assessment_turn_id.clone(),
                 status: GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: action_summary.clone(),
             }),
         )
@@ -122,11 +128,13 @@ async fn run_guardian_review(
                 turn.as_ref(),
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                     id: assessment_id,
+                    target_item_id,
                     turn_id: assessment_turn_id,
                     status: GuardianAssessmentStatus::Aborted,
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
+                    decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
                     action: action_summary,
                 }),
             )
@@ -168,11 +176,13 @@ async fn run_guardian_review(
                     turn.as_ref(),
                     EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                         id: assessment_id,
+                        target_item_id,
                         turn_id: assessment_turn_id,
                         status: GuardianAssessmentStatus::Aborted,
                         risk_level: None,
                         user_authorization: None,
                         rationale: None,
+                        decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
                         action: action_summary,
                     }),
                 )
@@ -212,8 +222,12 @@ async fn run_guardian_review(
         let mut rationales = session.services.guardian_rejection_rationales.lock().await;
         if approved {
             rationales.remove(&assessment_id);
+            rationales.remove(&rationale_lookup_id);
         } else {
             rationales.insert(assessment_id.clone(), assessment.rationale.clone());
+            if rationale_lookup_id != assessment_id {
+                rationales.insert(rationale_lookup_id, assessment.rationale.clone());
+            }
         }
     }
     session
@@ -221,11 +235,13 @@ async fn run_guardian_review(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id,
+                target_item_id,
                 turn_id: assessment_turn_id,
                 status,
                 risk_level: Some(assessment.risk_level),
                 user_authorization: Some(assessment.user_authorization),
                 rationale: Some(assessment.rationale.clone()),
+                decision_source: Some(GuardianAssessmentDecisionSource::Guardian),
                 action: terminal_action,
             }),
         )

@@ -6439,7 +6439,7 @@ impl ChatWidget {
             }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
-                    notification.target_item_id,
+                    notification.review_id,
                     notification.turn_id,
                     notification.review,
                     notification.action,
@@ -6447,7 +6447,7 @@ impl ChatWidget {
             }
             ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
                 self.on_guardian_review_notification(
-                    notification.target_item_id,
+                    notification.review_id,
                     notification.turn_id,
                     notification.review,
                     notification.action,
@@ -6729,6 +6729,7 @@ impl ChatWidget {
     ) {
         self.on_guardian_assessment(GuardianAssessmentEvent {
             id,
+            target_item_id: None,
             turn_id,
             status: match review.status {
                 codex_app_server_protocol::GuardianApprovalReviewStatus::InProgress => {
@@ -6775,6 +6776,7 @@ impl ChatWidget {
                 }
             }),
             rationale: review.rationale,
+            decision_source: None,
             action: action.into(),
         });
     }

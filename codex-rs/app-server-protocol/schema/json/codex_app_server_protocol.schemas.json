@@ -8284,6 +8284,14 @@
           }
         ]
       },
+      "GuardianApprovalReviewDecisionSource": {
+        "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+        "enum": [
+          "guardian",
+          "clientOverride"
+        ],
+        "type": "string"
+      },
       "GuardianApprovalReviewStatus": {
         "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
         "enum": [
@@ -8577,11 +8585,20 @@
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
           },
+          "decisionSource": {
+            "$ref": "#/definitions/v2/GuardianApprovalReviewDecisionSource"
+          },
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
-          "targetItemId": {
+          "reviewId": {
             "type": "string"
+          },
+          "targetItemId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"
@@ -8592,8 +8609,9 @@
         },
         "required": [
           "action",
+          "decisionSource",
           "review",
-          "targetItemId",
+          "reviewId",
           "threadId",
           "turnId"
         ],
@@ -8610,8 +8628,14 @@
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
-          "targetItemId": {
+          "reviewId": {
             "type": "string"
+          },
+          "targetItemId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"
@@ -8623,7 +8647,7 @@
         "required": [
           "action",
           "review",
-          "targetItemId",
+          "reviewId",
           "threadId",
           "turnId"
         ],
