@@ -82,6 +82,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
@@ -537,9 +538,6 @@ impl ThreadEventStore {
             ThreadBufferedEvent::Request(_)
                 | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
                 | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
-                | ThreadBufferedEvent::Notification(
-                    ServerNotification::AddCreditsNudgeEmailCompleted(_),
-                )
                 | ThreadBufferedEvent::FeedbackSubmission(_)
         )
     }
@@ -1099,8 +1097,6 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
-            initial_workspace_role: self.chat_widget.current_workspace_role(),
-            initial_is_workspace_owner: self.chat_widget.current_is_workspace_owner(),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
@@ -2431,10 +2427,6 @@ impl App {
                     .await?;
                 Ok(true)
             }
-            AppCommandView::SendAddCreditsNudgeEmail => {
-                app_server.thread_add_credits_nudge_email(thread_id).await?;
-                Ok(true)
-            }
             AppCommandView::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
                 Ok(true)
@@ -3310,6 +3302,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
+        session_start_source: Option<ThreadStartSource>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -3331,7 +3324,10 @@ impl App {
             }
         }
         self.config = config.clone();
-        match app_server.start_thread(&config).await {
+        match app_server
+            .start_thread_with_session_start_source(&config, session_start_source)
+            .await
+        {
             Ok(started) => {
                 if let Err(err) = self
                     .replace_chat_widget_with_app_server_thread(tui, app_server, started)
@@ -3658,8 +3654,6 @@ impl App {
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
-        let initial_workspace_role = bootstrap.workspace_role;
-        let initial_is_workspace_owner = bootstrap.is_workspace_owner;
         let initial_plan_type = bootstrap.plan_type;
         let session_telemetry = SessionTelemetry::new(
             ThreadId::new(),
@@ -3709,8 +3703,6 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
-                    initial_workspace_role,
-                    initial_is_workspace_owner,
                     initial_plan_type,
                     model: Some(model.clone()),
                     startup_tooltip_override,
@@ -3745,8 +3737,6 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
-                    initial_workspace_role,
-                    initial_is_workspace_owner,
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
@@ -3786,8 +3776,6 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
-                    initial_workspace_role,
-                    initial_is_workspace_owner,
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
@@ -4175,15 +4163,21 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                self.start_fresh_session_with_summary_hint(tui, app_server)
-                    .await;
+                self.start_fresh_session_with_summary_hint(
+                    tui, app_server, /*session_start_source*/ None,
+                )
+                .await;
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(tui, app_server)
-                    .await;
+                self.start_fresh_session_with_summary_hint(
+                    tui,
+                    app_server,
+                    Some(ThreadStartSource::Clear),
+                )
+                .await;
             }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
@@ -4566,23 +4560,6 @@ impl App {
                     }
                 }
             },
-            AppEvent::NotifyWorkspaceOwner => {
-                if self.active_thread_id.is_some() {
-                    self.chat_widget.start_notify_workspace_owner();
-                    if let Err(err) = self
-                        .submit_active_thread_op(app_server, Op::SendAddCreditsNudgeEmail.into())
-                        .await
-                    {
-                        self.chat_widget
-                            .finish_notify_workspace_owner(Err(err.to_string()));
-                        return Err(err);
-                    }
-                } else {
-                    self.chat_widget.finish_notify_workspace_owner(Err(
-                        "no active thread is available".to_string(),
-                    ));
-                }
-            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -6363,8 +6340,6 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
-    use codex_app_server_protocol::AddCreditsNudgeEmailNotification;
-    use codex_app_server_protocol::AddCreditsNudgeEmailResult;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -6752,8 +6727,6 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             is_first_run: false,
             status_account_display: None,
-            initial_workspace_role: None,
-            initial_is_workspace_owner: None,
             initial_plan_type: None,
             model: Some(model),
             startup_tooltip_override: None,
@@ -9658,29 +9631,6 @@ guardian_approval = true
     }
 
     #[test]
-    fn thread_event_store_rebase_preserves_add_credits_nudge_email_completion() {
-        let thread_id = ThreadId::new();
-        let mut store = ThreadEventStore::new(/*capacity*/ 8);
-        let notification =
-            ServerNotification::AddCreditsNudgeEmailCompleted(AddCreditsNudgeEmailNotification {
-                thread_id: thread_id.to_string(),
-                result: AddCreditsNudgeEmailResult::Sent,
-            });
-        store.push_notification(notification.clone());
-
-        store.rebase_buffer_after_session_refresh();
-
-        let snapshot = store.snapshot();
-        let [ThreadBufferedEvent::Notification(actual)] = snapshot.events.as_slice() else {
-            panic!("expected add-credits nudge email completion notification");
-        };
-        assert_eq!(
-            serde_json::to_value(actual).expect("notification should serialize"),
-            serde_json::to_value(notification).expect("notification should serialize"),
-        );
-    }
-
-    #[test]
     fn build_feedback_upload_params_includes_thread_id_and_rollout_path() {
         let thread_id = ThreadId::new();
         let rollout_path = PathBuf::from("/tmp/rollout.jsonl");
@@ -10741,8 +10691,6 @@ guardian_approval = true
             feedback: app.feedback.clone(),
             is_first_run: false,
             status_account_display: app.chat_widget.status_account_display().cloned(),
-            initial_workspace_role: app.chat_widget.current_workspace_role(),
-            initial_is_workspace_owner: app.chat_widget.current_is_workspace_owner(),
             initial_plan_type: app.chat_widget.current_plan_type(),
             model: Some(app.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,

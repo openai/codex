@@ -33,7 +33,6 @@ mod request_user_input;
 mod review;
 mod safety_check_downgrade;
 mod skills_list;
-mod thread_add_credits_nudge_email;
 mod thread_archive;
 mod thread_fork;
 mod thread_list;

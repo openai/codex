@@ -110,6 +110,12 @@ pub enum GuardianAssessmentStatus {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
+pub enum GuardianAssessmentDecisionSource {
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum GuardianCommandSource {
     Shell,
     UnifiedExec,
@@ -159,6 +165,10 @@ pub struct NetworkPolicyAmendment {
 pub struct GuardianAssessmentEvent {
     /// Stable identifier for this guardian review lifecycle.
     pub id: String,
+    /// Thread item being reviewed, when the review maps to a concrete item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target_item_id: Option<String>,
     /// Turn ID that this assessment belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
@@ -176,6 +186,10 @@ pub struct GuardianAssessmentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rationale: Option<String>,
+    /// Source that produced the terminal assessment decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub decision_source: Option<GuardianAssessmentDecisionSource>,
     /// Canonical action payload that was reviewed.
     pub action: GuardianAssessmentAction,
 }

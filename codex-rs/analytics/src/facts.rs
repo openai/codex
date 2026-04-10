@@ -64,6 +64,69 @@ pub struct SubAgentThreadStartedInput {
     pub created_at: u64,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionTrigger {
+    Manual,
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReason {
+    UserRequested,
+    ContextLimit,
+    ModelDownshift,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionImplementation {
+    Responses,
+    ResponsesCompact,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionPhase {
+    StandaloneTurn,
+    PreTurn,
+    MidTurn,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStrategy {
+    Memento,
+    PrefixCompaction,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStatus {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Clone)]
+pub struct CodexCompactionEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub trigger: CompactionTrigger,
+    pub reason: CompactionReason,
+    pub implementation: CompactionImplementation,
+    pub phase: CompactionPhase,
+    pub strategy: CompactionStrategy,
+    pub status: CompactionStatus,
+    pub error: Option<String>,
+    pub active_context_tokens_before: i64,
+    pub active_context_tokens_after: i64,
+    pub started_at: u64,
+    pub completed_at: u64,
+    pub duration_ms: Option<u64>,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -90,6 +153,7 @@ pub(crate) enum AnalyticsFact {
 
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
+    Compaction(Box<CodexCompactionEvent>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
