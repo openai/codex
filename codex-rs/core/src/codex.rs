@@ -1047,7 +1047,10 @@ impl TurnContext {
         FileSystemSandboxContext {
             sandbox_policy: self.sandbox_policy.get().clone(),
             windows_sandbox_level: self.windows_sandbox_level,
-            windows_sandbox_private_desktop: self.config.windows_sandbox_private_desktop,
+            windows_sandbox_private_desktop: self
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             use_legacy_landlock: self.features.use_legacy_landlock(),
             additional_permissions,
         }
