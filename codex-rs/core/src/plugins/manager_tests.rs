@@ -1518,7 +1518,7 @@ plugins = true
 
 [marketplaces.debug]
 last_updated = "2026-04-10T12:34:56Z"
-source_type = "directory"
+source_type = "git"
 source = "/tmp/debug"
 "#,
     );
@@ -1585,7 +1585,7 @@ plugins = true
 
 [marketplaces.debug]
 last_updated = "2026-04-10T12:34:56Z"
-source_type = "directory"
+source_type = "git"
 source = "/tmp/debug"
 "#,
     );

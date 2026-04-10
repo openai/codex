@@ -12,7 +12,6 @@ use codex_core::plugins::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -30,13 +29,13 @@ pub struct MarketplaceCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum MarketplaceSubcommand {
-    /// Add a marketplace repository or local marketplace directory.
+    /// Add a remote marketplace repository.
     Add(AddMarketplaceArgs),
 }
 
 #[derive(Debug, Parser)]
 struct AddMarketplaceArgs {
-    /// Marketplace source. Supports owner/repo[@ref], git URLs, SSH URLs, or local directories.
+    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, or SSH URLs.
     source: String,
 
     /// Git ref to check out. Overrides any @ref or #ref suffix in SOURCE.
@@ -54,9 +53,6 @@ struct AddMarketplaceArgs {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum MarketplaceSource {
-    LocalDirectory {
-        path: PathBuf,
-    },
     Git {
         url: String,
         ref_name: Option<String>,
@@ -91,15 +87,7 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         sparse_paths,
     } = args;
 
-    let has_explicit_ref = ref_name.is_some();
     let source = parse_marketplace_source(&source, ref_name)?;
-    let source_is_git = matches!(source, MarketplaceSource::Git { .. });
-    if has_explicit_ref && !source_is_git {
-        bail!("--ref can only be used with git marketplace sources");
-    }
-    if !sparse_paths.is_empty() && !source_is_git {
-        bail!("--sparse can only be used with git marketplace sources");
-    }
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let install_root = marketplace_install_root(&codex_home);
@@ -149,20 +137,8 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         })?;
     let staged_root = staged_dir.path().to_path_buf();
 
-    match &source {
-        MarketplaceSource::LocalDirectory { path } => {
-            ops::copy_dir_recursive(path, &staged_root).with_context(|| {
-                format!(
-                    "failed to copy marketplace source {} into {}",
-                    path.display(),
-                    staged_root.display()
-                )
-            })?;
-        }
-        MarketplaceSource::Git { url, ref_name } => {
-            ops::clone_git_source(url, ref_name.as_deref(), &sparse_paths, &staged_root)?;
-        }
-    }
+    let MarketplaceSource::Git { url, ref_name } = &source;
+    ops::clone_git_source(url, ref_name.as_deref(), &sparse_paths, &staged_root)?;
 
     let marketplace_name = validate_marketplace_source_root(&staged_root)
         .with_context(|| format!("failed to validate marketplace from {}", source.display()))?;
@@ -236,57 +212,18 @@ fn parse_marketplace_source(
         bail!("marketplace source must not be empty");
     }
 
-    let source = expand_home(source);
-    let (base_source, parsed_ref) = split_source_ref(&source);
+    let (base_source, parsed_ref) = split_source_ref(source);
     let ref_name = explicit_ref.or(parsed_ref);
 
-    if is_ssh_git_url(&base_source) || is_http_git_url(&base_source) {
-        let url = normalize_git_url(&base_source);
-        return Ok(MarketplaceSource::Git { url, ref_name });
+    if looks_like_local_path(&base_source) {
+        bail!(
+            "local marketplace sources are not supported yet; use an HTTP(S) Git URL, SSH Git URL, or GitHub owner/repo"
+        );
     }
 
-    let path = PathBuf::from(&source);
-    let path_exists = path.try_exists().with_context(|| {
-        format!(
-            "failed to access local marketplace source {}",
-            path.display()
-        )
-    })?;
-    if path_exists || looks_like_local_path(&source) {
-        if !path_exists {
-            bail!(
-                "local marketplace source does not exist: {}",
-                path.display()
-            );
-        }
-        let metadata = path.metadata().with_context(|| {
-            format!("failed to read local marketplace source {}", path.display())
-        })?;
-        if metadata.is_file() {
-            if path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                bail!(
-                    "local marketplace JSON files are not supported yet; pass the marketplace root directory containing .agents/plugins/marketplace.json: {}",
-                    path.display()
-                );
-            }
-            bail!(
-                "local marketplace source file must be a JSON marketplace manifest or a directory containing .agents/plugins/marketplace.json: {}",
-                path.display()
-            );
-        }
-        if !metadata.is_dir() {
-            bail!(
-                "local marketplace source must be a file or directory: {}",
-                path.display()
-            );
-        }
-        let path = path
-            .canonicalize()
-            .with_context(|| format!("failed to resolve {}", path.display()))?;
-        return Ok(MarketplaceSource::LocalDirectory { path });
+    if is_ssh_git_url(&base_source) || is_git_url(&base_source) {
+        let url = normalize_git_url(&base_source);
+        return Ok(MarketplaceSource::Git { url, ref_name });
     }
 
     if looks_like_github_shorthand(&base_source) {
@@ -333,21 +270,11 @@ fn looks_like_local_path(source: &str) -> bool {
         || source == ".."
 }
 
-fn expand_home(source: &str) -> String {
-    let Some(rest) = source.strip_prefix("~/") else {
-        return source.to_string();
-    };
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(rest).display().to_string();
-    }
-    source.to_string()
-}
-
 fn is_ssh_git_url(source: &str) -> bool {
     source.starts_with("ssh://") || source.starts_with("git@") && source.contains(':')
 }
 
-fn is_http_git_url(source: &str) -> bool {
+fn is_git_url(source: &str) -> bool {
     source.starts_with("http://") || source.starts_with("https://")
 }
 
@@ -452,7 +379,6 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 impl MarketplaceSource {
     fn display(&self) -> String {
         match self {
-            Self::LocalDirectory { path } => path.display().to_string(),
             Self::Git { url, ref_name } => {
                 if let Some(ref_name) = ref_name {
                     format!("{url}#{ref_name}")
@@ -556,6 +482,30 @@ mod tests {
                 url: "https://gitlab.com/owner/repo".to_string(),
                 ref_name: None,
             }
+        );
+    }
+
+    #[test]
+    fn file_url_source_is_rejected() {
+        let err =
+            parse_marketplace_source("file:///tmp/marketplace.git", /* explicit_ref */ None)
+                .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("invalid marketplace source format"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn local_path_source_is_rejected() {
+        let err = parse_marketplace_source("./marketplace", /* explicit_ref */ None).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("local marketplace sources are not supported yet"),
+            "unexpected error: {err}"
         );
     }
 

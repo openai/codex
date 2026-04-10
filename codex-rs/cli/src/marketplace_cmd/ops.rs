@@ -65,44 +65,6 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     );
 }
 
-pub(super) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
-    fs::create_dir_all(target)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let file_type = entry.file_type()?;
-
-        if file_type.is_dir() {
-            if entry.file_name().to_str() == Some(".git") {
-                continue;
-            }
-            copy_dir_recursive(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &target_path)?;
-        } else if file_type.is_symlink() {
-            copy_symlink_target(&source_path, &target_path)?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn copy_symlink_target(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(fs::read_link(source)?, target)?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn copy_symlink_target(source: &Path, target: &Path) -> Result<()> {
-    let metadata = fs::metadata(source)?;
-    if metadata.is_dir() {
-        copy_dir_recursive(source, target)
-    } else {
-        fs::copy(source, target).map(|_| ()).map_err(Into::into)
-    }
-}
-
 pub(super) fn replace_marketplace_root(staged_root: &Path, destination: &Path) -> Result<()> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;

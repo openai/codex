@@ -794,7 +794,6 @@
     },
     "MarketplaceSourceType": {
       "enum": [
-        "directory",
         "git"
       ],
       "type": "string"

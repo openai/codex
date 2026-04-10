@@ -14,9 +14,6 @@ pub(super) struct MarketplaceInstallMetadata {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InstalledMarketplaceSource {
-    LocalDirectory {
-        path: PathBuf,
-    },
     Git {
         url: String,
         ref_name: Option<String>,
@@ -60,9 +57,6 @@ pub(super) fn installed_marketplace_root_for_source(
 impl MarketplaceInstallMetadata {
     pub(super) fn from_source(source: &MarketplaceSource, sparse_paths: &[String]) -> Self {
         let source = match source {
-            MarketplaceSource::LocalDirectory { path } => {
-                InstalledMarketplaceSource::LocalDirectory { path: path.clone() }
-            }
             MarketplaceSource::Git { url, ref_name } => InstalledMarketplaceSource::Git {
                 url: url.clone(),
                 ref_name: ref_name.clone(),
@@ -74,28 +68,24 @@ impl MarketplaceInstallMetadata {
 
     pub(super) fn config_source_type(&self) -> &'static str {
         match &self.source {
-            InstalledMarketplaceSource::LocalDirectory { .. } => "directory",
             InstalledMarketplaceSource::Git { .. } => "git",
         }
     }
 
     pub(super) fn config_source(&self) -> String {
         match &self.source {
-            InstalledMarketplaceSource::LocalDirectory { path } => path.display().to_string(),
             InstalledMarketplaceSource::Git { url, .. } => url.clone(),
         }
     }
 
     pub(super) fn ref_name(&self) -> Option<&str> {
         match &self.source {
-            InstalledMarketplaceSource::LocalDirectory { .. } => None,
             InstalledMarketplaceSource::Git { ref_name, .. } => ref_name.as_deref(),
         }
     }
 
     pub(super) fn sparse_paths(&self) -> &[String] {
         match &self.source {
-            InstalledMarketplaceSource::LocalDirectory { .. } => &[],
             InstalledMarketplaceSource::Git { sparse_paths, .. } => sparse_paths,
         }
     }
@@ -137,8 +127,9 @@ mod tests {
         std::fs::create_dir(&config_path)?;
 
         let install_root = codex_home.path().join("marketplaces");
-        let source = MarketplaceSource::LocalDirectory {
-            path: codex_home.path().join("source"),
+        let source = MarketplaceSource::Git {
+            url: "https://github.com/owner/repo.git".to_string(),
+            ref_name: None,
         };
         let install_metadata = MarketplaceInstallMetadata::from_source(&source, &[]);
 
