@@ -39,7 +39,7 @@ enum HookRunState {
     },
     VisibleRunning {
         start_time: Instant,
-        reveal_deadline: Instant,
+        visible_since: Instant,
     },
     QuietLinger {
         start_time: Instant,
@@ -214,6 +214,14 @@ impl HookCell {
             run.reveal_running_now_for_test(now);
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn reveal_running_runs_after_delayed_redraw_for_test(&mut self) {
+        let now = Instant::now();
+        for run in &mut self.runs {
+            run.reveal_running_after_delayed_redraw_for_test(now);
+        }
+    }
 }
 
 impl HistoryCell for HookCell {
@@ -303,6 +311,19 @@ impl HookRunCell {
         } = &mut self.state
         {
             *reveal_deadline = now;
+        }
+    }
+
+    #[cfg(test)]
+    fn reveal_running_after_delayed_redraw_for_test(&mut self, now: Instant) {
+        if let HookRunState::PendingReveal {
+            reveal_deadline, ..
+        } = &mut self.state
+        {
+            let delayed_deadline = now
+                .checked_sub(QUIET_HOOK_MIN_VISIBLE + Duration::from_millis(100))
+                .unwrap_or(now);
+            *reveal_deadline = delayed_deadline;
         }
     }
 
@@ -420,7 +441,7 @@ impl HookRunState {
         }
         *self = HookRunState::VisibleRunning {
             start_time: *start_time,
-            reveal_deadline: *reveal_deadline,
+            visible_since: now,
         };
         true
     }
@@ -451,14 +472,14 @@ impl HookRunState {
     fn complete_quiet_success(&mut self, now: Instant) -> bool {
         let HookRunState::VisibleRunning {
             start_time,
-            reveal_deadline,
+            visible_since,
             ..
         } = self
         else {
             return false;
         };
         let start_time = *start_time;
-        let minimum_deadline = *reveal_deadline + QUIET_HOOK_MIN_VISIBLE;
+        let minimum_deadline = *visible_since + QUIET_HOOK_MIN_VISIBLE;
         if now >= minimum_deadline {
             return false;
         }

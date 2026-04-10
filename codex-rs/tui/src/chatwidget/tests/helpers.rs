@@ -687,6 +687,13 @@ pub(super) fn reveal_running_hooks(chat: &mut ChatWidget) {
     chat.pre_draw_tick();
 }
 
+pub(super) fn reveal_running_hooks_after_delayed_redraw(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.reveal_running_runs_after_delayed_redraw_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
 pub(super) fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .model_catalog

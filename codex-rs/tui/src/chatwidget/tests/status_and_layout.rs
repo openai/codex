@@ -1477,6 +1477,34 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
 }
 
 #[tokio::test]
+async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(hook_started_event(
+        "post-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        Some("checking output policy"),
+    ));
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    reveal_running_hooks_after_delayed_redraw(&mut chat);
+    chat.handle_codex_event(hook_completed_event(
+        "post-tool-use:0:/tmp/hooks.json",
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        codex_protocol::protocol::HookRunStatus::Completed,
+        Vec::new(),
+    ));
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(
+        active_hook_blob(&chat).contains("Running PostToolUse hook"),
+        "quiet hook should linger after the row becomes visible"
+    );
+    expire_quiet_hook_linger(&mut chat);
+    assert_eq!(active_hook_blob(&chat), "<empty>\n");
+}
+
+#[tokio::test]
 async fn blocked_and_failed_hooks_render_feedback_and_errors() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
