@@ -71,6 +71,10 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
+    /// Use $CODEX_HOME/<name>.config.toml as the user config file.
+    #[arg(long = "profile-v2")]
+    pub config_profile_v2: Option<String>,
+
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's')]

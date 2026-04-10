@@ -31,6 +31,7 @@ use codex_tui::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::path::Path;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -44,10 +45,12 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
-use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::config::resolve_profile_v2_config_path;
+use codex_core::config_loader::LoaderOverrides;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
@@ -720,10 +723,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 None => {
                     let transport = listen;
                     let auth = auth.try_into_settings()?;
+                    let loader_overrides = loader_overrides_for_interactive(&interactive)?;
                     codex_app_server::run_main_with_transport(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        codex_core::config_loader::LoaderOverrides::default(),
+                        loader_overrides,
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
@@ -1042,11 +1046,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     ..Default::default()
                 };
 
-                let config = Config::load_with_cli_overrides_and_harness_overrides(
-                    cli_kv_overrides,
-                    overrides,
-                )
-                .await?;
+                let config = ConfigBuilder::default()
+                    .cli_overrides(cli_kv_overrides)
+                    .harness_overrides(overrides)
+                    .loader_overrides(loader_overrides_for_interactive(&interactive)?)
+                    .build()
+                    .await?;
                 let mut rows = Vec::with_capacity(FEATURES.len());
                 let mut name_width = 0;
                 let mut stage_width = 0;
@@ -1095,12 +1100,14 @@ async fn run_exec_server_command(cmd: ExecServerCommand) -> anyhow::Result<()> {
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
     let codex_home = find_codex_home()?;
+    let config_path = user_config_path_for_interactive(&codex_home, interactive)?;
     ConfigEditsBuilder::new(&codex_home)
+        .with_config_path(&config_path)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, /*enabled*/ true)
         .apply()
         .await?;
-    println!("Enabled feature `{feature}` in config.toml.");
+    println!("Enabled feature `{feature}` in {}.", config_path.display());
     maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
     Ok(())
 }
@@ -1108,13 +1115,38 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
 async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
     let codex_home = find_codex_home()?;
+    let config_path = user_config_path_for_interactive(&codex_home, interactive)?;
     ConfigEditsBuilder::new(&codex_home)
+        .with_config_path(&config_path)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, /*enabled*/ false)
         .apply()
         .await?;
-    println!("Disabled feature `{feature}` in config.toml.");
+    println!("Disabled feature `{feature}` in {}.", config_path.display());
     Ok(())
+}
+
+fn user_config_path_for_interactive(
+    codex_home: &Path,
+    interactive: &TuiCli,
+) -> anyhow::Result<PathBuf> {
+    match interactive.config_profile_v2.as_deref() {
+        Some(profile_v2) => Ok(resolve_profile_v2_config_path(codex_home, profile_v2)?),
+        None => Ok(codex_home.join(codex_core::config::CONFIG_TOML_FILE)),
+    }
+}
+
+fn loader_overrides_for_interactive(interactive: &TuiCli) -> anyhow::Result<LoaderOverrides> {
+    match interactive.config_profile_v2.as_deref() {
+        Some(profile_v2) => {
+            let codex_home = find_codex_home()?;
+            Ok(LoaderOverrides {
+                user_config_path: Some(resolve_profile_v2_config_path(&codex_home, profile_v2)?),
+                ..Default::default()
+            })
+        }
+        None => Ok(LoaderOverrides::default()),
+    }
 }
 
 fn maybe_print_under_development_feature_warning(
@@ -1133,7 +1165,8 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let config_path = codex_home.join(codex_config::CONFIG_TOML_FILE);
+    let config_path = user_config_path_for_interactive(codex_home, interactive)
+        .unwrap_or_else(|_| codex_home.join(codex_config::CONFIG_TOML_FILE));
     eprintln!(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()
@@ -1170,6 +1203,7 @@ async fn run_debug_prompt_input_command(
     } else {
         interactive.sandbox_mode.map(Into::into)
     };
+    let loader_overrides = loader_overrides_for_interactive(&interactive)?;
     let overrides = ConfigOverrides {
         model: interactive.model,
         config_profile: interactive.config_profile,
@@ -1184,8 +1218,12 @@ async fn run_debug_prompt_input_command(
         additional_writable_roots: interactive.add_dir,
         ..Default::default()
     };
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
+        .build()
+        .await?;
 
     let mut input = interactive
         .images
@@ -1217,8 +1255,12 @@ async fn run_debug_clear_memories_command(
         config_profile: interactive.config_profile.clone(),
         ..Default::default()
     };
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .loader_overrides(loader_overrides_for_interactive(interactive)?)
+        .build()
+        .await?;
 
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;
@@ -1451,6 +1493,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if let Some(profile) = subcommand_cli.config_profile {
         interactive.config_profile = Some(profile);
+    }
+    if let Some(profile_v2) = subcommand_cli.config_profile_v2 {
+        interactive.config_profile_v2 = Some(profile_v2);
     }
     if let Some(sandbox) = subcommand_cli.sandbox_mode {
         interactive.sandbox_mode = Some(sandbox);
@@ -1784,6 +1829,8 @@ mod tests {
                 "gpt-5.1-test",
                 "-p",
                 "my-profile",
+                "--profile-v2",
+                "my-config",
                 "-C",
                 "/tmp",
                 "-i",
@@ -1795,6 +1842,7 @@ mod tests {
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.oss);
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
+        assert_eq!(interactive.config_profile_v2.as_deref(), Some("my-config"));
         assert_matches!(
             interactive.sandbox_mode,
             Some(codex_utils_cli::SandboxModeCliArg::WorkspaceWrite)

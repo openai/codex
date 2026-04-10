@@ -253,6 +253,7 @@ impl MessageProcessor {
             analytics_events_client: analytics_events_client.clone(),
             arg0_paths,
             config: Arc::clone(&config),
+            loader_overrides: loader_overrides.clone(),
             cli_overrides: cli_overrides.clone(),
             runtime_feature_enablement: runtime_feature_enablement.clone(),
             cloud_requirements: cloud_requirements.clone(),

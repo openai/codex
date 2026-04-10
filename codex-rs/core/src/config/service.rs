@@ -264,8 +264,7 @@ impl ConfigService {
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigServiceError> {
-        let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.codex_home);
+        let allowed_path = self.user_config_path()?;
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
                 .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?,
@@ -389,6 +388,7 @@ impl ConfigService {
 
         if !config_edits.is_empty() {
             ConfigEditsBuilder::new(&self.codex_home)
+                .with_config_path(provided_path.as_path())
                 .with_edits(config_edits)
                 .apply()
                 .await
@@ -431,6 +431,17 @@ impl ConfigService {
             self.cloud_requirements.clone(),
         )
         .await
+    }
+
+    fn user_config_path(&self) -> Result<AbsolutePathBuf, ConfigServiceError> {
+        match self.loader_overrides.user_config_path.as_ref() {
+            Some(path) => AbsolutePathBuf::from_absolute_path(path.clone())
+                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err)),
+            None => Ok(AbsolutePathBuf::resolve_path_against_base(
+                CONFIG_TOML_FILE,
+                &self.codex_home,
+            )),
+        }
     }
 }
 

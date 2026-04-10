@@ -47,6 +47,10 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
+    /// Use $CODEX_HOME/<name>.config.toml as the user config file.
+    #[arg(long = "profile-v2")]
+    pub config_profile_v2: Option<String>,
+
     /// Convenience alias for low-friction sandboxed automatic execution (--sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,

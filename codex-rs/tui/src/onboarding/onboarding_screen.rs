@@ -86,7 +86,11 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.to_path_buf();
-        let codex_home = config.codex_home.clone();
+        let user_config_path = config
+            .config_layer_stack
+            .get_user_config_file()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
+            .unwrap_or_else(|| config.codex_home.join(codex_core::config::CONFIG_TOML_FILE));
         let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
@@ -124,7 +128,7 @@ impl OnboardingScreen {
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
-                codex_home,
+                user_config_path,
                 show_windows_create_sandbox_hint,
                 should_quit: false,
                 selection: None,

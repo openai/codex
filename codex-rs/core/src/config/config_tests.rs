@@ -2925,6 +2925,53 @@ async fn set_model_updates_defaults() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn for_config_writes_selected_user_config_file() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let selected_config = codex_home.path().join("work.config.toml");
+    tokio::fs::write(&selected_config, r#"model = "gpt-old""#).await?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(selected_config.clone()),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await?;
+
+    ConfigEditsBuilder::for_config(&config)
+        .set_model(Some("gpt-new"), Some(ReasoningEffort::High))
+        .apply()
+        .await?;
+
+    let selected_serialized = tokio::fs::read_to_string(&selected_config).await?;
+    let selected: ConfigToml = toml::from_str(&selected_serialized)?;
+    assert_eq!(selected.model.as_deref(), Some("gpt-new"));
+    assert_eq!(selected.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert!(!codex_home.path().join(CONFIG_TOML_FILE).exists());
+
+    Ok(())
+}
+
+#[test]
+fn profile_v2_config_path_accepts_only_plain_names() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    assert_eq!(
+        resolve_profile_v2_config_path(codex_home.path(), "work")?,
+        codex_home.path().join("work.config.toml")
+    );
+
+    for invalid in ["", ".", "..", "nested/work", "nested\\work", "work.toml"] {
+        assert!(
+            resolve_profile_v2_config_path(codex_home.path(), invalid).is_err(),
+            "{invalid:?} should be rejected"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_model_overwrites_existing_model() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let config_path = codex_home.path().join(CONFIG_TOML_FILE);

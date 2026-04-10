@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codex_core::config::set_project_trust_level;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
@@ -25,8 +25,8 @@ use crate::selection_list::selection_option_row;
 
 use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
-    pub codex_home: PathBuf,
     pub cwd: PathBuf,
+    pub user_config_path: PathBuf,
     pub show_windows_create_sandbox_hint: bool,
     pub should_quit: bool,
     pub selection: Option<TrustDirectorySelection>,
@@ -144,7 +144,10 @@ impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
         let target =
             resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
-        if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
+        if let Err(e) = ConfigEditsBuilder::for_config_path(&self.user_config_path)
+            .set_project_trust_level(&target, TrustLevel::Trusted)
+            .apply_blocking()
+        {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
         }
@@ -180,8 +183,8 @@ mod tests {
     fn release_event_does_not_change_selection() {
         let codex_home = TempDir::new().expect("temp home");
         let mut widget = TrustDirectoryWidget {
-            codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("."),
+            user_config_path: codex_home.path().join("config.toml"),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -202,11 +205,34 @@ mod tests {
     }
 
     #[test]
+    fn trust_persists_to_selected_user_config_path() {
+        let codex_home = TempDir::new().expect("temp home");
+        let workspace = codex_home.path().join("workspace");
+        let user_config_path = codex_home.path().join("work.config.toml");
+        let mut widget = TrustDirectoryWidget {
+            cwd: workspace.clone(),
+            user_config_path: user_config_path.clone(),
+            show_windows_create_sandbox_hint: false,
+            should_quit: false,
+            selection: None,
+            highlighted: TrustDirectorySelection::Trust,
+            error: None,
+        };
+
+        widget.handle_trust();
+
+        let selected_config = std::fs::read_to_string(&user_config_path).expect("selected config");
+        assert!(selected_config.contains(workspace.to_string_lossy().as_ref()));
+        assert!(selected_config.contains("trust_level = \"trusted\""));
+        assert!(!codex_home.path().join("config.toml").exists());
+    }
+
+    #[test]
     fn renders_snapshot_for_git_repo() {
         let codex_home = TempDir::new().expect("temp home");
         let widget = TrustDirectoryWidget {
-            codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("/workspace/project"),
+            user_config_path: codex_home.path().join("config.toml"),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,

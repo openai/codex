@@ -291,6 +291,47 @@ async fn returns_empty_when_all_layers_missing() {
     }
 }
 
+#[tokio::test]
+async fn uses_selected_user_config_file() {
+    let tmp = tempdir().expect("tempdir");
+    let managed_path = tmp.path().join("managed_config.toml");
+    let selected_config = tmp.path().join("work.config.toml");
+
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), r#"model = "gpt-main""#)
+        .expect("write default user config");
+    std::fs::write(&selected_config, r#"model = "gpt-work""#).expect("write selected user config");
+
+    let mut overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
+    overrides.user_config_path = Some(selected_config.clone());
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+        CloudRequirementsLoader::default(),
+    )
+    .await
+    .expect("load layers");
+
+    let user_layer = layers.get_user_layer().expect("selected user layer");
+    assert_eq!(
+        user_layer.name,
+        super::ConfigLayerSource::User {
+            file: AbsolutePathBuf::from_absolute_path(&selected_config)
+                .expect("selected user config path")
+        }
+    );
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("model")
+            .and_then(TomlValue::as_str),
+        Some("gpt-work")
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn managed_preferences_take_highest_precedence() {

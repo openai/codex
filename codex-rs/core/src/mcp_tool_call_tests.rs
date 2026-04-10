@@ -1027,8 +1027,13 @@ fn accepted_elicitation_without_content_defaults_to_accept() {
 #[tokio::test]
 async fn persist_codex_app_tool_approval_writes_tool_override() {
     let tmp = tempdir().expect("tempdir");
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
 
-    persist_codex_app_tool_approval(tmp.path(), "calendar", "calendar/list_events")
+    persist_codex_app_tool_approval(&config, "calendar", "calendar/list_events")
         .await
         .expect("persist approval");
 
@@ -1139,7 +1144,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
 
 #[tokio::test]
 async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_server() {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     std::fs::write(
@@ -1147,6 +1152,12 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
         "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
     )
     .expect("seed config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.clone())
+        .build()
+        .await
+        .expect("load config");
+    turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
         server: "docs".to_string(),
         connector_id: None,

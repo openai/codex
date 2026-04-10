@@ -1,10 +1,9 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use codex_config::ConfigEditsBuilder;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
-use codex_config::load_global_mcp_servers;
 use codex_login::default_client::is_first_party_originator;
 use codex_login::default_client::originator;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -12,12 +11,14 @@ use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::perform_oauth_login;
+use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::SkillMetadata;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::skills::model::SkillToolDependency;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
@@ -85,17 +86,16 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    let codex_home = config.codex_home.clone();
     let installed = sess.services.mcp_manager.configured_servers(config);
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
         return;
     }
 
-    let mut servers = match load_global_mcp_servers(&codex_home).await {
+    let mut servers = match selected_user_mcp_servers(config) {
         Ok(servers) => servers,
         Err(err) => {
-            warn!("failed to load MCP servers while installing skill dependencies: {err}");
+            warn!("failed to load user MCP servers while installing skill dependencies: {err}");
             return;
         }
     };
@@ -115,7 +115,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    if let Err(err) = ConfigEditsBuilder::new(&codex_home)
+    if let Err(err) = ConfigEditsBuilder::for_config(config)
         .replace_mcp_servers(&servers)
         .apply()
         .await
@@ -209,6 +209,20 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         config.mcp_oauth_credentials_store_mode,
     )
     .await;
+}
+
+fn selected_user_mcp_servers(
+    config: &crate::config::Config,
+) -> Result<BTreeMap<String, McpServerConfig>, String> {
+    let servers: Option<HashMap<String, McpServerConfig>> = config
+        .config_layer_stack
+        .get_user_layer()
+        .and_then(|layer| layer.config.get("mcp_servers"))
+        .cloned()
+        .map(HashMap::<String, McpServerConfig>::deserialize)
+        .transpose()
+        .map_err(|err| format!("{err}"))?;
+    Ok(servers.unwrap_or_default().into_iter().collect())
 }
 
 async fn should_install_mcp_dependencies(
