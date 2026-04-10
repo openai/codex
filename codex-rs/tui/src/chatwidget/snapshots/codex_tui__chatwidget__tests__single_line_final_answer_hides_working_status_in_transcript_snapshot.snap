@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 1061
+expression: term.backend().vt100().screen().contents()
+---
+
+› count to 1
+
+
+• 1
+
+
+› Ask Codex to do anything
+
+  gpt-5.3-codex default · 100% left · /…
