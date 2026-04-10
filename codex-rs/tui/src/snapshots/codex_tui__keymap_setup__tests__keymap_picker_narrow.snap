@@ -9,12 +9,12 @@ expression: "render_picker(params, 78)"
   Search actions...                                                           
 › Global       Open Transcript                ctrl-t                          
   Global       Open External Editor           ctrl-g                          
+  Global       Copy                           ctrl-o                          
   Global       Toggle Vim Mode                unbound                         
   Chat         Edit Previous Message          esc                             
   Chat         Confirm Edit Previous Message  enter                           
   Composer     Submit                         enter                           
   Composer     Queue                          tab                             
-  Composer     Toggle Shortcuts               ?, shift-?                      
                                                                               
   Open the transcript overlay.                                                
                                                                               

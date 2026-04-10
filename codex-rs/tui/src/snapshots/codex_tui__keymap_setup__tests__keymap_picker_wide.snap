@@ -9,12 +9,12 @@ expression: "render_picker(params, 120)"
   Search actions...                                                     Global  global.open_transcript                  
 › Global       Open Transcript                ctrl-t                                                                    
   Global       Open External Editor           ctrl-g                    Current: ctrl-t                                 
-  Global       Toggle Vim Mode                unbound                   Source: default keymap                          
-  Chat         Edit Previous Message          esc                                                                       
-  Chat         Confirm Edit Previous Message  enter                     Open the transcript overlay.                    
-  Composer     Submit                         enter                                                                     
-  Composer     Queue                          tab                       Enter edits this shortcut                       
-  Composer     Toggle Shortcuts               ?, shift-?                                                                
+  Global       Copy                           ctrl-o                    Source: default keymap                          
+  Global       Toggle Vim Mode                unbound                                                                   
+  Chat         Edit Previous Message          esc                       Open the transcript overlay.                    
+  Chat         Confirm Edit Previous Message  enter                                                                     
+  Composer     Submit                         enter                     Enter edits this shortcut                       
+  Composer     Queue                          tab                                                                       
                                                                                                                         
   Saves to root `tui.keymap.*` so shortcuts stay consistent across profiles.                                            
   Press enter to confirm or esc to go back

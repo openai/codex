@@ -1187,8 +1187,8 @@ mod tests {
     #[test]
     fn rejects_shadowing_composer_queue_in_app_scope() {
         let mut keymap = TuiKeymap::default();
-        keymap.global.open_external_editor = Some(one("ctrl-o"));
-        keymap.composer.queue = Some(one("ctrl-o"));
+        keymap.global.open_external_editor = Some(one("ctrl-l"));
+        keymap.composer.queue = Some(one("ctrl-l"));
 
         let err = RuntimeKeymap::from_config(&keymap).expect_err("expected shadowing conflict");
         assert!(err.contains("composer.queue"));
