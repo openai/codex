@@ -59,7 +59,9 @@ pub(crate) fn preview(
         Some(&request.tool_name),
     )
     .into_iter()
-    .map(|handler| hook_run_for_tool_use(dispatcher::running_summary(&handler), request))
+    .map(|handler| {
+        common::hook_run_for_tool_use(dispatcher::running_summary(&handler), &request.tool_use_id)
+    })
     .collect()
 }
 
@@ -100,11 +102,13 @@ pub(crate) async fn run(
     }) {
         Ok(input_json) => input_json,
         Err(error) => {
-            return serialization_failure_outcome(common::serialization_failure_hook_events(
+            let hook_events = common::serialization_failure_hook_events_for_tool_use(
                 matched,
-                Some(request.turn_id),
+                Some(request.turn_id.clone()),
                 format!("failed to serialize post tool use hook input: {error}"),
-            ));
+                &request.tool_use_id,
+            );
+            return serialization_failure_outcome(hook_events);
         }
     };
 
@@ -137,26 +141,15 @@ pub(crate) async fn run(
     PostToolUseOutcome {
         hook_events: results
             .into_iter()
-            .map(|result| hook_completed_for_tool_use(result.completed, &request))
+            .map(|result| {
+                common::hook_completed_for_tool_use(result.completed, &request.tool_use_id)
+            })
             .collect(),
         should_stop,
         stop_reason,
         additional_contexts,
         feedback_message,
     }
-}
-
-fn hook_completed_for_tool_use(
-    mut event: HookCompletedEvent,
-    request: &PostToolUseRequest,
-) -> HookCompletedEvent {
-    event.run = hook_run_for_tool_use(event.run, request);
-    event
-}
-
-fn hook_run_for_tool_use(mut run: HookRunSummary, request: &PostToolUseRequest) -> HookRunSummary {
-    run.id = format!("{}:{}", run.id, request.tool_use_id);
-    run
 }
 
 fn parse_completed(
@@ -320,11 +313,11 @@ mod tests {
     use serde_json::json;
 
     use super::PostToolUseHandlerData;
-    use super::hook_completed_for_tool_use;
     use super::parse_completed;
     use super::preview;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
+    use crate::events::common;
 
     #[test]
     fn block_decision_stops_normal_processing() {
@@ -496,9 +489,25 @@ mod tests {
             run_result(Some(0), "", ""),
             Some("turn-1".to_string()),
         );
-        let completed = hook_completed_for_tool_use(parsed.completed, &request);
+        let completed = common::hook_completed_for_tool_use(parsed.completed, &request.tool_use_id);
 
         assert_eq!(completed.run.id, runs[0].id);
+    }
+
+    #[test]
+    fn serialization_failure_run_ids_include_tool_use_id() {
+        let request = request_for_tool_use("tool-call-456");
+        let runs = preview(&[handler()], &request);
+
+        let completed = common::serialization_failure_hook_events_for_tool_use(
+            vec![handler()],
+            Some(request.turn_id.clone()),
+            "serialize failed".into(),
+            &request.tool_use_id,
+        );
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].run.id, runs[0].id);
     }
 
     fn handler() -> ConfiguredHandler {
