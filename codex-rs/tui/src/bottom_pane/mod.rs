@@ -280,19 +280,10 @@ impl BottomPane {
         self.composer.take_recent_submission_mention_bindings()
     }
 
-    /// Drop a slash-command draft that the composer staged before dispatch.
-    ///
-    /// `BottomPane` owns the composer, but `ChatWidget` owns command acceptance, so this forwarding
-    /// method lets the application layer reject a staged command without exposing broader composer
-    /// internals.
-    pub(crate) fn discard_pending_slash_command_history(&mut self) {
-        self.composer.discard_pending_slash_command_history();
-    }
-
     /// Add a staged slash-command draft to the composer's local recall list.
     ///
-    /// This should be called exactly once after `ChatWidget` accepts a command. Calling it for
-    /// rejected commands would make Up-arrow recall disagree with what actually ran.
+    /// This should be called exactly once after `ChatWidget` dispatches a recognized command.
+    /// Slash recall records the submitted command text regardless of whether the command succeeds.
     pub(crate) fn record_pending_slash_command_history(&mut self) {
         self.composer.record_pending_slash_command_history();
     }

@@ -28,7 +28,7 @@
 //!
 //! Slash-command parsing lives in the bottom-pane composer, but slash-command acceptance lives
 //! here. That split lets the composer stage a recall entry before clearing input while this module
-//! decides whether dispatch accepted the command and therefore whether Up-arrow should recall it.
+//! records the attempted slash command after dispatch just like ordinary submitted text.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -5201,46 +5201,52 @@ impl ChatWidget {
         self.last_agent_markdown.as_deref()
     }
 
-    /// Dispatch a bare slash command and resolve its staged local-history entry.
+    /// Dispatch a bare slash command and record its staged local-history entry.
     ///
-    /// The composer stages history before returning `InputResult::Command`; this wrapper is the
-    /// point where that staged entry is either committed or discarded. Calling `dispatch_command`
-    /// directly from input handling would leave the composer without an authoritative accept/reject
-    /// decision for recall.
+    /// The composer stages history before returning `InputResult::Command`; this wrapper commits
+    /// that staged entry after dispatch so slash-command recall follows the same "submitted input"
+    /// rule as normal text.
     fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
-        if self.dispatch_command(cmd) {
-            self.bottom_pane.record_pending_slash_command_history();
-        } else {
-            self.bottom_pane.discard_pending_slash_command_history();
-        }
+        self.dispatch_command(cmd);
+        self.bottom_pane.record_pending_slash_command_history();
     }
 
-    /// Dispatch an inline slash command and resolve its staged local-history entry.
+    /// Dispatch an inline slash command and record its staged local-history entry.
     ///
     /// Inline command arguments may later be prepared through the normal submission pipeline, but
     /// local command recall still tracks the original command invocation. Treating this wrapper as
-    /// the only input-result entry point avoids double-recording accepted commands and avoids
-    /// recalling rejected ones.
+    /// the only input-result entry point avoids double-recording commands with inline args.
     fn handle_slash_command_with_args_dispatch(
         &mut self,
         cmd: SlashCommand,
         args: String,
         text_elements: Vec<TextElement>,
     ) {
-        if self.dispatch_command_with_args(cmd, args, text_elements) {
-            self.bottom_pane.record_pending_slash_command_history();
+        self.dispatch_command_with_args(cmd, args, text_elements);
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    fn apply_plan_slash_command(&mut self) -> bool {
+        if !self.collaboration_modes_enabled() {
+            self.add_info_message(
+                "Collaboration modes are disabled.".to_string(),
+                Some("Enable collaboration modes to use /plan.".to_string()),
+            );
+            return false;
+        }
+        if let Some(mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
+            self.set_collaboration_mask(mask);
+            true
         } else {
-            self.bottom_pane.discard_pending_slash_command_history();
+            self.add_info_message(
+                "Plan mode unavailable right now.".to_string(),
+                /*hint*/ None,
+            );
+            false
         }
     }
 
-    /// Run a bare slash command and report whether it should be locally recallable.
-    ///
-    /// Returning `true` means the command was accepted by the application layer, even if its work is
-    /// asynchronous or only opens another UI. Returning `false` means the command was unavailable,
-    /// rejected, or only produced a usage/error response; returning `true` from those paths would
-    /// make Up-arrow recall a command that did not actually run.
-    fn dispatch_command(&mut self, cmd: SlashCommand) -> bool {
+    fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -5249,7 +5255,7 @@ impl ChatWidget {
             self.add_to_history(history_cell::new_error_event(message));
             self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
-            return false;
+            return;
         }
 
         match cmd {
@@ -5258,30 +5264,25 @@ impl ChatWidget {
                     let params = crate::bottom_pane::feedback_disabled_params();
                     self.bottom_pane.show_selection_view(params);
                     self.request_redraw();
-                    return false;
+                    return;
                 }
                 // Step 1: pick a category (UI built in feedback_view)
                 let params =
                     crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
                 self.bottom_pane.show_selection_view(params);
                 self.request_redraw();
-                true
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
-                true
             }
             SlashCommand::Clear => {
                 self.app_event_tx.send(AppEvent::ClearUi);
-                true
             }
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
-                true
             }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
-                true
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -5290,11 +5291,10 @@ impl ChatWidget {
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
                     );
                     self.add_info_message(message, /*hint*/ None);
-                    return false;
+                    return;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
-                true
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -5302,21 +5302,17 @@ impl ChatWidget {
                     self.bottom_pane.set_task_running(/*running*/ true);
                 }
                 self.app_event_tx.compact();
-                true
             }
             SlashCommand::Review => {
                 self.open_review_popup();
-                true
             }
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
-                true
             }
             SlashCommand::Model => {
                 self.open_model_popup();
-                true
             }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
@@ -5325,48 +5321,28 @@ impl ChatWidget {
                     Some(ServiceTier::Fast)
                 };
                 self.set_service_tier_selection(next_tier);
-                true
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
-                    return false;
+                    return;
                 }
                 if self.realtime_conversation.is_live() {
                     self.stop_realtime_conversation_from_ui();
                 } else {
                     self.start_realtime_conversation();
                 }
-                true
             }
             SlashCommand::Settings => {
                 if !self.realtime_audio_device_selection_enabled() {
-                    return false;
+                    return;
                 }
                 self.open_realtime_audio_popup();
-                true
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
-                true
             }
             SlashCommand::Plan => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /plan.".to_string()),
-                    );
-                    return false;
-                }
-                if let Some(mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
-                    self.set_collaboration_mask(mask);
-                    true
-                } else {
-                    self.add_info_message(
-                        "Plan mode unavailable right now.".to_string(),
-                        /*hint*/ None,
-                    );
-                    false
-                }
+                self.apply_plan_slash_command();
             }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
@@ -5374,22 +5350,18 @@ impl ChatWidget {
                         "Collaboration modes are disabled.".to_string(),
                         Some("Enable collaboration modes to use /collab.".to_string()),
                     );
-                    return false;
+                    return;
                 }
                 self.open_collaboration_modes_popup();
-                true
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
-                true
             }
             SlashCommand::Approvals => {
                 self.open_permissions_popup();
-                true
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
-                true
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -5402,7 +5374,7 @@ impl ChatWidget {
                     {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
-                        return false;
+                        return;
                     }
 
                     let Some(preset) = builtin_approval_presets()
@@ -5414,7 +5386,7 @@ impl ChatWidget {
                         self.add_error_message(
                             "Internal error: missing the 'auto' approval preset.".to_string(),
                         );
-                        return false;
+                        return;
                     };
 
                     if let Err(err) = self
@@ -5424,7 +5396,7 @@ impl ChatWidget {
                         .can_set(&preset.approval)
                     {
                         self.add_error_message(err.to_string());
-                        return false;
+                        return;
                     }
 
                     self.session_telemetry.counter(
@@ -5434,28 +5406,23 @@ impl ChatWidget {
                     );
                     self.app_event_tx
                         .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
-                    true
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
                     let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
-                    false
                 }
             }
             SlashCommand::SandboxReadRoot => {
                 self.add_error_message(
                     "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
                 );
-                false
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
-                true
             }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
-                true
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_login::logout(
@@ -5465,14 +5432,12 @@ impl ChatWidget {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.request_quit_without_confirmation();
-                true
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
             // }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
-                true
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
@@ -5490,15 +5455,12 @@ impl ChatWidget {
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
-                true
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
-                true
             }
             SlashCommand::Skills => {
                 self.open_skills_menu();
-                true
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
@@ -5514,51 +5476,39 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
-                true
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
-                true
             }
             SlashCommand::Title => {
                 self.open_terminal_title_setup();
-                true
             }
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
-                true
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();
-                true
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
-                true
             }
             SlashCommand::Stop => {
                 self.clean_background_terminals();
-                true
             }
             SlashCommand::MemoryDrop => {
                 self.add_app_server_stub_message("Memory maintenance");
-                false
             }
             SlashCommand::MemoryUpdate => {
                 self.add_app_server_stub_message("Memory maintenance");
-                false
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
-                true
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
-                true
             }
             SlashCommand::Plugins => {
                 self.add_plugins_output();
-                true
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -5572,7 +5522,6 @@ impl ChatWidget {
                         /*hint*/ None,
                     );
                 }
-                true
             }
             SlashCommand::TestApproval => {
                 use std::collections::HashMap;
@@ -5604,25 +5553,24 @@ impl ChatWidget {
                         grant_root: Some(PathBuf::from("/tmp")),
                     },
                 );
-                true
             }
         }
     }
 
-    /// Run an inline slash command and report whether it should be locally recallable.
+    /// Run an inline slash command.
     ///
-    /// This method returns the same acceptance boolean as [`Self::dispatch_command`]. Branches that
-    /// prepare arguments should pass `record_history: false` to the composer because the staged
-    /// slash-command entry is the recall record; using the normal submission-history path as well
-    /// would make a single command appear twice during Up-arrow navigation.
+    /// Branches that prepare arguments should pass `record_history: false` to the composer because
+    /// the staged slash-command entry is the recall record; using the normal submission-history
+    /// path as well would make a single command appear twice during Up-arrow navigation.
     fn dispatch_command_with_args(
         &mut self,
         cmd: SlashCommand,
         args: String,
         _text_elements: Vec<TextElement>,
-    ) -> bool {
+    ) {
         if !cmd.supports_inline_args() {
-            return self.dispatch_command(cmd);
+            self.dispatch_command(cmd);
+            return;
         }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -5631,14 +5579,15 @@ impl ChatWidget {
             );
             self.add_to_history(history_cell::new_error_event(message));
             self.request_redraw();
-            return false;
+            return;
         }
 
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Fast => {
                 if trimmed.is_empty() {
-                    return self.dispatch_command(cmd);
+                    self.dispatch_command(cmd);
+                    return;
                 }
                 match trimmed.to_ascii_lowercase().as_str() {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
@@ -5657,10 +5606,9 @@ impl ChatWidget {
                     }
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                        return false;
+                        return;
                     }
                 }
-                true
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
@@ -5669,29 +5617,25 @@ impl ChatWidget {
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return;
                 };
                 let Some(name) = crate::legacy_core::util::normalize_thread_name(&prepared_args)
                 else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
-                    return false;
+                    return;
                 };
                 self.app_event_tx.set_thread_name(name);
                 self.bottom_pane.drain_pending_submission_state();
-                true
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
-                if !self.dispatch_command(cmd) {
-                    return false;
-                }
-                if self.active_mode_kind() != ModeKind::Plan {
-                    return false;
+                if !self.apply_plan_slash_command() {
+                    return;
                 }
                 let Some((prepared_args, prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return;
                 };
                 let local_images = self
                     .bottom_pane
@@ -5712,14 +5656,13 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
-                true
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return;
                 };
                 self.submit_op(AppCommand::review(ReviewRequest {
                     target: ReviewTarget::Custom {
@@ -5728,33 +5671,30 @@ impl ChatWidget {
                     user_facing_hint: None,
                 }));
                 self.bottom_pane.drain_pending_submission_state();
-                true
             }
             SlashCommand::Resume if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return;
                 };
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(prepared_args));
                 self.bottom_pane.drain_pending_submission_state();
-                true
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return;
                 };
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
                 self.bottom_pane.drain_pending_submission_state();
-                true
             }
             _ => self.dispatch_command(cmd),
         }

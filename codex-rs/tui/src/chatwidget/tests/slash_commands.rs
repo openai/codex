@@ -9,6 +9,20 @@ fn turn_complete_event(turn_id: &str, last_agent_message: Option<&str>) -> TurnC
     .expect("turn complete event should deserialize")
 }
 
+fn submit_composer_text(chat: &mut ChatWidget, text: &str) {
+    chat.bottom_pane
+        .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+}
+
+fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
+    chat.bottom_pane
+        .set_composer_text(String::new(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.bottom_pane.composer_text()
+}
+
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -63,7 +77,7 @@ async fn slash_init_skips_when_project_doc_exists() {
     std::fs::write(&existing_path, "existing instructions").unwrap();
     chat.config.cwd = tempdir.path().to_path_buf().abs();
 
-    chat.dispatch_command(SlashCommand::Init);
+    submit_composer_text(&mut chat, "/init");
 
     match op_rx.try_recv() {
         Err(TryRecvError::Empty) => {}
@@ -85,15 +99,14 @@ async fn slash_init_skips_when_project_doc_exists() {
         std::fs::read_to_string(existing_path).unwrap(),
         "existing instructions"
     );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/init");
 }
 
 #[tokio::test]
 async fn bare_slash_command_is_available_from_local_recall_after_dispatch() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.bottom_pane
-        .set_composer_text("/diff".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    submit_composer_text(&mut chat, "/diff");
 
     let _ = drain_insert_history(&mut rx);
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -104,14 +117,90 @@ async fn bare_slash_command_is_available_from_local_recall_after_dispatch() {
 async fn inline_slash_command_is_available_from_local_recall_after_dispatch() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.bottom_pane
-        .set_composer_text("/rename Better title".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    submit_composer_text(&mut chat, "/rename Better title");
 
     let _ = drain_insert_history(&mut rx);
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(chat.bottom_pane.composer_text(), "/rename Better title");
+}
+
+#[tokio::test]
+async fn usage_error_slash_command_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+
+    submit_composer_text(&mut chat, "/fast maybe");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /fast [on|off|status]"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/fast maybe");
+}
+
+#[tokio::test]
+async fn unrecognized_slash_command_is_not_added_to_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/does-not-exist");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Unrecognized command '/does-not-exist'"),
+        "expected unrecognized-command message, got: {rendered:?}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "/does-not-exist");
+    assert_eq!(recall_latest_after_clearing(&mut chat), "");
+}
+
+#[tokio::test]
+async fn unavailable_slash_command_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    submit_composer_text(&mut chat, "/model");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("'/model' is disabled while a task is in progress."),
+        "expected disabled-command message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/model");
+}
+
+#[tokio::test]
+async fn no_op_stub_slash_command_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/debug-m-drop");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Memory maintenance"),
+        "expected stub message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/debug-m-drop");
 }
 
 #[tokio::test]
