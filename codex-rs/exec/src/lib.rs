@@ -135,12 +135,15 @@ pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 use supports_color::Stream;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tracing::Instrument;
 use tracing::error;
 use tracing::field;
@@ -156,6 +159,8 @@ use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
+const THREAD_UNSUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(1);
+const TURN_COMPLETED_BACKFILL_TIMEOUT: Duration = Duration::from_secs(2);
 
 enum InitialOperation {
     UserTurn {
@@ -1251,16 +1256,23 @@ async fn maybe_backfill_turn_completed_items(
         return;
     };
 
-    let response = send_request_with_response::<ThreadReadResponse>(
-        client,
-        ClientRequest::ThreadRead {
-            request_id: request_ids.next(),
-            params: ThreadReadParams {
-                thread_id: payload.thread_id.clone(),
-                include_turns: true,
-            },
-        },
+    // This runs inline on exec's event loop immediately after `TurnCompleted`.
+    // Bound the request so a backpressured in-process event queue cannot deadlock
+    // shutdown by blocking `thread/read` forever behind unrelated lossless events.
+    let response = await_request_with_timeout(
         "thread/read",
+        TURN_COMPLETED_BACKFILL_TIMEOUT,
+        send_request_with_response::<ThreadReadResponse>(
+            client,
+            ClientRequest::ThreadRead {
+                request_id: request_ids.next(),
+                params: ThreadReadParams {
+                    thread_id: payload.thread_id.clone(),
+                    include_turns: true,
+                },
+            },
+            "thread/read",
+        ),
     )
     .await;
 
@@ -1489,9 +1501,30 @@ async fn request_shutdown(
             thread_id: thread_id.to_string(),
         },
     };
-    send_request_with_response::<ThreadUnsubscribeResponse>(client, request, "thread/unsubscribe")
-        .await
-        .map(|_| ())
+    await_request_with_timeout(
+        "thread/unsubscribe",
+        THREAD_UNSUBSCRIBE_TIMEOUT,
+        send_request_with_response::<ThreadUnsubscribeResponse>(
+            client,
+            request,
+            "thread/unsubscribe",
+        ),
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn await_request_with_timeout<T>(
+    request_name: &str,
+    timeout_duration: Duration,
+    request: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    match timeout(timeout_duration, request).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "{request_name} timed out after {timeout_duration:?}"
+        )),
+    }
 }
 
 async fn resolve_server_request(

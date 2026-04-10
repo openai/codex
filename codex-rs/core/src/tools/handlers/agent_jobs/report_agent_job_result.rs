@@ -63,39 +63,42 @@ pub async fn handle(
     let db = required_state_db(&session)?;
     let reporting_thread_id = session.conversation_id;
     let reporting_thread_id_str = reporting_thread_id.to_string();
-    let accepted = db
-        .report_agent_job_item_result(
+    let accepted = if args.stop.unwrap_or(false) {
+        db.report_agent_job_item_result_and_cancel_job(
+            args.job_id.as_str(),
+            args.item_id.as_str(),
+            reporting_thread_id_str.as_str(),
+            &args.result,
+            "cancelled by worker request",
+        )
+        .await
+    } else {
+        db.report_agent_job_item_result(
             args.job_id.as_str(),
             args.item_id.as_str(),
             reporting_thread_id_str.as_str(),
             &args.result,
         )
         .await
-        .map_err(|err| {
-            let job_id = args.job_id.as_str();
-            let item_id = args.item_id.as_str();
-            FunctionCallError::RespondToModel(format!(
-                "failed to record agent job result for {job_id} / {item_id}: {err}"
-            ))
-        })?;
-    if accepted && args.stop.unwrap_or(false) {
-        let message = "cancelled by worker request";
-        let _ = db
-            .mark_agent_job_cancelled(args.job_id.as_str(), message)
-            .await;
     }
+    .map_err(|err| {
+        let job_id = args.job_id.as_str();
+        let item_id = args.item_id.as_str();
+        FunctionCallError::RespondToModel(format!(
+            "failed to record agent job result for {job_id} / {item_id}: {err}"
+        ))
+    })?;
     if accepted {
-        let agent_control = session.services.agent_control.clone();
         tracing::debug!(
             job_id = args.job_id,
             item_id = args.item_id,
             thread_id = %reporting_thread_id,
             "agent job accepted worker result; scheduling worker shutdown"
         );
-        tokio::spawn(async move {
-            tokio::task::yield_now().await;
-            let _ = agent_control.shutdown_live_agent(reporting_thread_id).await;
-        });
+        request_live_agent_shutdown(
+            session.services.agent_control.clone(),
+            reporting_thread_id,
+        );
     }
     let content =
         serde_json::to_string(&ReportAgentJobResultToolResult { accepted }).map_err(|err| {

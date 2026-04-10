@@ -104,6 +104,18 @@ struct ActiveJobItem {
     status_rx: Option<Receiver<AgentStatus>>,
 }
 
+fn request_live_agent_shutdown(
+    agent_control: crate::agent::control::AgentControl,
+    thread_id: ThreadId,
+) {
+    tokio::spawn(async move {
+        tokio::task::yield_now().await;
+        let _ = agent_control
+            .request_live_agent_shutdown_preserving_thread(thread_id)
+            .await;
+    });
+}
+
 fn required_state_db(
     session: &Arc<Session>,
 ) -> Result<Arc<codex_state::StateRuntime>, FunctionCallError> {
@@ -224,6 +236,27 @@ async fn run_agent_job_loop(
             progressed = true;
         }
 
+        let terminal_in_db = if cancel_requested {
+            scheduler_progress.running_items == 0
+        } else {
+            scheduler_progress.pending_items == 0 && scheduler_progress.running_items == 0
+        };
+        if terminal_in_db
+            && slots::reconcile_terminal_scheduler_state(
+                session.clone(),
+                job_id.as_str(),
+                &scheduler_progress,
+                &mut active_items,
+                &mut starting_items,
+            )
+            .await?
+        {
+            progressed = true;
+        }
+        if terminal_in_db && active_items.is_empty() && starting_items.is_empty() {
+            break;
+        }
+
         if !cancel_requested
             && active_items.len() + starting_items.len() < options.max_concurrency
             && startup::launch_pending_items(
@@ -234,6 +267,7 @@ async fn run_agent_job_loop(
                 &options,
                 startup::SchedulerOccupancy {
                     active_items: active_items.len(),
+                    db_pending_items: scheduler_progress.pending_items,
                     db_running_items: scheduler_progress.running_items,
                 },
                 &mut starting_items,
@@ -280,19 +314,29 @@ async fn run_agent_job_loop(
 
         let finished = find_finished_threads(session.clone(), &active_items).await;
         if finished.is_empty() {
-            let progress = db.get_agent_job_progress(job_id.as_str()).await?;
-            if cancel_requested {
-                if progress.running_items == 0
-                    && active_items.is_empty()
-                    && starting_items.is_empty()
-                {
-                    break;
-                }
-            } else if progress.pending_items == 0
-                && progress.running_items == 0
-                && active_items.is_empty()
-                && starting_items.is_empty()
+            let progress = if progressed {
+                db.get_agent_job_progress(job_id.as_str()).await?
+            } else {
+                scheduler_progress
+            };
+            let terminal_in_db = if cancel_requested {
+                progress.running_items == 0
+            } else {
+                progress.pending_items == 0 && progress.running_items == 0
+            };
+            if terminal_in_db
+                && slots::reconcile_terminal_scheduler_state(
+                    session.clone(),
+                    job_id.as_str(),
+                    &progress,
+                    &mut active_items,
+                    &mut starting_items,
+                )
+                .await?
             {
+                progressed = true;
+            }
+            if terminal_in_db && active_items.is_empty() && starting_items.is_empty() {
                 break;
             }
             if !progressed {

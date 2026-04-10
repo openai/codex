@@ -15,6 +15,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tempfile::tempdir;
+use tokio::time::sleep;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
@@ -625,4 +626,46 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         active_permission_profile: None,
         reasoning_effort: None,
     }
+}
+
+#[tokio::test]
+async fn await_request_with_timeout_returns_ready_result() {
+    let result = await_request_with_timeout(
+        "test/request",
+        std::time::Duration::from_millis(50),
+        async { Ok::<_, String>(123usize) },
+    )
+    .await
+    .expect("ready request should succeed");
+
+    assert_eq!(result, 123);
+}
+
+#[tokio::test]
+async fn await_request_with_timeout_errors_when_request_stalls() {
+    let err = await_request_with_timeout(
+        "test/request",
+        std::time::Duration::from_millis(10),
+        async {
+            sleep(std::time::Duration::from_millis(50)).await;
+            Ok::<_, String>(())
+        },
+    )
+    .await
+    .expect_err("stalled request should time out");
+
+    assert_eq!(err, "test/request timed out after 10ms");
+}
+
+#[tokio::test]
+async fn turn_completed_backfill_times_out_instead_of_hanging_exec() {
+    let err =
+        await_request_with_timeout("thread/read", std::time::Duration::from_millis(10), async {
+            sleep(std::time::Duration::from_millis(50)).await;
+            Ok::<_, String>(())
+        })
+        .await
+        .expect_err("stalled turn/read backfill should time out");
+
+    assert_eq!(err, "thread/read timed out after 10ms");
 }

@@ -54,12 +54,11 @@ pub(super) async fn reclaim_inactive_active_items(
     );
 
     for inactive_item in inactive_items {
-        let _ = session
-            .services
-            .agent_control
-            .shutdown_live_agent(inactive_item.thread_id)
-            .await;
         active_items.remove(&inactive_item.thread_id);
+        request_live_agent_shutdown(
+            session.services.agent_control.clone(),
+            inactive_item.thread_id,
+        );
         tracing::debug!(
             job_id,
             item_id = inactive_item.item_id,
@@ -76,4 +75,42 @@ pub(super) async fn reclaim_inactive_active_items(
     }
 
     Ok(true)
+}
+
+pub(super) async fn reconcile_terminal_scheduler_state(
+    session: Arc<Session>,
+    job_id: &str,
+    progress: &codex_state::AgentJobProgress,
+    active_items: &mut HashMap<ThreadId, ActiveJobItem>,
+    startup_tasks: &mut startup::StartupTasks,
+) -> anyhow::Result<bool> {
+    if active_items.is_empty() && startup_tasks.is_empty() {
+        return Ok(false);
+    }
+
+    let active_count = active_items.len();
+    let starting_count = startup_tasks.len();
+    tracing::info!(
+        job_id,
+        pending_items = progress.pending_items,
+        db_running_items = progress.running_items,
+        active_items = active_count,
+        starting_items = starting_count,
+        "agent job state is terminal in DB; forcing scheduler teardown"
+    );
+
+    let thread_ids: Vec<_> = active_items.keys().copied().collect();
+    for thread_id in thread_ids {
+        active_items.remove(&thread_id);
+        request_live_agent_shutdown(session.services.agent_control.clone(), thread_id);
+    }
+
+    let aborted_startups = startup::abort_all_startups(startup_tasks).await;
+    tracing::debug!(
+        job_id,
+        active_items_reclaimed = active_count,
+        starting_items_aborted = aborted_startups,
+        "agent job terminal scheduler teardown completed"
+    );
+    Ok(active_count > 0 || aborted_startups > 0)
 }
