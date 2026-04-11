@@ -40,11 +40,9 @@ struct AppServerArgs {
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
-        let managed_config_path = managed_config_path_from_debug_env();
-        let loader_overrides = LoaderOverrides {
-            managed_config_path,
-            ..Default::default()
-        };
+        let loader_overrides = managed_config_path_from_debug_env()
+            .map(LoaderOverrides::with_managed_config_path_for_tests)
+            .unwrap_or_default();
         let transport = args.listen;
         let session_source = args.session_source;
         let auth = args.auth.try_into_settings()?;
