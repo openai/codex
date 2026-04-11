@@ -2262,6 +2262,9 @@ impl Session {
                 .original_config_do_not_use
                 .clone()
         };
+        if config.ephemeral {
+            return Err("timer storage is unavailable for ephemeral sessions".to_string());
+        }
         match codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
             config.model_provider_id.clone(),

@@ -150,7 +150,7 @@ async fn create_timer_persists_source_and_client_metadata() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_timer_lazily_opens_sqlite_for_ephemeral_thread() -> Result<()> {
+async fn create_timer_rejects_ephemeral_thread() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config.ephemeral = true;
@@ -161,7 +161,7 @@ async fn create_timer_lazily_opens_sqlite_for_ephemeral_thread() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let created = test
+    let err = test
         .codex
         .create_timer(
             ThreadTimerTrigger::Delay {
@@ -176,13 +176,10 @@ async fn create_timer_lazily_opens_sqlite_for_ephemeral_thread() -> Result<()> {
             TimerDelivery::AfterTurn,
         )
         .await
-        .map_err(|err| anyhow!("{err}"))?;
+        .expect_err("ephemeral sessions should not create durable timers");
 
-    assert_eq!(
-        test.codex.list_timers().await,
-        vec![created],
-        "ephemeral threads should still open sqlite timer storage lazily"
-    );
+    assert!(err.contains("timer storage is unavailable for ephemeral sessions"));
+    assert!(test.codex.state_db().is_none());
 
     Ok(())
 }
