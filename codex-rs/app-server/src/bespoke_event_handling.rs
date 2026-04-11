@@ -3356,7 +3356,7 @@ mod tests {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::new(
                     /*exec_server_url*/ None,
                 )),

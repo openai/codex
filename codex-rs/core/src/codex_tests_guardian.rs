@@ -95,7 +95,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -420,12 +420,12 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let models_manager = Arc::new(ModelsManager::new(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         auth_manager.clone(),
         /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     ));
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,

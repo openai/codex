@@ -45,6 +45,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_path_buf;
 use insta::Settings;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
@@ -76,7 +77,7 @@ async fn guardian_test_session_and_turn_with_base_url(
     config.user_instructions = None;
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -621,13 +622,8 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
 
 #[test]
 fn guardian_assessment_action_redacts_apply_patch_patch_text() {
-    let (cwd, file) = if cfg!(windows) {
-        (r"C:\tmp", r"C:\tmp\guardian.txt")
-    } else {
-        ("/tmp", "/tmp/guardian.txt")
-    };
-    let cwd = PathBuf::from(cwd);
-    let file = PathBuf::from(file).abs();
+    let cwd = test_path_buf("/tmp");
+    let file = test_path_buf("/tmp/guardian.txt").abs();
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd: cwd.clone(),
@@ -658,8 +654,8 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
     };
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
-        cwd: PathBuf::from("/tmp"),
-        files: vec![PathBuf::from("/tmp/guardian.txt").abs()],
+        cwd: test_path_buf("/tmp"),
+        files: vec![test_path_buf("/tmp/guardian.txt").abs()],
         patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
             .to_string(),
     };
@@ -686,8 +682,8 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
         "review-cancelled-guardian".to_string(),
         GuardianApprovalRequest::ApplyPatch {
             id: "patch-1".to_string(),
-            cwd: PathBuf::from("/tmp"),
-            files: vec![PathBuf::from("/tmp/guardian.txt").abs()],
+            cwd: test_path_buf("/tmp"),
+            files: vec![test_path_buf("/tmp/guardian.txt").abs()],
             patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
                 .to_string(),
         },
@@ -865,7 +861,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -1231,7 +1227,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     config.user_instructions = None;
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -1706,7 +1702,7 @@ fn guardian_review_session_config_uses_requirements_guardian_policy_config() {
             cwd: Some(workspace.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
         config_layer_stack,
     )
     .expect("load config");
@@ -1740,7 +1736,7 @@ fn guardian_review_session_config_uses_default_guardian_policy_without_requireme
             cwd: Some(workspace.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
         config_layer_stack,
     )
     .expect("load config");

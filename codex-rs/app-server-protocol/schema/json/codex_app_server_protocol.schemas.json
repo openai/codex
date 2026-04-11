@@ -12086,7 +12086,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "scope": {
             "$ref": "#/definitions/v2/SkillScope"
@@ -12139,7 +12139,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "shortDescription": {
             "type": [

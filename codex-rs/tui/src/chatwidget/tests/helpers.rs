@@ -11,7 +11,7 @@ pub(super) async fn test_config() -> Config {
     let mut config =
         Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), Vec::new())
             .expect("config");
-    config.codex_home = codex_home.clone();
+    config.codex_home = codex_home.abs();
     config.sqlite_home = codex_home.clone();
     config.log_dir = codex_home.join("log");
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
@@ -950,7 +950,7 @@ pub(super) fn plugins_test_detail(
                 description: format!("{name} description"),
                 short_description: None,
                 interface: None,
-                path: PathBuf::from(format!("/skills/{name}/SKILL.md")),
+                path: plugins_test_absolute_path(&format!("skills/{name}/SKILL.md")),
                 enabled: true,
             })
             .collect(),

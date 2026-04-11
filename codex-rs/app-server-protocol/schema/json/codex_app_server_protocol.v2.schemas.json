@@ -9934,7 +9934,7 @@
           "type": "string"
         },
         "path": {
-          "type": "string"
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "scope": {
           "$ref": "#/definitions/SkillScope"
@@ -9987,7 +9987,7 @@
           "type": "string"
         },
         "path": {
-          "type": "string"
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "shortDescription": {
           "type": [

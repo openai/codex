@@ -327,7 +327,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
     let cloud_requirements = cloud_requirements_loader_for_storage(
-        codex_home.clone(),
+        codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
@@ -417,7 +417,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     set_default_client_residency_requirement(config.enforce_residency.value());
 
     if let Err(err) = enforce_login_restrictions(&AuthConfig {
-        codex_home: config.codex_home.clone(),
+        codex_home: config.codex_home.to_path_buf(),
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),

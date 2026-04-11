@@ -3863,6 +3863,8 @@ impl ChatComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
     use image::ImageBuffer;
     use image::Rgba;
     use pretty_assertions::assert_eq;
@@ -4894,6 +4896,7 @@ mod tests {
 
     #[test]
     fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
+        let skill_path = test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs();
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -4919,7 +4922,7 @@ mod tests {
             }),
             dependencies: None,
             policy: None,
-            path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+            path_to_skills_md: skill_path.clone(),
             scope: codex_protocol::protocol::SkillScope::Repo,
         }]));
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
@@ -4956,10 +4959,7 @@ mod tests {
         let mentions = composer.mention_items();
         assert_eq!(mentions.len(), 3);
         assert_eq!(mentions[0].category_tag, Some("[Skill]".to_string()));
-        assert_eq!(
-            mentions[0].path,
-            Some("/tmp/repo/google-calendar/SKILL.md".to_string())
-        );
+        assert_eq!(mentions[0].path, Some(skill_path.display().to_string()));
         assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
         assert_eq!(mentions[1].category_tag, Some("[Plugin]".to_string()));
         assert_eq!(
@@ -5017,7 +5017,7 @@ mod tests {
                     }),
                     dependencies: None,
                     policy: None,
-                    path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+                    path_to_skills_md: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
                     scope: codex_protocol::protocol::SkillScope::Repo,
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {

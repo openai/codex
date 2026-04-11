@@ -1140,7 +1140,7 @@ impl CodexMessageProcessor {
         let opts = LoginServerOptions {
             open_browser: false,
             ..LoginServerOptions::new(
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 CLIENT_ID.to_string(),
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
@@ -1202,7 +1202,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-                    let codex_home = self.config.codex_home.clone();
+                    let codex_home = self.config.codex_home.to_path_buf();
                     let cli_overrides = self.current_cli_overrides();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
@@ -1319,7 +1319,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-                    let codex_home = self.config.codex_home.clone();
+                    let codex_home = self.config.codex_home.to_path_buf();
                     let cli_overrides = self.current_cli_overrides();
                     tokio::spawn(async move {
                         let (success, error_msg) = tokio::select! {
@@ -1491,7 +1491,7 @@ impl CodexMessageProcessor {
             self.cloud_requirements.as_ref(),
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
-            self.config.codex_home.clone(),
+            self.config.codex_home.to_path_buf(),
         );
         let cli_overrides = self.current_cli_overrides();
         sync_default_client_residency_requirement(&cli_overrides, self.cloud_requirements.as_ref())
@@ -2128,7 +2128,7 @@ impl CodexMessageProcessor {
             general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
-            codex_home: self.config.codex_home.clone(),
+            codex_home: self.config.codex_home.to_path_buf(),
         };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
@@ -4625,7 +4625,7 @@ impl CodexMessageProcessor {
         let path = match params {
             GetConversationSummaryParams::RolloutPath { rollout_path } => {
                 if rollout_path.is_relative() {
-                    self.config.codex_home.join(&rollout_path)
+                    self.config.codex_home.join(&rollout_path).to_path_buf()
                 } else {
                     rollout_path
                 }
@@ -5961,7 +5961,7 @@ impl CodexMessageProcessor {
         };
         let cwd_set: HashSet<PathBuf> = cwds.iter().cloned().collect();
 
-        let mut extra_roots_by_cwd: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        let mut extra_roots_by_cwd: HashMap<PathBuf, Vec<AbsolutePathBuf>> = HashMap::new();
         for entry in per_cwd_extra_user_roots.unwrap_or_default() {
             if !cwd_set.contains(&entry.cwd) {
                 warn!(
@@ -5973,7 +5973,7 @@ impl CodexMessageProcessor {
 
             let mut valid_extra_roots = Vec::new();
             for root in entry.extra_user_roots {
-                if !root.is_absolute() {
+                let Ok(root) = AbsolutePathBuf::from_absolute_path_checked(root.as_path()) else {
                     self.send_invalid_request_error(
                         request_id,
                         format!(
@@ -5983,7 +5983,7 @@ impl CodexMessageProcessor {
                     )
                     .await;
                     return;
-                }
+                };
                 valid_extra_roots.push(root);
             }
             extra_roots_by_cwd
@@ -6007,24 +6007,24 @@ impl CodexMessageProcessor {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
-            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+            let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
                 Ok(path) => path,
                 Err(err) => {
                     let error_path = cwd.clone();
                     data.push(codex_app_server_protocol::SkillsListEntry {
                         cwd,
                         skills: Vec::new(),
-                        errors: errors_to_info(&[codex_core::skills::SkillError {
+                        errors: vec![codex_app_server_protocol::SkillErrorInfo {
                             path: error_path,
                             message: err.to_string(),
-                        }]),
+                        }],
                     });
                     continue;
                 }
             };
             let config_layer_stack = match load_config_layers_state(
                 &self.config.codex_home,
-                Some(cwd_abs),
+                Some(cwd_abs.clone()),
                 &cli_overrides,
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
@@ -6037,10 +6037,10 @@ impl CodexMessageProcessor {
                     data.push(codex_app_server_protocol::SkillsListEntry {
                         cwd,
                         skills: Vec::new(),
-                        errors: errors_to_info(&[codex_core::skills::SkillError {
+                        errors: vec![codex_app_server_protocol::SkillErrorInfo {
                             path: error_path,
                             message: err.to_string(),
-                        }]),
+                        }],
                     });
                     continue;
                 }
@@ -6050,7 +6050,7 @@ impl CodexMessageProcessor {
                 config.features.enabled(Feature::Plugins),
             );
             let skills_input = codex_core::skills::SkillsLoadInput::new(
-                cwd.clone(),
+                cwd_abs,
                 effective_skill_roots,
                 config_layer_stack,
                 config.bundled_skills_enabled(),
@@ -7351,7 +7351,7 @@ impl CodexMessageProcessor {
                 general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
-                codex_home: self.config.codex_home.clone(),
+                codex_home: self.config.codex_home.to_path_buf(),
             },
             conversation_id,
             connection_id,
@@ -7440,7 +7440,7 @@ impl CodexMessageProcessor {
                 general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
-                codex_home: self.config.codex_home.clone(),
+                codex_home: self.config.codex_home.to_path_buf(),
             },
             conversation_id,
             conversation,
@@ -7945,7 +7945,7 @@ impl CodexMessageProcessor {
                         policy_cwd: config.cwd.to_path_buf(),
                         command_cwd,
                         env_map: std::env::vars().collect(),
-                        codex_home: config.codex_home.clone(),
+                        codex_home: config.codex_home.to_path_buf(),
                         active_profile: config.active_profile.clone(),
                     };
                     codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await
@@ -8398,7 +8398,7 @@ fn has_model_resume_override(
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
-    disabled_paths: &std::collections::HashSet<PathBuf>,
+    disabled_paths: &std::collections::HashSet<AbsolutePathBuf>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
@@ -8444,7 +8444,7 @@ fn skills_to_info(
 
 fn plugin_skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
-    disabled_skill_paths: &std::collections::HashSet<PathBuf>,
+    disabled_skill_paths: &std::collections::HashSet<AbsolutePathBuf>,
 ) -> Vec<SkillSummary> {
     skills
         .iter()
@@ -8501,7 +8501,7 @@ fn errors_to_info(
     errors
         .iter()
         .map(|err| codex_app_server_protocol::SkillErrorInfo {
-            path: err.path.clone(),
+            path: err.path.to_path_buf(),
             message: err.message.clone(),
         })
         .collect()

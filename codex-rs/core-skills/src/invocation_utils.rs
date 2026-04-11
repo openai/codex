@@ -1,24 +1,24 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(crate) fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,
 ) -> (
-    HashMap<PathBuf, SkillMetadata>,
-    HashMap<PathBuf, SkillMetadata>,
+    HashMap<AbsolutePathBuf, SkillMetadata>,
+    HashMap<AbsolutePathBuf, SkillMetadata>,
 ) {
     let mut by_scripts_dir = HashMap::new();
     let mut by_skill_doc_path = HashMap::new();
     for skill in skills {
-        let skill_doc_path = normalize_path(skill.path_to_skills_md.as_path());
+        let skill_doc_path = canonicalize_if_exists(&skill.path_to_skills_md);
         by_skill_doc_path.insert(skill_doc_path, skill.clone());
 
         if let Some(skill_dir) = skill.path_to_skills_md.parent() {
-            let scripts_dir = normalize_path(&skill_dir.join("scripts"));
+            let scripts_dir = canonicalize_if_exists(&skill_dir.join("scripts"));
             by_scripts_dir.insert(scripts_dir, skill);
         }
     }
@@ -29,17 +29,16 @@ pub(crate) fn build_implicit_skill_path_indexes(
 pub fn detect_implicit_skill_invocation_for_command(
     outcome: &SkillLoadOutcome,
     command: &str,
-    workdir: &Path,
+    workdir: &AbsolutePathBuf,
 ) -> Option<SkillMetadata> {
-    let workdir = normalize_path(workdir);
+    let workdir = canonicalize_if_exists(workdir);
     let tokens = tokenize_command(command);
 
-    if let Some(candidate) = detect_skill_script_run(outcome, tokens.as_slice(), workdir.as_path())
-    {
+    if let Some(candidate) = detect_skill_script_run(outcome, tokens.as_slice(), &workdir) {
         return Some(candidate);
     }
 
-    detect_skill_doc_read(outcome, tokens.as_slice(), workdir.as_path())
+    detect_skill_doc_read(outcome, tokens.as_slice(), &workdir)
 }
 
 fn tokenize_command(command: &str) -> Vec<String> {
@@ -82,19 +81,14 @@ fn script_run_token(tokens: &[String]) -> Option<&str> {
 fn detect_skill_script_run(
     outcome: &SkillLoadOutcome,
     tokens: &[String],
-    workdir: &Path,
+    workdir: &AbsolutePathBuf,
 ) -> Option<SkillMetadata> {
     let script_token = script_run_token(tokens)?;
     let script_path = Path::new(script_token);
-    let script_path = if script_path.is_absolute() {
-        script_path.to_path_buf()
-    } else {
-        workdir.join(script_path)
-    };
-    let script_path = normalize_path(script_path.as_path());
+    let script_path = canonicalize_if_exists(&workdir.join(script_path));
 
-    for ancestor in script_path.ancestors() {
-        if let Some(candidate) = outcome.implicit_skills_by_scripts_dir.get(ancestor) {
+    for path in script_path.ancestors() {
+        if let Some(candidate) = outcome.implicit_skills_by_scripts_dir.get(&path) {
             return Some(candidate.clone());
         }
     }
@@ -105,7 +99,7 @@ fn detect_skill_script_run(
 fn detect_skill_doc_read(
     outcome: &SkillLoadOutcome,
     tokens: &[String],
-    workdir: &Path,
+    workdir: &AbsolutePathBuf,
 ) -> Option<SkillMetadata> {
     if !command_reads_file(tokens) {
         return None;
@@ -116,11 +110,7 @@ fn detect_skill_doc_read(
             continue;
         }
         let path = Path::new(token);
-        let candidate_path = if path.is_absolute() {
-            normalize_path(path)
-        } else {
-            normalize_path(&workdir.join(path))
-        };
+        let candidate_path = canonicalize_if_exists(&workdir.join(path));
         if let Some(candidate) = outcome.implicit_skills_by_doc_path.get(&candidate_path) {
             return Some(candidate.clone());
         }
@@ -146,8 +136,8 @@ fn command_basename(command: &str) -> String {
         .to_string()
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+fn canonicalize_if_exists(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.clone())
 }
 
 #[cfg(test)]

@@ -2349,6 +2349,7 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-absolute-path",
  "codex-utils-plugins",
  "futures",
  "pretty_assertions",
@@ -2987,6 +2988,7 @@ version = "0.0.0"
 name = "codex-utils-home-dir"
 version = "0.0.0"
 dependencies = [
+ "codex-utils-absolute-path",
  "dirs",
  "pretty_assertions",
  "tempfile",

@@ -1238,6 +1238,8 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
     use crate::status_indicator_widget::StatusDetailsCapitalization;
+    use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyEventKind;
@@ -1246,7 +1248,6 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
-    use std::path::PathBuf;
     use std::rc::Rc;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1690,7 +1691,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
-                path_to_skills_md: PathBuf::from("test-skill"),
+                path_to_skills_md: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
                 scope: SkillScope::User,
             }]),
         });
