@@ -8,8 +8,8 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 
-use crate::config::ConfigToml;
-use crate::config::profile::ConfigProfile;
+use codex_config::config_toml::ConfigToml;
+use codex_config::profile_toml::ConfigProfile;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -96,7 +96,10 @@ impl ManagedFeatures {
 impl From<Features> for ManagedFeatures {
     fn from(features: Features) -> Self {
         Self {
-            value: ConstrainedWithSource::new(Constrained::allow_any(features), None),
+            value: ConstrainedWithSource::new(
+                Constrained::allow_any(features),
+                /*source*/ None,
+            ),
             pinned_features: BTreeMap::new(),
         }
     }
@@ -199,9 +202,9 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     let mut explicit_settings = Vec::new();
 
     if let Some(features) = cfg.features.as_ref() {
-        for (key, enabled) in &features.entries {
-            if let Some(feature) = feature_for_key(key) {
-                explicit_settings.push((format!("features.{key}"), feature, *enabled));
+        for (key, enabled) in features.entries() {
+            if let Some(feature) = feature_for_key(&key) {
+                explicit_settings.push((format!("features.{key}"), feature, enabled));
             }
         }
     }
@@ -221,12 +224,12 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     }
     for (profile_name, profile) in &cfg.profiles {
         if let Some(features) = profile.features.as_ref() {
-            for (key, enabled) in &features.entries {
-                if let Some(feature) = feature_for_key(key) {
+            for (key, enabled) in features.entries() {
+                if let Some(feature) = feature_for_key(&key) {
                     explicit_settings.push((
                         format!("profiles.{profile_name}.features.{key}"),
                         feature,
-                        *enabled,
+                        enabled,
                     ));
                 }
             }

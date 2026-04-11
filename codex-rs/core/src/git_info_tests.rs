@@ -72,7 +72,7 @@ async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
 #[tokio::test]
 async fn test_recent_commits_non_git_directory_returns_empty() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let entries = recent_commits(temp_dir.path(), 10).await;
+    let entries = recent_commits(temp_dir.path(), /*limit*/ 10).await;
     assert!(entries.is_empty(), "expected no commits outside a git repo");
 }
 
@@ -133,7 +133,7 @@ async fn test_recent_commits_orders_and_limits() {
         .expect("git commit 3");
 
     // Request the latest 3 commits; should be our three changes in reverse time order.
-    let entries = recent_commits(&repo_path, 3).await;
+    let entries = recent_commits(&repo_path, /*limit*/ 3).await;
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].subject, "third change");
     assert_eq!(entries[1].subject, "second change");

@@ -1,6 +1,7 @@
 mod account;
 mod analytics;
 mod app_list;
+mod client_metadata;
 mod collaboration_mode_list;
 #[cfg(unix)]
 mod command_exec;
@@ -14,7 +15,10 @@ mod experimental_api;
 mod experimental_feature_list;
 mod fs;
 mod initialize;
+mod mcp_resource;
 mod mcp_server_elicitation;
+mod mcp_server_status;
+mod mcp_tool;
 mod model_list;
 mod output_schema;
 mod plan_item;

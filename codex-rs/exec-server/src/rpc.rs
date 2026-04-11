@@ -179,7 +179,8 @@ pub(crate) struct RpcClient {
 
 impl RpcClient {
     pub(crate) fn new(connection: JsonRpcConnection) -> (Self, mpsc::Receiver<RpcClientEvent>) {
-        let (write_tx, mut incoming_rx, transport_tasks) = connection.into_parts();
+        let (write_tx, mut incoming_rx, _disconnected_rx, transport_tasks) =
+            connection.into_parts();
         let pending = Arc::new(Mutex::new(HashMap::<RequestId, PendingRequest>::new()));
         let (event_tx, event_rx) = mpsc::channel(128);
 
@@ -351,6 +352,14 @@ pub(crate) fn method_not_found(message: String) -> JSONRPCErrorError {
 pub(crate) fn invalid_params(message: String) -> JSONRPCErrorError {
     JSONRPCErrorError {
         code: -32602,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn not_found(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: -32004,
         data: None,
         message,
     }

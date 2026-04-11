@@ -129,12 +129,7 @@ pub fn generate_ts_with_options(
     }
 
     // Ensure our header is present on all TS files (root + subdirs like v2/).
-    let mut ts_files = Vec::new();
-    let should_collect_ts_files =
-        options.ensure_headers || (options.run_prettier && prettier.is_some());
-    if should_collect_ts_files {
-        ts_files = ts_files_in_recursive(out_dir)?;
-    }
+    let ts_files = ts_files_in_recursive(out_dir)?;
 
     if options.ensure_headers {
         let worker_count = thread::available_parallelism()
@@ -178,6 +173,8 @@ pub fn generate_ts_with_options(
             return Err(anyhow!("Prettier failed with status {status}"));
         }
     }
+
+    trim_trailing_whitespace_in_ts_files(&ts_files)?;
 
     Ok(())
 }
@@ -1942,6 +1939,32 @@ fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn trim_trailing_whitespace_in_ts_files(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let trimmed = trim_trailing_line_whitespace(&content);
+        if trimmed != content {
+            fs::write(path, trimmed)
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn trim_trailing_line_whitespace(content: &str) -> String {
+    let mut trimmed = String::with_capacity(content.len());
+    for line in content.split_inclusive('\n') {
+        if let Some(line_without_newline) = line.strip_suffix('\n') {
+            trimmed.push_str(line_without_newline.trim_end_matches([' ', '\t']));
+            trimmed.push('\n');
+        } else {
+            trimmed.push_str(line.trim_end_matches([' ', '\t']));
+        }
+    }
+    trimmed
+}
+
 /// Generate an index.ts file that re-exports all generated types.
 /// This allows consumers to import all types from a single file.
 fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
@@ -2690,7 +2713,7 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
     fn generate_json_filters_experimental_fields_and_methods() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
-        generate_json_with_experimental(&output_dir, false)?;
+        generate_json_with_experimental(&output_dir, /*experimental_api*/ false)?;
 
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;

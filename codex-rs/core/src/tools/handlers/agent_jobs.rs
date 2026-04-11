@@ -4,7 +4,6 @@ use crate::agent::status::is_final;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -13,12 +12,13 @@ use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use serde::Deserialize;
@@ -26,7 +26,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch::Receiver;
@@ -178,7 +177,6 @@ impl JobProgressEmitter {
     }
 }
 
-#[async_trait]
 impl ToolHandler for BatchJobHandler {
     type Output = FunctionToolOutput;
 
@@ -311,7 +309,7 @@ mod spawn_agents_on_csv {
 
         let job_id = Uuid::new_v4().to_string();
         let output_csv_path = args.output_csv_path.map_or_else(
-            || default_output_csv_path(input_path.as_path(), job_id.as_str()),
+            || default_output_csv_path(&input_path, job_id.as_str()),
             |path| turn.resolve_path(Some(path)),
         );
         let job_suffix = &job_id[..8];
@@ -1091,13 +1089,17 @@ fn is_item_stale(item: &codex_state::AgentJobItem, runtime_timeout: Duration) ->
     }
 }
 
-fn default_output_csv_path(input_csv_path: &Path, job_id: &str) -> PathBuf {
+fn default_output_csv_path(input_csv_path: &AbsolutePathBuf, job_id: &str) -> AbsolutePathBuf {
     let stem = input_csv_path
+        .as_path()
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("agent_job_output");
     let job_suffix = &job_id[..8];
-    input_csv_path.with_file_name(format!("{stem}.agent-job-{job_suffix}.csv"))
+    let output_dir = input_csv_path
+        .parent()
+        .unwrap_or_else(|| input_csv_path.clone());
+    output_dir.join(format!("{stem}.agent-job-{job_suffix}.csv"))
 }
 
 fn parse_csv(content: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {

@@ -31,7 +31,12 @@ async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
         network.set_allowed_domains(vec!["example.com".to_string()]);
         network
     }));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Limited, "example.com", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Limited,
+        "example.com",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::POST)
         .uri("/v1/responses?api_key=secret")
@@ -65,7 +70,12 @@ async fn mitm_policy_rejects_host_mismatch() {
         network.set_allowed_domains(vec!["example.com".to_string()]);
         network
     }));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "example.com", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Full,
+        "example.com",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::GET)
         .uri("/")
@@ -90,7 +100,12 @@ async fn mitm_policy_rechecks_local_private_target_after_connect() {
         network.allow_local_binding = false;
         network
     }));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "10.0.0.1", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Full,
+        "10.0.0.1",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::GET)
         .uri("/health?token=secret")

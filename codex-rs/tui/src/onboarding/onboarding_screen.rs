@@ -1,7 +1,9 @@
-use codex_core::AuthManager;
-use codex_core::config::Config;
+use crate::legacy_core::config::Config;
 #[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::ServerNotification;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;
@@ -17,6 +19,7 @@ use ratatui::widgets::WidgetRef;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
+use crate::app_server_session::AppServerSession;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
@@ -64,7 +67,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
-    pub auth_manager: Arc<AuthManager>,
+    pub app_server_request_handle: Option<AppServerRequestHandle>,
     pub config: Config,
 }
 
@@ -79,14 +82,12 @@ impl OnboardingScreen {
             show_trust_screen,
             show_login_screen,
             login_status,
-            auth_manager,
+            app_server_request_handle,
             config,
         } = args;
         let cwd = config.cwd.to_path_buf();
-        let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
-        let forced_login_method = config.forced_login_method;
         let codex_home = config.codex_home.clone();
-        let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
+        let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
@@ -98,19 +99,21 @@ impl OnboardingScreen {
                 Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
                 _ => SignInOption::ChatGpt,
             };
-            steps.push(Step::Auth(AuthModeWidget {
-                request_frame: tui.frame_requester(),
-                highlighted_mode,
-                error: None,
-                sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-                codex_home: codex_home.clone(),
-                cli_auth_credentials_store_mode,
-                login_status,
-                auth_manager,
-                forced_chatgpt_workspace_id,
-                forced_login_method,
-                animations_enabled: config.animations,
-            }))
+            if let Some(app_server_request_handle) = app_server_request_handle {
+                steps.push(Step::Auth(AuthModeWidget {
+                    request_frame: tui.frame_requester(),
+                    highlighted_mode,
+                    error: Arc::new(RwLock::new(None)),
+                    sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
+                    login_status,
+                    app_server_request_handle,
+                    forced_login_method,
+                    animations_enabled: config.animations,
+                    animations_suppressed: std::cell::Cell::new(false),
+                }));
+            } else {
+                tracing::warn!("skipping onboarding login step without app-server request handle");
+            }
         }
         #[cfg(target_os = "windows")]
         let show_windows_create_sandbox_hint =
@@ -168,6 +171,15 @@ impl OnboardingScreen {
         out
     }
 
+    fn should_suppress_animations(&self) -> bool {
+        // Freeze the whole onboarding screen when auth is showing copyable login
+        // material so terminal selection is not interrupted by redraws.
+        self.current_steps().into_iter().any(|step| match step {
+            Step::Auth(widget) => widget.should_suppress_animations(),
+            Step::Welcome(_) | Step::TrustDirectory(_) => false,
+        })
+    }
+
     fn is_auth_in_progress(&self) -> bool {
         self.steps.iter().any(|step| {
             matches!(step, Step::Auth(_)) && matches!(step.get_step_state(), StepState::InProgress)
@@ -197,6 +209,37 @@ impl OnboardingScreen {
 
     pub fn should_exit(&self) -> bool {
         self.should_exit
+    }
+
+    fn cancel_auth_if_active(&self) {
+        for step in &self.steps {
+            if let Step::Auth(widget) = step {
+                widget.cancel_active_attempt();
+            }
+        }
+    }
+
+    fn auth_widget_mut(&mut self) -> Option<&mut AuthModeWidget> {
+        self.steps.iter_mut().find_map(|step| match step {
+            Step::Auth(widget) => Some(widget),
+            Step::Welcome(_) | Step::TrustDirectory(_) => None,
+        })
+    }
+
+    fn handle_app_server_notification(&mut self, notification: ServerNotification) {
+        match notification {
+            ServerNotification::AccountLoginCompleted(notification) => {
+                if let Some(widget) = self.auth_widget_mut() {
+                    widget.on_account_login_completed(notification);
+                }
+            }
+            ServerNotification::AccountUpdated(notification) => {
+                if let Some(widget) = self.auth_widget_mut() {
+                    widget.on_account_updated(notification);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn is_api_key_entry_active(&self) -> bool {
@@ -240,6 +283,7 @@ impl KeyboardHandler for OnboardingScreen {
         };
         if should_quit {
             if self.is_auth_in_progress() {
+                self.cancel_auth_if_active();
                 // If the user cancels the auth menu, exit the app rather than
                 // leave the user at a prompt in an unauthed state.
                 self.should_exit = true;
@@ -284,6 +328,15 @@ impl KeyboardHandler for OnboardingScreen {
 
 impl WidgetRef for &OnboardingScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let suppress_animations = self.should_suppress_animations();
+        for step in self.current_steps() {
+            match step {
+                Step::Welcome(widget) => widget.set_animations_suppressed(suppress_animations),
+                Step::Auth(widget) => widget.set_animations_suppressed(suppress_animations),
+                Step::TrustDirectory(_) => {}
+            }
+        }
+
         Clear.render(area, buf);
         // Render steps top-to-bottom, measuring each step's height dynamically.
         let mut y = area.y;
@@ -394,6 +447,7 @@ impl WidgetRef for Step {
 
 pub(crate) async fn run_onboarding_app(
     args: OnboardingScreenArgs,
+    mut app_server: Option<&mut AppServerSession>,
     tui: &mut Tui,
 ) -> Result<OnboardingResult> {
     use tokio_stream::StreamExt;
@@ -410,48 +464,71 @@ pub(crate) async fn run_onboarding_app(
     tokio::pin!(tui_events);
 
     while !onboarding_screen.is_done() {
-        if let Some(event) = tui_events.next().await {
-            match event {
-                TuiEvent::Key(key_event) => {
-                    onboarding_screen.handle_key_event(key_event);
-                }
-                TuiEvent::Paste(text) => {
-                    onboarding_screen.handle_paste(text);
-                }
-                TuiEvent::Draw => {
-                    if !did_full_clear_after_success
-                        && onboarding_screen.steps.iter().any(|step| {
-                            if let Step::Auth(w) = step {
-                                w.sign_in_state.read().is_ok_and(|g| {
-                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+        tokio::select! {
+            event = tui_events.next() => {
+                if let Some(event) = event {
+                    match event {
+                        TuiEvent::Key(key_event) => {
+                            onboarding_screen.handle_key_event(key_event);
+                        }
+                        TuiEvent::Paste(text) => {
+                            onboarding_screen.handle_paste(text);
+                        }
+                        TuiEvent::Draw => {
+                            if !did_full_clear_after_success
+                                && onboarding_screen.steps.iter().any(|step| {
+                                    if let Step::Auth(w) = step {
+                                        w.sign_in_state.read().is_ok_and(|g| {
+                                            matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                        })
+                                    } else {
+                                        false
+                                    }
                                 })
-                            } else {
-                                false
+                            {
+                                // Reset any lingering SGR (underline/color) before clearing
+                                let _ = ratatui::crossterm::execute!(
+                                    std::io::stdout(),
+                                    ratatui::crossterm::style::SetAttribute(
+                                        ratatui::crossterm::style::Attribute::Reset
+                                    ),
+                                    ratatui::crossterm::style::SetAttribute(
+                                        ratatui::crossterm::style::Attribute::NoUnderline
+                                    ),
+                                    ratatui::crossterm::style::SetForegroundColor(
+                                        ratatui::crossterm::style::Color::Reset
+                                    ),
+                                    ratatui::crossterm::style::SetBackgroundColor(
+                                        ratatui::crossterm::style::Color::Reset
+                                    )
+                                );
+                                let _ = tui.terminal.clear();
+                                did_full_clear_after_success = true;
                             }
-                        })
-                    {
-                        // Reset any lingering SGR (underline/color) before clearing
-                        let _ = ratatui::crossterm::execute!(
-                            std::io::stdout(),
-                            ratatui::crossterm::style::SetAttribute(
-                                ratatui::crossterm::style::Attribute::Reset
-                            ),
-                            ratatui::crossterm::style::SetAttribute(
-                                ratatui::crossterm::style::Attribute::NoUnderline
-                            ),
-                            ratatui::crossterm::style::SetForegroundColor(
-                                ratatui::crossterm::style::Color::Reset
-                            ),
-                            ratatui::crossterm::style::SetBackgroundColor(
-                                ratatui::crossterm::style::Color::Reset
-                            )
-                        );
-                        let _ = tui.terminal.clear();
-                        did_full_clear_after_success = true;
+                            let _ = tui.draw(u16::MAX, |frame| {
+                                frame.render_widget_ref(&onboarding_screen, frame.area());
+                            });
+                        }
                     }
-                    let _ = tui.draw(u16::MAX, |frame| {
-                        frame.render_widget_ref(&onboarding_screen, frame.area());
-                    });
+                }
+            }
+            event = async {
+                match app_server.as_mut() {
+                    Some(app_server) => app_server.next_event().await,
+                    None => None,
+                }
+            }, if app_server.is_some() => {
+                if let Some(event) = event {
+                    match event {
+                        AppServerEvent::ServerNotification(notification) => {
+                            onboarding_screen.handle_app_server_notification(notification);
+                        }
+                        AppServerEvent::Disconnected { message } => {
+                            return Err(color_eyre::eyre::eyre!(message));
+                        }
+                        AppServerEvent::Lagged { .. }
+                        | AppServerEvent::ServerRequest(_) => {}
+                    }
                 }
             }
         }

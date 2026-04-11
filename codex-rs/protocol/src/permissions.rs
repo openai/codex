@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -471,6 +472,9 @@ impl FileSystemSandboxPolicy {
             // so root-wide aliases do not create duplicate top-level masks.
             // Example: keep `/var/...` normalized under `/` instead of
             // materializing both `/var/...` and `/private/var/...`.
+            // Nested symlink paths under a writable root stay logical so
+            // downstream sandboxes can still bind the real target while
+            // masking the user-visible symlink inode when needed.
             let preserve_raw_carveout_paths = root.as_path().parent().is_some();
             let raw_writable_roots: Vec<&AbsolutePathBuf> = writable_entries
                 .iter()
@@ -522,7 +526,7 @@ impl FileSystemSandboxPolicy {
                                     if suffix.as_os_str().is_empty() {
                                         return None;
                                     }
-                                    root.join(suffix).ok()
+                                    Some(root.join(suffix))
                                 })
                             }
                         } else {
@@ -921,7 +925,7 @@ fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
     if path.is_absolute() {
         AbsolutePathBuf::from_absolute_path(path).ok()
     } else {
-        AbsolutePathBuf::resolve_path_against_base(path, cwd).ok()
+        Some(AbsolutePathBuf::resolve_path_against_base(path, cwd))
     }
 }
 
@@ -1032,9 +1036,10 @@ fn resolve_file_system_special_path(
         FileSystemSpecialPath::ProjectRoots { subpath } => {
             let cwd = cwd?;
             match subpath.as_ref() {
-                Some(subpath) => {
-                    AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path()).ok()
-                }
+                Some(subpath) => Some(AbsolutePathBuf::resolve_path_against_base(
+                    subpath,
+                    cwd.as_path(),
+                )),
                 None => Some(cwd.clone()),
             }
         }
@@ -1080,14 +1085,17 @@ fn dedup_absolute_paths(
 fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
     let raw_path = path.to_path_buf();
     for ancestor in raw_path.ancestors() {
-        let Ok(canonical_ancestor) = ancestor.canonicalize() else {
+        if std::fs::symlink_metadata(ancestor).is_err() {
+            continue;
+        }
+        let Ok(normalized_ancestor) = canonicalize_preserving_symlinks(ancestor) else {
             continue;
         };
         let Ok(suffix) = raw_path.strip_prefix(ancestor) else {
             continue;
         };
         if let Ok(normalized_path) =
-            AbsolutePathBuf::from_absolute_path(canonical_ancestor.join(suffix))
+            AbsolutePathBuf::from_absolute_path(normalized_ancestor.join(suffix))
         {
             return normalized_path;
         }
@@ -1100,10 +1108,7 @@ fn default_read_only_subpaths_for_writable_root(
     protect_missing_dot_codex: bool,
 ) -> Vec<AbsolutePathBuf> {
     let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
-    #[allow(clippy::expect_used)]
-    let top_level_git = writable_root
-        .join(".git")
-        .expect(".git is a valid relative path");
+    let top_level_git = writable_root.join(".git");
     // This applies to typical repos (directory .git), worktrees/submodules
     // (file .git with gitdir pointer), and bare repos when the gitdir is the
     // writable root itself.
@@ -1119,8 +1124,7 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_git);
     }
 
-    #[allow(clippy::expect_used)]
-    let top_level_agents = writable_root.join(".agents").expect("valid relative path");
+    let top_level_agents = writable_root.join(".agents");
     if path_exists_or_is_symlink(top_level_agents.as_path()) {
         subpaths.push(top_level_agents);
     }
@@ -1129,17 +1133,13 @@ fn default_read_only_subpaths_for_writable_root(
     // default. For the workspace root itself, protect it even before the
     // directory exists so first-time creation still goes through the
     // protected-path approval flow.
-    #[allow(clippy::expect_used)]
-    let top_level_codex = writable_root.join(".codex").expect("valid relative path");
+    let top_level_codex = writable_root.join(".codex");
     if protect_missing_dot_codex || path_exists_or_is_symlink(top_level_codex.as_path()) {
         subpaths.push(top_level_codex);
     }
     // A read-only `.codex/` directory does not stop writes through a
     // symlinked `.codex/config.toml` that points back into the writable root.
-    #[allow(clippy::expect_used)]
-    let top_level_codex_config = writable_root
-        .join(".codex/config.toml")
-        .expect("valid relative path");
+    let top_level_codex_config = writable_root.join(".codex/config.toml");
     if path_exists_or_is_symlink(top_level_codex_config.as_path()) {
         subpaths.push(top_level_codex_config);
     }
@@ -1243,16 +1243,7 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf
             return None;
         }
     };
-    let gitdir_path = match AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base) {
-        Ok(path) => path,
-        Err(err) => {
-            error!(
-                "Failed to resolve gitdir path {gitdir_raw} from {path}: {err}",
-                path = dot_git.as_path().display()
-            );
-            return None;
-        }
-    };
+    let gitdir_path = AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base);
     if !gitdir_path.as_path().exists() {
         error!(
             "Resolved gitdir path {path} does not exist.",
@@ -1284,7 +1275,10 @@ mod tests {
     fn unknown_special_paths_are_ignored_by_legacy_bridge() -> std::io::Result<()> {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::unknown(":future_special_path", None),
+                value: FileSystemSpecialPath::unknown(
+                    ":future_special_path",
+                    /*subpath*/ None,
+                ),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -1315,7 +1309,7 @@ mod tests {
             cwd.path().canonicalize().expect("canonicalize cwd"),
         )
         .expect("absolute canonical root");
-        let expected_dot_codex = expected_root.join(".codex").expect("expected .codex path");
+        let expected_dot_codex = expected_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -1342,7 +1336,7 @@ mod tests {
             cwd.path().canonicalize().expect("canonicalize cwd"),
         )
         .expect("absolute canonical root");
-        let explicit_dot_codex = expected_root.join(".codex").expect("expected .codex path");
+        let explicit_dot_codex = expected_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -1372,10 +1366,7 @@ mod tests {
         );
         assert!(
             policy.can_write_path_with_cwd(
-                explicit_dot_codex
-                    .join("config.toml")
-                    .expect("config.toml")
-                    .as_path(),
+                explicit_dot_codex.join("config.toml").as_path(),
                 cwd.path()
             )
         );
@@ -1451,7 +1442,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn effective_runtime_roots_canonicalize_symlinked_paths() {
+    fn effective_runtime_roots_preserve_symlinked_paths() {
         let cwd = TempDir::new().expect("tempdir");
         let real_root = cwd.path().join("real");
         let link_root = cwd.path().join("link");
@@ -1464,19 +1455,10 @@ mod tests {
 
         let link_root =
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
-        let link_blocked = link_root.join("blocked").expect("symlinked blocked path");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            blocked.canonicalize().expect("canonicalize blocked"),
-        )
-        .expect("absolute canonical blocked");
-        let expected_codex = AbsolutePathBuf::from_absolute_path(
-            codex_dir.canonicalize().expect("canonicalize .codex"),
-        )
-        .expect("absolute canonical .codex");
+        let link_blocked = link_root.join("blocked");
+        let expected_root = link_root.clone();
+        let expected_blocked = link_blocked.clone();
+        let expected_codex = link_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -1511,7 +1493,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn current_working_directory_special_path_canonicalizes_symlinked_cwd() {
+    fn current_working_directory_special_path_preserves_symlinked_cwd() {
         let cwd = TempDir::new().expect("tempdir");
         let real_root = cwd.path().join("real");
         let link_root = cwd.path().join("link");
@@ -1526,22 +1508,11 @@ mod tests {
 
         let link_blocked =
             AbsolutePathBuf::from_absolute_path(link_root.join("blocked")).expect("link blocked");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            blocked.canonicalize().expect("canonicalize blocked"),
-        )
-        .expect("absolute canonical blocked");
-        let expected_agents = AbsolutePathBuf::from_absolute_path(
-            agents_dir.canonicalize().expect("canonicalize .agents"),
-        )
-        .expect("absolute canonical .agents");
-        let expected_codex = AbsolutePathBuf::from_absolute_path(
-            codex_dir.canonicalize().expect("canonicalize .codex"),
-        )
-        .expect("absolute canonical .codex");
+        let expected_root =
+            AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
+        let expected_blocked = link_blocked.clone();
+        let expected_agents = expected_root.join(".agents");
+        let expected_codex = expected_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -1646,10 +1617,8 @@ mod tests {
         let root =
             AbsolutePathBuf::from_absolute_path(root.canonicalize().expect("canonicalize root"))
                 .expect("absolute root");
-        let expected_dot_codex = root.join(".codex").expect("absolute .codex");
-        let expected_config = root
-            .join(".codex/config.toml")
-            .expect("absolute .codex/config.toml");
+        let expected_dot_codex = root.join(".codex");
+        let expected_config = root.join(".codex/config.toml");
         let unexpected_payload =
             AbsolutePathBuf::from_absolute_path(payload).expect("absolute payload");
 
@@ -1685,16 +1654,9 @@ mod tests {
 
         let link_root =
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
-        let link_private = link_root
-            .join("linked-private")
-            .expect("symlinked linked-private path");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_linked_private = expected_root
-            .join("linked-private")
-            .expect("expected linked-private path");
+        let link_private = link_root.join("linked-private");
+        let expected_root = link_root.clone();
+        let expected_linked_private = link_private.clone();
         let unexpected_decoy =
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
@@ -1739,16 +1701,9 @@ mod tests {
 
         let link_root =
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
-        let link_private = link_root
-            .join("linked-private")
-            .expect("symlinked linked-private path");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_root.canonicalize().expect("canonicalize real root"),
-        )
-        .expect("absolute canonical root");
-        let expected_linked_private = expected_root
-            .join("linked-private")
-            .expect("expected linked-private path");
+        let link_private = link_root.join("linked-private");
+        let expected_root = link_root.clone();
+        let expected_linked_private = link_private.clone();
         let unexpected_decoy =
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
@@ -1788,14 +1743,12 @@ mod tests {
         symlink_dir(&root, &alias).expect("create alias symlink");
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
-        let alias = root.join("alias-root").expect("alias root path");
+        let alias = root.join("alias-root");
         let expected_root = AbsolutePathBuf::from_absolute_path(
             root.as_path().canonicalize().expect("canonicalize root"),
         )
         .expect("absolute canonical root");
-        let expected_alias = expected_root
-            .join("alias-root")
-            .expect("expected alias path");
+        let expected_alias = expected_root.join("alias-root");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -1816,12 +1769,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn tmpdir_special_path_canonicalizes_symlinked_tmpdir() {
+    fn tmpdir_special_path_preserves_symlinked_tmpdir() {
         if std::env::var_os(SYMLINKED_TMPDIR_TEST_ENV).is_none() {
             let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
                 .env(SYMLINKED_TMPDIR_TEST_ENV, "1")
                 .arg("--exact")
-                .arg("permissions::tests::tmpdir_special_path_canonicalizes_symlinked_tmpdir")
+                .arg("permissions::tests::tmpdir_special_path_preserves_symlinked_tmpdir")
                 .output()
                 .expect("run tmpdir subprocess test");
 
@@ -1846,20 +1799,10 @@ mod tests {
 
         let link_blocked =
             AbsolutePathBuf::from_absolute_path(link_tmpdir.join("blocked")).expect("link blocked");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            real_tmpdir
-                .canonicalize()
-                .expect("canonicalize real tmpdir"),
-        )
-        .expect("absolute canonical tmpdir");
-        let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            blocked.canonicalize().expect("canonicalize blocked"),
-        )
-        .expect("absolute canonical blocked");
-        let expected_codex = AbsolutePathBuf::from_absolute_path(
-            codex_dir.canonicalize().expect("canonicalize .codex"),
-        )
-        .expect("absolute canonical .codex");
+        let expected_root =
+            AbsolutePathBuf::from_absolute_path(&link_tmpdir).expect("absolute symlinked tmpdir");
+        let expected_blocked = link_blocked.clone();
+        let expected_codex = expected_root.join(".codex");
 
         unsafe {
             std::env::set_var("TMPDIR", &link_tmpdir);
@@ -1901,13 +1844,10 @@ mod tests {
     #[test]
     fn resolve_access_with_cwd_uses_most_specific_entry() {
         let cwd = TempDir::new().expect("tempdir");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
-        let docs_private = AbsolutePathBuf::resolve_path_against_base("docs/private", cwd.path())
-            .expect("resolve docs/private");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
+        let docs_private = AbsolutePathBuf::resolve_path_against_base("docs/private", cwd.path());
         let docs_private_public =
-            AbsolutePathBuf::resolve_path_against_base("docs/private/public", cwd.path())
-                .expect("resolve docs/private/public");
+            AbsolutePathBuf::resolve_path_against_base("docs/private/public", cwd.path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -1954,8 +1894,7 @@ mod tests {
     #[test]
     fn split_only_nested_carveouts_need_direct_runtime_enforcement() {
         let cwd = TempDir::new().expect("tempdir");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -1986,8 +1925,7 @@ mod tests {
     #[test]
     fn root_write_with_read_only_child_is_not_full_disk_write() {
         let cwd = TempDir::new().expect("tempdir");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -2014,11 +1952,9 @@ mod tests {
     #[test]
     fn root_deny_does_not_materialize_as_unreadable_root() {
         let cwd = TempDir::new().expect("tempdir");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let expected_docs = AbsolutePathBuf::from_absolute_path(
-            cwd.path()
-                .canonicalize()
+            canonicalize_preserving_symlinks(cwd.path())
                 .expect("canonicalize cwd")
                 .join("docs"),
         )
@@ -2078,8 +2014,7 @@ mod tests {
     #[test]
     fn same_specificity_write_override_keeps_full_disk_write_access() {
         let cwd = TempDir::new().expect("tempdir");
-        let docs =
-            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {

@@ -4,9 +4,8 @@ This module implements the websocket-backed app-server client transport.
 It owns the remote connection lifecycle, including the initialize/initialized
 handshake, JSON-RPC request/response routing, server-request resolution, and
 notification streaming. The rest of the crate uses the same `AppServerEvent`
-surface for both in-process and remote transports, so callers such as
-`tui_app_server` can switch between them without changing their higher-level
-session logic.
+surface for both in-process and remote transports, so callers such as the TUI
+can switch between them without changing their higher-level session logic.
 */
 
 use std::collections::HashMap;
@@ -37,6 +36,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
@@ -170,6 +170,7 @@ impl RemoteAppServerClient {
                 })?;
             request.headers_mut().insert(AUTHORIZATION, header_value);
         }
+        ensure_rustls_crypto_provider();
         let stream = timeout(CONNECT_TIMEOUT, connect_async(request))
             .await
             .map_err(|_| {

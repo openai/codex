@@ -9,23 +9,23 @@ ExecRequest for execution.
 
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
-use crate::exec::ExecToolCallOutput;
 use crate::exec::StdoutStream;
-use crate::exec::WindowsRestrictedTokenFilesystemOverlay;
+use crate::exec::WindowsSandboxFilesystemOverrides;
 use crate::exec::execute_exec_request;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::exec_output::ExecToolCallOutput;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(crate) struct ExecOptions {
@@ -36,7 +36,7 @@ pub(crate) struct ExecOptions {
 #[derive(Debug)]
 pub struct ExecRequest {
     pub command: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
@@ -47,8 +47,7 @@ pub struct ExecRequest {
     pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
-    pub(crate) windows_restricted_token_filesystem_overlay:
-        Option<WindowsRestrictedTokenFilesystemOverlay>,
+    pub(crate) windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     pub arg0: Option<String>,
 }
 
@@ -56,7 +55,7 @@ impl ExecRequest {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         env: HashMap<String, String>,
         network: Option<NetworkProxy>,
         expiration: ExecExpiration,
@@ -82,7 +81,7 @@ impl ExecRequest {
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-            windows_restricted_token_filesystem_overlay: None,
+            windows_sandbox_filesystem_overrides: None,
             arg0,
         }
     }
@@ -131,7 +130,7 @@ impl ExecRequest {
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-            windows_restricted_token_filesystem_overlay: None,
+            windows_sandbox_filesystem_overrides: None,
             arg0,
         }
     }
@@ -140,22 +139,14 @@ impl ExecRequest {
 pub async fn execute_env(
     exec_request: ExecRequest,
     stdout_stream: Option<StdoutStream>,
-) -> crate::error::Result<ExecToolCallOutput> {
-    let effective_policy = exec_request.sandbox_policy.clone();
-    execute_exec_request(
-        exec_request,
-        &effective_policy,
-        stdout_stream,
-        /*after_spawn*/ None,
-    )
-    .await
+) -> codex_protocol::error::Result<ExecToolCallOutput> {
+    execute_exec_request(exec_request, stdout_stream, /*after_spawn*/ None).await
 }
 
 pub async fn execute_exec_request_with_after_spawn(
     exec_request: ExecRequest,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
-) -> crate::error::Result<ExecToolCallOutput> {
-    let effective_policy = exec_request.sandbox_policy.clone();
-    execute_exec_request(exec_request, &effective_policy, stdout_stream, after_spawn).await
+) -> codex_protocol::error::Result<ExecToolCallOutput> {
+    execute_exec_request(exec_request, stdout_stream, after_spawn).await
 }

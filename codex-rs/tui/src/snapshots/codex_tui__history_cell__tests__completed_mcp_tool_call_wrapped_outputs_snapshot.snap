@@ -1,6 +1,5 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 1891
 expression: rendered
 ---
 • Called

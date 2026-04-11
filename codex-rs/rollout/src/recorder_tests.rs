@@ -63,7 +63,7 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
 }
 
 #[tokio::test]
-async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
+async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
     let thread_id = ThreadId::new();
@@ -71,21 +71,21 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         &config,
         RolloutRecorderParams::new(
             thread_id,
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await?;
 
     let rollout_path = recorder.rollout_path().to_path_buf();
     assert!(
         !rollout_path.exists(),
-        "rollout file should not exist before first user message"
+        "rollout file should not exist before the first recordable item"
     );
 
     recorder
@@ -99,8 +99,8 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         .await?;
     recorder.flush().await?;
     assert!(
-        !rollout_path.exists(),
-        "rollout file should remain deferred before first user message"
+        rollout_path.exists(),
+        "flush with pending items should materialize the rollout"
     );
 
     recorder
@@ -114,10 +114,6 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         ))])
         .await?;
     recorder.flush().await?;
-    assert!(
-        !rollout_path.exists(),
-        "user-message-like items should not materialize without explicit persist"
-    );
 
     recorder.persist().await?;
     // Second call verifies `persist()` is idempotent after materialization.
@@ -147,6 +143,96 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            /*forked_from_id*/ None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "buffered-before-persist".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        ))])
+        .await?;
+    let sessions_blocker_path = home.path().join("sessions");
+    File::create(&sessions_blocker_path)?;
+
+    let err = recorder
+        .persist()
+        .await
+        .expect_err("blocked sessions directory should fail persist");
+    assert_ne!(err.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        !rollout_path.exists(),
+        "failed persist should keep the rollout deferred"
+    );
+
+    fs::remove_file(sessions_blocker_path)?;
+    recorder.flush().await?;
+    let text = std::fs::read_to_string(&rollout_path)?;
+    assert!(
+        text.contains("buffered-before-persist"),
+        "retry should preserve items buffered before the failed persist"
+    );
+
+    recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn writer_state_retries_write_error_before_reporting_flush_success() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let rollout_path = home.path().join("rollout.jsonl");
+    File::create(&rollout_path)?;
+    let read_only_file = std::fs::OpenOptions::new().read(true).open(&rollout_path)?;
+    let mut state = RolloutWriterState::new(
+        Some(tokio::fs::File::from_std(read_only_file)),
+        /*deferred_log_file_info*/ None,
+        /*meta*/ None,
+        home.path().to_path_buf(),
+        rollout_path.clone(),
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
+        config.model_provider_id.clone(),
+        config.generate_memories,
+    );
+    state.add_items(vec![RolloutItem::EventMsg(EventMsg::AgentMessage(
+        AgentMessageEvent {
+            message: "queued-after-writer-error".to_string(),
+            phase: None,
+            memory_citation: None,
+        },
+    ))]);
+
+    state.flush().await?;
+    let text_after_retry = std::fs::read_to_string(&rollout_path)?;
+    assert!(
+        text_after_retry.contains("queued-after-writer-error"),
+        "flush should retry after reopening and write buffered items"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
@@ -155,7 +241,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
         .await
         .expect("state db should initialize");
     state_db
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
 
@@ -164,14 +250,14 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
         &config,
         RolloutRecorderParams::new(
             thread_id,
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Cli,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
         Some(state_db.clone()),
-        None,
+        /*state_builder*/ None,
     )
     .await?;
 
@@ -257,7 +343,7 @@ async fn metadata_irrelevant_events_fall_back_to_upsert_when_thread_missing() ->
         Some(&builder),
         items.as_slice(),
         config.model_provider_id.as_str(),
-        None,
+        /*new_thread_memory_mode*/ None,
     )
     .await;
 
@@ -283,13 +369,13 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
     let default_provider = config.model_provider_id.clone();
     let page1 = RolloutRecorder::list_threads(
         &config,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page1.items.len(), 1);
@@ -298,13 +384,13 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
 
     let page2 = RolloutRecorder::list_threads(
         &config,
-        1,
+        /*page_size*/ 1,
         Some(&cursor),
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page2.items.len(), 1);
@@ -330,7 +416,7 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
     .await
     .expect("state db should initialize");
     runtime
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
     let created_at = chrono::Utc
@@ -355,13 +441,13 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
     let default_provider = config.model_provider_id.clone();
     let page = RolloutRecorder::list_threads(
         &config,
-        10,
-        None,
+        /*page_size*/ 10,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page.items.len(), 0);
@@ -392,7 +478,7 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
     .await
     .expect("state db should initialize");
     runtime
-        .mark_backfill_complete(None)
+        .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
     let created_at = chrono::Utc
@@ -417,13 +503,13 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
     let default_provider = config.model_provider_id.clone();
     let page = RolloutRecorder::list_threads(
         &config,
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         &[],
-        None,
+        /*model_providers*/ None,
         default_provider.as_str(),
-        None,
+        /*search_term*/ None,
     )
     .await?;
     assert_eq!(page.items.len(), 1);

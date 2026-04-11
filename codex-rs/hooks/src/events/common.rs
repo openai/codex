@@ -3,6 +3,7 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookRunSummary;
 
 use crate::engine::ConfiguredHandler;
 use crate::engine::dispatcher;
@@ -69,6 +70,31 @@ pub(crate) fn serialization_failure_hook_events(
         .collect()
 }
 
+pub(crate) fn serialization_failure_hook_events_for_tool_use(
+    handlers: Vec<ConfiguredHandler>,
+    turn_id: Option<String>,
+    error_message: String,
+    tool_use_id: &str,
+) -> Vec<HookCompletedEvent> {
+    serialization_failure_hook_events(handlers, turn_id, error_message)
+        .into_iter()
+        .map(|event| hook_completed_for_tool_use(event, tool_use_id))
+        .collect()
+}
+
+pub(crate) fn hook_completed_for_tool_use(
+    mut event: HookCompletedEvent,
+    tool_use_id: &str,
+) -> HookCompletedEvent {
+    event.run = hook_run_for_tool_use(event.run, tool_use_id);
+    event
+}
+
+pub(crate) fn hook_run_for_tool_use(mut run: HookRunSummary, tool_use_id: &str) -> HookRunSummary {
+    run.id = format!("{}:{tool_use_id}", run.id);
+    run
+}
+
 pub(crate) fn matcher_pattern_for_event(
     event_name: HookEventName,
     matcher: Option<&str>,
@@ -117,8 +143,8 @@ mod tests {
 
     #[test]
     fn matcher_omitted_matches_all_occurrences() {
-        assert!(matches_matcher(None, Some("Bash")));
-        assert!(matches_matcher(None, Some("Write")));
+        assert!(matches_matcher(/*matcher*/ None, Some("Bash")));
+        assert!(matches_matcher(/*matcher*/ None, Some("Write")));
     }
 
     #[test]

@@ -532,11 +532,15 @@ mod tests {
         let mut burst = PasteBurst::default();
         let now = Instant::now();
 
-        assert!(burst.decide_begin_buffer(now, "ab", 2).is_none());
+        assert!(
+            burst
+                .decide_begin_buffer(now, "ab", /*retro_chars*/ 2)
+                .is_none()
+        );
         assert!(!burst.is_active());
 
         let grab = burst
-            .decide_begin_buffer(now, "a b", 2)
+            .decide_begin_buffer(now, "a b", /*retro_chars*/ 2)
             .expect("whitespace should be considered paste-like");
         assert_eq!(grab.start_byte, 1);
         assert_eq!(grab.grabbed, " b");

@@ -29,7 +29,7 @@ fn fixed_thread_id() -> ThreadId {
 #[test]
 fn rollout_summary_file_stem_uses_uuid_timestamp_and_hash_when_slug_missing() {
     let thread_id = fixed_thread_id();
-    let memory = stage1_output_with_slug(thread_id, None);
+    let memory = stage1_output_with_slug(thread_id, /*rollout_slug*/ None);
 
     assert_eq!(rollout_summary_file_stem(&memory), FIXED_PREFIX);
     assert_eq!(

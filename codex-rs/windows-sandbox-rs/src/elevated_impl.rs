@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 pub struct ElevatedSandboxCaptureRequest<'a> {
     pub policy_json_or_preset: &'a str,
@@ -11,13 +12,14 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
     pub timeout_ms: Option<u64>,
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
+    pub read_roots_override: Option<&'a [PathBuf]>,
+    pub write_roots_override: Option<&'a [PathBuf]>,
+    pub deny_write_paths_override: &'a [PathBuf],
 }
 
 mod windows_impl {
     use super::ElevatedSandboxCaptureRequest;
     use crate::acl::allow_null_device;
-    use crate::allow::AllowDenyPaths;
-    use crate::allow::compute_allow_paths;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
@@ -93,7 +95,7 @@ mod windows_impl {
                     } else {
                         cur.join(gitdir)
                     };
-                    return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
+                    return resolved.parent().map(Path::to_path_buf).or(Some(cur));
                 }
                 return Some(cur);
             }
@@ -235,13 +237,15 @@ mod windows_impl {
             timeout_ms,
             use_private_desktop,
             proxy_enforced,
+            read_roots_override,
+            write_roots_override,
+            deny_write_paths_override,
         } = request;
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
         inject_git_safe_directory(&mut env_map, cwd, None);
-        let current_dir = cwd.to_path_buf();
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
         ensure_codex_home_exists(&sandbox_base)?;
@@ -254,6 +258,9 @@ mod windows_impl {
             cwd,
             &env_map,
             codex_home,
+            read_roots_override,
+            write_roots_override,
+            deny_write_paths_override,
             proxy_enforced,
         )?;
         let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
@@ -270,25 +277,27 @@ mod windows_impl {
         }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sids) = match &policy {
-            SandboxPolicy::ReadOnly { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                vec![caps.readonly.clone()],
-            ),
-            SandboxPolicy::WorkspaceWrite { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                vec![
-                    caps.workspace.clone(),
-                    crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
-                ],
-            ),
+            SandboxPolicy::ReadOnly { .. } => {
+                #[allow(clippy::unwrap_used)]
+                let psid = unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() };
+                (psid, vec![caps.readonly])
+            }
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                #[allow(clippy::unwrap_used)]
+                let psid = unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() };
+                (
+                    psid,
+                    vec![
+                        caps.workspace,
+                        crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
+                    ],
+                )
+            }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
             }
         };
 
-        let AllowDenyPaths { allow: _, deny: _ } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
-        // Deny/allow ACEs are now applied during setup; avoid per-command churn.
         unsafe {
             allow_null_device(psid_to_use);
         }
@@ -302,7 +311,7 @@ mod windows_impl {
         let runner_exe = find_runner_exe(codex_home, logs_base_dir);
         let runner_cmdline = runner_exe
             .to_str()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
         let runner_full_cmd = format!(
             "{} {} {}",
@@ -365,7 +374,7 @@ mod windows_impl {
                 ),
                 logs_base_dir,
             );
-            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
+            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
         }
 
         if let Err(err) = connect_pipe(h_pipe_in) {
@@ -451,7 +460,7 @@ mod windows_impl {
             if exit_code == 0 {
                 log_success(&command, logs_base_dir);
             } else {
-                log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+                log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
             }
 
             Ok(CaptureResult {
@@ -490,12 +499,12 @@ mod windows_impl {
 
         #[test]
         fn applies_network_block_when_access_is_disabled() {
-            assert!(!workspace_policy(false).has_full_network_access());
+            assert!(!workspace_policy(/*network_access*/ false).has_full_network_access());
         }
 
         #[test]
         fn skips_network_block_when_access_is_allowed() {
-            assert!(workspace_policy(true).has_full_network_access());
+            assert!(workspace_policy(/*network_access*/ true).has_full_network_access());
         }
 
         #[test]

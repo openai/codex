@@ -31,7 +31,6 @@ use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
@@ -46,6 +45,7 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
+use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 
@@ -1050,7 +1050,7 @@ impl JsReplManager {
                 "--experimental-vm-modules".to_string(),
                 kernel_path.to_string_lossy().to_string(),
             ],
-            cwd: turn.cwd.to_path_buf(),
+            cwd: turn.cwd.clone(),
             env,
             additional_permissions: None,
         };
@@ -1068,7 +1068,7 @@ impl JsReplManager {
                 enforce_managed_network: has_managed_network_requirements,
                 network: None,
                 sandbox_policy_cwd: &turn.cwd,
-                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
+                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
                 windows_sandbox_private_desktop: turn
@@ -1565,13 +1565,8 @@ impl JsReplManager {
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
-                mcp_tools: Some(
-                    mcp_tools
-                        .into_iter()
-                        .map(|(name, tool)| (name, tool.tool))
-                        .collect(),
-                ),
-                app_tools: None,
+                deferred_mcp_tools: None,
+                mcp_tools: Some(mcp_tools),
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             },

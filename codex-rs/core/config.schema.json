@@ -392,6 +392,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "general_analytics": {
+              "type": "boolean"
+            },
             "guardian_approval": {
               "type": "boolean"
             },
@@ -420,7 +423,7 @@
               "type": "boolean"
             },
             "multi_agent_v2": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
             },
             "personality": {
               "type": "boolean"
@@ -432,6 +435,9 @@
               "type": "boolean"
             },
             "realtime_conversation": {
+              "type": "boolean"
+            },
+            "remote_control": {
               "type": "boolean"
             },
             "remote_models": {
@@ -503,9 +509,6 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
-            "voice_transcription": {
-              "type": "boolean"
-            },
             "web_search": {
               "type": "boolean"
             },
@@ -519,6 +522,15 @@
           "type": "object"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "include_apps_instructions": {
+          "type": "boolean"
+        },
+        "include_environment_context": {
+          "type": "boolean"
+        },
+        "include_permissions_instructions": {
           "type": "boolean"
         },
         "js_repl_node_module_dirs": {
@@ -605,6 +617,16 @@
         }
       },
       "type": "object"
+    },
+    "FeatureToml_for_MultiAgentV2ConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/MultiAgentV2ConfigToml"
+        }
+      ]
     },
     "FeedbackConfigToml": {
       "additionalProperties": false,
@@ -742,6 +764,50 @@
         }
       ]
     },
+    "MarketplaceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "last_updated": {
+          "default": null,
+          "description": "Last time Codex successfully added or refreshed this marketplace.",
+          "type": "string"
+        },
+        "ref": {
+          "default": null,
+          "description": "Git ref to check out when `source_type` is `git`.",
+          "type": "string"
+        },
+        "source": {
+          "default": null,
+          "description": "Source location used when the marketplace was added.",
+          "type": "string"
+        },
+        "source_type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MarketplaceSourceType"
+            }
+          ],
+          "default": null,
+          "description": "Source kind used to install this marketplace."
+        },
+        "sparse_paths": {
+          "default": null,
+          "description": "Sparse checkout paths used when `source_type` is `git`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "MarketplaceSourceType": {
+      "enum": [
+        "git"
+      ],
+      "type": "string"
+    },
     "McpServerToolConfig": {
       "additionalProperties": false,
       "description": "Per-tool approval settings for a single MCP server tool.",
@@ -819,10 +885,62 @@
       },
       "type": "object"
     },
+    "ModelProviderAuthInfo": {
+      "additionalProperties": false,
+      "description": "Configuration for obtaining a provider bearer token from a command.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Command arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Command to execute. Bare names are resolved via `PATH`; paths are resolved against `cwd`.",
+          "type": "string"
+        },
+        "cwd": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Working directory used when running the token command."
+        },
+        "refresh_interval_ms": {
+          "default": 300000,
+          "description": "Maximum age for the cached token before rerunning the command. Set to `0` to disable proactive refresh and only rerun after a 401 retry path.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "default": 5000,
+          "description": "Maximum time to wait for the token command to exit successfully.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
       "properties": {
+        "auth": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelProviderAuthInfo"
+            }
+          ],
+          "description": "Command-backed bearer-token configuration for this provider."
+        },
         "base_url": {
           "description": "Base URL for the provider's OpenAI-compatible API.",
           "type": "string"
@@ -911,6 +1029,24 @@
       "required": [
         "name"
       ],
+      "type": "object"
+    },
+    "MultiAgentV2ConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "hide_spawn_agent_metadata": {
+          "type": "boolean"
+        },
+        "usage_hint_enabled": {
+          "type": "boolean"
+        },
+        "usage_hint_text": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "NetworkDomainPermissionToml": {
@@ -1015,6 +1151,24 @@
         }
       },
       "type": "object"
+    },
+    "NotificationCondition": {
+      "oneOf": [
+        {
+          "description": "Emit TUI notifications only while the terminal is unfocused.",
+          "enum": [
+            "unfocused"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Emit TUI notifications regardless of terminal focus.",
+          "enum": [
+            "always"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "NotificationMethod": {
       "enum": [
@@ -1267,6 +1421,7 @@
     },
     "RawMcpServerConfig": {
       "additionalProperties": false,
+      "description": "Raw MCP config shape used for deserialization and JSON Schema generation.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
       "properties": {
         "args": {
           "default": null,
@@ -1404,14 +1559,51 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "transport": {
+          "$ref": "#/definitions/RealtimeTransport"
+        },
         "type": {
           "$ref": "#/definitions/RealtimeWsMode"
         },
         "version": {
           "$ref": "#/definitions/RealtimeConversationVersion"
+        },
+        "voice": {
+          "$ref": "#/definitions/RealtimeVoice"
         }
       },
       "type": "object"
+    },
+    "RealtimeTransport": {
+      "enum": [
+        "webrtc",
+        "websocket"
+      ],
+      "type": "string"
+    },
+    "RealtimeVoice": {
+      "enum": [
+        "alloy",
+        "arbor",
+        "ash",
+        "ballad",
+        "breeze",
+        "cedar",
+        "coral",
+        "cove",
+        "echo",
+        "ember",
+        "juniper",
+        "maple",
+        "marin",
+        "sage",
+        "shimmer",
+        "sol",
+        "spruce",
+        "vale",
+        "verse"
+      ],
+      "type": "string"
     },
     "RealtimeWsMode": {
       "enum": [
@@ -1682,6 +1874,15 @@
           "default": {},
           "description": "Startup tooltip availability NUX state persisted by the TUI."
         },
+        "notification_condition": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NotificationCondition"
+            }
+          ],
+          "default": "unfocused",
+          "description": "Controls whether TUI notifications are delivered only when the terminal is unfocused or regardless of focus. Defaults to `unfocused`."
+        },
         "notification_method": {
           "allOf": [
             {
@@ -1689,7 +1890,7 @@
             }
           ],
           "default": "auto",
-          "description": "Notification method to use for unfocused terminal notifications. Defaults to `auto`."
+          "description": "Notification method to use for terminal notifications. Defaults to `auto`."
         },
         "notifications": {
           "allOf": [
@@ -1698,7 +1899,7 @@
             }
           ],
           "default": true,
-          "description": "Enable desktop notifications from the TUI when the terminal is unfocused. Defaults to `true`."
+          "description": "Enable desktop notifications from the TUI. Defaults to `true`."
         },
         "show_tooltips": {
           "default": true,
@@ -1707,7 +1908,7 @@
         },
         "status_line": {
           "default": null,
-          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and `current-dir`.",
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.",
           "items": {
             "type": "string"
           },
@@ -2037,6 +2238,9 @@
         "fast_mode": {
           "type": "boolean"
         },
+        "general_analytics": {
+          "type": "boolean"
+        },
         "guardian_approval": {
           "type": "boolean"
         },
@@ -2065,7 +2269,7 @@
           "type": "boolean"
         },
         "multi_agent_v2": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
         },
         "personality": {
           "type": "boolean"
@@ -2077,6 +2281,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "remote_control": {
           "type": "boolean"
         },
         "remote_models": {
@@ -2148,9 +2355,6 @@
         "use_linux_sandbox_bwrap": {
           "type": "boolean"
         },
-        "voice_transcription": {
-          "type": "boolean"
-        },
         "web_search": {
           "type": "boolean"
         },
@@ -2215,6 +2419,18 @@
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
     },
+    "include_apps_instructions": {
+      "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_environment_context": {
+      "description": "Whether to inject the `<environment_context>` user block.",
+      "type": "boolean"
+    },
+    "include_permissions_instructions": {
+      "description": "Whether to inject the `<permissions instructions>` developer block.",
+      "type": "boolean"
+    },
     "instructions": {
       "description": "System instructions.",
       "type": "string"
@@ -2241,6 +2457,14 @@
         }
       ],
       "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
+    },
+    "marketplaces": {
+      "additionalProperties": {
+        "$ref": "#/definitions/MarketplaceConfig"
+      },
+      "default": {},
+      "description": "User-level marketplace entries keyed by marketplace name.",
+      "type": "object"
     },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
@@ -2343,7 +2567,7 @@
           "$ref": "#/definitions/Notice"
         }
       ],
-      "description": "Collection of in-product notices (different from notifications) See [`crate::config::types::Notices`] for more details"
+      "description": "Collection of in-product notices (different from notifications) See [`crate::types::Notice`] for more details"
     },
     "notify": {
       "default": null,

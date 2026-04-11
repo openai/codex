@@ -1,6 +1,6 @@
 use anyhow::Result;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -463,16 +463,17 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     let db = test.codex.state_db().expect("state db enabled");
     let expected_thread_id = test.session_configured.session_id.to_string();
 
-    let subscriber = tracing_subscriber::registry().with(codex_state::log_db::start(db.clone()));
-    let dispatch = tracing::Dispatch::new(subscriber);
-    let _guard = tracing::dispatcher::set_default(&dispatch);
-
     test.submit_turn("run a shell command").await?;
-    {
+
+    let log_db_layer = codex_state::log_db::start(db.clone());
+    let subscriber = tracing_subscriber::registry().with(log_db_layer.clone());
+    let dispatch = tracing::Dispatch::new(subscriber);
+    tracing::dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!("test_log_span", thread_id = %expected_thread_id);
         let _entered = span.enter();
         tracing::info!("ToolCall: shell_command {{\"command\":\"echo hello\"}}");
-    }
+    });
+    log_db_layer.flush().await;
 
     let mut found = None;
     for _ in 0..80 {

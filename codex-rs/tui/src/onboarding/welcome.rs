@@ -27,6 +27,7 @@ pub(crate) struct WelcomeWidget {
     pub is_logged_in: bool,
     animation: AsciiAnimation,
     animations_enabled: bool,
+    animations_suppressed: Cell<bool>,
     layout_area: Cell<Option<Rect>>,
 }
 
@@ -55,6 +56,7 @@ impl WelcomeWidget {
             is_logged_in,
             animation: AsciiAnimation::new(request_frame),
             animations_enabled,
+            animations_suppressed: Cell::new(false),
             layout_area: Cell::new(None),
         }
     }
@@ -62,18 +64,23 @@ impl WelcomeWidget {
     pub(crate) fn update_layout_area(&self, area: Rect) {
         self.layout_area.set(Some(area));
     }
+
+    pub(crate) fn set_animations_suppressed(&self, suppressed: bool) {
+        self.animations_suppressed.set(suppressed);
+    }
 }
 
 impl WidgetRef for &WelcomeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        if self.animations_enabled {
+        if self.animations_enabled && !self.animations_suppressed.get() {
             self.animation.schedule_next_frame();
         }
 
         let layout_area = self.layout_area.get().unwrap_or(area);
         // Skip the animation entirely when the viewport is too small so we don't clip frames.
         let show_animation = self.animations_enabled
+            && !self.animations_suppressed.get()
             && layout_area.height >= MIN_ANIMATION_HEIGHT
             && layout_area.width >= MIN_ANIMATION_WIDTH;
 
@@ -128,7 +135,11 @@ mod tests {
 
     #[test]
     fn welcome_renders_animation_on_first_draw() {
-        let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
+        let widget = WelcomeWidget::new(
+            /*is_logged_in*/ false,
+            FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+        );
         let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
         let mut buf = Buffer::empty(area);
         let frame_lines = widget.animation.current_frame().lines().count() as u16;
@@ -140,7 +151,11 @@ mod tests {
 
     #[test]
     fn welcome_skips_animation_below_height_breakpoint() {
-        let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
+        let widget = WelcomeWidget::new(
+            /*is_logged_in*/ false,
+            FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+        );
         let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT - 1);
         let mut buf = Buffer::empty(area);
         (&widget).render(area, &mut buf);
@@ -153,8 +168,13 @@ mod tests {
     fn ctrl_dot_changes_animation_variant() {
         let mut widget = WelcomeWidget {
             is_logged_in: false,
-            animation: AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0),
+            animation: AsciiAnimation::with_variants(
+                FrameRequester::test_dummy(),
+                &VARIANTS,
+                /*variant_idx*/ 0,
+            ),
             animations_enabled: true,
+            animations_suppressed: Cell::new(false),
             layout_area: Cell::new(None),
         };
 

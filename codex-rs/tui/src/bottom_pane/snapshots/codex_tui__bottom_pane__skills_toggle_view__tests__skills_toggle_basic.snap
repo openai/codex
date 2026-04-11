@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/skills_toggle_view.rs
-assertion_line: 439
 expression: "render_lines(&view, 72)"
 ---
                                                                         

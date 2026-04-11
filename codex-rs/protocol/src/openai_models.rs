@@ -20,6 +20,7 @@ use crate::config_types::ReasoningSummary;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+pub const SPEED_TIER_FAST: &str = "fast";
 
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
@@ -132,6 +133,9 @@ pub struct ModelPreset {
     /// Whether this model supports personality-specific instructions.
     #[serde(default)]
     pub supports_personality: bool,
+    /// Additional speed tiers this model can run with beyond the standard path.
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -252,6 +256,8 @@ pub struct ModelInfo {
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
@@ -428,6 +434,7 @@ impl From<ModelInfo> for ModelPreset {
                 .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             supports_personality,
+            additional_speed_tiers: info.additional_speed_tiers,
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
@@ -449,6 +456,12 @@ impl From<ModelInfo> for ModelPreset {
 }
 
 impl ModelPreset {
+    pub fn supports_fast_mode(&self) -> bool {
+        self.additional_speed_tiers
+            .iter()
+            .any(|tier| tier == SPEED_TIER_FAST)
+    }
+
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
@@ -527,6 +540,7 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
+            additional_speed_tiers: Vec::new(),
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
@@ -537,7 +551,7 @@ mod tests {
             default_verbosity: None,
             apply_patch_tool_type: None,
             web_search_tool_type: WebSearchToolType::Text,
-            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
             context_window: None,
@@ -606,7 +620,10 @@ mod tests {
             model.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
-        assert_eq!(model.get_model_instructions(None), "Hello\n");
+        assert_eq!(
+            model.get_model_instructions(/*personality*/ None),
+            "Hello\n"
+        );
 
         let model_no_personality = test_model(Some(ModelMessages {
             instructions_template: Some("Hello\n{{ personality }}".to_string()),
@@ -628,7 +645,10 @@ mod tests {
             model_no_personality.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
-        assert_eq!(model_no_personality.get_model_instructions(None), "Hello\n");
+        assert_eq!(
+            model_no_personality.get_model_instructions(/*personality*/ None),
+            "Hello\n"
+        );
     }
 
     #[test]
@@ -651,7 +671,7 @@ mod tests {
     fn get_personality_message_returns_default_when_personality_is_none() {
         let personality_template = personality_variables();
         assert_eq!(
-            personality_template.get_personality_message(None),
+            personality_template.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
     }
@@ -672,7 +692,7 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(
-            personality_variables.get_personality_message(None),
+            personality_variables.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
 
@@ -694,7 +714,7 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(
-            personality_variables.get_personality_message(None),
+            personality_variables.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
 
@@ -715,7 +735,10 @@ mod tests {
             personality_variables.get_personality_message(Some(Personality::None)),
             Some(String::new())
         );
-        assert_eq!(personality_variables.get_personality_message(None), None);
+        assert_eq!(
+            personality_variables.get_personality_message(/*personality*/ None),
+            None
+        );
     }
 
     #[test]
@@ -763,7 +786,8 @@ mod tests {
             availability_nux: Some(ModelAvailabilityNux {
                 message: "Try Spark.".to_string(),
             }),
-            ..test_model(None)
+            additional_speed_tiers: vec![SPEED_TIER_FAST.to_string()],
+            ..test_model(/*spec*/ None)
         });
 
         assert_eq!(
@@ -772,5 +796,6 @@ mod tests {
                 message: "Try Spark.".to_string(),
             })
         );
+        assert!(preset.supports_fast_mode());
     }
 }

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
-use codex_core::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
-use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
+use crate::legacy_core::PLUGIN_TEXT_MENTION_SIGIL;
+use crate::legacy_core::TOOL_MENTION_SIGIL;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LinkedMention {
@@ -16,6 +16,7 @@ pub(crate) struct DecodedHistoryText {
     pub(crate) mentions: Vec<LinkedMention>,
 }
 
+#[allow(dead_code)]
 pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) -> String {
     if mentions.is_empty() || text.is_empty() {
         return text.to_string();

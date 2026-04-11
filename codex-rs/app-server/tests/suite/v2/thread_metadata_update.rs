@@ -19,10 +19,10 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
-use codex_core::state_db::reconcile_rollout;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as RolloutGitInfo;
+use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -184,7 +184,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -
         "2025-01-05T12:00:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -237,7 +237,7 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
         "2025-01-06T08:30:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
     let thread_uuid = ThreadId::from_string(&thread_id)?;
     let rollout_path = rollout_path(codex_home.path(), "2025-01-06T08-30-00", &thread_id);
@@ -245,10 +245,10 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
         Some(&state_db),
         rollout_path.as_path(),
         "mock_provider",
-        None,
+        /*builder*/ None,
         &[],
-        None,
-        None,
+        /*archived_only*/ None,
+        /*new_thread_memory_mode*/ None,
     )
     .await;
 
@@ -317,7 +317,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_archived_thread()
         "2025-01-06T08:30:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let archived_dir = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
@@ -430,7 +430,9 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
 
 async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
     let state_db = StateRuntime::init(codex_home.to_path_buf(), "mock_provider".into()).await?;
-    state_db.mark_backfill_complete(None).await?;
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
     Ok(state_db)
 }
 

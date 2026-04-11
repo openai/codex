@@ -904,6 +904,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -920,6 +921,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             })
             .await?;
     }
@@ -1321,7 +1323,8 @@ async fn pre_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_pre_tool_use_hook(home, None, "json_deny", "should not fire")
+            if let Err(error) =
+                write_pre_tool_use_hook(home, /*matcher*/ None, "json_deny", "should not fire")
             {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
@@ -1775,9 +1778,12 @@ async fn post_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_post_tool_use_hook(home, None, "decision_block", "should not fire")
-            {
+            if let Err(error) = write_post_tool_use_hook(
+                home,
+                /*matcher*/ None,
+                "decision_block",
+                "should not fire",
+            ) {
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })

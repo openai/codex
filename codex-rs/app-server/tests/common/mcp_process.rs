@@ -45,7 +45,10 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::McpResourceReadParams;
+use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::PluginInstallParams;
@@ -65,6 +68,7 @@ use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
+use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -79,7 +83,7 @@ use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
-use codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use tokio::process::Command;
 
 pub struct McpProcess {
@@ -481,6 +485,24 @@ impl McpProcess {
         self.send_request("app/list", params).await
     }
 
+    /// Send an `mcpServer/resource/read` JSON-RPC request.
+    pub async fn send_mcp_resource_read_request(
+        &mut self,
+        params: McpResourceReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("mcpServer/resource/read", params).await
+    }
+
+    /// Send an `mcpServer/tool/call` JSON-RPC request.
+    pub async fn send_mcp_server_tool_call_request(
+        &mut self,
+        params: McpServerToolCallParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("mcpServer/tool/call", params).await
+    }
+
     /// Send a `skills/list` JSON-RPC request.
     pub async fn send_skills_list_request(
         &mut self,
@@ -524,6 +546,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("plugin/read", params).await
+    }
+
+    /// Send an `mcpServerStatus/list` JSON-RPC request.
+    pub async fn send_list_mcp_server_status_request(
+        &mut self,
+        params: ListMcpServerStatusParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("mcpServerStatus/list", params).await
     }
 
     /// Send a JSON-RPC request with raw params for protocol-level validation tests.
@@ -642,6 +673,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/realtime/stop", params).await
+    }
+
+    pub async fn send_thread_realtime_list_voices_request(
+        &mut self,
+        params: ThreadRealtimeListVoicesParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/realtime/listVoices", params)
+            .await
     }
 
     /// Deterministically clean up an intentionally in-flight turn.

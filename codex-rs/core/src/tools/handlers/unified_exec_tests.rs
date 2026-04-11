@@ -2,10 +2,12 @@ use super::*;
 use crate::shell::default_user_shell;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
-use crate::tools::spec::ZshForkConfig;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_tools::UnifiedExecShellMode;
+use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::sync::Arc;
@@ -31,7 +33,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -52,7 +54,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -78,7 +80,7 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -98,7 +100,7 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        true,
+        /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -115,7 +117,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
         &args,
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
-        false,
+        /*allow_login_shell*/ false,
     )
     .expect_err("explicit login should be rejected");
 
@@ -144,8 +146,13 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         })?,
     });
 
-    let command = get_command(&args, Arc::new(default_user_shell()), &shell_mode, true)
-        .map_err(anyhow::Error::msg)?;
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &shell_mode,
+        /*allow_login_shell*/ true,
+    )
+    .map_err(anyhow::Error::msg)?;
 
     assert_eq!(
         command,
@@ -175,15 +182,15 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
             }
         }"#;
 
-    let base_path = resolve_workdir_base_path(json, cwd.path())?;
-    let args: ExecCommandArgs = parse_arguments_with_base_path(json, base_path.as_path())?;
+    let base_path = resolve_workdir_base_path(json, &cwd.path().abs())?;
+    let args: ExecCommandArgs = parse_arguments_with_base_path(json, &base_path)?;
 
     assert_eq!(
         args.additional_permissions,
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: None,
-                write: Some(vec![AbsolutePathBuf::try_from(expected_write)?]),
+                write: Some(vec![expected_write.abs()]),
             }),
             ..Default::default()
         })

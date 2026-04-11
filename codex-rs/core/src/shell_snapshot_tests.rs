@@ -269,9 +269,15 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
         "HOME=\"{home_display}\"; export HOME; {}",
         bash_snapshot_script()
     );
-    let output = run_script_with_timeout(&shell, &script, Duration::from_secs(2), true, home)
-        .await
-        .context("run snapshot command")?;
+    let output = run_script_with_timeout(
+        &shell,
+        &script,
+        Duration::from_secs(2),
+        /*use_login_shell*/ true,
+        home,
+    )
+    .await
+    .context("run snapshot command")?;
     let read_status = fs::read_to_string(&read_status_path)
         .await
         .context("read stdin probe status")?;
@@ -307,9 +313,15 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true, dir.path())
-        .await
-        .expect_err("snapshot shell should time out");
+    let err = run_script_with_timeout(
+        &shell,
+        &script,
+        Duration::from_secs(1),
+        /*use_login_shell*/ true,
+        dir.path(),
+    )
+    .await
+    .expect_err("snapshot shell should time out");
     assert!(
         err.to_string().contains("timed out"),
         "expected timeout error, got {err:?}"

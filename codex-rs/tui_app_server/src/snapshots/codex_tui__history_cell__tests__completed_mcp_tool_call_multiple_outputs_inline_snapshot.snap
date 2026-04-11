@@ -1,8 +1,0 @@
----
-source: tui/src/history_cell.rs
-assertion_line: 1934
-expression: rendered
----
-• Called metrics.summary({"metric":"trace.latency","window":"15m"})
-  └ Latency summary: p50=120ms, p95=480ms.
-    No anomalies detected.

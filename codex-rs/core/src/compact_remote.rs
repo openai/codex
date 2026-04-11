@@ -5,21 +5,27 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::built_tools;
+use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
+use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::context_manager::is_codex_generated_item;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
-use crate::protocol::CompactedItem;
-use crate::protocol::EventMsg;
-use crate::protocol::TurnStartedEvent;
+use codex_analytics::CompactionImplementation;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
+use codex_analytics::CompactionTrigger;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TurnStartedEvent;
 use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -29,8 +35,18 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await?;
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        initial_context_injection,
+        CompactionTrigger::Auto,
+        reason,
+        phase,
+    )
+    .await?;
     Ok(())
 }
 
@@ -40,22 +56,50 @@ pub(crate) async fn run_remote_compact_task(
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
+        started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        InitialContextInjection::DoNotInject,
+        CompactionTrigger::Manual,
+        CompactionReason::UserRequested,
+        CompactionPhase::StandaloneTurn,
+    )
+    .await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
-    if let Err(err) =
-        run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await
-    {
+    let attempt = CompactionAnalyticsAttempt::begin(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        trigger,
+        reason,
+        CompactionImplementation::ResponsesCompact,
+        phase,
+    )
+    .await;
+    let result =
+        run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await;
+    attempt
+        .track(
+            sess.as_ref(),
+            compaction_status_from_result(&result),
+            result.as_ref().err().map(ToString::to_string),
+        )
+        .await;
+    if let Err(err) = result {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );

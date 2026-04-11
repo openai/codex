@@ -183,14 +183,14 @@ mod tests {
     #[test]
     fn desired_height_empty() {
         let queue = PendingInputPreview::new();
-        assert_eq!(queue.desired_height(40), 0);
+        assert_eq!(queue.desired_height(/*width*/ 40), 0);
     }
 
     #[test]
     fn desired_height_one_message() {
         let mut queue = PendingInputPreview::new();
         queue.queued_messages.push("Hello, world!".to_string());
-        assert_eq!(queue.desired_height(40), 3);
+        assert_eq!(queue.desired_height(/*width*/ 40), 3);
     }
 
     #[test]

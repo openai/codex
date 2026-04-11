@@ -1,25 +1,23 @@
-use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
-use crate::protocol::EventMsg;
-use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ViewImageToolCallEvent;
 
 pub struct ViewImageHandler;
 
@@ -37,7 +35,6 @@ enum ViewImageDetail {
     Original,
 }
 
-#[async_trait]
 impl ToolHandler for ViewImageHandler {
     type Output = ViewImageOutput;
 
@@ -89,13 +86,14 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let abs_path =
-            AbsolutePathBuf::try_from(turn.resolve_path(Some(args.path))).map_err(|error| {
-                FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
-            })?;
+        let abs_path = turn.resolve_path(Some(args.path));
+        let Some(environment) = turn.environment.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "view_image is unavailable in this session".to_string(),
+            ));
+        };
 
-        let metadata = turn
-            .environment
+        let metadata = environment
             .get_filesystem()
             .get_metadata(&abs_path)
             .await
@@ -112,8 +110,7 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
-        let file_bytes = turn
-            .environment
+        let file_bytes = environment
             .get_filesystem()
             .read_file(&abs_path)
             .await

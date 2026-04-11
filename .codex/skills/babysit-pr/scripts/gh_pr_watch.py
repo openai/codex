@@ -45,7 +45,6 @@ MERGE_CONFLICT_OR_BLOCKING_STATES = {
     "DRAFT",
     "UNKNOWN",
 }
-GREEN_STATE_MAX_POLL_SECONDS = 60 * 60
 
 
 class GhCommandError(RuntimeError):
@@ -578,7 +577,7 @@ def recommend_actions(pr, checks_summary, failed_runs, new_review_items, retries
         return unique_actions(actions)
 
     if is_pr_ready_to_merge(pr, checks_summary, new_review_items):
-        actions.append("stop_ready_to_merge")
+        actions.append("ready_to_merge")
         return unique_actions(actions)
 
     if new_review_items:
@@ -606,12 +605,6 @@ def collect_snapshot(args):
     if not state.get("started_at"):
         state["started_at"] = int(time.time())
 
-    # `gh pr checks -R <repo>` requires an explicit PR/branch/url argument.
-    # After resolving `--pr auto`, reuse the concrete PR number.
-    checks = get_pr_checks(str(pr["number"]), repo=pr["repo"])
-    checks_summary = summarize_checks(checks)
-    workflow_runs = get_workflow_runs_for_sha(pr["repo"], pr["head_sha"])
-    failed_runs = failed_runs_from_workflow_runs(workflow_runs, pr["head_sha"])
     authenticated_login = get_authenticated_login()
     new_review_items = fetch_new_review_items(
         pr,
@@ -619,6 +612,15 @@ def collect_snapshot(args):
         fresh_state=fresh_state,
         authenticated_login=authenticated_login,
     )
+    # Surface review feedback before drilling into CI and mergeability details.
+    # That keeps the babysitter responsive to new comments even when other
+    # actions are also available.
+    # `gh pr checks -R <repo>` requires an explicit PR/branch/url argument.
+    # After resolving `--pr auto`, reuse the concrete PR number.
+    checks = get_pr_checks(str(pr["number"]), repo=pr["repo"])
+    checks_summary = summarize_checks(checks)
+    workflow_runs = get_workflow_runs_for_sha(pr["repo"], pr["head_sha"])
+    failed_runs = failed_runs_from_workflow_runs(workflow_runs, pr["head_sha"])
 
     retries_used = current_retry_count(state, pr["head_sha"])
     actions = recommend_actions(
@@ -761,7 +763,6 @@ def run_watch(args):
         if (
             "stop_pr_closed" in actions
             or "stop_exhausted_retries" in actions
-            or "stop_ready_to_merge" in actions
         ):
             print_event("stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")})
             return 0
@@ -769,13 +770,13 @@ def run_watch(args):
         current_change_key = snapshot_change_key(snapshot)
         changed = current_change_key != last_change_key
         green = is_ci_green(snapshot)
+        pr = snapshot.get("pr") or {}
+        pr_open = not bool(pr.get("closed")) and not bool(pr.get("merged"))
 
-        if not green:
+        if not green or pr_open:
             poll_seconds = args.poll_seconds
         elif changed or last_change_key is None:
             poll_seconds = args.poll_seconds
-        else:
-            poll_seconds = min(poll_seconds * 2, GREEN_STATE_MAX_POLL_SECONDS)
 
         last_change_key = current_change_key
         time.sleep(poll_seconds)

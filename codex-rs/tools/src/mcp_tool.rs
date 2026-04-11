@@ -42,13 +42,17 @@ pub fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) 
         "properties": {
             "content": {
                 "type": "array",
-                "items": {}
+                "items": {
+                    "type": "object"
+                }
             },
             "structuredContent": structured_content_schema,
             "isError": {
                 "type": "boolean"
             },
-            "_meta": {}
+            "_meta": {
+                "type": "object"
+            }
         },
         "required": ["content"],
         "additionalProperties": false

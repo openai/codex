@@ -27,7 +27,7 @@ use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
 use codex_git_utils::GhostCommit;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_image::error::ImageProcessingError;
+use codex_utils_image::ImageProcessingError;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
@@ -1694,7 +1694,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: false,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1724,8 +1724,8 @@ mod tests {
             ApprovalsReviewer::User,
             &Policy::empty(),
             &PathBuf::from("/tmp"),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
@@ -1751,7 +1751,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: false,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1772,7 +1772,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1792,7 +1792,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1812,7 +1812,7 @@ mod tests {
                 exec_permission_approvals_enabled: true,
                 request_permissions_tool_enabled: false,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1832,7 +1832,7 @@ mod tests {
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1854,7 +1854,7 @@ mod tests {
                 exec_permission_approvals_enabled: true,
                 request_permissions_tool_enabled: true,
             },
-            None,
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1868,8 +1868,8 @@ mod tests {
             AskForApproval::OnRequest,
             ApprovalsReviewer::GuardianSubagent,
             &Policy::empty(),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1883,8 +1883,8 @@ mod tests {
             AskForApproval::Never,
             ApprovalsReviewer::GuardianSubagent,
             &Policy::empty(),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1935,8 +1935,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            false,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1969,8 +1969,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            false,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1984,8 +1984,8 @@ mod tests {
                     "- `mcp_elicitations`",
                 ],
                 &[],
-                true,
-                false,
+                /*include_shell_permission_request_instructions*/ true,
+                /*include_request_permissions_tool_section*/ false,
             )
         );
     }
@@ -2002,8 +2002,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            false,
-            false,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -2017,8 +2017,8 @@ mod tests {
                     "- `mcp_elicitations`",
                 ],
                 &[],
-                false,
-                false,
+                /*include_shell_permission_request_instructions*/ false,
+                /*include_request_permissions_tool_section*/ false,
             )
         );
     }
@@ -2035,8 +2035,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            true,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ true,
         )
         .into_text();
         assert!(allowed.contains("# request_permissions Tool"));
@@ -2051,8 +2051,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            true,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ true,
         )
         .into_text();
         assert!(!rejected.contains("# request_permissions Tool"));
@@ -2071,8 +2071,8 @@ mod tests {
             }),
             ApprovalsReviewer::User,
             &Policy::empty(),
-            true,
-            false,
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
         )
         .into_text();
 
@@ -2652,7 +2652,7 @@ mod tests {
                 assert_eq!(
                     content.get(3),
                     Some(&ContentItem::InputText {
-                        text: local_image_open_tag_text(2),
+                        text: local_image_open_tag_text(/*label_number*/ 2),
                     })
                 );
                 assert!(matches!(

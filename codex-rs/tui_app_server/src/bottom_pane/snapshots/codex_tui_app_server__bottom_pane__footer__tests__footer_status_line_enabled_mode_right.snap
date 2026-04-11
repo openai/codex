@@ -1,5 +1,0 @@
----
-source: tui_app_server/src/bottom_pane/footer.rs
-expression: terminal.backend()
----
-"                                                                                        Plan mode (shift+tab to cycle)  "

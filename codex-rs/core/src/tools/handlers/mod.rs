@@ -1,5 +1,5 @@
 pub(crate) mod agent_jobs;
-pub mod apply_patch;
+pub(crate) mod apply_patch;
 mod dynamic;
 mod js_repl;
 mod list_dir;
@@ -21,12 +21,11 @@ mod view_image;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
-pub use plan::PLAN_TOOL;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
@@ -44,16 +43,11 @@ pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use plan::PlanHandler;
 pub use request_permissions::RequestPermissionsHandler;
-pub(crate) use request_permissions::request_permissions_tool_description;
 pub use request_user_input::RequestUserInputHandler;
-pub(crate) use request_user_input::request_user_input_tool_description;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
-pub(crate) use tool_search::DEFAULT_LIMIT as TOOL_SEARCH_DEFAULT_LIMIT;
-pub(crate) use tool_search::TOOL_SEARCH_TOOL_NAME;
 pub use tool_search::ToolSearchHandler;
-pub(crate) use tool_suggest::TOOL_SUGGEST_TOOL_NAME;
 pub use tool_suggest::ToolSuggestHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
@@ -69,7 +63,7 @@ where
 
 fn parse_arguments_with_base_path<T>(
     arguments: &str,
-    base_path: &Path,
+    base_path: &AbsolutePathBuf,
 ) -> Result<T, FunctionCallError>
 where
     T: for<'de> Deserialize<'de>,
@@ -80,18 +74,14 @@ where
 
 fn resolve_workdir_base_path(
     arguments: &str,
-    default_cwd: &Path,
-) -> Result<PathBuf, FunctionCallError> {
+    default_cwd: &AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, FunctionCallError> {
     let arguments: Value = parse_arguments(arguments)?;
     Ok(arguments
         .get("workdir")
         .and_then(Value::as_str)
         .filter(|workdir| !workdir.is_empty())
-        .map(PathBuf::from)
-        .map_or_else(
-            || default_cwd.to_path_buf(),
-            |workdir| crate::util::resolve_path(default_cwd, &workdir),
-        ))
+        .map_or_else(|| default_cwd.clone(), |workdir| default_cwd.join(workdir)))
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and
@@ -261,7 +251,7 @@ mod tests {
         let cwd = tempdir().expect("tempdir");
 
         let normalized = normalize_and_validate_additional_permissions(
-            false,
+            /*additional_permissions_allowed*/ false,
             AskForApproval::Granular(GranularApprovalConfig {
                 sandbox_approval: true,
                 rules: true,
@@ -271,7 +261,7 @@ mod tests {
             }),
             SandboxPermissions::WithAdditionalPermissions,
             Some(network_permissions()),
-            true,
+            /*permissions_preapproved*/ true,
             cwd.path(),
         )
         .expect("preapproved permissions should be allowed");
@@ -284,11 +274,11 @@ mod tests {
         let cwd = tempdir().expect("tempdir");
 
         let err = normalize_and_validate_additional_permissions(
-            false,
+            /*additional_permissions_allowed*/ false,
             AskForApproval::OnRequest,
             SandboxPermissions::WithAdditionalPermissions,
             Some(network_permissions()),
-            false,
+            /*permissions_preapproved*/ false,
             cwd.path(),
         )
         .expect_err("fresh inline permission requests should remain disabled");
@@ -305,7 +295,7 @@ mod tests {
         let granted_permissions = file_system_permissions(cwd.path());
         let implicit_permissions = implicit_granted_permissions(
             SandboxPermissions::UseDefault,
-            None,
+            /*additional_permissions*/ None,
             &EffectiveAdditionalPermissions {
                 sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
                 additional_permissions: Some(granted_permissions.clone()),

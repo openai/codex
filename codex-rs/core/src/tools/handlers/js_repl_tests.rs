@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use super::parse_freeform_args;
 use crate::codex::make_session_and_context_with_rx;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandSource;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -58,7 +58,7 @@ async fn emit_js_repl_exec_end_sends_event() {
         turn.as_ref(),
         "call-1",
         "hello",
-        None,
+        /*error*/ None,
         Duration::from_millis(12),
     )
     .await;

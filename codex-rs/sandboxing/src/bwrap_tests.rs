@@ -6,30 +6,42 @@ use tempfile::tempdir;
 
 #[test]
 fn system_bwrap_warning_reports_missing_system_bwrap() {
-    let warning =
-        system_bwrap_warning_for_lookup(None).expect("missing system bwrap should emit a warning");
-
-    assert!(warning.contains("could not find system bubblewrap"));
+    assert_eq!(
+        system_bwrap_warning_for_path(/*system_bwrap_path*/ None),
+        Some(MISSING_BWRAP_WARNING.to_string())
+    );
 }
 
 #[test]
-fn system_bwrap_warning_skips_too_old_system_bwrap() {
+fn system_bwrap_warning_reports_user_namespace_failures() {
+    for failure in USER_NAMESPACE_FAILURES {
+        let fake_bwrap = write_fake_bwrap(&format!(
+            r#"#!/bin/sh
+echo '{failure}' >&2
+exit 1
+"#
+        ));
+        let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+        assert_eq!(
+            system_bwrap_warning_for_path(Some(fake_bwrap_path)),
+            Some(USER_NAMESPACE_WARNING.to_string()),
+            "{failure}",
+        );
+    }
+}
+
+#[test]
+fn system_bwrap_warning_skips_unrelated_bwrap_failures() {
     let fake_bwrap = write_fake_bwrap(
         r#"#!/bin/sh
-if [ "$1" = "--help" ]; then
-  echo 'usage: bwrap [OPTION...] COMMAND'
-  exit 0
-fi
+echo 'bwrap: Unknown option --argv0' >&2
 exit 1
 "#,
     );
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
 
-    assert_eq!(
-        system_bwrap_warning_for_lookup(Some(fake_bwrap_path.to_path_buf())),
-        None,
-        "Do not warn even if bwrap does not support `--argv0`",
-    );
+    assert_eq!(system_bwrap_warning_for_path(Some(fake_bwrap_path)), None);
 }
 
 #[test]
@@ -102,5 +114,5 @@ fn write_named_fake_bwrap_in(dir: &Path) -> PathBuf {
     fs::write(&path, "#!/bin/sh\n").expect("write fake bwrap");
     let permissions = fs::Permissions::from_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
-    path
+    fs::canonicalize(path).expect("canonicalize fake bwrap")
 }

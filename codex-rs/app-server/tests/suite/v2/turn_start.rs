@@ -43,7 +43,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::config::ConfigToml;
+use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -234,6 +234,96 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            // TODO(aibrahim): Replace empty string instruction overrides with explicit tri-state
+            // app-server semantics: omitted, explicitly none, or explicit value.
+            config: Some(HashMap::from([(
+                "include_permissions_instructions".to_string(),
+                json!(false),
+            )])),
+            base_instructions: Some(String::new()),
+            developer_instructions: Some(String::new()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request_body = response_mock.single_request().body_json();
+    let empty_developer_input_texts = request_body["input"]
+        .as_array()
+        .expect("input array")
+        .iter()
+        .filter(|item| item.get("role").and_then(serde_json::Value::as_str) == Some("developer"))
+        .filter_map(|item| item.get("content").and_then(serde_json::Value::as_array))
+        .flatten()
+        .filter(|content| {
+            content.get("type").and_then(serde_json::Value::as_str) == Some("input_text")
+        })
+        .filter_map(|content| content.get("text").and_then(serde_json::Value::as_str))
+        .filter(|text| text.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        json!({
+            "hasInstructions": request_body.get("instructions").is_some(),
+            "emptyDeveloperInputTexts": empty_developer_input_texts,
+        }),
+        json!({
+            "hasInstructions": false,
+            "emptyDeveloperInputTexts": [],
+        })
+    );
 
     Ok(())
 }
@@ -888,7 +978,7 @@ async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() ->
         "2025-01-01T00:00:00Z",
         "history user message",
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -1031,7 +1121,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call1",
         )?,
@@ -1042,7 +1132,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call2",
         )?,
@@ -1186,7 +1276,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-decline",
         )?,
@@ -1331,14 +1421,14 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     let responses = vec![
         create_shell_command_sse_response(
             vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
         create_shell_command_sse_response(
             vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-second",
         )?,
@@ -1377,6 +1467,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
+            responsesapi_client_metadata: None,
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
@@ -1416,6 +1507,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],
+            responsesapi_client_metadata: None,
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
@@ -2519,6 +2611,67 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let workspace = TempDir::new()?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_request = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_request)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_response)?;
+
+    let turn_request = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            cwd: Some(workspace.path().to_path_buf()),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(!config_toml.contains("trust_level = \"trusted\""));
+    assert!(!config_toml.contains(&workspace.path().display().to_string()));
 
     Ok(())
 }

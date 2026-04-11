@@ -9,10 +9,10 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use codex_core::CodexAuth;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
-use codex_core::models_manager::manager::RefreshStrategy;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
+use codex_login::CodexAuth;
+use codex_models_manager::manager::RefreshStrategy;
 
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -405,6 +405,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 visibility: ModelVisibility::List,
                 supported_in_api: true,
                 priority: 1,
+                additional_speed_tiers: Vec::new(),
                 upgrade: None,
                 base_instructions: "base instructions".to_string(),
                 model_messages: None,
@@ -415,7 +416,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 availability_nux: None,
                 apply_patch_tool_type: None,
                 web_search_tool_type: Default::default(),
-                truncation_policy: TruncationPolicyConfig::bytes(10_000),
+                truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
                 supports_parallel_tool_calls: false,
                 supports_image_detail_original: false,
                 context_window: Some(272_000),

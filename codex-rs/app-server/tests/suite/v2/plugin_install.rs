@@ -25,7 +25,7 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::RequestId;
-use codex_core::auth::AuthCredentialsStoreMode;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -118,7 +118,7 @@ async fn plugin_install_returns_invalid_request_for_not_available_plugin() -> Re
         "sample-plugin",
         "./sample-plugin",
         Some("NOT_AVAILABLE"),
-        None,
+        /*auth_policy*/ None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
     let marketplace_path =
@@ -217,8 +217,8 @@ async fn plugin_install_force_remote_sync_enables_remote_plugin_before_local_ins
         "debug",
         "sample-plugin",
         "./sample-plugin",
-        None,
-        None,
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
     let marketplace_path =
@@ -286,8 +286,8 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
         "debug",
         "sample-plugin",
         "./sample-plugin",
-        None,
-        None,
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
     let marketplace_path =
@@ -401,8 +401,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
         "debug",
         "sample-plugin",
         "./sample-plugin",
-        None,
-        None,
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &["alpha", "beta"])?;
     let marketplace_path =
@@ -481,7 +481,7 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
         "debug",
         "sample-plugin",
         "./sample-plugin",
-        None,
+        /*install_policy*/ None,
         Some("ON_USE"),
     )?;
     write_plugin_source(
@@ -542,8 +542,8 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
         "debug",
         "sample-plugin",
         "./sample-plugin",
-        None,
-        None,
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
     std::fs::write(

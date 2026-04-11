@@ -2,9 +2,9 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_core::CodexAuth;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -85,7 +85,7 @@ fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> 
 }
 
 async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow::Result<PathBuf> {
-    let abs_path = test.config.cwd.join(rel_path)?;
+    let abs_path = test.config.cwd.join(rel_path);
     test.fs()
         .create_directory(&abs_path, CreateDirectoryOptions { recursive: true })
         .await?;
@@ -97,7 +97,7 @@ async fn write_workspace_file(
     rel_path: &str,
     contents: Vec<u8>,
 ) -> anyhow::Result<PathBuf> {
-    let abs_path = test.config.cwd.join(rel_path)?;
+    let abs_path = test.config.cwd.join(rel_path);
     if let Some(parent) = abs_path.parent() {
         test.fs()
             .create_directory(&parent, CreateDirectoryOptions { recursive: true })
@@ -226,7 +226,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     let cwd = config.cwd.clone();
 
     let rel_path = "assets/example.png";
-    let abs_path = cwd.join(rel_path)?;
+    let abs_path = cwd.join(rel_path);
     let original_width = 2304;
     let original_height = 864;
     write_workspace_png(
@@ -476,7 +476,14 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
     } = &test;
 
     let rel_path = "assets/unsupported-detail.png";
-    write_workspace_png(&test, rel_path, 256, 128, [0u8, 80, 255, 255]).await?;
+    write_workspace_png(
+        &test,
+        rel_path,
+        /*width*/ 256,
+        /*height*/ 128,
+        [0u8, 80, 255, 255],
+    )
+    .await?;
 
     let call_id = "view-image-unsupported-detail";
     let arguments = serde_json::json!({ "path": rel_path, "detail": "low" }).to_string();
@@ -1251,7 +1258,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     } = &test;
 
     let rel_path = "missing/example.png";
-    let abs_path = config.cwd.join(rel_path)?;
+    let abs_path = config.cwd.join(rel_path);
 
     let call_id = "view-image-missing";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -1342,6 +1349,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
+        additional_speed_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -1352,7 +1360,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         availability_nux: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
@@ -1377,7 +1385,14 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
     let TestCodex { codex, config, .. } = &test;
 
     let rel_path = "assets/example.png";
-    write_workspace_png(&test, rel_path, 20, 20, [255u8, 0, 0, 255]).await?;
+    write_workspace_png(
+        &test,
+        rel_path,
+        /*width*/ 20,
+        /*height*/ 20,
+        [255u8, 0, 0, 255],
+    )
+    .await?;
 
     let call_id = "view-image-unsupported-model";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();

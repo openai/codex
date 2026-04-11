@@ -50,6 +50,8 @@ pub(crate) enum StatusRateLimitData {
     Available(Vec<StatusRateLimitRow>),
     /// Snapshot data exists but is older than the staleness threshold.
     Stale(Vec<StatusRateLimitRow>),
+    /// The refresh completed, but the response did not include displayable usage data.
+    Unavailable,
     /// No snapshot data is currently available.
     Missing,
 }
@@ -269,7 +271,7 @@ pub(crate) fn compose_rate_limit_data_many(
     }
 
     if rows.is_empty() {
-        StatusRateLimitData::Available(vec![])
+        StatusRateLimitData::Unavailable
     } else if stale {
         StatusRateLimitData::Stale(rows)
     } else {
@@ -366,7 +368,7 @@ mod tests {
         let codex = RateLimitSnapshotDisplay {
             limit_name: "codex".to_string(),
             captured_at: now,
-            primary: Some(window(10.0)),
+            primary: Some(window(/*used_percent*/ 10.0)),
             secondary: None,
             credits: Some(CreditsSnapshotDisplay {
                 has_credits: true,
@@ -377,7 +379,7 @@ mod tests {
         let other = RateLimitSnapshotDisplay {
             limit_name: "codex-other".to_string(),
             captured_at: now,
-            primary: Some(window(20.0)),
+            primary: Some(window(/*used_percent*/ 20.0)),
             secondary: None,
             credits: Some(CreditsSnapshotDisplay {
                 has_credits: true,

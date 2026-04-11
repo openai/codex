@@ -1,17 +1,8 @@
 load("//:defs.bzl", "codex_rust_crate")
 
-exports_files(
-    [
-        "templates/collaboration_mode/default.md",
-        "templates/collaboration_mode/plan.md",
-    ],
-    visibility = ["//visibility:public"],
-)
-
 filegroup(
     name = "model_availability_nux_fixtures",
     srcs = [
-        "models.json",
         "tests/cli_responses_fixture.sse",
     ],
     visibility = ["//visibility:public"],
@@ -38,9 +29,9 @@ codex_rust_crate(
     },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
-        "models.json",
-        "prompt.md",
+        "templates/realtime/backend_prompt.md",
     ],
+    integration_test_timeout = "long",
     test_data_extra = [
         "config.schema.json",
     ] + glob([
@@ -57,6 +48,7 @@ codex_rust_crate(
         "//:AGENTS.md",
     ],
     test_tags = ["no-sandbox"],
+    unit_test_timeout = "long",
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",

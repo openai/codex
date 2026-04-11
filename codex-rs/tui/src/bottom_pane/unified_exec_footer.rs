@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn desired_height_empty() {
         let footer = UnifiedExecFooter::new();
-        assert_eq!(footer.desired_height(40), 0);
+        assert_eq!(footer.desired_height(/*width*/ 40), 0);
     }
 
     #[test]

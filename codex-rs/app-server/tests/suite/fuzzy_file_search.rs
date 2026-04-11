@@ -237,7 +237,11 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     let root_path = root.path().to_string_lossy().to_string();
     // Send fuzzyFileSearch request.
     let request_id = mcp
-        .send_fuzzy_file_search_request("abe", vec![root_path.clone()], None)
+        .send_fuzzy_file_search_request(
+            "abe",
+            vec![root_path.clone()],
+            /*cancellation_token*/ None,
+        )
         .await?;
 
     // Read response and verify shape and ordering.
@@ -298,7 +302,11 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 
     let root_path = root.path().to_string_lossy().to_string();
     let request_id = mcp
-        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], None)
+        .send_fuzzy_file_search_request(
+            "alp",
+            vec![root_path.clone()],
+            /*cancellation_token*/ None,
+        )
         .await?;
 
     let request_id_2 = mcp
@@ -354,6 +362,30 @@ async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
     assert_eq!(completed.session_id, session_id);
 
     mcp.stop_fuzzy_file_search_session(session_id).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_session_update_is_case_insensitive() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let root = TempDir::new()?;
+    std::fs::write(root.path().join("alpha.txt"), "contents")?;
+    let mut mcp = initialized_mcp(&codex_home).await?;
+
+    let root_path = root.path().to_string_lossy().to_string();
+    let session_id = "session-case-insensitive";
+
+    mcp.start_fuzzy_file_search_session(session_id, vec![root_path.clone()])
+        .await?;
+    mcp.update_fuzzy_file_search_session(session_id, "ALP")
+        .await?;
+
+    let payload =
+        wait_for_session_updated(&mut mcp, session_id, "ALP", FileExpectation::NonEmpty).await?;
+    assert_eq!(payload.files.len(), 1);
+    assert_eq!(payload.files[0].root, root_path);
+    assert_eq!(payload.files[0].path, "alpha.txt");
 
     Ok(())
 }

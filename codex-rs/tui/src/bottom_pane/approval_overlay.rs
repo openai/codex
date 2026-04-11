@@ -24,6 +24,7 @@ use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
+#[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -261,14 +262,8 @@ impl ApprovalOverlay {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id,
-            op: Op::ExecApproval {
-                id: id.to_string(),
-                turn_id: None,
-                decision,
-            },
-        });
+        self.app_event_tx
+            .exec_approval(thread_id, id.to_string(), decision);
     }
 
     fn handle_permissions_decision(
@@ -282,7 +277,9 @@ impl ApprovalOverlay {
         };
         let granted_permissions = match decision {
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
-            ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
+            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+                Default::default()
+            }
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
@@ -304,16 +301,14 @@ impl ApprovalOverlay {
             )));
         }
         let thread_id = request.thread_id();
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+        self.app_event_tx.request_permissions_response(
             thread_id,
-            op: Op::RequestPermissionsResponse {
-                id: call_id.to_string(),
-                response: codex_protocol::request_permissions::RequestPermissionsResponse {
-                    permissions: granted_permissions,
-                    scope,
-                },
+            call_id.to_string(),
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: granted_permissions,
+                scope,
             },
-        });
+        );
     }
 
     fn handle_patch_decision(&self, id: &str, decision: ReviewDecision) {
@@ -324,13 +319,8 @@ impl ApprovalOverlay {
         else {
             return;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id,
-            op: Op::PatchApproval {
-                id: id.to_string(),
-                decision,
-            },
-        });
+        self.app_event_tx
+            .patch_approval(thread_id, id.to_string(), decision);
     }
 
     fn handle_elicitation_decision(
@@ -346,16 +336,14 @@ impl ApprovalOverlay {
         else {
             return;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+        self.app_event_tx.resolve_elicitation(
             thread_id,
-            op: Op::ResolveElicitation {
-                server_name: server_name.to_string(),
-                request_id: request_id.clone(),
-                decision,
-                content: None,
-                meta: None,
-            },
-        });
+            server_name.to_string(),
+            request_id.clone(),
+            decision,
+            /*content*/ None,
+            /*meta*/ None,
+        );
     }
 
     fn advance_queue(&mut self) {
@@ -734,6 +722,7 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('d'))],
             }),
+            ReviewDecision::TimedOut => None,
             ReviewDecision::Abort => Some(ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),
@@ -1011,7 +1000,7 @@ mod tests {
 
         assert_snapshot!(
             "approval_overlay_cross_thread_prompt",
-            render_overlay_lines(&view, 80)
+            render_overlay_lines(&view, /*width*/ 80)
         );
     }
 
@@ -1123,8 +1112,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(80)));
-        view.render(Rect::new(0, 0, 80, view.desired_height(80)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)));
+        view.render(
+            Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -1160,7 +1152,7 @@ mod tests {
                 ReviewDecision::Abort,
             ],
             Some(&network_context),
-            None,
+            /*additional_permissions*/ None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1183,8 +1175,8 @@ mod tests {
                 ReviewDecision::ApprovedForSession,
                 ReviewDecision::Abort,
             ],
-            None,
-            None,
+            /*network_approval_context*/ None,
+            /*additional_permissions*/ None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1209,7 +1201,7 @@ mod tests {
         };
         let options = exec_options(
             &[ReviewDecision::Approved, ReviewDecision::Abort],
-            None,
+            /*network_approval_context*/ None,
             Some(&additional_permissions),
         );
 
@@ -1290,8 +1282,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(120)));
-        view.render(Rect::new(0, 0, 120, view.desired_height(120)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(/*width*/ 120)));
+        view.render(
+            Rect::new(0, 0, 120, view.desired_height(/*width*/ 120)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -1339,7 +1334,7 @@ mod tests {
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_additional_permissions_prompt",
-            normalize_snapshot_paths(render_overlay_lines(&view, 120))
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
         );
     }
 
@@ -1350,7 +1345,7 @@ mod tests {
         let view = ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_permissions_prompt",
-            normalize_snapshot_paths(render_overlay_lines(&view, 120))
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
         );
     }
 
@@ -1383,8 +1378,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
-        view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)));
+        view.render(
+            Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)),
+            &mut buf,
+        );
         assert_snapshot!("network_exec_prompt", format!("{buf:?}"));
 
         let rendered: Vec<String> = (0..buf.area.height)
@@ -1423,7 +1421,7 @@ mod tests {
             ReviewDecision::Approved,
             history_cell::ApprovalDecisionActor::User,
         );
-        let lines = cell.display_lines(28);
+        let lines = cell.display_lines(/*width*/ 28);
         let rendered: Vec<String> = lines
             .iter()
             .map(|line| {

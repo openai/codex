@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
@@ -11,9 +10,7 @@ use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
-use crate::is_safe_command::is_known_safe_command;
 use crate::maybe_emit_implicit_skill_invocation;
-use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -37,9 +34,11 @@ use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
-use crate::tools::spec::ShellCommandBackendConfig;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_tools::ShellCommandBackendConfig;
 
 pub struct ShellHandler;
 
@@ -178,7 +177,6 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for ShellHandler {
     type Output = FunctionToolOutput;
 
@@ -235,9 +233,8 @@ impl ToolHandler for ShellHandler {
 
         match payload {
             ToolPayload::Function { arguments } => {
-                let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
-                let params: ShellToolCallParams =
-                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+                let params: ShellToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
@@ -279,7 +276,6 @@ impl ToolHandler for ShellHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for ShellCommandHandler {
     type Output = FunctionToolOutput;
 
@@ -347,9 +343,8 @@ impl ToolHandler for ShellCommandHandler {
             )));
         };
 
-        let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
-        let params: ShellCommandToolCallParams =
-            parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
@@ -398,6 +393,13 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
+        let Some(environment) = turn.environment.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "shell is unavailable in this session".to_string(),
+            ));
+        };
+        let fs = environment.get_filesystem();
+
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
             exec_params.env.extend(dependency_env.clone());
@@ -464,6 +466,7 @@ impl ShellHandler {
         if let Some(output) = intercept_apply_patch(
             &exec_params.command,
             &exec_params.cwd,
+            fs.as_ref(),
             exec_params.expiration.timeout_ms(),
             session.clone(),
             turn.clone(),
@@ -479,7 +482,7 @@ impl ShellHandler {
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
-            exec_params.cwd.clone(),
+            exec_params.cwd.to_path_buf(),
             source,
             freeform,
         );

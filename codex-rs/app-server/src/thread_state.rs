@@ -16,6 +16,7 @@ use std::sync::Weak;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tracing::error;
 
 type PendingInterruptQueue = Vec<(
     ConnectionRequestId,
@@ -44,6 +45,7 @@ pub(crate) enum ThreadListenerCommand {
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
+    pub(crate) started_at: Option<i64>,
     pub(crate) file_change_started: HashSet<String>,
     pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
@@ -109,10 +111,47 @@ impl ThreadState {
     }
 
     pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {
+        if let EventMsg::TurnStarted(payload) = event {
+            self.turn_summary.started_at = payload.started_at;
+        }
         self.current_turn_history.handle_event(event);
-        if !self.current_turn_history.has_active_turn() {
+        if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
+            && !self.current_turn_history.has_active_turn()
+        {
             self.current_turn_history.reset();
         }
+    }
+}
+
+pub(crate) async fn resolve_server_request_on_thread_listener(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    request_id: RequestId,
+) {
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let listener_command_tx = {
+        let state = thread_state.lock().await;
+        state.listener_command_tx()
+    };
+    let Some(listener_command_tx) = listener_command_tx else {
+        error!("failed to remove pending client request: thread listener is not running");
+        return;
+    };
+
+    if listener_command_tx
+        .send(ThreadListenerCommand::ResolveServerRequest {
+            request_id,
+            completion_tx,
+        })
+        .is_err()
+    {
+        error!(
+            "failed to remove pending client request: thread listener command channel is closed"
+        );
+        return;
+    }
+
+    if let Err(err) = completion_rx.await {
+        error!("failed to remove pending client request: {err}");
     }
 }
 
@@ -313,8 +352,8 @@ impl ThreadStateManager {
         true
     }
 
-    pub(crate) async fn remove_connection(&self, connection_id: ConnectionId) {
-        let thread_states = {
+    pub(crate) async fn remove_connection(&self, connection_id: ConnectionId) -> Vec<ThreadId> {
+        {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
             let thread_ids = state
@@ -328,36 +367,13 @@ impl ThreadStateManager {
             }
             thread_ids
                 .into_iter()
-                .map(|thread_id| {
-                    (
-                        thread_id,
-                        state
-                            .threads
-                            .get(&thread_id)
-                            .is_none_or(|thread_entry| thread_entry.connection_ids.is_empty()),
-                        state
-                            .threads
-                            .get(&thread_id)
-                            .map(|thread_entry| thread_entry.state.clone()),
-                    )
+                .filter(|thread_id| {
+                    state
+                        .threads
+                        .get(thread_id)
+                        .is_some_and(|thread_entry| thread_entry.connection_ids.is_empty())
                 })
                 .collect::<Vec<_>>()
-        };
-
-        for (thread_id, no_subscribers, thread_state) in thread_states {
-            if !no_subscribers {
-                continue;
-            }
-            let Some(thread_state) = thread_state else {
-                continue;
-            };
-            let listener_generation = thread_state.lock().await.listener_generation;
-            tracing::debug!(
-                thread_id = %thread_id,
-                connection_id = ?connection_id,
-                listener_generation,
-                "retaining thread listener after connection disconnect left zero subscribers"
-            );
         }
     }
 }

@@ -12,9 +12,9 @@
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
-//! - Context usage (remaining %, used %, window size)
+//! - Context usage (meter, window size)
 //! - Usage limits (5-hour, weekly)
-//! - Session info (ID, tokens used)
+//! - Session info (thread title, ID, tokens used)
 //! - Application version
 
 use ratatui::buffer::Buffer;
@@ -22,7 +22,6 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use strum_macros::EnumString;
@@ -63,11 +62,15 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
-    /// Percentage of context window remaining.
-    ContextRemaining,
-
-    /// Percentage of context window used.
-    ContextUsed,
+    /// Visual meter of context window usage.
+    ///
+    /// Also accepts legacy `context-remaining` and `context-used` config values.
+    #[strum(
+        to_string = "context-usage",
+        serialize = "context-remaining",
+        serialize = "context-used"
+    )]
+    ContextUsage,
 
     /// Remaining usage on the 5-hour rate limit.
     FiveHourLimit,
@@ -95,6 +98,9 @@ pub(crate) enum StatusLineItem {
 
     /// Whether Fast mode is currently active.
     FastMode,
+
+    /// Current thread title (if set by user).
+    ThreadTitle,
 }
 
 impl StatusLineItem {
@@ -106,11 +112,8 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
-            StatusLineItem::ContextRemaining => {
-                "Percentage of context window remaining (omitted when unknown)"
-            }
-            StatusLineItem::ContextUsed => {
-                "Percentage of context window used (omitted when unknown)"
+            StatusLineItem::ContextUsage => {
+                "Visual meter of context window usage (omitted when unknown)"
             }
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on 5-hour usage limit (omitted when unavailable)"
@@ -129,9 +132,29 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
+            StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
         }
     }
 }
+
+const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
+    StatusLineItem::ModelName,
+    StatusLineItem::ModelWithReasoning,
+    StatusLineItem::CurrentDir,
+    StatusLineItem::ProjectRoot,
+    StatusLineItem::GitBranch,
+    StatusLineItem::ContextUsage,
+    StatusLineItem::FiveHourLimit,
+    StatusLineItem::WeeklyLimit,
+    StatusLineItem::CodexVersion,
+    StatusLineItem::ContextWindowSize,
+    StatusLineItem::UsedTokens,
+    StatusLineItem::TotalInputTokens,
+    StatusLineItem::TotalOutputTokens,
+    StatusLineItem::SessionId,
+    StatusLineItem::FastMode,
+    StatusLineItem::ThreadTitle,
+];
 
 /// Runtime values used to preview the current status-line selection.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -209,7 +232,7 @@ impl StatusLineSetupView {
             }
         }
 
-        for item in StatusLineItem::iter() {
+        for item in SELECTABLE_STATUS_LINE_ITEMS.iter().cloned() {
             let item_id = item.to_string();
             if used_ids.contains(&item_id) {
                 continue;
@@ -294,6 +317,23 @@ mod tests {
     use crate::app_event::AppEvent;
 
     #[test]
+    fn context_usage_is_canonical_and_accepts_legacy_ids() {
+        assert_eq!(StatusLineItem::ContextUsage.to_string(), "context-usage");
+        assert_eq!(
+            "context-usage".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+        assert_eq!(
+            "context-remaining".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+        assert_eq!(
+            "context-used".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
+        );
+    }
+
+    #[test]
     fn preview_uses_runtime_values() {
         let preview_data = StatusLinePreviewData::from_iter([
             (StatusLineItem::ModelName, "gpt-5".to_string()),
@@ -346,6 +386,33 @@ mod tests {
     }
 
     #[test]
+    fn preview_includes_thread_title() {
+        let preview_data = StatusLinePreviewData::from_iter([
+            (StatusLineItem::ModelName, "gpt-5".to_string()),
+            (StatusLineItem::ThreadTitle, "Roadmap cleanup".to_string()),
+        ]);
+        let items = vec![
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::ThreadTitle.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            preview_data.line_for_items(&items),
+            Some(Line::from("gpt-5 · Roadmap cleanup"))
+        );
+    }
+
+    #[test]
     fn setup_view_snapshot_uses_runtime_preview_values() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let view = StatusLineSetupView::new(
@@ -366,7 +433,7 @@ mod tests {
             AppEventSender::new(tx_raw),
         );
 
-        assert_snapshot!(render_lines(&view, 72));
+        assert_snapshot!(render_lines(&view, /*width*/ 72));
     }
 
     fn render_lines(view: &StatusLineSetupView, width: u16) -> String {

@@ -5,17 +5,23 @@
 
 use super::*;
 
+/// Items shown in the terminal title when the user has not configured a
+/// custom selection. Intentionally minimal: spinner + project name.
 pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["spinner", "project"];
+
+/// Braille-pattern dot-spinner frames for the terminal title animation.
 pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Time between spinner frame advances in the terminal title.
 pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 /// Compact runtime states that can be rendered into the terminal title.
 ///
 /// This is intentionally smaller than the full status-header vocabulary. The
 /// title needs short, stable labels, so callers map richer lifecycle events
 /// onto one of these buckets before rendering.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
@@ -47,12 +53,12 @@ impl StatusSurfaceSelections {
     }
 }
 
-#[derive(Clone, Debug)]
 /// Cached project-root display name keyed by the cwd used for the last lookup.
 ///
 /// Terminal-title refreshes can happen very frequently, so the title path avoids
 /// repeatedly walking up the filesystem to rediscover the same project root name
 /// while the working directory is unchanged.
+#[derive(Clone, Debug)]
 pub(super) struct CachedProjectRootName {
     pub(super) cwd: PathBuf,
     pub(super) root_name: Option<String>,
@@ -270,20 +276,7 @@ impl ChatWidget {
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
     fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
-        let mut invalid = Vec::new();
-        let mut invalid_seen = HashSet::new();
-        let mut items = Vec::new();
-        for id in self.configured_status_line_items() {
-            match id.parse::<StatusLineItem>() {
-                Ok(item) => items.push(item),
-                Err(_) => {
-                    if invalid_seen.insert(id.clone()) {
-                        invalid.push(format!(r#""{id}""#));
-                    }
-                }
-            }
-        }
-        (items, invalid)
+        parse_items_with_invalids(self.configured_status_line_items())
     }
 
     pub(super) fn configured_status_line_items(&self) -> Vec<String> {
@@ -299,20 +292,7 @@ impl ChatWidget {
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
     fn terminal_title_items_with_invalids(&self) -> (Vec<TerminalTitleItem>, Vec<String>) {
-        let mut invalid = Vec::new();
-        let mut invalid_seen = HashSet::new();
-        let mut items = Vec::new();
-        for id in self.configured_terminal_title_items() {
-            match id.parse::<TerminalTitleItem>() {
-                Ok(item) => items.push(item),
-                Err(_) => {
-                    if invalid_seen.insert(id.clone()) {
-                        invalid.push(format!(r#""{id}""#));
-                    }
-                }
-            }
-        }
-        (items, invalid)
+        parse_items_with_invalids(self.configured_terminal_title_items())
     }
 
     /// Returns the configured terminal-title ids, or the default ordering when unset.
@@ -470,12 +450,9 @@ impl ChatWidget {
                     Some(format!("{} used", format_tokens_compact(total)))
                 }
             }
-            StatusLineItem::ContextRemaining => self
-                .status_line_context_remaining_percent()
-                .map(|remaining| format!("{remaining}% left")),
-            StatusLineItem::ContextUsed => self
+            StatusLineItem::ContextUsage => self
                 .status_line_context_used_percent()
-                .map(|used| format!("{used}% used")),
+                .map(format_context_used_meter),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id
@@ -518,6 +495,10 @@ impl ChatWidget {
                     "Fast off".to_string()
                 },
             ),
+            StatusLineItem::ThreadTitle => self.thread_name.as_ref().and_then(|name| {
+                let trimmed = name.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }),
         }
     }
 
@@ -658,5 +639,83 @@ impl ChatWidget {
         let mut truncated = head.graphemes(true).take(max_chars - 3).collect::<String>();
         truncated.push_str("...");
         truncated
+    }
+}
+
+fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)
+where
+    T: std::str::FromStr,
+{
+    let mut invalid = Vec::new();
+    let mut invalid_seen = HashSet::new();
+    let mut items = Vec::new();
+    for id in ids {
+        match id.parse::<T>() {
+            Ok(item) => items.push(item),
+            Err(_) => {
+                if invalid_seen.insert(id.clone()) {
+                    invalid.push(format!(r#""{id}""#));
+                }
+            }
+        }
+    }
+    (items, invalid)
+}
+
+fn format_context_used_meter(used_percent: i64) -> String {
+    const METER_WIDTH: usize = 5;
+    const EIGHTHS_PER_CELL: i64 = 8;
+    const PARTIAL_BLOCKS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+
+    let used_percent = used_percent.clamp(0, 100);
+    let total_eighths = (used_percent * METER_WIDTH as i64 * EIGHTHS_PER_CELL + 50) / 100;
+    let filled_cells = (total_eighths / EIGHTHS_PER_CELL) as usize;
+    let partial_eighths = (total_eighths % EIGHTHS_PER_CELL) as usize;
+
+    let mut meter = String::with_capacity(METER_WIDTH);
+    meter.push_str(&"█".repeat(filled_cells));
+    meter.push_str(PARTIAL_BLOCKS[partial_eighths]);
+
+    let occupied_cells = filled_cells + usize::from(partial_eighths > 0);
+    meter.push_str(&" ".repeat(METER_WIDTH.saturating_sub(occupied_cells)));
+
+    format!("Context [{meter}]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_context_used_meter;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn context_meter_uses_five_cells_with_partial_blocks() {
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 100),
+            "Context [█████]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 50),
+            "Context [██▌  ]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 10),
+            "Context [▌    ]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 0),
+            "Context [     ]"
+        );
+    }
+
+    #[test]
+    fn context_meter_clamps_out_of_range_values() {
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 125),
+            "Context [█████]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ -1),
+            "Context [     ]"
+        );
     }
 }

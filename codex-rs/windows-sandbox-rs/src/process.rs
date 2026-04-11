@@ -43,7 +43,7 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     });
     let mut w: Vec<u16> = Vec::new();
     for (k, v) in items {
-        let mut s = to_wide(format!("{}={}", k, v));
+        let mut s = to_wide(format!("{k}={v}"));
         s.pop();
         w.extend_from_slice(&s);
         w.push(0);
@@ -149,7 +149,7 @@ pub unsafe fn create_process_as_user(
             creation_flags,
         );
         logging::debug_log(&msg, logs_base_dir);
-        return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
+        return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
     }
     Ok(CreatedProcess {
         process_info: pi,

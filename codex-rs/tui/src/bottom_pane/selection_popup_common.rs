@@ -863,7 +863,7 @@ mod tests {
             ..Default::default()
         };
 
-        let two_col = wrap_two_column_row(&row, 0, 1);
+        let two_col = wrap_two_column_row(&row, /*desc_col*/ 0, /*width*/ 1);
         assert_eq!(two_col.len(), 0);
     }
 }

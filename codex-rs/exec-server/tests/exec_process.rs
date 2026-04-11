@@ -235,7 +235,8 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
     server.shutdown().await?;
 
     let mut wake_rx = session.process.subscribe_wake();
-    let response = read_process_until_change(session.process, &mut wake_rx, None).await?;
+    let response =
+        read_process_until_change(session.process, &mut wake_rx, /*after_seq*/ None).await?;
     let message = response
         .failure
         .expect("disconnect should surface as a failure");

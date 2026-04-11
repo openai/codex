@@ -310,7 +310,7 @@ mod tests {
         let mut policy = AdaptiveChunkingPolicy::default();
         let now = Instant::now();
 
-        let decision = policy.decide(snapshot(1, 10), now);
+        let decision = policy.decide(snapshot(/*queued_lines*/ 1, /*oldest_age_ms*/ 10), now);
         assert_eq!(decision.mode, ChunkingMode::Smooth);
         assert_eq!(decision.entered_catch_up, false);
         assert_eq!(decision.drain_plan, DrainPlan::Single);
@@ -321,7 +321,7 @@ mod tests {
         let mut policy = AdaptiveChunkingPolicy::default();
         let now = Instant::now();
 
-        let decision = policy.decide(snapshot(8, 10), now);
+        let decision = policy.decide(snapshot(/*queued_lines*/ 8, /*oldest_age_ms*/ 10), now);
         assert_eq!(decision.mode, ChunkingMode::CatchUp);
         assert_eq!(decision.entered_catch_up, true);
         assert_eq!(decision.drain_plan, DrainPlan::Batch(8));
@@ -332,7 +332,7 @@ mod tests {
         let mut policy = AdaptiveChunkingPolicy::default();
         let now = Instant::now();
 
-        let decision = policy.decide(snapshot(2, 120), now);
+        let decision = policy.decide(snapshot(/*queued_lines*/ 2, /*oldest_age_ms*/ 120), now);
         assert_eq!(decision.mode, ChunkingMode::CatchUp);
         assert_eq!(decision.entered_catch_up, true);
         assert_eq!(decision.drain_plan, DrainPlan::Batch(2));
@@ -342,9 +342,12 @@ mod tests {
     fn severe_backlog_uses_faster_paced_batches() {
         let mut policy = AdaptiveChunkingPolicy::default();
         let now = Instant::now();
-        let _ = policy.decide(snapshot(9, 10), now);
+        let _ = policy.decide(snapshot(/*queued_lines*/ 9, /*oldest_age_ms*/ 10), now);
 
-        let decision = policy.decide(snapshot(64, 10), now + Duration::from_millis(5));
+        let decision = policy.decide(
+            snapshot(/*queued_lines*/ 64, /*oldest_age_ms*/ 10),
+            now + Duration::from_millis(5),
+        );
         assert_eq!(decision.mode, ChunkingMode::CatchUp);
         assert_eq!(decision.drain_plan, DrainPlan::Batch(64));
     }
@@ -353,7 +356,7 @@ mod tests {
     fn catch_up_batch_drains_current_backlog() {
         let mut policy = AdaptiveChunkingPolicy::default();
         let now = Instant::now();
-        let decision = policy.decide(snapshot(512, 400), now);
+        let decision = policy.decide(snapshot(/*queued_lines*/ 512, /*oldest_age_ms*/ 400), now);
         assert_eq!(decision.mode, ChunkingMode::CatchUp);
         assert_eq!(decision.drain_plan, DrainPlan::Batch(512));
     }
@@ -363,13 +366,19 @@ mod tests {
         let mut policy = AdaptiveChunkingPolicy::default();
         let t0 = Instant::now();
 
-        let _ = policy.decide(snapshot(9, 10), t0);
+        let _ = policy.decide(snapshot(/*queued_lines*/ 9, /*oldest_age_ms*/ 10), t0);
         assert_eq!(policy.mode(), ChunkingMode::CatchUp);
 
-        let pre_hold = policy.decide(snapshot(2, 40), t0 + Duration::from_millis(200));
+        let pre_hold = policy.decide(
+            snapshot(/*queued_lines*/ 2, /*oldest_age_ms*/ 40),
+            t0 + Duration::from_millis(200),
+        );
         assert_eq!(pre_hold.mode, ChunkingMode::CatchUp);
 
-        let post_hold = policy.decide(snapshot(2, 40), t0 + Duration::from_millis(460));
+        let post_hold = policy.decide(
+            snapshot(/*queued_lines*/ 2, /*oldest_age_ms*/ 40),
+            t0 + Duration::from_millis(460),
+        );
         assert_eq!(post_hold.mode, ChunkingMode::Smooth);
         assert_eq!(post_hold.drain_plan, DrainPlan::Single);
     }
@@ -378,7 +387,7 @@ mod tests {
     fn drops_back_to_smooth_when_idle() {
         let mut policy = AdaptiveChunkingPolicy::default();
         let now = Instant::now();
-        let _ = policy.decide(snapshot(9, 10), now);
+        let _ = policy.decide(snapshot(/*queued_lines*/ 9, /*oldest_age_ms*/ 10), now);
         assert_eq!(policy.mode(), ChunkingMode::CatchUp);
 
         let decision = policy.decide(
@@ -397,7 +406,7 @@ mod tests {
         let mut policy = AdaptiveChunkingPolicy::default();
         let t0 = Instant::now();
 
-        let entered = policy.decide(snapshot(8, 20), t0);
+        let entered = policy.decide(snapshot(/*queued_lines*/ 8, /*oldest_age_ms*/ 20), t0);
         assert_eq!(entered.mode, ChunkingMode::CatchUp);
 
         let drained = policy.decide(
@@ -409,11 +418,17 @@ mod tests {
         );
         assert_eq!(drained.mode, ChunkingMode::Smooth);
 
-        let held = policy.decide(snapshot(8, 20), t0 + Duration::from_millis(120));
+        let held = policy.decide(
+            snapshot(/*queued_lines*/ 8, /*oldest_age_ms*/ 20),
+            t0 + Duration::from_millis(120),
+        );
         assert_eq!(held.mode, ChunkingMode::Smooth);
         assert_eq!(held.drain_plan, DrainPlan::Single);
 
-        let reentered = policy.decide(snapshot(8, 20), t0 + Duration::from_millis(320));
+        let reentered = policy.decide(
+            snapshot(/*queued_lines*/ 8, /*oldest_age_ms*/ 20),
+            t0 + Duration::from_millis(320),
+        );
         assert_eq!(reentered.mode, ChunkingMode::CatchUp);
         assert_eq!(reentered.drain_plan, DrainPlan::Batch(8));
     }
@@ -423,7 +438,7 @@ mod tests {
         let mut policy = AdaptiveChunkingPolicy::default();
         let t0 = Instant::now();
 
-        let _ = policy.decide(snapshot(8, 20), t0);
+        let _ = policy.decide(snapshot(/*queued_lines*/ 8, /*oldest_age_ms*/ 20), t0);
         let _ = policy.decide(
             QueueSnapshot {
                 queued_lines: 0,
@@ -432,7 +447,10 @@ mod tests {
             t0 + Duration::from_millis(20),
         );
 
-        let severe = policy.decide(snapshot(64, 20), t0 + Duration::from_millis(120));
+        let severe = policy.decide(
+            snapshot(/*queued_lines*/ 64, /*oldest_age_ms*/ 20),
+            t0 + Duration::from_millis(120),
+        );
         assert_eq!(severe.mode, ChunkingMode::CatchUp);
         assert_eq!(severe.drain_plan, DrainPlan::Batch(64));
     }

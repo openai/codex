@@ -20,6 +20,7 @@ use crate::schema::SessionStartCommandInput;
 pub enum SessionStartSource {
     Startup,
     Resume,
+    Clear,
 }
 
 impl SessionStartSource {
@@ -27,6 +28,7 @@ impl SessionStartSource {
         match self {
             Self::Startup => "startup",
             Self::Resume => "resume",
+            Self::Clear => "clear",
         }
     }
 }
@@ -263,7 +265,7 @@ mod tests {
         let parsed = parse_completed(
             &handler(),
             run_result(Some(0), "hello from hook\n", ""),
-            None,
+            /*turn_id*/ None,
         );
 
         assert_eq!(
@@ -293,7 +295,7 @@ mod tests {
                 r#"{"continue":false,"stopReason":"pause","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"do not inject"}}"#,
                 "",
             ),
-            None,
+            /*turn_id*/ None,
         );
 
         assert_eq!(
@@ -329,7 +331,7 @@ mod tests {
                 r#"{"hookSpecificOutput":{"hookEventName":"SessionStart""#,
                 "",
             ),
-            None,
+            /*turn_id*/ None,
         );
 
         assert_eq!(

@@ -1,5 +1,0 @@
----
-source: tui_app_server/src/chatwidget/tests.rs
-expression: rendered
----
-• `/copy` is unavailable before the first Codex output or right after a rollback.

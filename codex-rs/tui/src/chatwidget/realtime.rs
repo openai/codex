@@ -1,18 +1,19 @@
 use super::*;
+use codex_config::config_toml::RealtimeTransport;
 use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
-#[cfg(not(target_os = "linux"))]
-use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_realtime_webrtc::RealtimeWebrtcEvent;
+use codex_realtime_webrtc::RealtimeWebrtcSession;
+use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 #[cfg(not(target_os = "linux"))]
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicU16;
 #[cfg(not(target_os = "linux"))]
 use std::time::Duration;
-
-const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum RealtimeConversationPhase {
@@ -26,11 +27,10 @@ pub(super) enum RealtimeConversationPhase {
 #[derive(Default)]
 pub(super) struct RealtimeConversationUiState {
     pub(super) phase: RealtimeConversationPhase,
-    #[cfg(not(target_os = "linux"))]
-    audio_behavior: RealtimeAudioBehavior,
     requested_close: bool,
     session_id: Option<String>,
     warned_audio_only_submission: bool,
+    transport: RealtimeConversationUiTransport,
     #[cfg(not(target_os = "linux"))]
     pub(super) meter_placeholder_id: Option<String>,
     #[cfg(not(target_os = "linux"))]
@@ -39,40 +39,15 @@ pub(super) struct RealtimeConversationUiState {
     capture: Option<crate::voice::VoiceCapture>,
     #[cfg(not(target_os = "linux"))]
     audio_player: Option<crate::voice::RealtimeAudioPlayer>,
-    #[cfg(not(target_os = "linux"))]
-    // Shared queue depth lets capture suppress echoed speaker audio without
-    // taking the playback queue lock from the input callback.
-    playback_queued_samples: Arc<AtomicUsize>,
 }
 
-#[cfg(not(target_os = "linux"))]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum RealtimeAudioBehavior {
+#[derive(Debug, Default)]
+enum RealtimeConversationUiTransport {
     #[default]
-    Legacy,
-    PlaybackAware,
-}
-
-#[cfg(not(target_os = "linux"))]
-impl RealtimeAudioBehavior {
-    fn from_version(version: RealtimeConversationVersion) -> Self {
-        match version {
-            RealtimeConversationVersion::V1 => Self::Legacy,
-            RealtimeConversationVersion::V2 => Self::PlaybackAware,
-        }
-    }
-
-    fn input_behavior(
-        self,
-        playback_queued_samples: Arc<AtomicUsize>,
-    ) -> crate::voice::RealtimeInputBehavior {
-        match self {
-            Self::Legacy => crate::voice::RealtimeInputBehavior::Ungated,
-            Self::PlaybackAware => crate::voice::RealtimeInputBehavior::PlaybackAware {
-                playback_queued_samples,
-            },
-        }
-    }
+    Websocket,
+    Webrtc {
+        handle: Option<RealtimeWebrtcSessionHandle>,
+    },
 }
 
 impl RealtimeConversationUiState {
@@ -106,23 +81,6 @@ pub(super) struct PendingSteerCompareKey {
 }
 
 impl ChatWidget {
-    pub(super) fn stop_realtime_conversation_from_ui(&mut self) {
-        self.request_realtime_conversation_close(/*info_message*/ None);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn stop_realtime_conversation_for_deleted_meter(&mut self, id: &str) -> bool {
-        if self.realtime_conversation.is_live()
-            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
-        {
-            self.realtime_conversation.meter_placeholder_id = None;
-            self.stop_realtime_conversation_from_ui();
-            return true;
-        }
-
-        false
-    }
-
     pub(super) fn rendered_user_message_event_from_parts(
         message: String,
         text_elements: Vec<TextElement>,
@@ -174,6 +132,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn pending_steer_compare_key_from_item(
         item: &codex_protocol::items::UserMessageItem,
     ) -> PendingSteerCompareKey {
@@ -220,6 +179,7 @@ impl ChatWidget {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn should_render_realtime_user_message_event(
         &self,
         event: &UserMessageEvent,
@@ -253,24 +213,59 @@ impl ChatWidget {
         None
     }
 
+    fn realtime_footer_hint_items() -> Vec<(String, String)> {
+        vec![("/realtime".to_string(), "stop live voice".to_string())]
+    }
+
+    pub(super) fn stop_realtime_conversation_from_ui(&mut self) {
+        self.request_realtime_conversation_close(/*info_message*/ None);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn stop_realtime_conversation_for_deleted_meter(&mut self, id: &str) -> bool {
+        if self.realtime_conversation.is_live()
+            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
+        {
+            self.realtime_conversation.meter_placeholder_id = None;
+            self.stop_realtime_conversation_from_ui();
+            return true;
+        }
+
+        false
+    }
+
     pub(super) fn start_realtime_conversation(&mut self) {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
-        }
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(vec![(
-            "/realtime".to_string(),
-            "stop live voice".to_string(),
-        )]));
-        self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
-            session_id: None,
-        }));
+        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        match self.config.realtime.transport {
+            RealtimeTransport::Websocket => {
+                self.realtime_conversation.transport = RealtimeConversationUiTransport::Websocket;
+                self.submit_realtime_conversation_start(/*transport*/ None);
+            }
+            RealtimeTransport::WebRtc => {
+                self.realtime_conversation.transport =
+                    RealtimeConversationUiTransport::Webrtc { handle: None };
+                start_realtime_webrtc_offer_task(self.app_event_tx.clone());
+            }
+        }
         self.request_redraw();
+    }
+
+    fn submit_realtime_conversation_start(
+        &mut self,
+        transport: Option<ConversationStartTransport>,
+    ) {
+        self.submit_op(AppCommand::realtime_conversation_start(
+            ConversationStartParams {
+                prompt: None,
+                session_id: None,
+                transport,
+                voice: self.config.realtime.voice,
+            },
+        ));
     }
 
     pub(super) fn request_realtime_conversation_close(&mut self, info_message: Option<String>) {
@@ -283,8 +278,9 @@ impl ChatWidget {
 
         self.realtime_conversation.requested_close = true;
         self.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
-        self.submit_op(Op::RealtimeConversationClose);
+        self.submit_op(AppCommand::realtime_conversation_close());
         self.stop_realtime_local_audio();
+        self.close_realtime_webrtc_transport();
         self.set_footer_hint_override(/*items*/ None);
 
         if let Some(message) = info_message {
@@ -296,15 +292,13 @@ impl ChatWidget {
 
     pub(super) fn reset_realtime_conversation_state(&mut self) {
         self.stop_realtime_local_audio();
+        self.close_realtime_webrtc_transport();
         self.set_footer_hint_override(/*items*/ None);
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
-        }
         self.realtime_conversation.warned_audio_only_submission = false;
+        self.realtime_conversation.transport = RealtimeConversationUiTransport::Websocket;
     }
 
     fn fail_realtime_conversation(&mut self, message: String) {
@@ -325,19 +319,15 @@ impl ChatWidget {
             self.request_realtime_conversation_close(/*info_message*/ None);
             return;
         }
-        self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.realtime_conversation.audio_behavior =
-                RealtimeAudioBehavior::from_version(ev.version);
-        }
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(vec![(
-            "/realtime".to_string(),
-            "stop live voice".to_string(),
-        )]));
-        self.start_realtime_local_audio();
+        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        if self.realtime_conversation_uses_webrtc() {
+            self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
+        } else {
+            self.realtime_conversation.phase = RealtimeConversationPhase::Active;
+            self.start_realtime_local_audio();
+        }
         self.request_redraw();
     }
 
@@ -345,27 +335,29 @@ impl ChatWidget {
         &mut self,
         ev: RealtimeConversationRealtimeEvent,
     ) {
+        if self.realtime_conversation_uses_webrtc()
+            && matches!(
+                ev.payload,
+                RealtimeEvent::AudioOut(_)
+                    | RealtimeEvent::InputAudioSpeechStarted(_)
+                    | RealtimeEvent::ResponseCreated(_)
+                    | RealtimeEvent::ResponseCancelled(_)
+                    | RealtimeEvent::ResponseDone(_)
+            )
+        {
+            return;
+        }
         match ev.payload {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
-            RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) => {
-                #[cfg(not(target_os = "linux"))]
-                {
-                    if matches!(
-                        self.realtime_conversation.audio_behavior,
-                        RealtimeAudioBehavior::PlaybackAware
-                    ) && let Some(player) = &self.realtime_conversation.audio_player
-                    {
-                        // Once the server detects user speech or the current response is cancelled,
-                        // any buffered assistant audio is stale and should stop gating mic input.
-                        player.clear();
-                    }
-                }
-            }
+            RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCreated(_) => {}
+            RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
+            RealtimeEvent::ResponseDone(_) => {}
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
@@ -376,6 +368,13 @@ impl ChatWidget {
     }
 
     pub(super) fn on_realtime_conversation_closed(&mut self, ev: RealtimeConversationClosedEvent) {
+        if self.realtime_conversation_uses_webrtc()
+            && self.realtime_conversation.is_live()
+            && ev.reason.as_deref() == Some("transport_closed")
+        {
+            return;
+        }
+
         let requested = self.realtime_conversation.requested_close;
         let reason = ev.reason;
         self.reset_realtime_conversation_state();
@@ -391,15 +390,121 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(super) fn on_realtime_conversation_sdp(&mut self, sdp: String) {
+        let RealtimeConversationUiTransport::Webrtc {
+            handle: Some(handle),
+        } = &self.realtime_conversation.transport
+        else {
+            return;
+        };
+
+        if let Err(err) = handle.apply_answer_sdp(sdp) {
+            self.fail_realtime_conversation(format!("Failed to connect realtime WebRTC: {err}"));
+        }
+    }
+
+    pub(crate) fn on_realtime_webrtc_offer_created(
+        &mut self,
+        result: Result<crate::app_event::RealtimeWebrtcOffer, String>,
+    ) {
+        if self.realtime_conversation.phase != RealtimeConversationPhase::Starting
+            || !matches!(
+                self.realtime_conversation.transport,
+                RealtimeConversationUiTransport::Webrtc { handle: None }
+            )
+        {
+            return;
+        }
+
+        let offer = match result {
+            Ok(offer) => offer,
+            Err(err) => {
+                self.fail_realtime_conversation(format!("Failed to start realtime WebRTC: {err}"));
+                return;
+            }
+        };
+
+        self.realtime_conversation.transport = RealtimeConversationUiTransport::Webrtc {
+            handle: Some(offer.handle),
+        };
+        self.submit_realtime_conversation_start(Some(ConversationStartTransport::Webrtc {
+            sdp: offer.offer_sdp,
+        }));
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_realtime_webrtc_event(&mut self, event: RealtimeWebrtcEvent) {
+        if !self.realtime_conversation_uses_webrtc() {
+            return;
+        }
+
+        match event {
+            RealtimeWebrtcEvent::Connected => {
+                if self.realtime_conversation.phase != RealtimeConversationPhase::Starting {
+                    return;
+                }
+                self.realtime_conversation.phase = RealtimeConversationPhase::Active;
+                self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+                self.request_redraw();
+            }
+            RealtimeWebrtcEvent::Closed => {
+                self.reset_realtime_conversation_state();
+                self.request_redraw();
+            }
+            RealtimeWebrtcEvent::Failed(message) => {
+                self.fail_realtime_conversation(format!("Realtime WebRTC error: {message}"));
+            }
+            RealtimeWebrtcEvent::LocalAudioLevel(_) => {}
+        }
+    }
+
+    pub(crate) fn on_realtime_webrtc_local_audio_level(&mut self, peak: u16) {
+        if !self.realtime_conversation_uses_webrtc() || peak == 0 {
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let _ = peak;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let RealtimeConversationUiTransport::Webrtc {
+                handle: Some(handle),
+            } = &self.realtime_conversation.transport
+            else {
+                return;
+            };
+            let peak = handle.local_audio_peak();
+            if self.realtime_conversation.meter_placeholder_id.is_none() {
+                self.start_realtime_webrtc_meter(peak);
+            }
+        }
+    }
+
+    fn realtime_conversation_uses_webrtc(&self) -> bool {
+        matches!(
+            self.realtime_conversation.transport,
+            RealtimeConversationUiTransport::Webrtc { .. }
+        )
+    }
+
+    fn close_realtime_webrtc_transport(&mut self) {
+        if let RealtimeConversationUiTransport::Webrtc { handle } =
+            &mut self.realtime_conversation.transport
+            && let Some(handle) = handle.take()
+        {
+            handle.close();
+        }
+    }
+
     fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeAudioFrame) {
         #[cfg(not(target_os = "linux"))]
         {
             if self.realtime_conversation.audio_player.is_none() {
-                self.realtime_conversation.audio_player = crate::voice::RealtimeAudioPlayer::start(
-                    &self.config,
-                    Arc::clone(&self.realtime_conversation.playback_queued_samples),
-                )
-                .ok();
+                self.realtime_conversation.audio_player =
+                    crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
             }
             if let Some(player) = &self.realtime_conversation.audio_player
                 && let Err(err) = player.enqueue_frame(frame)
@@ -414,28 +519,27 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "linux"))]
+    fn interrupt_realtime_audio_playback(&mut self) {
+        if let Some(player) = &self.realtime_conversation.audio_player {
+            player.clear();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupt_realtime_audio_playback(&mut self) {}
+
+    #[cfg(not(target_os = "linux"))]
     fn start_realtime_local_audio(&mut self) {
         if self.realtime_conversation.capture_stop_flag.is_some() {
             return;
         }
 
-        let placeholder_id = self.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
-        self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
-        self.request_redraw();
-
         let capture = match crate::voice::VoiceCapture::start_realtime(
             &self.config,
             self.app_event_tx.clone(),
-            self.realtime_conversation
-                .audio_behavior
-                .input_behavior(Arc::clone(
-                    &self.realtime_conversation.playback_queued_samples,
-                )),
         ) {
             Ok(capture) => capture,
             Err(err) => {
-                self.realtime_conversation.meter_placeholder_id = None;
-                self.remove_transcription_placeholder(&placeholder_id);
                 self.fail_realtime_conversation(format!(
                     "Failed to start microphone capture: {err}"
                 ));
@@ -445,36 +549,33 @@ impl ChatWidget {
 
         let stop_flag = capture.stopped_flag();
         let peak = capture.last_peak_arc();
-        let meter_placeholder_id = placeholder_id;
-        let app_event_tx = self.app_event_tx.clone();
-
-        self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
+        self.start_realtime_meter(stop_flag.clone(), peak);
+        self.realtime_conversation.capture_stop_flag = Some(stop_flag);
         self.realtime_conversation.capture = Some(capture);
         if self.realtime_conversation.audio_player.is_none() {
-            self.realtime_conversation.audio_player = crate::voice::RealtimeAudioPlayer::start(
-                &self.config,
-                Arc::clone(&self.realtime_conversation.playback_queued_samples),
-            )
-            .ok();
+            self.realtime_conversation.audio_player =
+                crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn start_realtime_webrtc_meter(&mut self, peak: Arc<AtomicU16>) {
+        if self.realtime_conversation.capture_stop_flag.is_some() {
+            return;
         }
 
-        std::thread::spawn(move || {
-            let mut meter = crate::voice::RecordingMeterState::new();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        self.start_realtime_meter(stop_flag.clone(), peak);
+        self.realtime_conversation.capture_stop_flag = Some(stop_flag);
+    }
 
-            loop {
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
+    #[cfg(not(target_os = "linux"))]
+    fn start_realtime_meter(&mut self, stop_flag: Arc<AtomicBool>, peak: Arc<AtomicU16>) {
+        let placeholder_id = self.bottom_pane.insert_recording_meter_placeholder("⠤⠤⠤⠤");
+        self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
+        self.request_redraw();
 
-                let meter_text = meter.next_text(peak.load(Ordering::Relaxed));
-                app_event_tx.send(AppEvent::UpdateRecordingMeter {
-                    id: meter_placeholder_id.clone(),
-                    text: meter_text,
-                });
-
-                std::thread::sleep(Duration::from_millis(60));
-            }
-        });
+        start_realtime_meter_task(placeholder_id, self.app_event_tx.clone(), stop_flag, peak);
     }
 
     #[cfg(target_os = "linux")]
@@ -493,10 +594,7 @@ impl ChatWidget {
             }
             RealtimeAudioDeviceKind::Speaker => {
                 self.stop_realtime_speaker();
-                match crate::voice::RealtimeAudioPlayer::start(
-                    &self.config,
-                    Arc::clone(&self.realtime_conversation.playback_queued_samples),
-                ) {
+                match crate::voice::RealtimeAudioPlayer::start(&self.config) {
                     Ok(player) => {
                         self.realtime_conversation.audio_player = Some(player);
                     }
@@ -531,10 +629,10 @@ impl ChatWidget {
             flag.store(true, Ordering::Relaxed);
         }
         if let Some(capture) = self.realtime_conversation.capture.take() {
-            let _ = capture.stop();
+            capture.stop();
         }
         if let Some(id) = self.realtime_conversation.meter_placeholder_id.take() {
-            self.remove_transcription_placeholder(&id);
+            self.remove_recording_meter_placeholder(&id);
         }
     }
 
@@ -544,4 +642,57 @@ impl ChatWidget {
             player.clear();
         }
     }
+}
+
+fn start_realtime_webrtc_offer_task(app_event_tx: AppEventSender) {
+    std::thread::spawn(move || {
+        let result = match RealtimeWebrtcSession::start() {
+            Ok(started) => {
+                let event_tx = app_event_tx.clone();
+                let local_audio_peak = started.handle.local_audio_peak();
+                std::thread::spawn(move || {
+                    for event in started.events {
+                        if let RealtimeWebrtcEvent::LocalAudioLevel(peak) = event {
+                            local_audio_peak.store(peak, Ordering::Relaxed);
+                            event_tx.send(AppEvent::RealtimeWebrtcLocalAudioLevel(peak));
+                        } else {
+                            event_tx.send(AppEvent::RealtimeWebrtcEvent(event));
+                        }
+                    }
+                });
+                Ok(crate::app_event::RealtimeWebrtcOffer {
+                    offer_sdp: started.offer_sdp,
+                    handle: started.handle,
+                })
+            }
+            Err(err) => Err(err.to_string()),
+        };
+        app_event_tx.send(AppEvent::RealtimeWebrtcOfferCreated { result });
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_realtime_meter_task(
+    meter_placeholder_id: String,
+    app_event_tx: AppEventSender,
+    stop_flag: Arc<AtomicBool>,
+    peak: Arc<AtomicU16>,
+) {
+    std::thread::spawn(move || {
+        let mut meter = crate::voice::RecordingMeterState::new();
+
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let meter_text = meter.next_text(peak.load(Ordering::Relaxed));
+            app_event_tx.send(AppEvent::UpdateRecordingMeter {
+                id: meter_placeholder_id.clone(),
+                text: meter_text,
+            });
+
+            std::thread::sleep(Duration::from_millis(60));
+        }
+    });
 }

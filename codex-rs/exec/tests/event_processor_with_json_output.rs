@@ -37,42 +37,42 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use codex_exec::event_processor_with_jsonl_output::CodexStatus;
-use codex_exec::event_processor_with_jsonl_output::CollectedThreadEvents;
-use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
-use codex_exec::exec_events::AgentMessageItem;
-use codex_exec::exec_events::CollabAgentState;
-use codex_exec::exec_events::CollabAgentStatus;
-use codex_exec::exec_events::CollabTool;
-use codex_exec::exec_events::CollabToolCallItem;
-use codex_exec::exec_events::CollabToolCallStatus;
-use codex_exec::exec_events::CommandExecutionItem;
-use codex_exec::exec_events::CommandExecutionStatus;
-use codex_exec::exec_events::ErrorItem;
-use codex_exec::exec_events::FileChangeItem;
-use codex_exec::exec_events::FileUpdateChange as ExecFileUpdateChange;
-use codex_exec::exec_events::ItemCompletedEvent;
-use codex_exec::exec_events::ItemStartedEvent;
-use codex_exec::exec_events::ItemUpdatedEvent;
-use codex_exec::exec_events::McpToolCallItem;
-use codex_exec::exec_events::McpToolCallItemError;
-use codex_exec::exec_events::McpToolCallItemResult;
-use codex_exec::exec_events::McpToolCallStatus;
-use codex_exec::exec_events::PatchApplyStatus;
-use codex_exec::exec_events::PatchChangeKind;
-use codex_exec::exec_events::ReasoningItem;
-use codex_exec::exec_events::ThreadErrorEvent;
-use codex_exec::exec_events::ThreadEvent;
-use codex_exec::exec_events::ThreadItem as ExecThreadItem;
-use codex_exec::exec_events::ThreadItemDetails;
-use codex_exec::exec_events::ThreadStartedEvent;
-use codex_exec::exec_events::TodoItem;
-use codex_exec::exec_events::TodoListItem;
-use codex_exec::exec_events::TurnCompletedEvent;
-use codex_exec::exec_events::TurnFailedEvent;
-use codex_exec::exec_events::TurnStartedEvent;
-use codex_exec::exec_events::Usage;
-use codex_exec::exec_events::WebSearchItem;
+use codex_exec::AgentMessageItem;
+use codex_exec::CodexStatus;
+use codex_exec::CollabAgentState;
+use codex_exec::CollabAgentStatus;
+use codex_exec::CollabTool;
+use codex_exec::CollabToolCallItem;
+use codex_exec::CollabToolCallStatus;
+use codex_exec::CollectedThreadEvents;
+use codex_exec::CommandExecutionItem;
+use codex_exec::CommandExecutionStatus;
+use codex_exec::ErrorItem;
+use codex_exec::EventProcessorWithJsonOutput;
+use codex_exec::ExecThreadItem;
+use codex_exec::FileChangeItem;
+use codex_exec::FileUpdateChange as ExecFileUpdateChange;
+use codex_exec::ItemCompletedEvent;
+use codex_exec::ItemStartedEvent;
+use codex_exec::ItemUpdatedEvent;
+use codex_exec::McpToolCallItem;
+use codex_exec::McpToolCallItemError;
+use codex_exec::McpToolCallItemResult;
+use codex_exec::McpToolCallStatus;
+use codex_exec::PatchApplyStatus;
+use codex_exec::PatchChangeKind;
+use codex_exec::ReasoningItem;
+use codex_exec::ThreadErrorEvent;
+use codex_exec::ThreadEvent;
+use codex_exec::ThreadItemDetails;
+use codex_exec::ThreadStartedEvent;
+use codex_exec::TodoItem;
+use codex_exec::TodoListItem;
+use codex_exec::TurnCompletedEvent;
+use codex_exec::TurnFailedEvent;
+use codex_exec::TurnStartedEvent;
+use codex_exec::Usage;
+use codex_exec::WebSearchItem;
 
 #[test]
 fn map_todo_items_preserves_text_and_completion_state() {
@@ -134,7 +134,7 @@ fn session_configured_produces_thread_started_event() {
 
 #[test]
 fn turn_started_emits_turn_started_event() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected =
         processor.collect_thread_events(ServerNotification::TurnStarted(TurnStartedNotification {
@@ -144,6 +144,9 @@ fn turn_started_emits_turn_started_event() {
                 items: Vec::new(),
                 status: TurnStatus::InProgress,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         }));
 
@@ -158,7 +161,7 @@ fn turn_started_emits_turn_started_event() {
 
 #[test]
 fn command_execution_started_and_completed_translate_to_thread_events() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
     let command_item = ThreadItem::CommandExecution {
         id: "cmd-1".to_string(),
         command: "ls".to_string(),
@@ -235,7 +238,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
 
 #[test]
 fn empty_reasoning_items_are_ignored() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -260,7 +263,7 @@ fn empty_reasoning_items_are_ignored() {
 
 #[test]
 fn unsupported_items_do_not_consume_synthetic_ids() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let ignored = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -312,7 +315,7 @@ fn unsupported_items_do_not_consume_synthetic_ids() {
 
 #[test]
 fn reasoning_items_emit_summary_not_raw_content() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -344,7 +347,7 @@ fn reasoning_items_emit_summary_not_raw_content() {
 
 #[test]
 fn web_search_completion_preserves_query_and_action() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -384,7 +387,7 @@ fn web_search_completion_preserves_query_and_action() {
 
 #[test]
 fn web_search_start_and_completion_reuse_item_id() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let started =
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
@@ -451,7 +454,7 @@ fn web_search_start_and_completion_reuse_item_id() {
 
 #[test]
 fn mcp_tool_call_begin_and_end_emit_item_events() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let started =
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
@@ -479,6 +482,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 result: Some(McpToolCallResult {
                     content: Vec::new(),
                     structured_content: None,
+                    meta: None,
                 }),
                 error: None,
                 duration_ms: Some(1_000),
@@ -533,7 +537,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
 
 #[test]
 fn mcp_tool_call_failure_sets_failed_status() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -579,7 +583,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
 
 #[test]
 fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let started =
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
@@ -610,6 +614,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                         "text": "done",
                     })],
                     structured_content: Some(json!({ "status": "ok" })),
+                    meta: None,
                 }),
                 error: None,
                 duration_ms: Some(10),
@@ -667,7 +672,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
 
 #[test]
 fn collab_spawn_begin_and_end_emit_item_events() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let started =
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
@@ -757,7 +762,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
 
 #[test]
 fn file_change_completion_maps_change_kinds() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -819,7 +824,7 @@ fn file_change_completion_maps_change_kinds() {
 
 #[test]
 fn file_change_declined_maps_to_failed_status() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -859,7 +864,7 @@ fn file_change_declined_maps_to_failed_status() {
 
 #[test]
 fn agent_message_item_updates_final_message() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -893,7 +898,7 @@ fn agent_message_item_updates_final_message() {
 
 #[test]
 fn agent_message_item_started_is_ignored() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected =
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
@@ -918,7 +923,7 @@ fn agent_message_item_started_is_ignored() {
 
 #[test]
 fn reasoning_item_completed_uses_synthetic_id() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -950,7 +955,7 @@ fn reasoning_item_completed_uses_synthetic_id() {
 
 #[test]
 fn warning_event_produces_error_item() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_warning(
         "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
@@ -974,7 +979,7 @@ fn warning_event_produces_error_item() {
 
 #[test]
 fn plan_update_emits_started_then_updated_then_completed() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let started = processor.collect_thread_events(ServerNotification::TurnPlanUpdated(
         TurnPlanUpdatedNotification {
@@ -1066,6 +1071,9 @@ fn plan_update_emits_started_then_updated_then_completed() {
                 items: Vec::new(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1101,7 +1109,7 @@ fn plan_update_emits_started_then_updated_then_completed() {
 
 #[test]
 fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let _ = processor.collect_thread_events(ServerNotification::TurnPlanUpdated(
         TurnPlanUpdatedNotification {
@@ -1122,6 +1130,9 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
                 items: Vec::new(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1159,7 +1170,7 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
 
 #[test]
 fn token_usage_update_is_emitted_on_turn_completion() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let usage_update =
         processor.collect_thread_events(ServerNotification::ThreadTokenUsageUpdated(
@@ -1201,6 +1212,9 @@ fn token_usage_update_is_emitted_on_turn_completion() {
                 items: Vec::new(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1221,7 +1235,7 @@ fn token_usage_update_is_emitted_on_turn_completion() {
 
 #[test]
 fn turn_completion_recovers_final_message_from_turn_items() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
         TurnCompletedNotification {
@@ -1236,6 +1250,9 @@ fn turn_completion_recovers_final_message_from_turn_items() {
                 }],
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1254,7 +1271,7 @@ fn turn_completion_recovers_final_message_from_turn_items() {
 
 #[test]
 fn turn_completion_reconciles_started_items_from_turn_items() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let started =
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
@@ -1310,6 +1327,9 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
                 }],
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1340,7 +1360,7 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
 
 #[test]
 fn turn_completion_overwrites_stale_final_message_from_turn_items() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
     let _ = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
             item: ThreadItem::AgentMessage {
@@ -1367,6 +1387,9 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
                 }],
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1385,7 +1408,7 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
 
 #[test]
 fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
     let _ = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
             item: ThreadItem::AgentMessage {
@@ -1407,6 +1430,9 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
                 items: Vec::new(),
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1425,7 +1451,7 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
 
 #[test]
 fn failed_turn_clears_stale_final_message() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
@@ -1455,6 +1481,9 @@ fn failed_turn_clears_stale_final_message() {
                     additional_details: None,
                     codex_error_info: None,
                 }),
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1465,7 +1494,7 @@ fn failed_turn_clears_stale_final_message() {
 
 #[test]
 fn turn_completion_falls_back_to_final_plan_text() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
         TurnCompletedNotification {
@@ -1478,6 +1507,9 @@ fn turn_completion_falls_back_to_final_plan_text() {
                 }],
                 status: TurnStatus::Completed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1496,7 +1528,7 @@ fn turn_completion_falls_back_to_final_plan_text() {
 
 #[test]
 fn turn_failure_prefers_structured_error_message() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let error = processor.collect_thread_events(ServerNotification::Error(ErrorNotification {
         error: TurnError {
@@ -1526,6 +1558,9 @@ fn turn_failure_prefers_structured_error_message() {
                 items: Vec::new(),
                 status: TurnStatus::Failed,
                 error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
             },
         },
     ));
@@ -1544,7 +1579,7 @@ fn turn_failure_prefers_structured_error_message() {
 
 #[test]
 fn model_reroute_surfaces_as_error_item() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ModelRerouted(
         codex_app_server_protocol::ModelReroutedNotification {

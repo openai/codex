@@ -1,6 +1,7 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use async_trait::async_trait;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
@@ -16,7 +17,6 @@ use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
-use codex_core::AnalyticsEventsClient;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigService;
@@ -366,6 +366,12 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .map(codex_app_server_protocol::AskForApproval::from)
                 .collect()
         }),
+        allowed_approvals_reviewers: requirements.allowed_approvals_reviewers.map(|reviewers| {
+            reviewers
+                .into_iter()
+                .map(codex_app_server_protocol::ApprovalsReviewer::from)
+                .collect()
+        }),
         allowed_sandbox_modes: requirements.allowed_sandbox_modes.map(|modes| {
             modes
                 .into_iter()
@@ -443,6 +449,7 @@ fn map_network_requirements_to_api(
                 .collect()
         }),
         managed_allowed_domains_only: network.managed_allowed_domains_only,
+        danger_full_access_denylist_only: network.danger_full_access_denylist_only,
         allowed_domains,
         denied_domains,
         unix_sockets: network.unix_sockets.map(|unix_sockets| {
@@ -510,15 +517,16 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::AnalyticsEventsClient;
-    use codex_core::AuthManager;
-    use codex_core::CodexAuth;
+    use codex_analytics::AnalyticsEventsClient;
     use codex_core::config_loader::NetworkDomainPermissionToml as CoreNetworkDomainPermissionToml;
     use codex_core::config_loader::NetworkDomainPermissionsToml as CoreNetworkDomainPermissionsToml;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_core::config_loader::NetworkUnixSocketPermissionToml as CoreNetworkUnixSocketPermissionToml;
     use codex_core::config_loader::NetworkUnixSocketPermissionsToml as CoreNetworkUnixSocketPermissionsToml;
     use codex_features::Feature;
+    use codex_login::AuthManager;
+    use codex_login::CodexAuth;
+    use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -545,6 +553,10 @@ mod tests {
                 CoreAskForApproval::Never,
                 CoreAskForApproval::OnRequest,
             ]),
+            allowed_approvals_reviewers: Some(vec![
+                CoreApprovalsReviewer::User,
+                CoreApprovalsReviewer::GuardianSubagent,
+            ]),
             allowed_sandbox_modes: Some(vec![
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
@@ -552,7 +564,7 @@ mod tests {
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             feature_requirements: Some(codex_core::config_loader::FeatureRequirementsToml {
                 entries: std::collections::BTreeMap::from([
                     ("apps".to_string(), false),
@@ -583,6 +595,7 @@ mod tests {
                     ]),
                 }),
                 managed_allowed_domains_only: Some(false),
+                danger_full_access_denylist_only: Some(true),
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/proxy.sock".to_string(),
@@ -600,6 +613,13 @@ mod tests {
             Some(vec![
                 codex_app_server_protocol::AskForApproval::Never,
                 codex_app_server_protocol::AskForApproval::OnRequest,
+            ])
+        );
+        assert_eq!(
+            mapped.allowed_approvals_reviewers,
+            Some(vec![
+                codex_app_server_protocol::ApprovalsReviewer::User,
+                codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
             ])
         );
         assert_eq!(
@@ -635,6 +655,7 @@ mod tests {
                     ("example.com".to_string(), NetworkDomainPermission::Deny),
                 ])),
                 managed_allowed_domains_only: Some(false),
+                danger_full_access_denylist_only: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -651,9 +672,10 @@ mod tests {
     fn map_requirements_toml_to_api_omits_unix_socket_none_entries_from_legacy_network_fields() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,
@@ -668,6 +690,7 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
+                danger_full_access_denylist_only: None,
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/ignored.sock".to_string(),
@@ -691,6 +714,7 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
+                danger_full_access_denylist_only: None,
                 allowed_domains: None,
                 denied_domains: None,
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -707,9 +731,10 @@ mod tests {
     fn map_requirements_toml_to_api_normalizes_allowed_web_search_modes() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,

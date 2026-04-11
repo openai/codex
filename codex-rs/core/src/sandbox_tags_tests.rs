@@ -1,7 +1,7 @@
 use super::sandbox_tag;
-use crate::protocol::SandboxPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::NetworkAccess;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use pretty_assertions::assert_eq;
@@ -32,7 +32,7 @@ fn default_linux_sandbox_uses_platform_sandbox_tag() {
         &SandboxPolicy::new_read_only_policy(),
         WindowsSandboxLevel::Disabled,
     );
-    let expected = get_platform_sandbox(false)
+    let expected = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
         .map(SandboxType::as_metric_tag)
         .unwrap_or("none");
     assert_eq!(actual, expected);

@@ -1,15 +1,7 @@
 ---
-source: tui/src/chatwidget/tests.rs
-assertion_line: 9085
-expression: term.backend().vt100().screen().contents()
+source: tui/src/chatwidget/tests/guardian.rs
+expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
-
-
-
-
-
-
-
 ⚠ Automatic approval review denied (risk: high): The planned action would
   transmit the full contents of a workspace source file (`core/src/codex.rs`) to
   `https://example.com`, which is an external and untrusted endpoint.
@@ -22,4 +14,4 @@ expression: term.backend().vt100().screen().contents()
 
 › Ask Codex to do anything
 
-  ? for shortcuts                                                                                                        100% context left
+  gpt-5.3-codex default · /tmp/project

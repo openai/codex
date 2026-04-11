@@ -388,6 +388,13 @@
         }
       ]
     },
+    "AutoReviewDecisionSource": {
+      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+      "enum": [
+        "agent"
+      ],
+      "type": "string"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -1013,7 +1020,7 @@
           "type": "array"
         },
         "watchId": {
-          "description": "Watch identifier returned by `fs/watch`.",
+          "description": "Watch identifier previously provided to `fs/watch`.",
           "type": "string"
         }
       },
@@ -1146,16 +1153,18 @@
             }
           ]
         },
-        "riskScore": {
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "status": {
           "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        },
+        "userAuthorization": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianUserAuthorization"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1163,19 +1172,208 @@
       ],
       "type": "object"
     },
+    "GuardianApprovalReviewAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/definitions/GuardianCommandSource"
+            },
+            "type": {
+              "enum": [
+                "command"
+              ],
+              "title": "CommandGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "cwd",
+            "source",
+            "type"
+          ],
+          "title": "CommandGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "argv": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "program": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/definitions/GuardianCommandSource"
+            },
+            "type": {
+              "enum": [
+                "execve"
+              ],
+              "title": "ExecveGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "argv",
+            "cwd",
+            "program",
+            "source",
+            "type"
+          ],
+          "title": "ExecveGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cwd": {
+              "type": "string"
+            },
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "applyPatch"
+              ],
+              "title": "ApplyPatchGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cwd",
+            "files",
+            "type"
+          ],
+          "title": "ApplyPatchGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "protocol": {
+              "$ref": "#/definitions/NetworkApprovalProtocol"
+            },
+            "target": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "networkAccess"
+              ],
+              "title": "NetworkAccessGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "host",
+            "port",
+            "protocol",
+            "target",
+            "type"
+          ],
+          "title": "NetworkAccessGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "connectorId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "connectorName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "server": {
+              "type": "string"
+            },
+            "toolName": {
+              "type": "string"
+            },
+            "toolTitle": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "mcpToolCall"
+              ],
+              "title": "McpToolCallGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "server",
+            "toolName",
+            "type"
+          ],
+          "title": "McpToolCallGuardianApprovalReviewAction",
+          "type": "object"
+        }
+      ]
+    },
     "GuardianApprovalReviewStatus": {
       "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
       "enum": [
         "inProgress",
         "approved",
         "denied",
+        "timedOut",
         "aborted"
+      ],
+      "type": "string"
+    },
+    "GuardianCommandSource": {
+      "enum": [
+        "shell",
+        "unifiedExec"
       ],
       "type": "string"
     },
     "GuardianRiskLevel": {
       "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
       "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "GuardianUserAuthorization": {
+      "description": "[UNSTABLE] Authorization level assigned by guardian approval review.",
+      "enum": [
+        "unknown",
         "low",
         "medium",
         "high"
@@ -1398,14 +1596,27 @@
       "type": "object"
     },
     "ItemGuardianApprovalReviewCompletedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
       "properties": {
-        "action": true,
+        "action": {
+          "$ref": "#/definitions/GuardianApprovalReviewAction"
+        },
+        "decisionSource": {
+          "$ref": "#/definitions/AutoReviewDecisionSource"
+        },
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
-        "targetItemId": {
+        "reviewId": {
+          "description": "Stable identifier for this review.",
           "type": "string"
+        },
+        "targetItemId": {
+          "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "threadId": {
           "type": "string"
@@ -1415,22 +1626,34 @@
         }
       },
       "required": [
+        "action",
+        "decisionSource",
         "review",
-        "targetItemId",
+        "reviewId",
         "threadId",
         "turnId"
       ],
       "type": "object"
     },
     "ItemGuardianApprovalReviewStartedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
       "properties": {
-        "action": true,
+        "action": {
+          "$ref": "#/definitions/GuardianApprovalReviewAction"
+        },
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
-        "targetItemId": {
+        "reviewId": {
+          "description": "Stable identifier for this review.",
           "type": "string"
+        },
+        "targetItemId": {
+          "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "threadId": {
           "type": "string"
@@ -1440,8 +1663,9 @@
         }
       },
       "required": [
+        "action",
         "review",
-        "targetItemId",
+        "reviewId",
         "threadId",
         "turnId"
       ],
@@ -1553,6 +1777,7 @@
     },
     "McpToolCallResult": {
       "properties": {
+        "_meta": true,
         "content": {
           "items": true,
           "type": "array"
@@ -1672,6 +1897,15 @@
       ],
       "type": "object"
     },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5Tcp",
+        "socks5Udp"
+      ],
+      "type": "string"
+    },
     "NonSteerableTurnKind": {
       "enum": [
         "review",
@@ -1777,7 +2011,9 @@
         "plus",
         "pro",
         "team",
+        "self_serve_business_usage_based",
         "business",
+        "enterprise_cbp_usage_based",
         "enterprise",
         "edu",
         "unknown"
@@ -2230,6 +2466,13 @@
         "ephemeral": {
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
+        },
+        "forkedFromId": {
+          "description": "Source thread id when this thread was created by forking another thread.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "gitInfo": {
           "anyOf": [
@@ -3102,6 +3345,22 @@
       ],
       "type": "object"
     },
+    "ThreadRealtimeSdpNotification": {
+      "description": "EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.",
+      "properties": {
+        "sdp": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sdp",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadRealtimeStartedNotification": {
       "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
       "properties": {
@@ -3331,6 +3590,22 @@
     },
     "Turn": {
       "properties": {
+        "completedAt": {
+          "description": "Unix timestamp (in seconds) when the turn completed.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "description": "Duration between turn start and completion in milliseconds, if known.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "error": {
           "anyOf": [
             {
@@ -3351,6 +3626,14 @@
             "$ref": "#/definitions/ThreadItem"
           },
           "type": "array"
+        },
+        "startedAt": {
+          "description": "Unix timestamp (in seconds) when the turn started.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "status": {
           "$ref": "#/definitions/TurnStatus"
@@ -4699,6 +4982,26 @@
         "params"
       ],
       "title": "Thread/realtime/outputAudio/deltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/sdp"
+          ],
+          "title": "Thread/realtime/sdpNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeSdpNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/sdpNotification",
       "type": "object"
     },
     {

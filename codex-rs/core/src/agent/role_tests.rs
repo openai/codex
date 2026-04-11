@@ -40,7 +40,10 @@ async fn write_role_config(home: &TempDir, name: &str, contents: &str) -> PathBu
 fn session_flags_layer_count(config: &Config) -> usize {
     config
         .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
         .into_iter()
         .filter(|layer| layer.name == ConfigLayerSource::SessionFlags)
         .count()
@@ -51,7 +54,7 @@ async fn apply_role_defaults_to_default_and_leaves_config_unchanged() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let before = config.clone();
 
-    apply_role_to_config(&mut config, None)
+    apply_role_to_config(&mut config, /*role_name*/ None)
         .await
         .expect("default role should apply");
 
@@ -82,6 +85,22 @@ async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
     assert_eq!(config.model.as_deref(), Some("gpt-5.1-codex-mini"));
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
     assert_eq!(session_flags_layer_count(&config), before_layers + 1);
+}
+
+#[tokio::test]
+async fn apply_empty_explorer_role_preserves_current_model_and_reasoning_effort() {
+    let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let before_layers = session_flags_layer_count(&config);
+    config.model = Some("gpt-5.4-mini".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+
+    apply_role_to_config(&mut config, Some("explorer"))
+        .await
+        .expect("explorer role should apply");
+
+    assert_eq!(config.model.as_deref(), Some("gpt-5.4-mini"));
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(session_flags_layer_count(&config), before_layers);
 }
 
 #[tokio::test]
@@ -529,7 +548,10 @@ writable_roots = ["./sandbox-root"]
 
     let role_layer = config
         .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
         .into_iter()
         .rfind(|layer| layer.name == ConfigLayerSource::SessionFlags)
         .expect("expected a session flags layer");
@@ -630,7 +652,10 @@ enabled = false
         .expect("custom role should apply");
 
     let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(home.path().to_path_buf(), true);
+    let skills_manager = SkillsManager::new(
+        home.path().to_path_buf(),
+        /*bundled_skills_enabled*/ true,
+    );
     let plugin_outcome = plugins_manager.plugins_for_config(&config);
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input = skills_load_input_from_config(&config, effective_skill_roots);

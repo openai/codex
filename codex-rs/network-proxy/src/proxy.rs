@@ -2,6 +2,7 @@ use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
+use crate::runtime::ConfigState;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
 use crate::state::NetworkProxyState;
@@ -13,6 +14,7 @@ use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -219,11 +221,9 @@ impl NetworkProxyBuilder {
             http_addr,
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
-            allow_local_binding: current_cfg.network.allow_local_binding,
-            allow_unix_sockets: current_cfg.network.allow_unix_sockets(),
-            dangerously_allow_all_unix_sockets: current_cfg
-                .network
-                .dangerously_allow_all_unix_sockets,
+            runtime_settings: Arc::new(RwLock::new(NetworkProxyRuntimeSettings::from_config(
+                &current_cfg,
+            ))),
             reserved_listeners,
             policy_decider: self.policy_decider,
         })
@@ -294,15 +294,30 @@ fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
         .context("bind loopback ephemeral port")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NetworkProxyRuntimeSettings {
+    allow_local_binding: bool,
+    allow_unix_sockets: Arc<[String]>,
+    dangerously_allow_all_unix_sockets: bool,
+}
+
+impl NetworkProxyRuntimeSettings {
+    fn from_config(config: &config::NetworkProxyConfig) -> Self {
+        Self {
+            allow_local_binding: config.network.allow_local_binding,
+            allow_unix_sockets: config.network.allow_unix_sockets().into(),
+            dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct NetworkProxy {
     state: Arc<NetworkProxyState>,
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     socks_enabled: bool,
-    allow_local_binding: bool,
-    allow_unix_sockets: Vec<String>,
-    dangerously_allow_all_unix_sockets: bool,
+    runtime_settings: Arc<RwLock<NetworkProxyRuntimeSettings>>,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
@@ -322,7 +337,7 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr == other.socks_addr
-            && self.allow_local_binding == other.allow_local_binding
+            && self.runtime_settings() == other.runtime_settings()
     }
 }
 
@@ -364,8 +379,10 @@ pub const NO_PROXY_ENV_KEYS: &[&str] = &[
 
 pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
     "localhost,127.0.0.1,::1,",
-    "*.local,.local,",
-    "169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    "169.254.0.0/16,",
+    "10.0.0.0/8,",
+    "172.16.0.0/12,",
+    "192.168.0.0/16"
 );
 
 pub fn proxy_url_env_value<'a>(
@@ -437,7 +454,9 @@ fn apply_proxy_env_overrides(
     // HTTP(S)_PROXY. Keep them aligned with the managed HTTP proxy endpoint.
     set_env_keys(env, WEBSOCKET_PROXY_ENV_KEYS, &http_proxy_url);
 
-    // Keep local/private targets direct so local IPC and metadata endpoints avoid the proxy.
+    // Keep loopback and IP-literal private targets direct so local IPC/LAN access avoids the proxy.
+    // Do not include hostname suffixes here: those can force clients to resolve internal names
+    // locally instead of letting the proxy resolve them.
     set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
 
     env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
@@ -488,18 +507,19 @@ impl NetworkProxy {
     }
 
     pub fn allow_local_binding(&self) -> bool {
-        self.allow_local_binding
+        self.runtime_settings().allow_local_binding
     }
 
-    pub fn allow_unix_sockets(&self) -> &[String] {
-        &self.allow_unix_sockets
+    pub fn allow_unix_sockets(&self) -> Arc<[String]> {
+        self.runtime_settings().allow_unix_sockets
     }
 
     pub fn dangerously_allow_all_unix_sockets(&self) -> bool {
-        self.dangerously_allow_all_unix_sockets
+        self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        let allow_local_binding = self.allow_local_binding();
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -507,8 +527,48 @@ impl NetworkProxy {
             self.http_addr,
             self.socks_addr,
             self.socks_enabled,
-            self.allow_local_binding,
+            allow_local_binding,
         );
+    }
+
+    pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
+        let current_cfg = self.state.current_cfg().await?;
+        anyhow::ensure!(
+            new_state.config.network.enabled == current_cfg.network.enabled,
+            "cannot update network.enabled on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.proxy_url == current_cfg.network.proxy_url,
+            "cannot update network.proxy_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.socks_url == current_cfg.network.socks_url,
+            "cannot update network.socks_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.enable_socks5 == current_cfg.network.enable_socks5,
+            "cannot update network.enable_socks5 on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.enable_socks5_udp == current_cfg.network.enable_socks5_udp,
+            "cannot update network.enable_socks5_udp on a running proxy"
+        );
+
+        let settings = NetworkProxyRuntimeSettings::from_config(&new_state.config);
+        self.state.replace_config_state(new_state).await?;
+        let mut guard = self
+            .runtime_settings
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = settings;
+        Ok(())
+    }
+
+    fn runtime_settings(&self) -> NetworkProxyRuntimeSettings {
+        self.runtime_settings
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
@@ -705,7 +765,7 @@ mod tests {
         let state = Arc::new(network_proxy_state_for_policy(settings));
         let proxy = NetworkProxy::builder()
             .state(state)
-            .managed_by_codex(false)
+            .managed_by_codex(/*managed_by_codex*/ false)
             .build()
             .await
             .unwrap();
@@ -780,7 +840,7 @@ mod tests {
         let reserved = reserve_windows_managed_listeners(
             SocketAddr::from(([127, 0, 0, 1], busy_port)),
             SocketAddr::from(([127, 0, 0, 1], 48081)),
-            false,
+            /*reserve_socks_listener*/ false,
         )
         .unwrap();
 
@@ -839,8 +899,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(
@@ -871,6 +931,11 @@ mod tests {
             env.get("NO_PROXY"),
             Some(&DEFAULT_NO_PROXY_VALUE.to_string())
         );
+        let no_proxy = env.get("NO_PROXY").expect("NO_PROXY should be set");
+        assert!(no_proxy.contains("10.0.0.0/8"));
+        assert!(no_proxy.contains("172.16.0.0/12"));
+        assert!(no_proxy.contains("192.168.0.0/16"));
+        assert!(no_proxy.contains("169.254.0.0/16"));
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
         assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
         #[cfg(target_os = "macos")]
@@ -889,8 +954,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            false,
-            true,
+            /*socks_enabled*/ false,
+            /*allow_local_binding*/ true,
         );
 
         assert_eq!(
@@ -907,8 +972,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(
@@ -952,8 +1017,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(

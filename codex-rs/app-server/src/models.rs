@@ -4,7 +4,7 @@ use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
-use codex_core::models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
@@ -42,6 +42,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         default_reasoning_effort: preset.default_reasoning_effort,
         input_modalities: preset.input_modalities,
         supports_personality: preset.supports_personality,
+        additional_speed_tiers: preset.additional_speed_tiers,
         is_default: preset.is_default,
     }
 }

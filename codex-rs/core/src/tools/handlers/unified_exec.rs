@@ -1,8 +1,5 @@
 use crate::function_tool::FunctionCallError;
-use crate::is_safe_command::is_known_safe_command;
 use crate::maybe_emit_implicit_skill_invocation;
-use crate::protocol::EventMsg;
-use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
@@ -21,16 +18,18 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
-use async_trait::async_trait;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
-use codex_otel::metrics::names::TOOL_CALL_UNIFIED_EXEC_METRIC;
+use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_tools::UnifiedExecShellMode;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -86,7 +85,6 @@ fn default_tty() -> bool {
     false
 }
 
-#[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     type Output = ExecCommandToolOutput;
 
@@ -178,14 +176,20 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
+        let Some(environment) = turn.environment.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "unified exec is unavailable in this session".to_string(),
+            ));
+        };
+        let fs = environment.get_filesystem();
+
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
-                let args: ExecCommandArgs =
-                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
+                let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
@@ -279,6 +283,7 @@ impl ToolHandler for UnifiedExecHandler {
                 if let Some(output) = intercept_apply_patch(
                     &command,
                     &cwd,
+                    fs.as_ref(),
                     Some(yield_time_ms),
                     context.session.clone(),
                     context.turn.clone(),

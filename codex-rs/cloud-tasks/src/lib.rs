@@ -1,10 +1,10 @@
 mod app;
 mod cli;
-pub mod env_detect;
+pub(crate) mod env_detect;
 mod new_task;
-pub mod scrollable_diff;
+pub(crate) mod scrollable_diff;
 mod ui;
-pub mod util;
+pub(crate) mod util;
 pub use cli::Cli;
 
 use anyhow::anyhow;
@@ -12,6 +12,7 @@ use chrono::Utc;
 use codex_cloud_tasks_client::TaskStatus;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::default_branch_name;
+use codex_login::default_client::get_codex_user_agent;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -40,6 +41,7 @@ struct BackendContext {
 }
 
 async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext> {
+    #[cfg(debug_assertions)]
     let use_mock = matches!(
         std::env::var("CODEX_CLOUD_TASKS_MODE").ok().as_deref(),
         Some("mock") | Some("MOCK")
@@ -49,14 +51,15 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     set_user_agent_suffix(user_agent_suffix);
 
+    #[cfg(debug_assertions)]
     if use_mock {
         return Ok(BackendContext {
-            backend: Arc::new(codex_cloud_tasks_client::MockClient),
+            backend: Arc::new(codex_cloud_tasks_mock_client::MockClient),
             base_url,
         });
     }
 
-    let ua = codex_core::default_client::get_codex_user_agent();
+    let ua = get_codex_user_agent();
     let mut http = codex_cloud_tasks_client::HttpClient::new(base_url.clone())?.with_user_agent(ua);
     let style = if base_url.contains("/backend-api") {
         "wham"
@@ -802,7 +805,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     append_error_log(format!(
         "startup: wham_force_internal={} ua={}",
         force_internal,
-        codex_core::default_client::get_codex_user_agent()
+        get_codex_user_agent()
     ));
     // Non-blocking initial load so the in-box spinner can animate
     app.status = "Loading tasks…".to_string();
@@ -930,7 +933,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                 if let Some(page) = app.new_task.as_mut() {
                     if page.composer.flush_paste_burst_if_due() { needs_redraw = true; }
                     if page.composer.is_in_paste_burst() {
-                        let _ = frame_tx.send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay());
+                        let _ = frame_tx
+                            .send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay());
                     }
                 }
                 // Keep spinner pulsing only while loading.
@@ -1491,7 +1495,9 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                 _ => {
                                     if page.submitting {
                                         // Ignore input while submitting
-                                    } else if let codex_tui::ComposerAction::Submitted(text) = page.composer.input(key) {
+                                    } else if let codex_tui::ComposerAction::Submitted(text) =
+                                        page.composer.input(key)
+                                    {
                                             // Submit only if we have an env id
                                             if let Some(env) = page.env_id.clone() {
                                                 append_error_log(format!(
@@ -1521,7 +1527,10 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     needs_redraw = true;
                                     // If paste‑burst is active, schedule a micro‑flush frame.
                                     if page.composer.is_in_paste_burst() {
-                                        let _ = frame_tx.send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay());
+                                        let _ = frame_tx.send(
+                                            Instant::now()
+                                                + codex_tui::ComposerInput::recommended_flush_delay(),
+                                        );
                                     }
                                     // Always schedule an immediate redraw for key edits in the composer.
                                     let _ = frame_tx.send(Instant::now());
@@ -1587,7 +1596,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let total = ov.attempt_display_total();
                                         let current = ov.selected_attempt + 1;
                                         app.status = format!("Viewing attempt {current} of {total}");
-                                        ov.sd.to_top();
+                                        ov.sd.scroll_to_top();
                                         needs_redraw = true;
                                     }
                             };
@@ -1663,7 +1672,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let has_diff = ov.current_attempt().is_some_and(app::AttemptView::has_diff) || ov.base_can_apply;
                                         if has_text && has_diff {
                                             ov.set_view(app::DetailView::Prompt);
-                                            ov.sd.to_top();
+                                            ov.sd.scroll_to_top();
                                             needs_redraw = true;
                                         }
                                     }
@@ -1674,7 +1683,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let has_diff = ov.current_attempt().is_some_and(app::AttemptView::has_diff) || ov.base_can_apply;
                                         if has_text && has_diff {
                                             ov.set_view(app::DetailView::Diff);
-                                            ov.sd.to_top();
+                                            ov.sd.scroll_to_top();
                                             needs_redraw = true;
                                         }
                                     }
@@ -1705,8 +1714,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     if let Some(ov) = &mut app.diff_overlay { let step = ov.sd.state.viewport_h.saturating_sub(1) as i16; ov.sd.page_by(-step); }
                                     needs_redraw = true;
                                 }
-                                KeyCode::Home => { if let Some(ov) = &mut app.diff_overlay { ov.sd.to_top(); } needs_redraw = true; }
-                                KeyCode::End  => { if let Some(ov) = &mut app.diff_overlay { ov.sd.to_bottom(); } needs_redraw = true; }
+                                KeyCode::Home => { if let Some(ov) = &mut app.diff_overlay { ov.sd.scroll_to_top(); } needs_redraw = true; }
+                                KeyCode::End  => { if let Some(ov) = &mut app.diff_overlay { ov.sd.scroll_to_bottom(); } needs_redraw = true; }
                                 _ => {}
                             }
                         } else if app.env_modal.is_some() {
@@ -2126,10 +2135,10 @@ mod tests {
     use super::*;
     use crate::resolve_git_ref_with_git_info;
     use codex_cloud_tasks_client::DiffSummary;
-    use codex_cloud_tasks_client::MockClient;
     use codex_cloud_tasks_client::TaskId;
     use codex_cloud_tasks_client::TaskStatus;
     use codex_cloud_tasks_client::TaskSummary;
+    use codex_cloud_tasks_mock_client::MockClient;
     use codex_tui::ComposerAction;
     use codex_tui::ComposerInput;
     use crossterm::event::KeyCode;
@@ -2168,7 +2177,7 @@ mod tests {
     async fn branch_override_is_used_when_provided() {
         let git_ref = resolve_git_ref_with_git_info(
             Some(&"feature/override".to_string()),
-            &StubGitInfo::new(None, None),
+            &StubGitInfo::new(/*default_branch*/ None, /*current_branch*/ None),
         )
         .await;
 
@@ -2179,7 +2188,7 @@ mod tests {
     async fn trims_override_whitespace() {
         let git_ref = resolve_git_ref_with_git_info(
             Some(&"  feature/spaces  ".to_string()),
-            &StubGitInfo::new(None, None),
+            &StubGitInfo::new(/*default_branch*/ None, /*current_branch*/ None),
         )
         .await;
 
@@ -2189,7 +2198,7 @@ mod tests {
     #[tokio::test]
     async fn prefers_current_branch_when_available() {
         let git_ref = resolve_git_ref_with_git_info(
-            None,
+            /*branch_override*/ None,
             &StubGitInfo::new(
                 Some("default-main".to_string()),
                 Some("feature/current".to_string()),
@@ -2203,8 +2212,8 @@ mod tests {
     #[tokio::test]
     async fn falls_back_to_current_branch_when_default_is_missing() {
         let git_ref = resolve_git_ref_with_git_info(
-            None,
-            &StubGitInfo::new(None, Some("develop".to_string())),
+            /*branch_override*/ None,
+            &StubGitInfo::new(/*default_branch*/ None, Some("develop".to_string())),
         )
         .await;
 
@@ -2213,7 +2222,11 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_to_main_when_no_git_info_is_available() {
-        let git_ref = resolve_git_ref_with_git_info(None, &StubGitInfo::new(None, None)).await;
+        let git_ref = resolve_git_ref_with_git_info(
+            /*branch_override*/ None,
+            &StubGitInfo::new(/*default_branch*/ None, /*current_branch*/ None),
+        )
+        .await;
 
         assert_eq!(git_ref, "main");
     }
@@ -2236,7 +2249,7 @@ mod tests {
             is_review: false,
             attempt_total: None,
         };
-        let lines = format_task_status_lines(&task, now, false);
+        let lines = format_task_status_lines(&task, now, /*colorize*/ false);
         assert_eq!(
             lines,
             vec![
@@ -2261,7 +2274,7 @@ mod tests {
             is_review: false,
             attempt_total: Some(1),
         };
-        let lines = format_task_status_lines(&task, now, false);
+        let lines = format_task_status_lines(&task, now, /*colorize*/ false);
         assert_eq!(
             lines,
             vec![
@@ -2303,7 +2316,12 @@ mod tests {
                 attempt_total: Some(1),
             },
         ];
-        let lines = format_task_list_lines(&tasks, "https://chatgpt.com/backend-api", now, false);
+        let lines = format_task_list_lines(
+            &tasks,
+            "https://chatgpt.com/backend-api",
+            now,
+            /*colorize*/ false,
+        );
         assert_eq!(
             lines,
             vec![

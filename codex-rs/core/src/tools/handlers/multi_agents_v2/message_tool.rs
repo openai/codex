@@ -1,27 +1,19 @@
 //! Shared argument parsing and dispatch for the v2 text-only agent messaging tools.
 //!
-//! `send_message` and `assign_task` intentionally expose the same input shape and differ only in
-//! whether the resulting `InterAgentCommunication` should wake the target immediately.
+//! `send_message` and `followup_task` share the same submission path and differ only in whether the
+//! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
-use crate::agent::control::render_input_preview;
+use crate::tools::context::FunctionToolOutput;
 use codex_protocol::protocol::InterAgentCommunication;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MessageDeliveryMode {
     QueueOnly,
     TriggerTurn,
 }
 
 impl MessageDeliveryMode {
-    /// Returns the model-visible error message for non-text inputs.
-    fn unsupported_items_error(self) -> &'static str {
-        match self {
-            Self::QueueOnly => "send_message only supports text content in MultiAgentV2 for now",
-            Self::TriggerTurn => "assign_task only supports text content in MultiAgentV2 for now",
-        }
-    }
-
     /// Returns whether the produced communication should start a turn immediately.
     fn apply(self, communication: InterAgentCommunication) -> InterAgentCommunication {
         match self {
@@ -38,81 +30,80 @@ impl MessageDeliveryMode {
 }
 
 #[derive(Debug, Deserialize)]
-/// Input shared by the MultiAgentV2 `send_message` and `assign_task` tools.
-pub(crate) struct MessageToolArgs {
+#[serde(deny_unknown_fields)]
+/// Input for the MultiAgentV2 `send_message` tool.
+pub(crate) struct SendMessageArgs {
     pub(crate) target: String,
-    pub(crate) items: Vec<UserInput>,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Input for the MultiAgentV2 `followup_task` tool.
+pub(crate) struct FollowupTaskArgs {
+    pub(crate) target: String,
+    pub(crate) message: String,
     #[serde(default)]
     pub(crate) interrupt: bool,
 }
 
-#[derive(Debug, Serialize)]
-/// Tool result shared by the MultiAgentV2 message-delivery tools.
-pub(crate) struct MessageToolResult {
-    submission_id: String,
-}
-
-impl ToolOutput for MessageToolResult {
-    fn log_preview(&self) -> String {
-        tool_output_json_text(self, "multi_agent_message")
-    }
-
-    fn success_for_logging(&self) -> bool {
-        true
-    }
-
-    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        tool_output_response_item(call_id, payload, self, Some(true), "multi_agent_message")
-    }
-
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        tool_output_code_mode_result(self, "multi_agent_message")
-    }
-}
-
-/// Validates that the tool input is non-empty text-only content and returns its preview string.
-fn text_content(
-    items: &[UserInput],
-    mode: MessageDeliveryMode,
-) -> Result<String, FunctionCallError> {
-    if items.is_empty() {
+fn message_content(message: String) -> Result<String, FunctionCallError> {
+    if message.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
-            "Items can't be empty".to_string(),
+            "Empty message can't be sent to an agent".to_string(),
         ));
     }
-    if items
-        .iter()
-        .all(|item| matches!(item, UserInput::Text { .. }))
-    {
-        return Ok(render_input_preview(&(items.to_vec().into())));
-    }
-    Err(FunctionCallError::RespondToModel(
-        mode.unsupported_items_error().to_string(),
-    ))
+    Ok(message)
 }
 
-/// Handles the shared MultiAgentV2 text-message flow for both `send_message` and `assign_task`.
-pub(crate) async fn handle_message_tool(
+/// Handles the shared MultiAgentV2 plain-text message flow for both `send_message` and `followup_task`.
+pub(crate) async fn handle_message_string_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,
-) -> Result<MessageToolResult, FunctionCallError> {
+    target: String,
+    message: String,
+    interrupt: bool,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    handle_message_submission(
+        invocation,
+        mode,
+        target,
+        message_content(message)?,
+        interrupt,
+    )
+    .await
+}
+
+async fn handle_message_submission(
+    invocation: ToolInvocation,
+    mode: MessageDeliveryMode,
+    target: String,
+    prompt: String,
+    interrupt: bool,
+) -> Result<FunctionToolOutput, FunctionCallError> {
     let ToolInvocation {
         session,
         turn,
-        payload,
         call_id,
         ..
     } = invocation;
-    let arguments = function_arguments(payload)?;
-    let args: MessageToolArgs = parse_arguments(&arguments)?;
-    let receiver_thread_id = resolve_agent_target(&session, &turn, &args.target).await?;
-    let prompt = text_content(&args.items, mode)?;
+    let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
     let receiver_agent = session
         .services
         .agent_control
         .get_agent_metadata(receiver_thread_id)
         .unwrap_or_default();
-    if args.interrupt {
+    if mode == MessageDeliveryMode::TriggerTurn
+        && receiver_agent
+            .agent_path
+            .as_ref()
+            .is_some_and(AgentPath::is_root)
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "Tasks can't be assigned to the root agent".to_string(),
+        ));
+    }
+    if interrupt {
         session
             .services
             .agent_control
@@ -170,7 +161,7 @@ pub(crate) async fn handle_message_tool(
             .into(),
         )
         .await;
-    let submission_id = result?;
+    result?;
 
-    Ok(MessageToolResult { submission_id })
+    Ok(FunctionToolOutput::from_text(String::new(), Some(true)))
 }

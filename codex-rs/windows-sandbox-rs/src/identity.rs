@@ -5,6 +5,7 @@ use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
 use crate::setup::offline_proxy_settings_from_env;
 use crate::setup::run_elevated_setup;
+use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
 use crate::setup::SandboxNetworkIdentity;
@@ -19,6 +20,7 @@ use base64::Engine;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 struct SandboxIdentity {
@@ -122,22 +124,30 @@ fn select_identity(
     };
     let password = decode_password(&chosen)?;
     Ok(Some(SandboxIdentity {
-        username: chosen.username.clone(),
+        username: chosen.username,
         password,
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn require_logon_sandbox_creds(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
+    read_roots_override: Option<&[PathBuf]>,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
-    let needed_read = gather_read_roots(command_cwd, policy, codex_home);
-    let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
+    let needed_read = read_roots_override
+        .map(<[PathBuf]>::to_vec)
+        .unwrap_or_else(|| gather_read_roots(command_cwd, policy, codex_home));
+    let needed_write = write_roots_override
+        .map(<[PathBuf]>::to_vec)
+        .unwrap_or_else(|| gather_write_roots(policy, policy_cwd, command_cwd, env_map));
     let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
     let desired_offline_proxy_settings =
         offline_proxy_settings_from_env(env_map, network_identity);
@@ -189,18 +199,26 @@ pub fn require_logon_sandbox_creds(
             crate::setup::SetupRootOverrides {
                 read_roots: Some(needed_read.clone()),
                 write_roots: Some(needed_write.clone()),
+                deny_write_paths: Some(deny_write_paths_override.to_vec()),
             },
         )?;
         identity = select_identity(network_identity, codex_home)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    crate::setup::run_setup_refresh(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        proxy_enforced,
+    run_setup_refresh_with_overrides(
+        crate::setup::SandboxSetupRequest {
+            policy,
+            policy_cwd,
+            command_cwd,
+            env_map,
+            codex_home,
+            proxy_enforced,
+        },
+        crate::setup::SetupRootOverrides {
+            read_roots: Some(needed_read),
+            write_roots: Some(needed_write),
+            deny_write_paths: Some(deny_write_paths_override.to_vec()),
+        },
     )?;
     let identity = identity.ok_or_else(|| {
         anyhow!(
