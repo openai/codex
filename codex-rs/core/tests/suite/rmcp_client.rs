@@ -30,6 +30,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
+use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
@@ -51,6 +52,29 @@ use tokio::time::sleep;
 
 static OPENAI_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAD0AAAA9CAYAAAAeYmHpAAAE6klEQVR4Aeyau44UVxCGx1fZsmRLlm3Zoe0XcGQ5cUiCCIgJeS9CHgAhMkISQnIuGQgJEkBcxLW+nqnZ6uqqc+nuWRC7q/P3qetf9e+MtOwyX25O4Nep6JPyop++0qev9HrfgZ+F6r2DuB/vHOrt/UIkqdDHYvujOW6fO7h/CNEI+a5jc+pBR8uy0jVFsziYu5HtfSUk+Io34q921hLNctFSX0gwww+S8wce8K1LfCU+cYW4888aov8NxqvQILUPPReLOrm6zyLxa4i+6VZuFbJo8d1MOHZm+7VUtB/aIvhPWc/3SWg49JcwFLlHxuXKjtyloo+YNhuW3VS+WPBuUEMvCFKjEDVgFBQHXrnazpqiSxNZCkQ1kYiozsbm9Oz7l4i2Il7vGccGNWAc3XosDrZe/9P3ZnMmzHNEQw4smf8RQ87XEAMsC7Az0Au+dgXerfH4+sHvEc0SYGic8WBBUGqFH2gN7yDrazy7m2pbRTeRmU3+MjZmr1h6LJgPbGy23SI6GlYT0brQ71IY8Us4PNQCm+zepSbaD2BY9xCaAsD9IIj/IzFmKMSdHHonwdZATbTnYREf6/VZGER98N9yCWIvXQwXDoDdhZJoT8jwLnJXDB9w4Sb3e6nK5ndzlkTLnP3JBu4LKkbrYrU69gCVceV0JvpyuW1xlsUVngzhwMetn/XamtTORF9IO5YnWNiyeF9zCAfqR3fUW+vZZKLtgP+ts8BmQRBREAdRDhH3o8QuRh/YucNFz2BEjxbRN6LGzphfKmvP6v6QhqIQyZ8XNJ0W0X83MR1PEcJBNO2KC2Z1TW/v244scp9FwRViZxIOBF0Lctk7ZVSavdLvRlV1hz/ysUi9sr8CIcB3nvWBwA93ykTz18eAYxQ6N/K2DkPA1lv3iXCwmDUT7YkjIby9siXueIJj9H+pzSqJ9oIuJWTUgSSt4WO7o/9GGg0viR4VinNRUDoIj34xoCd6pxD3aK3zfdbnx5v1J3ZNNEJsE0sBG7N27ReDrJc4sFxz7dI/ZAbOmmiKvHBitQXpAdR6+F7v+/ol/tOouUV01EeMZQF2BoQDn6dP4XNr+j9GZEtEK1/L8pFw7bd3a53tsTa7WD+054jOFmPg1XBKPQgnqFfmFcy32ZRvjmiIIQTYFvyDxQ8nH8WIwwGwlyDjDznnilYyFr6njrlZwsKkBpO59A7OwgdzPEWRm+G+oeb7IfyNuzjEEVLrOVxJsxvxwF8kmCM6I2QYmJunz4u4TrADpfl7mlbRTWQ7VmrBzh3+C9f6Grc3YoGN9dg/SXFthpRsT6vobfXRs2VBlgBHXVMLHjDNbIZv1sZ9+X3hB09cXdH1JKViyG0+W9bWZDa/r2f9zAFR71sTzGpMSWz2iI4YssWjWo3REy1MDGjdwe5e0dFSiAC1JakBvu4/CUS8Eh6dqHdU0Or0ioY3W5ClSqDXAy7/6SRfgw8vt4I+tbvvNtFT2kVDhY5+IGb1rCqYaXNF08vSALsXCPmt0kQNqJT1p5eI1mkIV/BxCY1z85lOzeFbPBQHURkkPTlwTYK9gTVE25l84IbFFN+YJDHjdpn0gq6mrHht0dkcjbM4UL9283O5p77GN+SPW/QwVB4IUYg7Or+Kp7naR6qktP98LNF2UxWo9yObPIT9KYg+hK4i56no4rfnM0qeyFf6AwAAAP//trwR3wAAAAZJREFUAwBZ0sR75itw5gAAAABJRU5ErkJggg==";
 
+fn assert_wall_time_line(line: &str) {
+    assert_regex_match(r"^Wall time: [0-9]+(?:\.[0-9]+)? seconds$", line);
+}
+
+fn split_wall_time_wrapped_output(output: &str) -> &str {
+    let Some((wall_time, rest)) = output.split_once('\n') else {
+        panic!("wall-time output should contain an Output section: {output}");
+    };
+    assert_wall_time_line(wall_time);
+    let Some(output) = rest.strip_prefix("Output:\n") else {
+        panic!("wall-time output should contain Output marker: {output}");
+    };
+    output
+}
+
+fn assert_wall_time_header(output: &str) {
+    let Some((wall_time, marker)) = output.split_once('\n') else {
+        panic!("wall-time header should contain an Output marker: {output}");
+    };
+    assert_wall_time_line(wall_time);
+    assert_eq!(marker, "Output:");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_server_round_trip() -> anyhow::Result<()> {
@@ -71,7 +95,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         ]),
     )
     .await;
-    mount_sse_once(
+    let final_mock = mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
@@ -189,6 +213,17 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     assert_eq!(env_value, expected_env_value);
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let output_item = final_mock.single_request().function_call_output(call_id);
+    let output_text = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function_call_output output should be a string");
+    let wrapped_payload = split_wall_time_wrapped_output(output_text);
+    let output_json: Value = serde_json::from_str(wrapped_payload)
+        .expect("wrapped MCP output should preserve structured JSON");
+    assert_eq!(output_json["echo"], "ECHOING: ping");
+    assert_eq!(output_json["env"], expected_env_value);
 
     server.verify().await;
 
@@ -362,15 +397,22 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let output_item = final_mock.single_request().function_call_output(call_id);
+    assert_eq!(output_item["type"], "function_call_output");
+    assert_eq!(output_item["call_id"], call_id);
+    let output = output_item["output"]
+        .as_array()
+        .expect("image MCP output should be content items");
+    assert_eq!(output.len(), 2);
+    assert_wall_time_header(
+        output[0]["text"]
+            .as_str()
+            .expect("first MCP image output item should be wall-time text"),
+    );
     assert_eq!(
-        output_item,
+        output[1],
         json!({
-            "type": "function_call_output",
-            "call_id": call_id,
-            "output": [{
-                "type": "input_image",
-                "image_url": OPENAI_PNG
-            }]
+            "type": "input_image",
+            "image_url": OPENAI_PNG
         })
     );
     server.verify().await;
@@ -533,7 +575,8 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
         .get("output")
         .and_then(Value::as_str)
         .expect("function_call_output output should be a JSON string");
-    let output_json: Value = serde_json::from_str(output_text)
+    let wrapped_payload = split_wall_time_wrapped_output(output_text);
+    let output_json: Value = serde_json::from_str(wrapped_payload)
         .expect("function_call_output output should be valid JSON");
     assert_eq!(
         output_json,
