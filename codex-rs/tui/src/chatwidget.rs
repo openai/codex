@@ -248,6 +248,8 @@ const PLAN_IMPLEMENTATION_CLEAR_CONTEXT: &str = "Yes, clear context and implemen
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX: &str = "Implement the approved plan below in a fresh context. Treat the plan as the\nsource of user intent, re-read files as needed, and carry the work through\nimplementation and verification.";
+const PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE: &str = "Default mode unavailable";
+const PLAN_IMPLEMENTATION_NO_APPROVED_PLAN: &str = "No approved plan available";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
@@ -265,6 +267,19 @@ const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 /// context clear, which can reintroduce rejected approaches into the implementation turn.
 fn plan_implementation_clear_context_message(plan_markdown: &str) -> String {
     format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}")
+}
+
+fn plan_implementation_clear_context_plan<'a>(
+    default_mask_available: bool,
+    plan_markdown: Option<&'a str>,
+) -> Result<&'a str, &'static str> {
+    if !default_mask_available {
+        return Err(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE);
+    }
+    match plan_markdown {
+        Some(plan_markdown) if !plan_markdown.trim().is_empty() => Ok(plan_markdown),
+        _ => Err(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN),
+    }
 }
 
 /// Choose the keybinding used to edit the most-recently queued message.
@@ -2484,6 +2499,7 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
+        let default_mask_available = default_mask.is_some();
         let (implement_actions, implement_disabled_reason) = match default_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
@@ -2495,11 +2511,17 @@ impl ChatWidget {
                 })];
                 (actions, None)
             }
-            None => (Vec::new(), Some("Default mode unavailable".to_string())),
+            None => (
+                Vec::new(),
+                Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
+            ),
         };
         let (clear_context_actions, clear_context_disabled_reason) =
-            match self.latest_proposed_plan_markdown.as_deref() {
-                Some(plan_markdown) if !plan_markdown.trim().is_empty() => {
+            match plan_implementation_clear_context_plan(
+                default_mask_available,
+                self.latest_proposed_plan_markdown.as_deref(),
+            ) {
+                Ok(plan_markdown) => {
                     let user_text = plan_implementation_clear_context_message(plan_markdown);
                     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                         tx.send(AppEvent::ClearUiAndSubmitUserMessage {
@@ -2508,7 +2530,7 @@ impl ChatWidget {
                     })];
                     (actions, None)
                 }
-                _ => (Vec::new(), Some("No approved plan available".to_string())),
+                Err(reason) => (Vec::new(), Some(reason.to_string())),
             };
         let items = vec![
             SelectionItem {

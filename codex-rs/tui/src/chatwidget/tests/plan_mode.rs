@@ -62,6 +62,32 @@ async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
     );
 }
 
+#[test]
+fn plan_implementation_clear_context_requires_default_mode_and_plan() {
+    assert_eq!(
+        plan_implementation_clear_context_plan(
+            /*default_mask_available*/ false,
+            Some("- Step\n")
+        ),
+        Err(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE)
+    );
+    assert_eq!(
+        plan_implementation_clear_context_plan(/*default_mask_available*/ true, None),
+        Err(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+    );
+    assert_eq!(
+        plan_implementation_clear_context_plan(/*default_mask_available*/ true, Some("  \n")),
+        Err(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+    );
+    assert_eq!(
+        plan_implementation_clear_context_plan(
+            /*default_mask_available*/ true,
+            Some("- Step\n")
+        ),
+        Ok("- Step\n")
+    );
+}
+
 #[tokio::test]
 async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
