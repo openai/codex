@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::DateTime;
-use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -300,7 +299,7 @@ impl ThreadMetadata {
 }
 
 fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
-    dt.with_nanosecond(0).unwrap_or(dt)
+    epoch_millis_to_datetime(datetime_to_epoch_millis(dt)).unwrap_or(dt)
 }
 
 #[derive(Debug)]
@@ -389,8 +388,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
-            created_at: epoch_seconds_to_datetime(created_at)?,
-            updated_at: epoch_seconds_to_datetime(updated_at)?,
+            created_at: epoch_millis_to_datetime(created_at)?,
+            updated_at: epoch_millis_to_datetime(updated_at)?,
             source,
             agent_nickname,
             agent_role,
@@ -406,7 +405,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             approval_mode,
             tokens_used,
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
-            archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
+            archived_at: archived_at.map(epoch_millis_to_datetime).transpose()?,
             git_sha,
             git_branch,
             git_origin_url,
@@ -423,13 +422,21 @@ pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Opti
     Some(Anchor { ts, id })
 }
 
-pub(crate) fn datetime_to_epoch_seconds(dt: DateTime<Utc>) -> i64 {
-    dt.timestamp()
+pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {
+    dt.timestamp_millis()
 }
 
-pub(crate) fn epoch_seconds_to_datetime(secs: i64) -> Result<DateTime<Utc>> {
-    DateTime::<Utc>::from_timestamp(secs, 0)
-        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {secs}"))
+pub(crate) fn epoch_millis_to_datetime(value: i64) -> Result<DateTime<Utc>> {
+    // Values older than 2020 if interpreted as milliseconds are legacy second-precision rows.
+    // Convert them in memory so old state DBs keep ordering correctly after new writes use ms.
+    const MIN_EPOCH_MILLIS: i64 = 1_577_836_800_000;
+    let millis = if value < MIN_EPOCH_MILLIS {
+        value.saturating_mul(1000)
+    } else {
+        value
+    };
+    DateTime::<Utc>::from_timestamp_millis(millis)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp millis: {value}"))
 }
 
 /// Statistics about a backfill operation.
