@@ -414,7 +414,7 @@ impl GuardianReviewSessionManager {
         let snapshot = state.last_committed_fork_snapshot.as_ref()?;
         match &snapshot.initial_history {
             InitialHistory::Forked(items) => Some(items.clone()),
-            _ => None,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Resumed(_) => None,
         }
     }
 

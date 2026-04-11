@@ -1,4 +1,5 @@
 use clap::Parser;
+use codex_app_server_client::legacy_core;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_tui::AppExitInfo;
@@ -53,7 +54,7 @@ fn main() -> anyhow::Result<()> {
         let exit_info = run_main(
             inner,
             arg0_paths,
-            codex_core::config_loader::LoaderOverrides::default(),
+            legacy_core::config_loader::LoaderOverrides::default(),
             /*remote*/ None,
             /*remote_auth_token*/ None,
         )
