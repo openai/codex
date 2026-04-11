@@ -13,6 +13,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
@@ -84,6 +85,7 @@ async fn list_threads_with_sort(
             cursor,
             limit,
             sort_key,
+            sort_direction: None,
             model_providers: providers,
             source_kinds,
             archived,
@@ -357,6 +359,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     let ThreadListResponse {
         data: data1,
         next_cursor: cursor1,
+        ..
     } = list_threads(
         &mut mcp,
         /*cursor*/ None,
@@ -384,6 +387,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     let ThreadListResponse {
         data: data2,
         next_cursor: cursor2,
+        ..
     } = list_threads(
         &mut mcp,
         Some(cursor1),
@@ -498,6 +502,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
             cursor: None,
             limit: Some(10),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
@@ -579,6 +584,7 @@ sqlite = true
             cursor: None,
             limit: Some(10),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
@@ -1234,6 +1240,114 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let id_old = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let id_watermark = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T10-00-00", &id_old).as_path(),
+        "2025-02-02T00:00:00Z",
+    )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T11-00-00", &id_watermark).as_path(),
+        "2025-02-03T00:00:00Z",
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse {
+        data: page1,
+        backwards_cursor,
+        ..
+    } = {
+        let request_id = mcp
+            .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                cursor: None,
+                limit: Some(1),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                sort_direction: Some(SortDirection::Desc),
+                model_providers: Some(vec!["mock_provider".to_string()]),
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                search_term: None,
+            })
+            .await?;
+        let resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        to_response::<ThreadListResponse>(resp)?
+    };
+    let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_page1, vec![id_watermark.as_str()]);
+    let backwards_cursor = backwards_cursor.expect("expected backwardsCursor on first page");
+    assert!(
+        backwards_cursor.contains(&id_watermark),
+        "backwardsCursor should preserve the actual first thread id"
+    );
+
+    let id_new = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T12-00-00",
+        "2025-02-01T12:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T12-00-00", &id_new).as_path(),
+        "2025-02-04T00:00:00Z",
+    )?;
+
+    let ThreadListResponse {
+        data: delta_page, ..
+    } = {
+        let request_id = mcp
+            .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                cursor: Some(backwards_cursor),
+                limit: Some(10),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                sort_direction: Some(SortDirection::Asc),
+                model_providers: Some(vec!["mock_provider".to_string()]),
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                search_term: None,
+            })
+            .await?;
+        let resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        to_response::<ThreadListResponse>(resp)?
+    };
+    let ids_delta: Vec<_> = delta_page.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_delta, vec![id_watermark.as_str(), id_new.as_str()]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
@@ -1449,6 +1563,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             cursor: Some("not-a-cursor".to_string()),
             limit: Some(2),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,

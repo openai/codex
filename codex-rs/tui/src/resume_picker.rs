@@ -335,6 +335,7 @@ fn spawn_rollout_page_loader(
                 PAGE_SIZE,
                 cursor,
                 request.sort_key,
+                codex_rollout::SortDirection::Desc,
                 INTERACTIVE_SESSION_SOURCES.as_slice(),
                 default_provider.as_ref().map(std::slice::from_ref),
                 default_provider.as_deref().unwrap_or_default(),
@@ -1135,6 +1136,7 @@ fn thread_list_params(
             ThreadSortKey::CreatedAt => AppServerThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
         }),
+        sort_direction: None,
         model_providers: match provider_filter {
             ProviderFilter::Any => None,
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),

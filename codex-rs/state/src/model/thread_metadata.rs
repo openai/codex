@@ -21,6 +21,13 @@ pub enum SortKey {
     UpdatedAt,
 }
 
+/// Sort direction to use when listing threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
 /// A pagination anchor used for keyset pagination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
