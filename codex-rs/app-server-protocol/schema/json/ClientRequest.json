@@ -2562,6 +2562,17 @@
       ],
       "type": "object"
     },
+    "ThreadAddCreditsNudgeEmailParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadArchiveParams": {
       "properties": {
         "threadId": {
@@ -3824,6 +3835,30 @@
         "params"
       ],
       "title": "Thread/shellCommandRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/addCreditsNudgeEmail"
+          ],
+          "title": "Thread/addCreditsNudgeEmailRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadAddCreditsNudgeEmailParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/addCreditsNudgeEmailRequest",
       "type": "object"
     },
     {

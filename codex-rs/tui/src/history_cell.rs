@@ -2166,10 +2166,17 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
+    new_error_event_with_hint(message, /*hint*/ None)
+}
+
+pub(crate) fn new_error_event_with_hint(message: String, hint: Option<String>) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
+    let mut lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
+    if let Some(hint) = hint {
+        lines.push(vec!["  ".into(), hint.dark_gray()].into());
+    }
     PlainHistoryCell { lines }
 }
 

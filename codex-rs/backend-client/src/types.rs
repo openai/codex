@@ -1,16 +1,114 @@
+pub use codex_backend_openapi_models::models::AdditionalRateLimitDetails;
 pub use codex_backend_openapi_models::models::ConfigFileResponse;
 pub use codex_backend_openapi_models::models::CreditStatusDetails;
 pub use codex_backend_openapi_models::models::PaginatedListTaskListItem;
 pub use codex_backend_openapi_models::models::PlanType;
 pub use codex_backend_openapi_models::models::RateLimitStatusDetails;
-pub use codex_backend_openapi_models::models::RateLimitStatusPayload;
 pub use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
 use serde::Deserialize;
+use serde::Serialize;
 use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceRole {
+    AccountOwner,
+    AccountAdmin,
+    StandardUser,
+}
+
+impl WorkspaceRole {
+    pub fn from_api_str(value: &str) -> Option<Self> {
+        match value {
+            "account-owner" | "account_owner" => Some(Self::AccountOwner),
+            "account-admin" | "account_admin" => Some(Self::AccountAdmin),
+            "standard-user" | "standard_user" | "member" => Some(Self::StandardUser),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AccountsCheckV4Response {
+    #[serde(default)]
+    pub accounts: HashMap<String, AccountsCheckV4AccountItem>,
+    #[serde(default)]
+    pub account_ordering: Vec<String>,
+}
+
+impl AccountsCheckV4Response {
+    pub fn current_workspace_role(
+        &self,
+        current_account_id: Option<&str>,
+    ) -> Option<WorkspaceRole> {
+        let account = if let Some(account_id) = current_account_id {
+            self.accounts.get(account_id)?
+        } else {
+            self.account_ordering
+                .iter()
+                .find_map(|account_id| self.accounts.get(account_id))
+                .or_else(|| {
+                    if self.accounts.len() == 1 {
+                        self.accounts.values().next()
+                    } else {
+                        None
+                    }
+                })?
+        };
+        account
+            .account
+            .as_ref()
+            .and_then(|account| account.account_user_role.as_deref())
+            .and_then(WorkspaceRole::from_api_str)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AccountsCheckV4AccountItem {
+    #[serde(default)]
+    pub account: Option<AccountsCheckV4Account>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AccountsCheckV4Account {
+    #[serde(default, rename = "account_user_role")]
+    pub account_user_role: Option<String>,
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitStatusPayload {
+    #[serde(rename = "plan_type")]
+    pub plan_type: PlanType,
+    #[serde(
+        rename = "rate_limit",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rate_limit: Option<Box<RateLimitStatusDetails>>,
+    #[serde(rename = "credits", default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<Box<CreditStatusDetails>>,
+    #[serde(
+        rename = "additional_rate_limits",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub additional_rate_limits: Option<Vec<AdditionalRateLimitDetails>>,
+    #[serde(
+        rename = "spend_control",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub spend_control: Option<Box<SpendControlStatusDetails>>,
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpendControlStatusDetails {
+    #[serde(rename = "reached")]
+    pub reached: bool,
+}
 
 /// Hand-rolled models for the Cloud Tasks task-details response.
 /// The generated OpenAPI models are pretty bad. This is a half-step
@@ -217,6 +315,83 @@ impl Turn {
 
     fn error_summary(&self) -> Option<String> {
         self.error.as_ref().and_then(TurnError::summary)
+    }
+}
+
+#[cfg(test)]
+mod accounts_check_tests {
+    use super::AccountsCheckV4Account;
+    use super::AccountsCheckV4AccountItem;
+    use super::AccountsCheckV4Response;
+    use super::WorkspaceRole;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+
+    #[test]
+    fn current_workspace_role_prefers_current_account_id() {
+        let response = AccountsCheckV4Response {
+            accounts: HashMap::from([
+                (
+                    "workspace-a".to_string(),
+                    AccountsCheckV4AccountItem {
+                        account: Some(AccountsCheckV4Account {
+                            account_user_role: Some("standard-user".to_string()),
+                        }),
+                    },
+                ),
+                (
+                    "workspace-b".to_string(),
+                    AccountsCheckV4AccountItem {
+                        account: Some(AccountsCheckV4Account {
+                            account_user_role: Some("account-owner".to_string()),
+                        }),
+                    },
+                ),
+            ]),
+            account_ordering: vec!["workspace-a".to_string(), "workspace-b".to_string()],
+        };
+
+        assert_eq!(
+            response.current_workspace_role(Some("workspace-b")),
+            Some(WorkspaceRole::AccountOwner)
+        );
+    }
+
+    #[test]
+    fn current_workspace_role_falls_back_to_account_ordering() {
+        let response = AccountsCheckV4Response {
+            accounts: HashMap::from([(
+                "workspace-a".to_string(),
+                AccountsCheckV4AccountItem {
+                    account: Some(AccountsCheckV4Account {
+                        account_user_role: Some("account_admin".to_string()),
+                    }),
+                },
+            )]),
+            account_ordering: vec!["workspace-a".to_string()],
+        };
+
+        assert_eq!(
+            response.current_workspace_role(/*current_account_id*/ None),
+            Some(WorkspaceRole::AccountAdmin)
+        );
+    }
+
+    #[test]
+    fn current_workspace_role_does_not_fall_back_when_current_account_missing() {
+        let response = AccountsCheckV4Response {
+            accounts: HashMap::from([(
+                "workspace-a".to_string(),
+                AccountsCheckV4AccountItem {
+                    account: Some(AccountsCheckV4Account {
+                        account_user_role: Some("account-owner".to_string()),
+                    }),
+                },
+            )]),
+            account_ordering: vec!["workspace-a".to_string()],
+        };
+
+        assert_eq!(response.current_workspace_role(Some("workspace-b")), None);
     }
 }
 

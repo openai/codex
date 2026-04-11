@@ -116,6 +116,8 @@ use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
@@ -184,6 +186,7 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
+use codex_app_server_protocol::WorkspaceRole;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
@@ -200,6 +203,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
+use codex_core::WorkspaceRole as CoreWorkspaceRole;
 use codex_core::append_thread_name;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -321,6 +325,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -363,6 +368,7 @@ struct ThreadListFilters {
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
+const WORKSPACE_ROLE_REFRESH_RETRY_COOLDOWN: Duration = Duration::from_secs(60);
 
 enum ActiveLogin {
     Browser {
@@ -434,6 +440,7 @@ pub(crate) struct CodexMessageProcessor {
     command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
+    workspace_role_refresh_state: Arc<Mutex<WorkspaceRoleRefreshState>>,
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
@@ -486,6 +493,156 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
 }
 
+async fn resolve_workspace_role_and_owner_for_auth(
+    chatgpt_base_url: &str,
+    auth: Option<&CodexAuth>,
+) -> (Option<WorkspaceRole>, Option<bool>) {
+    let ownership =
+        codex_core::resolve_workspace_role_and_owner_for_auth(chatgpt_base_url, auth).await;
+    (
+        ownership.workspace_role.map(workspace_role_to_v2),
+        ownership.is_workspace_owner,
+    )
+}
+
+fn workspace_role_to_v2(role: CoreWorkspaceRole) -> WorkspaceRole {
+    match role {
+        CoreWorkspaceRole::AccountOwner => WorkspaceRole::AccountOwner,
+        CoreWorkspaceRole::AccountAdmin => WorkspaceRole::AccountAdmin,
+        CoreWorkspaceRole::StandardUser => WorkspaceRole::StandardUser,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct AuthIdentity {
+    account_id: Option<String>,
+    account_email: Option<String>,
+    chatgpt_user_id: Option<String>,
+}
+
+fn auth_identity(auth: &CodexAuth) -> AuthIdentity {
+    AuthIdentity {
+        account_id: auth.get_account_id(),
+        account_email: auth.get_account_email(),
+        chatgpt_user_id: auth.get_chatgpt_user_id(),
+    }
+}
+
+#[derive(Default)]
+struct WorkspaceRoleRefreshState {
+    in_flight: HashSet<AuthIdentity>,
+    last_attempt_at: HashMap<AuthIdentity, Instant>,
+    last_payload_by_identity: HashMap<AuthIdentity, AccountUpdatedNotification>,
+}
+
+impl WorkspaceRoleRefreshState {
+    fn try_start(&mut self, identity: &AuthIdentity) -> bool {
+        if self.last_payload_by_identity.contains_key(identity) {
+            return false;
+        }
+        if let Some(last_attempt) = self.last_attempt_at.get(identity)
+            && last_attempt.elapsed() < WORKSPACE_ROLE_REFRESH_RETRY_COOLDOWN
+        {
+            return false;
+        }
+        if !self.in_flight.insert(identity.clone()) {
+            return false;
+        }
+        self.last_attempt_at
+            .insert(identity.clone(), Instant::now());
+        true
+    }
+
+    fn finish(&mut self, identity: &AuthIdentity, payload: AccountUpdatedNotification) -> bool {
+        self.in_flight.remove(identity);
+        if self
+            .last_payload_by_identity
+            .get(identity)
+            .is_some_and(|cached_payload| cached_payload == &payload)
+        {
+            return false;
+        }
+        self.last_payload_by_identity
+            .insert(identity.clone(), payload);
+        true
+    }
+
+    fn finish_without_payload(&mut self, identity: &AuthIdentity) {
+        self.in_flight.remove(identity);
+    }
+}
+
+fn cached_workspace_role_and_owner_for_auth(
+    auth: Option<&CodexAuth>,
+) -> (Option<WorkspaceRole>, Option<bool>) {
+    (None, auth.and_then(CodexAuth::is_workspace_owner))
+}
+
+fn account_updated_notification_for_auth(
+    auth: Option<&CodexAuth>,
+    workspace_role: Option<WorkspaceRole>,
+    is_workspace_owner: Option<bool>,
+) -> AccountUpdatedNotification {
+    AccountUpdatedNotification {
+        auth_mode: auth.map(CodexAuth::api_auth_mode),
+        plan_type: auth.and_then(CodexAuth::account_plan_type),
+        workspace_role,
+        is_workspace_owner,
+    }
+}
+
+fn spawn_live_workspace_role_update_for_auth(
+    outgoing: Arc<OutgoingMessageSender>,
+    auth_manager: Arc<AuthManager>,
+    chatgpt_base_url: String,
+    workspace_role_refresh_state: Arc<Mutex<WorkspaceRoleRefreshState>>,
+    auth: Option<CodexAuth>,
+) {
+    let Some(auth) = auth.filter(CodexAuth::is_chatgpt_auth) else {
+        return;
+    };
+    let expected_identity = auth_identity(&auth);
+
+    tokio::spawn(async move {
+        {
+            let mut state = workspace_role_refresh_state.lock().await;
+            if !state.try_start(&expected_identity) {
+                return;
+            }
+        }
+
+        let (workspace_role, is_workspace_owner) =
+            resolve_workspace_role_and_owner_for_auth(&chatgpt_base_url, Some(&auth)).await;
+        let Some(workspace_role) = workspace_role else {
+            let mut state = workspace_role_refresh_state.lock().await;
+            state.finish_without_payload(&expected_identity);
+            return;
+        };
+
+        let current_auth = auth_manager.auth_cached();
+        if current_auth.as_ref().map(auth_identity) != Some(expected_identity.clone()) {
+            let mut state = workspace_role_refresh_state.lock().await;
+            state.finish_without_payload(&expected_identity);
+            return;
+        }
+
+        let payload = account_updated_notification_for_auth(
+            current_auth.as_ref(),
+            Some(workspace_role),
+            is_workspace_owner,
+        );
+        {
+            let mut state = workspace_role_refresh_state.lock().await;
+            if !state.finish(&expected_identity, payload.clone()) {
+                return;
+            }
+        }
+        outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(payload))
+            .await;
+    });
+}
+
 impl CodexMessageProcessor {
     pub(crate) fn handle_config_mutation(&self) {
         self.clear_plugin_related_caches();
@@ -498,10 +655,19 @@ impl CodexMessageProcessor {
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
-        AccountUpdatedNotification {
-            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-        }
+        let (workspace_role, is_workspace_owner) =
+            cached_workspace_role_and_owner_for_auth(auth.as_ref());
+        account_updated_notification_for_auth(auth.as_ref(), workspace_role, is_workspace_owner)
+    }
+
+    fn spawn_live_workspace_role_update(&self, auth: Option<CodexAuth>) {
+        spawn_live_workspace_role_update_for_auth(
+            self.outgoing.clone(),
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            self.workspace_role_refresh_state.clone(),
+            auth,
+        );
     }
 
     async fn load_thread(
@@ -558,6 +724,9 @@ impl CodexMessageProcessor {
             command_exec_manager: CommandExecManager::default(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
+            workspace_role_refresh_state: Arc::new(
+                Mutex::new(WorkspaceRoleRefreshState::default()),
+            ),
             background_tasks: TaskTracker::new(),
             feedback,
             log_db,
@@ -783,6 +952,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadAddCreditsNudgeEmail { request_id, params } => {
+                self.thread_add_credits_nudge_email(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
@@ -1104,6 +1277,7 @@ impl CodexMessageProcessor {
                         self.current_account_updated_notification(),
                     ))
                     .await;
+                self.spawn_live_workspace_role_update(self.auth_manager.auth_cached());
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -1194,6 +1368,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+                    let workspace_role_refresh_state = self.workspace_role_refresh_state.clone();
                     let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.current_cli_overrides();
                     let auth_url = server.auth_url.clone();
@@ -1228,7 +1403,7 @@ impl CodexMessageProcessor {
                             replace_cloud_requirements_loader(
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
-                                chatgpt_base_url,
+                                chatgpt_base_url.clone(),
                                 codex_home,
                             );
                             sync_default_client_residency_requirement(
@@ -1237,17 +1412,28 @@ impl CodexMessageProcessor {
                             )
                             .await;
 
-                            // Notify clients with the actual current auth mode.
+                            // Notify clients with the actual current auth mode immediately; the
+                            // live workspace role is fetched below without delaying this update.
                             let auth = auth_manager.auth_cached();
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                            };
+                            let (workspace_role, is_workspace_owner) =
+                                cached_workspace_role_and_owner_for_auth(auth.as_ref());
+                            let payload_v2 = account_updated_notification_for_auth(
+                                auth.as_ref(),
+                                workspace_role,
+                                is_workspace_owner,
+                            );
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
                                     payload_v2,
                                 ))
                                 .await;
+                            spawn_live_workspace_role_update_for_auth(
+                                outgoing_clone.clone(),
+                                auth_manager.clone(),
+                                chatgpt_base_url.clone(),
+                                workspace_role_refresh_state.clone(),
+                                auth,
+                            );
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -1311,6 +1497,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+                    let workspace_role_refresh_state = self.workspace_role_refresh_state.clone();
                     let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.current_cli_overrides();
                     tokio::spawn(async move {
@@ -1342,7 +1529,7 @@ impl CodexMessageProcessor {
                             replace_cloud_requirements_loader(
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
-                                chatgpt_base_url,
+                                chatgpt_base_url.clone(),
                                 codex_home,
                             );
                             sync_default_client_residency_requirement(
@@ -1352,15 +1539,25 @@ impl CodexMessageProcessor {
                             .await;
 
                             let auth = auth_manager.auth_cached();
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                            };
+                            let (workspace_role, is_workspace_owner) =
+                                cached_workspace_role_and_owner_for_auth(auth.as_ref());
+                            let payload_v2 = account_updated_notification_for_auth(
+                                auth.as_ref(),
+                                workspace_role,
+                                is_workspace_owner,
+                            );
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
                                     payload_v2,
                                 ))
                                 .await;
+                            spawn_live_workspace_role_update_for_auth(
+                                outgoing_clone.clone(),
+                                auth_manager.clone(),
+                                chatgpt_base_url.clone(),
+                                workspace_role_refresh_state.clone(),
+                                auth,
+                            );
                         }
 
                         let mut guard = active_login.lock().await;
@@ -1509,6 +1706,7 @@ impl CodexMessageProcessor {
                 self.current_account_updated_notification(),
             ))
             .await;
+        self.spawn_live_workspace_role_update(self.auth_manager.auth_cached());
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
@@ -1546,6 +1744,8 @@ impl CodexMessageProcessor {
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
                     plan_type: None,
+                    workspace_role: None,
+                    is_workspace_owner: None,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -1644,13 +1844,16 @@ impl CodexMessageProcessor {
         if !requires_openai_auth {
             let response = GetAccountResponse {
                 account: None,
+                workspace_role: None,
+                is_workspace_owner: None,
                 requires_openai_auth,
             };
             self.outgoing.send_response(request_id, response).await;
             return;
         }
 
-        let account = match self.auth_manager.auth_cached() {
+        let auth = self.auth_manager.auth_cached();
+        let account = match auth.as_ref() {
             Some(auth) => match auth.auth_mode() {
                 CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
                 CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
@@ -1677,12 +1880,17 @@ impl CodexMessageProcessor {
             },
             None => None,
         };
+        let (workspace_role, is_workspace_owner) =
+            cached_workspace_role_and_owner_for_auth(auth.as_ref());
 
         let response = GetAccountResponse {
             account,
+            workspace_role,
+            is_workspace_owner,
             requires_openai_auth,
         };
         self.outgoing.send_response(request_id, response).await;
+        self.spawn_live_workspace_role_update(auth);
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
@@ -1700,6 +1908,11 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => {
+                tracing::warn!(
+                    ?request_id,
+                    error = %error.message,
+                    "account/rateLimits/read request failed"
+                );
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -3403,6 +3616,40 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to start shell command: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_add_credits_nudge_email(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadAddCreditsNudgeEmailParams,
+    ) {
+        let ThreadAddCreditsNudgeEmailParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::SendAddCreditsNudgeEmail)
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadAddCreditsNudgeEmailResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to request add-credits nudge email: {err}"),
                 )
                 .await;
             }
