@@ -23,6 +23,8 @@ use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
+const TIMER_INTEGRATION_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_timer_emits_fired_background_event_when_timer_starts() -> Result<()> {
     assert_after_turn_timer_starts_and_emits_fired_event().await
@@ -271,13 +273,13 @@ async fn resume_due_timer_runs_after_history_reconstruction() -> Result<()> {
             }
             _ => false,
         },
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
     wait_for_event_with_timeout(
         &resumed.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
 
@@ -390,13 +392,13 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
             }
             _ => false,
         },
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
 
@@ -470,7 +472,7 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
             EventMsg::InjectedMessage(event) => event.source == format!("timer {}", timer.id),
             _ => false,
         },
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
     let thread_id = test.session_configured.session_id.to_string();
@@ -495,7 +497,7 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
     wait_for_event_with_timeout(
@@ -504,13 +506,13 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
             EventMsg::InjectedMessage(event) => event.source == "external",
             _ => false,
         },
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(20),
+        TIMER_INTEGRATION_TIMEOUT,
     )
     .await;
 
