@@ -13,8 +13,16 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+from rusty_v8_module_bazel import (
+    RustyV8ChecksumError,
+    check_module_bazel,
+    update_module_bazel,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
+MODULE_BAZEL = ROOT / "MODULE.bazel"
+RUSTY_V8_CHECKSUMS_DIR = ROOT / "third_party" / "v8"
 MUSL_RUNTIME_ARCHIVE_LABELS = [
     "@llvm//runtimes/libcxx:libcxx.static",
     "@llvm//runtimes/libcxx:libcxxabi.static",
@@ -147,6 +155,24 @@ def resolved_v8_crate_version() -> str:
     return matches[0]
 
 
+def rusty_v8_checksum_manifest_path(version: str) -> Path:
+    return RUSTY_V8_CHECKSUMS_DIR / f"rusty_v8_{version.replace('.', '_')}.sha256"
+
+
+def command_version(version: str | None) -> str:
+    if version is not None:
+        return version
+    return resolved_v8_crate_version()
+
+
+def command_manifest_path(manifest: Path | None, version: str) -> Path:
+    if manifest is None:
+        return rusty_v8_checksum_manifest_path(version)
+    if manifest.is_absolute():
+        return manifest
+    return ROOT / manifest
+
+
 def staged_archive_name(target: str, source_path: Path) -> str:
     if source_path.suffix == ".lib":
         return f"rusty_v8_release_{target}.lib.gz"
@@ -275,6 +301,24 @@ def parse_args() -> argparse.Namespace:
 
     subparsers.add_parser("resolved-v8-crate-version")
 
+    check_module_bazel_parser = subparsers.add_parser("check-module-bazel")
+    check_module_bazel_parser.add_argument("--version")
+    check_module_bazel_parser.add_argument("--manifest", type=Path)
+    check_module_bazel_parser.add_argument(
+        "--module-bazel",
+        type=Path,
+        default=MODULE_BAZEL,
+    )
+
+    update_module_bazel_parser = subparsers.add_parser("update-module-bazel")
+    update_module_bazel_parser.add_argument("--version")
+    update_module_bazel_parser.add_argument("--manifest", type=Path)
+    update_module_bazel_parser.add_argument(
+        "--module-bazel",
+        type=Path,
+        default=MODULE_BAZEL,
+    )
+
     return parser.parse_args()
 
 
@@ -290,6 +334,22 @@ def main() -> int:
         return 0
     if args.command == "resolved-v8-crate-version":
         print(resolved_v8_crate_version())
+        return 0
+    if args.command == "check-module-bazel":
+        version = command_version(args.version)
+        manifest_path = command_manifest_path(args.manifest, version)
+        try:
+            check_module_bazel(args.module_bazel, manifest_path, version)
+        except RustyV8ChecksumError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+    if args.command == "update-module-bazel":
+        version = command_version(args.version)
+        manifest_path = command_manifest_path(args.manifest, version)
+        try:
+            update_module_bazel(args.module_bazel, manifest_path, version)
+        except RustyV8ChecksumError as exc:
+            raise SystemExit(str(exc)) from exc
         return 0
     raise SystemExit(f"unsupported command: {args.command}")
 
