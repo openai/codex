@@ -7,11 +7,7 @@ use codex_core::timers::ThreadTimer;
 use codex_core::timers::ThreadTimerTrigger;
 use codex_core::timers::TimerDelivery;
 use codex_features::Feature;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -247,20 +243,13 @@ async fn list_timers_discovers_externally_inserted_timer() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()> {
     let server = start_mock_server().await;
-    let mock = mount_sse_sequence(
+    let mock = mount_sse_once(
         &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_assistant_message("msg-1", "first turn"),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-2", "queued turn"),
-                ev_completed("resp-2"),
-            ]),
-        ],
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "queued turn"),
+            ev_completed("resp-1"),
+        ]),
     )
     .await;
 
@@ -288,26 +277,6 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
     ))
     .await?;
 
-    let session_model = test.session_configured.model.clone();
-    test.codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "start".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
     wait_for_event_with_timeout(
         &test.codex,
         |event| match event {
@@ -327,6 +296,7 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
     .await;
 
     let requests = mock.requests();
+    assert_eq!(requests.len(), 1);
     assert!(requests.iter().any(|request| {
         request
             .message_input_texts("user")
@@ -409,13 +379,6 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
         Utc::now().timestamp(),
     ))
     .await?;
-
-    wait_for_event_with_timeout(
-        &test.codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(20),
-    )
-    .await;
     assert!(
         test.codex
             .delete_timer(&timer.id)
@@ -423,6 +386,13 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
             .map_err(|err| anyhow!("{err}"))?,
         "test should delete the idle recurring timer before it can schedule another turn"
     );
+
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(20),
+    )
+    .await;
     wait_for_event_with_timeout(
         &test.codex,
         |event| match event {
