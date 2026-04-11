@@ -1922,6 +1922,13 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
+    /// Stores async GitHub PR lookup results for the current status-surface cwd.
+    ///
+    /// Results are dropped when they target an out-of-date cwd to avoid
+    /// rendering a pull request from a previous project after the session cwd
+    /// changes. `None` is a completed lookup result as well as "not found", so
+    /// callers must update the completion flag before refreshing or the widget
+    /// would immediately schedule the same best-effort `gh` lookup again.
     pub(crate) fn set_status_line_github_pr(
         &mut self,
         cwd: PathBuf,

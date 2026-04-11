@@ -1,7 +1,28 @@
+//! OSC 8 hyperlink helpers for rendered TUI buffers.
+//!
+//! Ratatui renders styled text into cells before the terminal backend writes the
+//! final escape stream. These helpers attach OSC 8 escapes after rendering by
+//! rewriting selected cell symbols in-place. The current contract is deliberately
+//! style-based: callers underline the visible text that should become clickable,
+//! then provide one URL for that rendered region.
+//!
+//! The helper sanitizes the URL for OSC 8 delimiters but does not validate that
+//! the string is a browser URL. Callers remain responsible for passing a URL
+//! that makes sense for the visible label.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
+/// Marks underlined, non-blank cells in `area` as an OSC 8 hyperlink to `url`.
+///
+/// This is intended for compact footer/status rendering where the clickable
+/// range has already been signaled by underline styling. Non-underlined and
+/// blank cells are skipped so separators, padding, and unrelated status text do
+/// not become part of the link. If future callers need multiple links in one
+/// area, they should split rendering by area or extend this API; passing a broad
+/// area with unrelated underlined text would incorrectly point every underlined
+/// cell at the same destination.
 pub(crate) fn mark_underlined_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
     let safe_url = sanitize_osc8_url(url);
     if safe_url.is_empty() {

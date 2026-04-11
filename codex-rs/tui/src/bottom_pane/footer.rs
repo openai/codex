@@ -57,6 +57,14 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+/// Render-ready status-line content for the footer.
+///
+/// The footer sometimes needs to preserve metadata that is not part of
+/// `ratatui::text::Line`, such as the URL for an OSC 8 hyperlink. `StatusLine`
+/// keeps that metadata traveling with the visible line through dimming,
+/// truncation, and passive-footer composition. The hyperlink model is
+/// intentionally narrow: one optional URL applies to underlined cells in the
+/// rendered status-line area.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StatusLine {
     line: Line<'static>,
@@ -64,6 +72,7 @@ pub(crate) struct StatusLine {
 }
 
 impl StatusLine {
+    /// Creates footer status-line content without a hyperlink.
     pub(crate) fn new(line: Line<'static>) -> Self {
         Self {
             line,
@@ -71,16 +80,23 @@ impl StatusLine {
         }
     }
 
+    /// Attaches one hyperlink URL to the status-line's underlined cells.
+    ///
+    /// This should only be used when the line contains a deliberately underlined
+    /// segment. If a caller underlines multiple unrelated segments, the footer
+    /// will mark all of them with this same URL.
     pub(crate) fn with_hyperlink(mut self, url: String) -> Self {
         self.hyperlink_url = Some(url);
         self
     }
 
     #[cfg(test)]
+    /// Returns the visible line for assertions.
     pub(crate) fn line(&self) -> &Line<'static> {
         &self.line
     }
 
+    /// Dims the visible text while preserving hyperlink metadata.
     pub(crate) fn into_dimmed_line(self) -> Self {
         Self {
             line: self.line.dim(),
@@ -88,6 +104,12 @@ impl StatusLine {
         }
     }
 
+    /// Truncates the visible line to `max_width` while preserving hyperlink metadata.
+    ///
+    /// The hyperlink is still applied after rendering, so truncating a linked
+    /// label makes the visible truncated label clickable. Callers should avoid
+    /// using this to combine multiple independent links because only one URL is
+    /// retained.
     pub(crate) fn truncate_with_ellipsis_if_overflow(self, max_width: usize) -> Self {
         Self {
             line: truncate_line_with_ellipsis_if_overflow(self.line, max_width),
@@ -95,6 +117,7 @@ impl StatusLine {
         }
     }
 
+    /// Returns the display width of the visible status line.
     pub(crate) fn width(&self) -> usize {
         self.line.width()
     }
@@ -270,6 +293,12 @@ pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'stati
     .render(area, buf);
 }
 
+/// Renders a footer status line and applies its hyperlink metadata afterward.
+///
+/// Hyperlinks are applied after `Paragraph` has written to the buffer because
+/// the OSC 8 escape sequence is terminal output metadata, not display width.
+/// Rendering the escape sequence as normal text would corrupt layout
+/// measurement and snapshot expectations.
 pub(crate) fn render_status_line(area: Rect, buf: &mut Buffer, status_line: StatusLine) {
     let line = status_line.line.clone();
     render_footer_line(area, buf, line);

@@ -107,6 +107,12 @@ impl TerminalTitleItem {
     }
 }
 
+/// Returns whether an item should be offered by the setup picker in this environment.
+///
+/// Existing config can still include `github-pr` and the renderer will simply
+/// omit it when no value is available. The picker is more conservative: it does
+/// not advertise the item unless the GitHub CLI integration can at least be
+/// attempted.
 fn terminal_title_item_selectable(item: TerminalTitleItem, github_pr_available: bool) -> bool {
     item != TerminalTitleItem::GithubPr || github_pr_available
 }

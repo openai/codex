@@ -1,3 +1,17 @@
+//! Best-effort GitHub pull request discovery for TUI status surfaces.
+//!
+//! The status line and terminal title only need compact, renderable metadata
+//! for the pull request associated with the current branch. This module keeps
+//! that boundary narrow: it shells out to the GitHub CLI, parses the small
+//! `gh pr view --json number,url` response, and turns every lookup failure into
+//! `None`.
+//!
+//! Discovery is intentionally non-interactive. Lookups must not prompt for
+//! authentication, block the UI indefinitely, or emit command output into the
+//! terminal. Callers cache results by cwd and carry the cwd through async update
+//! events so stale completions can be ignored after the session changes
+//! directories.
+
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,22 +24,50 @@ use tokio::time::timeout;
 
 const GH_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Compact GitHub pull request metadata that can be rendered in status surfaces.
+///
+/// The number is used for the visible `PR #123` label and the URL is used for
+/// terminal hyperlinks. Instances are created only from a successful `gh pr
+/// view` response with a non-empty URL; callers should avoid constructing one
+/// from partially trusted data because an empty URL would render as visible text
+/// without a useful destination.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GithubPullRequest {
+    /// Pull request number within its repository.
     pub(crate) number: u64,
+    /// Browser URL returned by `gh`.
     pub(crate) url: String,
 }
 
 impl GithubPullRequest {
+    /// Returns the compact label shared by the footer and terminal title.
     pub(crate) fn label(&self) -> String {
         format!("PR #{}", self.number)
     }
 }
 
+/// Returns whether a usable GitHub CLI executable is present on `PATH`.
+///
+/// This only checks that `gh` can be resolved to an executable file. It does not
+/// prove the user is authenticated, that the current directory is a GitHub
+/// repository, or that the current branch has a pull request. Treating this as a
+/// guarantee would make setup UIs advertise a value that later cannot render.
 pub(crate) fn gh_available() -> bool {
     resolve_gh_path().is_some()
 }
 
+/// Looks up the pull request associated with the branch checked out at `cwd`.
+///
+/// The lookup is cwd-relative because `gh pr view` infers repository and branch
+/// context from the working directory. It uses a short timeout, null stdin, and
+/// suppressed stderr so status-surface refreshes remain best-effort background
+/// work. `None` means any of: `gh` is missing, auth/repository/branch context is
+/// unavailable, the command failed or timed out, the JSON was not the expected
+/// shape, or the PR URL was empty.
+///
+/// A caller that forgets to key the result by the same `cwd` can display a PR
+/// from a previous session directory after the user changes projects, so update
+/// events should carry `cwd` back to the owner that requested the lookup.
 pub(crate) async fn lookup_current_branch_pull_request(cwd: &Path) -> Option<GithubPullRequest> {
     let gh_path = resolve_gh_path()?;
     let mut command = Command::new(&gh_path);

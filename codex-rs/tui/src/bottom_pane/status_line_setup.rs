@@ -11,7 +11,7 @@
 //!
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
-//! - Git information (branch name)
+//! - Git information (branch name and, when `gh` is available, pull request)
 //! - Context usage (meter, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (thread title, ID, tokens used)
@@ -41,7 +41,8 @@ use crate::render::renderable::Renderable;
 /// storage (e.g., `ModelWithReasoning` becomes `model-with-reasoning`).
 ///
 /// Some items are conditionally displayed based on availability:
-/// - Git-related items only show when in a git repository
+/// - Git-related items only show when repository data is available
+/// - GitHub PR selection is offered only when the `gh` executable is available
 /// - Context/limit items only show when data is available from the API
 /// - Session ID only shows after a session has started
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -141,6 +142,10 @@ impl StatusLineItem {
     }
 }
 
+/// Returns setup items, omitting GitHub PR when the CLI integration is unavailable.
+///
+/// Existing config may still contain `github-pr`; this only controls whether
+/// the setup picker advertises the item in the current environment.
 fn selectable_status_line_items(github_pr_available: bool) -> Vec<StatusLineItem> {
     let mut items = vec![
         StatusLineItem::ModelName,
@@ -215,14 +220,12 @@ pub(crate) struct StatusLineSetupView {
 impl StatusLineSetupView {
     /// Creates a new status line setup view.
     ///
-    /// # Arguments
-    ///
-    /// * `status_line_items` - Currently configured item IDs (in display order),
-    ///   or `None` to start with all items disabled
-    /// * `app_event_tx` - Event sender for dispatching configuration changes
-    ///
     /// Items from `status_line_items` are shown first (in order) and marked as
-    /// enabled. Remaining items are appended and marked as disabled.
+    /// enabled. Remaining selectable items are appended and marked as disabled.
+    /// `preview_data` supplies live values for the preview row, while
+    /// `github_pr_available` gates whether the optional `github-pr` item is
+    /// shown at all. Passing `true` without a working `gh` binary would let the
+    /// user persist an item that cannot produce a value in this environment.
     pub(crate) fn new(
         status_line_items: Option<&[String]>,
         preview_data: StatusLinePreviewData,

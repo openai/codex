@@ -30,13 +30,15 @@ pub(super) enum TerminalTitleStatusKind {
     Thinking,
 }
 
-#[derive(Debug)]
 /// Parsed status-surface configuration for one refresh pass.
 ///
 /// The status line and terminal title share some expensive or stateful inputs
-/// (notably git branch lookup and invalid-item warnings). This snapshot lets one
-/// refresh pass compute those shared concerns once, then render both surfaces
-/// from the same selection set.
+/// (notably git branch/PR lookups and invalid-item warnings). This snapshot lets
+/// one refresh pass compute those shared concerns once, then render both
+/// surfaces from the same selection set. A caller that parsed each surface
+/// independently could schedule duplicate external lookups or warn twice about
+/// the same invalid config value.
+#[derive(Debug)]
 struct StatusSurfaceSelections {
     status_line_items: Vec<StatusLineItem>,
     invalid_status_line_items: Vec<String>,
@@ -60,6 +62,12 @@ impl StatusSurfaceSelections {
     }
 }
 
+/// One rendered status-line segment plus optional metadata for the final line.
+///
+/// Most segments are plain text. The GitHub PR segment carries a hyperlink URL
+/// and underlined visible text; when the full status line is assembled, the
+/// first available hyperlink is preserved on the resulting footer `StatusLine`.
+/// This matches the current single-link footer contract.
 struct StatusLineSegment {
     line: Line<'static>,
     hyperlink_url: Option<String>,
@@ -140,6 +148,12 @@ impl ChatWidget {
         }
     }
 
+    /// Synchronizes cached branch/PR state needed by either status surface.
+    ///
+    /// Values that are no longer selected are cleared so stale context does not
+    /// leak back into previews after config changes. Selected values are looked
+    /// up relative to the active cwd and guarded by pending/completed flags so a
+    /// refresh burst schedules at most one lookup of each kind.
     fn sync_status_surface_shared_state(&mut self, selections: &StatusSurfaceSelections) {
         if !selections.uses_git_branch() {
             self.status_line_branch = None;
@@ -307,6 +321,12 @@ impl ChatWidget {
         self.refresh_terminal_title_from_selections(&selections);
     }
 
+    /// Forces a fresh repository-context lookup for selected status surfaces.
+    ///
+    /// This is called when the active cwd may have changed outside the normal
+    /// refresh path. It refreshes whichever repository-backed items are selected
+    /// (`git-branch`, `github-pr`, or both) and keeps the existing cwd guard so
+    /// late completions cannot update a different project.
     pub(super) fn request_status_line_branch_refresh(&mut self) {
         let selections = self.status_surface_selections();
         if !selections.uses_git_branch() && !selections.uses_github_pr() {
@@ -448,6 +468,11 @@ impl ChatWidget {
         self.status_line_branch_lookup_complete = false;
     }
 
+    /// Resets GitHub PR cache state when the status-surface cwd changes.
+    ///
+    /// PR discovery is branch/repository-sensitive and `gh pr view` infers both
+    /// from `cwd`. Keeping a completed lookup across cwd changes would make the
+    /// footer or terminal title show a PR from the previous project.
     fn sync_status_line_github_pr_state(&mut self, cwd: &Path) {
         if self
             .status_line_github_pr_cwd
@@ -478,6 +503,12 @@ impl ChatWidget {
         });
     }
 
+    /// Starts an async GitHub PR lookup unless one is already running.
+    ///
+    /// The completion event carries the lookup cwd so `ChatWidget` can reject
+    /// stale results after directory changes. Lookup failures intentionally
+    /// render as absence rather than user-visible errors because the item is
+    /// ambient status context, not a command the user explicitly invoked.
     fn request_status_line_github_pr(&mut self, cwd: PathBuf) {
         if self.status_line_github_pr_pending {
             return;
