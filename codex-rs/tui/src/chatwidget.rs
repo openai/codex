@@ -1564,6 +1564,7 @@ fn request_permissions_from_params(
         call_id: params.item_id,
         reason: params.reason,
         permissions: params.permissions.into(),
+        permissions_profile_persistence: params.permissions_profile_persistence.map(Into::into),
     }
 }
 
@@ -4570,6 +4571,7 @@ impl ChatWidget {
             call_id: ev.call_id,
             reason: ev.reason,
             permissions: ev.permissions,
+            permissions_profile_persistence: ev.permissions_profile_persistence,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);

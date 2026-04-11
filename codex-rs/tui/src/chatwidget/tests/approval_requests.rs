@@ -160,6 +160,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
                 write: Some(vec![write_path.clone()]),
             }),
         },
+        permissions_profile_persistence: None,
     });
 
     assert_eq!(

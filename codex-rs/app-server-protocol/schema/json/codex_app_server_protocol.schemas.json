@@ -3230,11 +3230,86 @@
       ]
     },
     "PermissionGrantScope": {
-      "enum": [
-        "turn",
-        "session"
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "turn"
+              ],
+              "title": "TurnPermissionGrantScopeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "TurnPermissionGrantScope",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "session"
+              ],
+              "title": "SessionPermissionGrantScopeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SessionPermissionGrantScope",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "permissionProfileAmendment": {
+              "$ref": "#/definitions/PermissionProfileAmendment"
+            },
+            "type": {
+              "enum": [
+                "persist"
+              ],
+              "title": "PersistPermissionGrantScopeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "permissionProfileAmendment",
+            "type"
+          ],
+          "title": "PersistPermissionGrantScope",
+          "type": "object"
+        }
+      ]
+    },
+    "PermissionProfileAmendment": {
+      "properties": {
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        },
+        "profileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "permissions",
+        "profileName"
       ],
-      "type": "string"
+      "type": "object"
+    },
+    "PermissionProfilePersistence": {
+      "properties": {
+        "profileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profileName"
+      ],
+      "type": "object"
     },
     "PermissionsRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -3244,6 +3319,17 @@
         },
         "permissions": {
           "$ref": "#/definitions/RequestPermissionProfile"
+        },
+        "permissionsProfilePersistence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfilePersistence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "reason": {
           "type": [
@@ -3279,7 +3365,9 @@
               "$ref": "#/definitions/PermissionGrantScope"
             }
           ],
-          "default": "turn"
+          "default": {
+            "type": "turn"
+          }
         }
       },
       "required": [

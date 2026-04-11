@@ -26,8 +26,10 @@ use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 #[cfg(test)]
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PersistPermissionProfileAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::PermissionProfilePersistence;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -60,6 +62,7 @@ pub(crate) enum ApprovalRequest {
         call_id: String,
         reason: Option<String>,
         permissions: RequestPermissionProfile,
+        permissions_profile_persistence: Option<PermissionProfilePersistence>,
     },
     ApplyPatch {
         thread_id: ThreadId,
@@ -166,8 +169,12 @@ impl ApprovalOverlay {
                     },
                 ),
             ),
-            ApprovalRequest::Permissions { .. } => (
-                permissions_options(),
+            ApprovalRequest::Permissions {
+                permissions,
+                permissions_profile_persistence,
+                ..
+            } => (
+                permissions_options(permissions, permissions_profile_persistence.as_ref()),
                 "Would you like to grant these permissions?".to_string(),
             ),
             ApprovalRequest::ApplyPatch { .. } => (
@@ -228,6 +235,18 @@ impl ApprovalOverlay {
                     },
                     ApprovalDecision::Review(decision),
                 ) => self.handle_permissions_decision(call_id, permissions, decision.clone()),
+                (
+                    ApprovalRequest::Permissions {
+                        call_id,
+                        permissions,
+                        ..
+                    },
+                    ApprovalDecision::PersistPermissions(permission_profile_amendment),
+                ) => self.handle_persist_permissions_decision(
+                    call_id,
+                    permissions,
+                    permission_profile_amendment.clone(),
+                ),
                 (ApprovalRequest::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
                 }
@@ -281,15 +300,18 @@ impl ApprovalOverlay {
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
-        let scope = if matches!(decision, ReviewDecision::ApprovedForSession) {
-            PermissionGrantScope::Session
-        } else {
-            PermissionGrantScope::Turn
+        let scope = match &decision {
+            ReviewDecision::ApprovedForSession => PermissionGrantScope::Session,
+            ReviewDecision::Approved
+            | ReviewDecision::Denied
+            | ReviewDecision::Abort
+            | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+            | ReviewDecision::NetworkPolicyAmendment { .. } => PermissionGrantScope::Turn,
         };
         if request.thread_label().is_none() {
             let message = if granted_permissions.is_empty() {
                 "You did not grant additional permissions"
-            } else if matches!(scope, PermissionGrantScope::Session) {
+            } else if matches!(&scope, PermissionGrantScope::Session) {
                 "You granted additional permissions for this session"
             } else {
                 "You granted additional permissions"
@@ -305,6 +327,36 @@ impl ApprovalOverlay {
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: granted_permissions,
                 scope,
+            },
+        );
+    }
+
+    fn handle_persist_permissions_decision(
+        &self,
+        call_id: &str,
+        permissions: &RequestPermissionProfile,
+        permission_profile_amendment: PersistPermissionProfileAction,
+    ) {
+        let Some(request) = self.current_request.as_ref() else {
+            return;
+        };
+        if request.thread_label().is_none() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                crate::history_cell::PlainHistoryCell::new(vec![
+                    "You granted additional permissions and saved them to your permissions profile"
+                        .into(),
+                ]),
+            )));
+        }
+        let thread_id = request.thread_id();
+        self.app_event_tx.request_permissions_response(
+            thread_id,
+            call_id.to_string(),
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: permissions.clone(),
+                scope: PermissionGrantScope::Persist {
+                    permission_profile_amendment,
+                },
             },
         );
     }
@@ -621,6 +673,7 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
 #[derive(Clone)]
 enum ApprovalDecision {
     Review(ReviewDecision),
+    PersistPermissions(PersistPermissionProfileAction),
     McpElicitation(ElicitationAction),
 }
 
@@ -796,8 +849,11 @@ fn patch_options() -> Vec<ApprovalOption> {
     ]
 }
 
-fn permissions_options() -> Vec<ApprovalOption> {
-    vec![
+fn permissions_options(
+    permissions: &RequestPermissionProfile,
+    permissions_profile_persistence: Option<&PermissionProfilePersistence>,
+) -> Vec<ApprovalOption> {
+    let mut options = vec![
         ApprovalOption {
             label: "Yes, grant these permissions".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Approved),
@@ -816,7 +872,32 @@ fn permissions_options() -> Vec<ApprovalOption> {
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
-    ]
+    ];
+    if let Some(decision) =
+        permission_profile_amendment_decision(permissions, permissions_profile_persistence)
+    {
+        options.insert(
+            1,
+            ApprovalOption {
+                label: "Yes, always allow these permissions".to_string(),
+                decision: ApprovalDecision::PersistPermissions(decision),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+            },
+        );
+    }
+    options
+}
+
+fn permission_profile_amendment_decision(
+    permissions: &RequestPermissionProfile,
+    permissions_profile_persistence: Option<&PermissionProfilePersistence>,
+) -> Option<PersistPermissionProfileAction> {
+    let profile_name = permissions_profile_persistence?.profile_name.clone();
+    Some(PersistPermissionProfileAction {
+        profile_name,
+        permissions: permissions.clone().into(),
+    })
 }
 
 fn elicitation_options() -> Vec<ApprovalOption> {
@@ -915,6 +996,31 @@ mod tests {
                     write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
             },
+            permissions_profile_persistence: None,
+        }
+    }
+
+    fn make_persistable_permissions_request() -> ApprovalRequest {
+        let ApprovalRequest::Permissions {
+            thread_id,
+            thread_label,
+            call_id,
+            reason,
+            permissions,
+            ..
+        } = make_permissions_request()
+        else {
+            unreachable!("permissions request");
+        };
+        ApprovalRequest::Permissions {
+            thread_id,
+            thread_label,
+            call_id,
+            reason,
+            permissions,
+            permissions_profile_persistence: Some(PermissionProfilePersistence {
+                profile_name: "workspace".to_string(),
+            }),
         }
     }
 
@@ -1214,10 +1320,19 @@ mod tests {
 
     #[test]
     fn permissions_options_use_expected_labels() {
-        let labels: Vec<String> = permissions_options()
-            .into_iter()
-            .map(|option| option.label)
-            .collect();
+        let ApprovalRequest::Permissions {
+            permissions,
+            permissions_profile_persistence,
+            ..
+        } = make_permissions_request()
+        else {
+            unreachable!("permissions request");
+        };
+        let labels: Vec<String> =
+            permissions_options(&permissions, permissions_profile_persistence.as_ref())
+                .into_iter()
+                .map(|option| option.label)
+                .collect();
         assert_eq!(
             labels,
             vec![
@@ -1252,6 +1367,59 @@ mod tests {
         assert!(
             saw_op,
             "expected permission approval decision to emit a session-scoped response"
+        );
+    }
+
+    #[test]
+    fn permissions_persist_shortcut_submits_persist_scope() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(
+            make_persistable_permissions_request(),
+            tx,
+            Features::with_defaults(),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+
+        let mut saw_history = false;
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                AppEvent::InsertHistoryCell(cell) => {
+                    assert_eq!(
+                        cell.display_lines(/*width*/ 120),
+                        vec![Line::from(
+                            "You granted additional permissions and saved them to your permissions profile"
+                        )]
+                    );
+                    saw_history = true;
+                }
+                AppEvent::SubmitThreadOp {
+                    op: Op::RequestPermissionsResponse { response, .. },
+                    ..
+                } => {
+                    let ApprovalRequest::Permissions {
+                        permissions: expected_permissions,
+                        ..
+                    } = make_permissions_request()
+                    else {
+                        unreachable!("permissions request");
+                    };
+                    assert_eq!(response.permissions, expected_permissions);
+                    assert!(matches!(
+                        response.scope,
+                        PermissionGrantScope::Persist { .. }
+                    ));
+                    saw_op = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_history, "expected permission approval history cell");
+        assert!(
+            saw_op,
+            "expected permission approval decision to emit a persisted response"
         );
     }
 
@@ -1343,6 +1511,20 @@ mod tests {
         assert_snapshot!(
             "approval_overlay_permissions_prompt",
             normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
+        );
+    }
+
+    #[test]
+    fn persistable_permissions_prompt_snapshot() {
+        let view = ApprovalOverlay::new(
+            make_persistable_permissions_request(),
+            AppEventSender::new(unbounded_channel::<AppEvent>().0),
+            Features::with_defaults(),
+        );
+
+        assert_snapshot!(
+            "approval_overlay_persistable_permissions_prompt",
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 72))
         );
     }
 

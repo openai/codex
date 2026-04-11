@@ -156,7 +156,7 @@ impl PendingAppServerRequests {
                             permissions: granted_permission_profile_from_request(
                                 response.permissions.clone(),
                             ),
-                            scope: response.scope.into(),
+                            scope: response.scope.clone().into(),
                         })
                         .map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")
@@ -363,6 +363,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     item_id: "perm-1".to_string(),
                     reason: None,
+                    permissions_profile_persistence: None,
                     permissions: serde_json::from_value(json!({
                         "network": { "enabled": null }
                     }))

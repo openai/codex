@@ -1,17 +1,28 @@
 use crate::models::FileSystemPermissions;
 use crate::models::NetworkPermissions;
 use crate::models::PermissionProfile;
+use crate::protocol::PersistPermissionProfileAction;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+#[derive(Default)]
 pub enum PermissionGrantScope {
     #[default]
     Turn,
     Session,
+    Persist {
+        permission_profile_amendment: PersistPermissionProfileAction,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct PermissionProfilePersistence {
+    pub profile_name: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -70,4 +81,7 @@ pub struct RequestPermissionsEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permissions_profile_persistence: Option<PermissionProfilePersistence>,
 }

@@ -1,5 +1,7 @@
 use super::*;
+use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
+use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use codex_config::config_toml::ConfigToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
@@ -10,6 +12,9 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionToml;
 use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::request_permissions::PermissionProfilePersistence;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -155,6 +160,84 @@ fn network_permission_containers_project_allowed_and_denied_entries() {
         unix_sockets.allow_unix_sockets(),
         vec!["/tmp/example.sock".to_string()]
     );
+}
+
+#[tokio::test]
+async fn persistence_target_rejects_write_grant_that_cannot_reload() -> std::io::Result<()> {
+    let (_temp_dir, config) = load_config_with_user_permissions(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+"#,
+    )
+    .await?;
+    let path = config.cwd.join("out");
+    let permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: None,
+            write: Some(vec![path]),
+        }),
+        network: None,
+    };
+
+    assert_eq!(
+        persistence_target_for_permissions(&config, &permissions),
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistence_target_allows_read_grant_that_can_reload() -> std::io::Result<()> {
+    let (_temp_dir, config) = load_config_with_user_permissions(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+"#,
+    )
+    .await?;
+    let path = config.cwd.join("out");
+    let permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![path]),
+            write: None,
+        }),
+        network: None,
+    };
+
+    assert_eq!(
+        persistence_target_for_permissions(&config, &permissions),
+        Some(PermissionProfilePersistence {
+            profile_name: "workspace".to_string()
+        })
+    );
+    Ok(())
+}
+
+async fn load_config_with_user_permissions(
+    user_config: &str,
+) -> std::io::Result<(TempDir, Config)> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().join(".codex");
+    let cwd = temp_dir.path().join("workspace");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), user_config)?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    Ok((temp_dir, config))
 }
 
 #[test]
