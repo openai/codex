@@ -5,7 +5,6 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-mod account;
 mod agent_identity;
 mod apply_patch;
 mod apps;
