@@ -18,6 +18,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -76,6 +77,13 @@ pub enum ThreadInitializationMode {
     New,
     Forked,
     Resumed,
+}
+
+#[derive(Clone)]
+pub struct TurnTokenUsageFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub token_usage: TokenUsage,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -212,6 +220,7 @@ pub(crate) enum CustomAnalyticsFact {
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnTokenUsage(Box<TurnTokenUsageFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

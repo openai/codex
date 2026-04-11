@@ -15,6 +15,7 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
@@ -207,6 +208,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
         ));
+    }
+
+    pub fn track_turn_token_usage(&self, fact: TurnTokenUsageFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(
+            Box::new(fact),
+        )));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {

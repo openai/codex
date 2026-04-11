@@ -38,6 +38,7 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
+use crate::facts::TurnTokenUsageFact;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo;
@@ -54,6 +55,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::TokenUsage;
 use sha1::Digest;
 use std::collections::HashMap;
 use std::path::Path;
@@ -124,6 +126,7 @@ struct TurnState {
     num_input_images: Option<usize>,
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
+    token_usage: Option<TokenUsage>,
     completed: Option<CompletedTurnState>,
 }
 
@@ -173,6 +176,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
                     self.ingest_turn_resolved_config(*input, out);
+                }
+                CustomAnalyticsFact::TurnTokenUsage(input) => {
+                    self.ingest_turn_token_usage(*input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -302,11 +308,32 @@ impl AnalyticsReducer {
             num_input_images: None,
             resolved_config: None,
             started_at: None,
+            token_usage: None,
             completed: None,
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
         turn_state.resolved_config = Some(input);
+        self.maybe_emit_turn_event(&turn_id, out);
+    }
+
+    fn ingest_turn_token_usage(
+        &mut self,
+        input: TurnTokenUsageFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let turn_id = input.turn_id.clone();
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at: None,
+            token_usage: None,
+            completed: None,
+        });
+        turn_state.thread_id = Some(input.thread_id);
+        turn_state.token_usage = Some(input.token_usage);
         self.maybe_emit_turn_event(&turn_id, out);
     }
 
@@ -454,6 +481,7 @@ impl AnalyticsReducer {
                     num_input_images: None,
                     resolved_config: None,
                     started_at: None,
+                    token_usage: None,
                     completed: None,
                 });
                 turn_state.connection_id = Some(connection_id);
@@ -478,6 +506,7 @@ impl AnalyticsReducer {
                     num_input_images: None,
                     resolved_config: None,
                     started_at: None,
+                    token_usage: None,
                     completed: None,
                 });
                 turn_state.started_at = notification
@@ -495,6 +524,7 @@ impl AnalyticsReducer {
                             num_input_images: None,
                             resolved_config: None,
                             started_at: None,
+                            token_usage: None,
                             completed: None,
                         });
                 turn_state.completed = Some(CompletedTurnState {
@@ -672,6 +702,7 @@ fn codex_turn_event_params(
         personality,
         is_first_turn,
     } = resolved_config;
+    let token_usage = turn_state.token_usage.clone();
     CodexTurnEventParams {
         thread_id,
         turn_id,
@@ -709,6 +740,21 @@ fn codex_turn_event_params(
         subagent_tool_call_count: None,
         web_search_count: None,
         image_generation_count: None,
+        input_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.input_tokens),
+        cached_input_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.cached_input_tokens),
+        output_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.output_tokens),
+        reasoning_output_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.reasoning_output_tokens),
+        total_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.total_tokens),
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),
