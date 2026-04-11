@@ -7,6 +7,7 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+use tokio::time::sleep;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
@@ -322,6 +323,33 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
 }
 
 #[test]
+fn should_backfill_turn_completed_items_skips_notifications_with_items() {
+    let notification =
+        ServerNotification::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-1".to_string(),
+                items: vec![AppServerThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "finished".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        });
+
+    assert!(!should_backfill_turn_completed_items(
+        /*thread_ephemeral*/ false,
+        &notification
+    ));
+}
+
+#[test]
 fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
     let value = canceled_mcp_server_elicitation_response()
         .expect("mcp elicitation cancel response should serialize");
@@ -429,4 +457,46 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
         event.approvals_reviewer,
         ApprovalsReviewer::GuardianSubagent
     );
+}
+
+#[tokio::test]
+async fn await_request_with_timeout_returns_ready_result() {
+    let result = await_request_with_timeout(
+        "test/request",
+        std::time::Duration::from_millis(50),
+        async { Ok::<_, String>(123usize) },
+    )
+    .await
+    .expect("ready request should succeed");
+
+    assert_eq!(result, 123);
+}
+
+#[tokio::test]
+async fn await_request_with_timeout_errors_when_request_stalls() {
+    let err = await_request_with_timeout(
+        "test/request",
+        std::time::Duration::from_millis(10),
+        async {
+            sleep(std::time::Duration::from_millis(50)).await;
+            Ok::<_, String>(())
+        },
+    )
+    .await
+    .expect_err("stalled request should time out");
+
+    assert_eq!(err, "test/request timed out after 10ms");
+}
+
+#[tokio::test]
+async fn turn_completed_backfill_times_out_instead_of_hanging_exec() {
+    let err =
+        await_request_with_timeout("thread/read", std::time::Duration::from_millis(10), async {
+            sleep(std::time::Duration::from_millis(50)).await;
+            Ok::<_, String>(())
+        })
+        .await
+        .expect_err("stalled turn/read backfill should time out");
+
+    assert_eq!(err, "thread/read timed out after 10ms");
 }

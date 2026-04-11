@@ -4,6 +4,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
+use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_protocol::ThreadId;
@@ -61,6 +62,7 @@ pub(crate) struct ThreadState {
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    last_terminal_turn: Option<Turn>,
     listener_thread: Option<Weak<CodexThread>>,
 }
 
@@ -93,6 +95,7 @@ impl ThreadState {
         }
         self.listener_command_tx = None;
         self.current_turn_history.reset();
+        self.last_terminal_turn = None;
         self.listener_thread = None;
     }
 
@@ -110,14 +113,26 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    pub(crate) fn completion_turn_snapshot(&self, turn_id: &str) -> Option<Turn> {
+        self.active_turn_snapshot()
+            .filter(|turn| turn.id == turn_id && !matches!(turn.status, TurnStatus::InProgress))
+            .or_else(|| {
+                self.last_terminal_turn
+                    .clone()
+                    .filter(|turn| turn.id == turn_id)
+            })
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
+            self.last_terminal_turn = None;
         }
         self.current_turn_history.handle_event(event);
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
+            self.last_terminal_turn = self.current_turn_history.active_turn_snapshot();
             self.current_turn_history.reset();
         }
     }

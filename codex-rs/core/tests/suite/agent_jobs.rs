@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_features::Feature;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
@@ -15,6 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::time::sleep;
+use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
@@ -50,6 +54,155 @@ impl StopAfterFirstResponder {
             seen_main: AtomicBool::new(false),
             worker_calls,
         }
+    }
+}
+
+struct DelayedWorkerAfterReportResponder {
+    spawn_args_json: String,
+    seen_main: AtomicBool,
+    worker_calls: Arc<AtomicUsize>,
+    delayed_worker_output: AtomicBool,
+    worker_output_delay: Duration,
+}
+
+struct WorkerNeverCompletesAfterReportResponder {
+    spawn_args_json: String,
+    seen_main: AtomicBool,
+    worker_calls: Arc<AtomicUsize>,
+}
+
+impl DelayedWorkerAfterReportResponder {
+    fn new(
+        spawn_args_json: String,
+        worker_calls: Arc<AtomicUsize>,
+        worker_output_delay: Duration,
+    ) -> Self {
+        Self {
+            spawn_args_json,
+            seen_main: AtomicBool::new(false),
+            worker_calls,
+            delayed_worker_output: AtomicBool::new(false),
+            worker_output_delay,
+        }
+    }
+}
+
+impl WorkerNeverCompletesAfterReportResponder {
+    fn new(spawn_args_json: String, worker_calls: Arc<AtomicUsize>) -> Self {
+        Self {
+            spawn_args_json,
+            seen_main: AtomicBool::new(false),
+            worker_calls,
+        }
+    }
+}
+
+impl Respond for WorkerNeverCompletesAfterReportResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body_bytes = decode_body_bytes(request);
+        let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+
+        let call_output_ids = function_call_output_call_ids(&body);
+        if !call_output_ids.is_empty() {
+            if call_output_ids
+                .iter()
+                .any(|call_id| call_id.starts_with("call-worker-"))
+            {
+                return sse_response(sse(vec![
+                    ev_response_created("resp-worker-post-report"),
+                    ev_assistant_message("msg-worker-post-report", "no bugs found"),
+                ]));
+            }
+            return sse_response(sse(vec![
+                ev_response_created("resp-tool"),
+                ev_completed("resp-tool"),
+            ]));
+        }
+
+        if let Some((job_id, item_id)) = extract_job_and_item(&body) {
+            let call_index = self.worker_calls.fetch_add(1, Ordering::SeqCst);
+            let call_id = format!("call-worker-{call_index}");
+            let args = json!({
+                "job_id": job_id,
+                "item_id": item_id,
+                "result": { "item_id": item_id }
+            });
+            let args_json = serde_json::to_string(&args).unwrap_or_else(|err| {
+                panic!("worker args serialize: {err}");
+            });
+            return sse_response(sse(vec![
+                ev_response_created("resp-worker"),
+                ev_function_call(&call_id, "report_agent_job_result", &args_json),
+                ev_completed("resp-worker"),
+            ]));
+        }
+
+        if !self.seen_main.swap(true, Ordering::SeqCst) {
+            return sse_response(sse(vec![
+                ev_response_created("resp-main"),
+                ev_function_call("call-spawn", "spawn_agents_on_csv", &self.spawn_args_json),
+                ev_completed("resp-main"),
+            ]));
+        }
+
+        sse_response(sse(vec![
+            ev_response_created("resp-default"),
+            ev_completed("resp-default"),
+        ]))
+    }
+}
+
+impl Respond for DelayedWorkerAfterReportResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body_bytes = decode_body_bytes(request);
+        let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+
+        let call_output_ids = function_call_output_call_ids(&body);
+        if !call_output_ids.is_empty() {
+            let response = sse_response(sse(vec![
+                ev_response_created("resp-tool"),
+                ev_completed("resp-tool"),
+            ]));
+            if call_output_ids
+                .iter()
+                .any(|call_id| call_id == "call-worker-0")
+                && !self.delayed_worker_output.swap(true, Ordering::SeqCst)
+            {
+                return response.set_delay(self.worker_output_delay);
+            }
+            return response;
+        }
+
+        if let Some((job_id, item_id)) = extract_job_and_item(&body) {
+            let call_index = self.worker_calls.fetch_add(1, Ordering::SeqCst);
+            let call_id = format!("call-worker-{call_index}");
+            let args = json!({
+                "job_id": job_id,
+                "item_id": item_id,
+                "result": { "item_id": item_id }
+            });
+            let args_json = serde_json::to_string(&args).unwrap_or_else(|err| {
+                panic!("worker args serialize: {err}");
+            });
+            return sse_response(sse(vec![
+                ev_response_created("resp-worker"),
+                ev_function_call(&call_id, "report_agent_job_result", &args_json),
+                ev_completed("resp-worker"),
+            ]));
+        }
+
+        if !self.seen_main.swap(true, Ordering::SeqCst) {
+            return sse_response(sse(vec![
+                ev_response_created("resp-main"),
+                ev_function_call("call-spawn", "spawn_agents_on_csv", &self.spawn_args_json),
+                ev_completed("resp-main"),
+            ]));
+        }
+
+        sse_response(sse(vec![
+            ev_response_created("resp-default"),
+            ev_completed("resp-default"),
+        ]))
     }
 }
 
@@ -174,6 +327,17 @@ fn has_function_call_output(body: &Value) -> bool {
                 item.get("type").and_then(Value::as_str) == Some("function_call_output")
             })
         })
+}
+
+fn function_call_output_call_ids(body: &Value) -> Vec<String> {
+    body.get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .filter_map(|item| item.get("call_id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 fn extract_job_and_item(body: &Value) -> Option<(String, String)> {
@@ -444,5 +608,207 @@ async fn spawn_agents_on_csv_stop_halts_future_items() -> Result<()> {
     assert_eq!(progress.running_items, 0);
     assert_eq!(progress.pending_items, 2);
     assert_eq!(worker_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agents_on_csv_reclaims_slot_after_report_before_worker_completes() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpawnCsv)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+    });
+    let test = Arc::new(builder.build(&server).await?);
+
+    let input_path = test.cwd_path().join("agent_jobs_reclaim.csv");
+    let output_path = test.cwd_path().join("agent_jobs_reclaim_out.csv");
+    fs::write(&input_path, "path\nfile-1\nfile-2\n")?;
+
+    let args = json!({
+        "csv_path": input_path.display().to_string(),
+        "instruction": "Return {path}",
+        "output_csv_path": output_path.display().to_string(),
+        "max_concurrency": 1,
+    });
+    let args_json = serde_json::to_string(&args)?;
+
+    let worker_calls = Arc::new(AtomicUsize::new(0));
+    let responder = DelayedWorkerAfterReportResponder::new(
+        args_json,
+        worker_calls.clone(),
+        Duration::from_secs(2),
+    );
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder)
+        .mount(&server)
+        .await;
+
+    let submit = tokio::spawn({
+        let test = Arc::clone(&test);
+        async move { test.submit_turn("run batch job").await }
+    });
+
+    timeout(Duration::from_secs(1), async {
+        while worker_calls.load(Ordering::SeqCst) < 2 {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("second worker should start before first worker's delayed post-report response");
+
+    submit.await??;
+
+    let output = fs::read_to_string(&output_path)?;
+    assert_eq!(output.lines().skip(1).count(), 2);
+
+    let requests = worker_calls.load(Ordering::SeqCst);
+    assert_eq!(requests, 2);
+
+    let root_requests = server
+        .received_requests()
+        .await
+        .expect("wiremock should capture requests");
+    let saw_spawn_output = root_requests.iter().any(|request| {
+        let body_bytes = decode_body_bytes(request);
+        let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+        function_call_output_call_ids(&body)
+            .iter()
+            .any(|call_id| call_id == "call-spawn")
+    });
+    assert!(saw_spawn_output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agents_on_csv_finishes_after_rows_complete_even_if_worker_exit_lags() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpawnCsv)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let input_path = test.cwd_path().join("agent_jobs_terminal.csv");
+    let output_path = test.cwd_path().join("agent_jobs_terminal_out.csv");
+    fs::write(&input_path, "path\nfile-1\n")?;
+
+    let args = json!({
+        "csv_path": input_path.display().to_string(),
+        "instruction": "Return {path}",
+        "output_csv_path": output_path.display().to_string(),
+        "max_concurrency": 1,
+    });
+    let args_json = serde_json::to_string(&args)?;
+
+    let worker_calls = Arc::new(AtomicUsize::new(0));
+    let responder = DelayedWorkerAfterReportResponder::new(
+        args_json,
+        worker_calls.clone(),
+        Duration::from_secs(30),
+    );
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder)
+        .mount(&server)
+        .await;
+
+    timeout(Duration::from_secs(5), test.submit_turn("run batch job"))
+        .await
+        .expect("root turn should finalize without waiting for the delayed worker exit")?;
+
+    let output = fs::read_to_string(&output_path)?;
+    let rows: Vec<&str> = output.lines().skip(1).collect();
+    assert_eq!(rows.len(), 1);
+
+    let job_id = rows
+        .first()
+        .and_then(|line| {
+            parse_simple_csv_line(line)
+                .iter()
+                .find(|value| value.len() == 36)
+                .cloned()
+        })
+        .expect("job_id from csv");
+    let db = test.codex.state_db().expect("state db");
+    let job = db.get_agent_job(job_id.as_str()).await?.expect("job");
+    assert_eq!(job.status, codex_state::AgentJobStatus::Completed);
+    assert!(job.completed_at.is_some());
+    assert_eq!(worker_calls.load(Ordering::SeqCst), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agents_on_csv_finishes_when_worker_reports_but_never_completes_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SpawnCsv)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let input_path = test.cwd_path().join("agent_jobs_incomplete_turn.csv");
+    let output_path = test.cwd_path().join("agent_jobs_incomplete_turn_out.csv");
+    fs::write(&input_path, "path\nfile-1\n")?;
+
+    let args = json!({
+        "csv_path": input_path.display().to_string(),
+        "instruction": "Return {path}",
+        "output_csv_path": output_path.display().to_string(),
+        "max_concurrency": 1,
+    });
+    let args_json = serde_json::to_string(&args)?;
+
+    let worker_calls = Arc::new(AtomicUsize::new(0));
+    let responder = WorkerNeverCompletesAfterReportResponder::new(args_json, worker_calls.clone());
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder)
+        .mount(&server)
+        .await;
+
+    timeout(Duration::from_secs(5), test.submit_turn("run batch job"))
+        .await
+        .expect("root turn should finalize even if a worker never reaches task_complete")?;
+
+    let output = fs::read_to_string(&output_path)?;
+    let rows: Vec<&str> = output.lines().skip(1).collect();
+    assert_eq!(rows.len(), 1);
+
+    let job_id = rows
+        .first()
+        .and_then(|line| {
+            parse_simple_csv_line(line)
+                .iter()
+                .find(|value| value.len() == 36)
+                .cloned()
+        })
+        .expect("job_id from csv");
+    let db = test.codex.state_db().expect("state db");
+    let job = db.get_agent_job(job_id.as_str()).await?.expect("job");
+    assert_eq!(job.status, codex_state::AgentJobStatus::Completed);
+    assert!(job.completed_at.is_some());
+    assert_eq!(worker_calls.load(Ordering::SeqCst), 1);
+
     Ok(())
 }
