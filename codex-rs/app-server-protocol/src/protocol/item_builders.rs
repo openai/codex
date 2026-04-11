@@ -221,6 +221,9 @@ pub fn guardian_auto_approval_review_notification(
             codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
                 GuardianApprovalReviewStatus::Denied
             }
+            codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                GuardianApprovalReviewStatus::TimedOut
+            }
             codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
                 GuardianApprovalReviewStatus::Aborted
             }
@@ -245,6 +248,7 @@ pub fn guardian_auto_approval_review_notification(
         }
         codex_protocol::protocol::GuardianAssessmentStatus::Approved
         | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+        | codex_protocol::protocol::GuardianAssessmentStatus::TimedOut
         | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
             ServerNotification::ItemGuardianApprovalReviewCompleted(
                 ItemGuardianApprovalReviewCompletedNotification {
