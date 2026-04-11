@@ -667,11 +667,10 @@ pub(crate) async fn load_remote_control_auth(
     auth_manager: &Arc<AuthManager>,
 ) -> io::Result<RemoteControlConnectionAuth> {
     let mut reloaded = false;
-    let auth = loop {
+    loop {
         let Some(auth) = auth_manager.auth().await else {
             if reloaded {
-                return Err(io::Error::new(
-                    ErrorKind::PermissionDenied,
+                return Err(recoverable_remote_control_auth_error(
                     "remote control requires ChatGPT authentication",
                 ));
             }
@@ -680,32 +679,48 @@ pub(crate) async fn load_remote_control_auth(
             continue;
         };
         if !auth.is_chatgpt_auth() {
-            break auth;
+            if reloaded {
+                return Err(recoverable_remote_control_auth_error(
+                    "remote control requires ChatGPT authentication; API key auth is not supported",
+                ));
+            }
+            auth_manager.reload();
+            reloaded = true;
+            continue;
         }
         if auth.get_account_id().is_none() && !reloaded {
             auth_manager.reload();
             reloaded = true;
             continue;
         }
-        break auth;
-    };
 
-    if !auth.is_chatgpt_auth() {
-        return Err(io::Error::new(
-            ErrorKind::PermissionDenied,
-            "remote control requires ChatGPT authentication; API key auth is not supported",
-        ));
-    }
-
-    Ok(RemoteControlConnectionAuth {
-        bearer_token: auth.get_token().map_err(io::Error::other)?,
-        account_id: auth.get_account_id().ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::WouldBlock,
+        let bearer_token = match auth.get_token() {
+            Ok(bearer_token) => bearer_token,
+            Err(err) => {
+                if reloaded {
+                    return Err(recoverable_remote_control_auth_error(format!(
+                        "remote control cannot read ChatGPT authentication token: {err}"
+                    )));
+                }
+                auth_manager.reload();
+                reloaded = true;
+                continue;
+            }
+        };
+        let account_id = auth.get_account_id().ok_or_else(|| {
+            recoverable_remote_control_auth_error(
                 "remote control enrollment is waiting for a ChatGPT account id",
             )
-        })?,
-    })
+        })?;
+        return Ok(RemoteControlConnectionAuth {
+            bearer_token,
+            account_id,
+        });
+    }
+}
+
+fn recoverable_remote_control_auth_error(message: impl Into<String>) -> io::Error {
+    io::Error::new(ErrorKind::WouldBlock, message.into())
 }
 
 pub(super) async fn connect_remote_control_websocket(
@@ -754,12 +769,15 @@ pub(super) async fn connect_remote_control_websocket(
         let new_enrollment = match enroll_remote_control_server(remote_control_target, &auth).await
         {
             Ok(new_enrollment) => new_enrollment,
-            Err(err)
-                if err.kind() == ErrorKind::PermissionDenied
-                    && recover_remote_control_auth(auth_recovery).await =>
-            {
-                return Err(io::Error::other(format!(
-                    "{err}; retrying after auth recovery"
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                if recover_remote_control_auth(auth_recovery).await {
+                    return Err(io::Error::other(format!(
+                        "{err}; retrying after auth recovery"
+                    )));
+                }
+                reload_remote_control_auth(auth_manager, auth_recovery);
+                return Err(recoverable_remote_control_auth_error(format!(
+                    "{err}; waiting for valid ChatGPT authentication"
                 )));
             }
             Err(err) => return Err(err),
@@ -825,12 +843,19 @@ pub(super) async fn connect_remote_control_websocket(
                 tungstenite::Error::Http(response)
                     if matches!(response.status().as_u16(), 401 | 403) =>
                 {
+                    let message = format!(
+                        "remote control websocket auth failed with HTTP {}",
+                        response.status()
+                    );
                     if recover_remote_control_auth(auth_recovery).await {
                         return Err(io::Error::other(format!(
-                            "remote control websocket auth failed with HTTP {}; retrying after auth recovery",
-                            response.status()
+                            "{message}; retrying after auth recovery"
                         )));
                     }
+                    reload_remote_control_auth(auth_manager, auth_recovery);
+                    return Err(recoverable_remote_control_auth_error(format!(
+                        "{message}; waiting for valid ChatGPT authentication"
+                    )));
                 }
                 _ => {}
             }
@@ -864,6 +889,14 @@ async fn recover_remote_control_auth(auth_recovery: &mut UnauthorizedRecovery) -
             false
         }
     }
+}
+
+fn reload_remote_control_auth(
+    auth_manager: &Arc<AuthManager>,
+    auth_recovery: &mut UnauthorizedRecovery,
+) {
+    auth_manager.reload();
+    *auth_recovery = auth_manager.unauthorized_recovery();
 }
 
 fn format_remote_control_websocket_connect_error(
@@ -1168,6 +1201,57 @@ mod tests {
                 .get_token()
                 .expect("token should be readable"),
             "fresh-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_remote_control_websocket_treats_exhausted_unauthorized_as_recoverable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let remote_control_url = remote_control_url_for_listener(&listener);
+        let remote_control_target =
+            normalize_remote_control_url(&remote_control_url).expect("target should parse");
+        let codex_home = TempDir::new().expect("temp dir should create");
+        let state_db = remote_control_state_runtime(&codex_home).await;
+        let auth_manager = remote_control_auth_manager();
+        let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut enrollment = Some(RemoteControlEnrollment {
+            account_id: "account_id".to_string(),
+            environment_id: "env_test".to_string(),
+            server_id: "srv_e_test".to_string(),
+            server_name: "test-server".to_string(),
+        });
+        let server_task = tokio::spawn(async move {
+            let (stream, request_line) = accept_http_request(&listener).await;
+            assert_eq!(
+                request_line,
+                "GET /backend-api/wham/remote/control/server HTTP/1.1"
+            );
+            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
+        });
+
+        let err = connect_remote_control_websocket(
+            &remote_control_target,
+            Some(state_db.as_ref()),
+            &auth_manager,
+            &mut auth_recovery,
+            &mut enrollment,
+            /*subscribe_cursor*/ None,
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("unauthorized response should remain recoverable after recovery is exhausted");
+
+        server_task.await.expect("server task should succeed");
+        assert_eq!(err.kind(), ErrorKind::WouldBlock);
+        assert_eq!(
+            err.to_string(),
+            "remote control websocket auth failed with HTTP 401 Unauthorized; waiting for valid ChatGPT authentication"
+        );
+        assert!(
+            auth_manager.auth().await.is_none(),
+            "exhausted unauthorized recovery should reload auth so future runtime changes can be observed"
         );
     }
 

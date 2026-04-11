@@ -27,6 +27,8 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
+use crate::transport::RemoteControlAuthStartup;
+use crate::transport::RemoteControlStartup;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
@@ -572,6 +574,16 @@ pub async fn run_main_with_transport(
         ));
     }
 
+    let remote_control_startup = if remote_control_enabled {
+        let auth = if transport_accept_handles.is_empty() {
+            RemoteControlAuthStartup::RequireReady
+        } else {
+            RemoteControlAuthStartup::AllowRecoverable
+        };
+        RemoteControlStartup::Enabled { auth }
+    } else {
+        RemoteControlStartup::Disabled
+    };
     let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
         config.chatgpt_base_url.clone(),
         state_db.clone(),
@@ -579,7 +591,7 @@ pub async fn run_main_with_transport(
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),
         app_server_client_name_rx,
-        remote_control_enabled,
+        remote_control_startup,
     )
     .await?;
     transport_accept_handles.push(remote_control_accept_handle);

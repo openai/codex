@@ -45,6 +45,18 @@ impl RemoteControlHandle {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RemoteControlAuthStartup {
+    AllowRecoverable,
+    RequireReady,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RemoteControlStartup {
+    Disabled,
+    Enabled { auth: RemoteControlAuthStartup },
+}
+
 pub(crate) async fn start_remote_control(
     remote_control_url: String,
     state_db: Option<Arc<StateRuntime>>,
@@ -52,17 +64,26 @@ pub(crate) async fn start_remote_control(
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
     app_server_client_name_rx: Option<oneshot::Receiver<String>>,
-    initial_enabled: bool,
+    startup: RemoteControlStartup,
 ) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
-    let remote_control_target = if initial_enabled {
-        Some(normalize_remote_control_url(&remote_control_url)?)
-    } else {
-        None
+    let remote_control_target = match startup {
+        RemoteControlStartup::Enabled { .. } => {
+            Some(normalize_remote_control_url(&remote_control_url)?)
+        }
+        RemoteControlStartup::Disabled => None,
     };
-    if initial_enabled {
-        validate_remote_control_auth(&auth_manager).await?;
+    if let RemoteControlStartup::Enabled { auth } = startup {
+        match auth {
+            RemoteControlAuthStartup::AllowRecoverable => {
+                validate_remote_control_auth(&auth_manager).await?;
+            }
+            RemoteControlAuthStartup::RequireReady => {
+                validate_remote_control_auth_ready(&auth_manager).await?;
+            }
+        }
     }
 
+    let initial_enabled = matches!(startup, RemoteControlStartup::Enabled { .. });
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let join_handle = tokio::spawn(async move {
         RemoteControlWebsocket::new(
@@ -92,6 +113,19 @@ pub(crate) async fn validate_remote_control_auth(
     match load_remote_control_auth(auth_manager).await {
         Ok(_) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) async fn validate_remote_control_auth_ready(
+    auth_manager: &Arc<AuthManager>,
+) -> io::Result<()> {
+    match load_remote_control_auth(auth_manager).await {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            err.to_string(),
+        )),
         Err(err) => Err(err),
     }
 }
