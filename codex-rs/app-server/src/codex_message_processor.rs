@@ -9437,7 +9437,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
             .to_rfc3339_opts(SecondsFormat::Secs, true),
         metadata
             .updated_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
+            .to_rfc3339_opts(SecondsFormat::Millis, true),
         metadata.model_provider.clone(),
         metadata.cwd.clone(),
         metadata.cli_version.clone(),
@@ -9703,7 +9703,7 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
         .and_then(|meta| meta.modified().ok())
         .map(|modified| {
             let updated_at: DateTime<Utc> = modified.into();
-            updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)
+            updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)
         });
     updated_at.or_else(|| created_at.map(str::to_string))
 }
