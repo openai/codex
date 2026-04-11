@@ -13,6 +13,7 @@ use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
 use crate::ToolNamespace;
 use crate::ToolRegistryPlanDeferredTool;
+use crate::ToolRegistryPlanMcpTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
 use crate::mcp_call_tool_result_output_schema;
@@ -1890,10 +1891,29 @@ fn build_specs_with_optional_tool_namespaces<'a>(
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
+    let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
+        mcp_tools
+            .iter()
+            .map(|(qualified_name, tool)| {
+                let raw_tool_name = tool.name.as_ref();
+                let callable_namespace = qualified_name
+                    .strip_suffix(raw_tool_name)
+                    .filter(|namespace| !namespace.is_empty())
+                    .unwrap_or("mcp__test_server__");
+
+                ToolRegistryPlanMcpTool {
+                    qualified_name: qualified_name.clone(),
+                    callable_name: raw_tool_name.to_string(),
+                    callable_namespace: callable_namespace.to_string(),
+                    tool,
+                }
+            })
+            .collect::<Vec<_>>()
+    });
     let plan = build_tool_registry_plan(
         config,
         ToolRegistryPlanParams {
-            mcp_tools: mcp_tools.as_ref(),
+            mcp_tools: mcp_tool_inputs.as_deref(),
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
             tool_namespaces: tool_namespaces.as_ref(),
             discoverable_tools: discoverable_tools.as_deref(),

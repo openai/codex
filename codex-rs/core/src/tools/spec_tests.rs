@@ -912,6 +912,43 @@ fn search_tool_registers_namespaced_mcp_tool_aliases() {
 }
 
 #[test]
+fn direct_mcp_tools_register_namespaced_handlers() {
+    let config = test_config();
+    let model_info = construct_model_info_offline("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (_, registry) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            "mcp__test_server__echo".to_string(),
+            mcp_tool_info(mcp_tool(
+                "echo",
+                "Echo",
+                serde_json::json!({"type": "object"}),
+            )),
+        )])),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert!(registry.has_handler(&ToolName::namespaced("mcp__test_server__", "echo")));
+    assert!(!registry.has_handler(&ToolName::plain("mcp__test_server__echo")));
+}
+
+#[test]
 fn test_mcp_tool_property_missing_type_defaults_to_string() {
     let config = test_config();
     let model_info = construct_model_info_offline("gpt-5-codex", &config);

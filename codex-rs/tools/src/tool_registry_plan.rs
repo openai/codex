@@ -61,7 +61,6 @@ use crate::request_user_input_tool_description;
 use crate::tool_registry_plan_types::agent_type_description;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-use rmcp::model::Tool as McpTool;
 use std::collections::BTreeMap;
 
 pub fn build_tool_registry_plan(
@@ -471,25 +470,26 @@ pub fn build_tool_registry_plan(
     }
 
     if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries: Vec<(String, &McpTool)> = mcp_tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool))
-            .collect();
-        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut entries = mcp_tools.to_vec();
+        entries.sort_by(|left, right| left.qualified_name.cmp(&right.qualified_name));
 
-        for (name, tool) in entries {
-            match mcp_tool_to_responses_api_tool(name.clone(), tool) {
+        for tool in entries {
+            let qualified_name = tool.qualified_name.clone();
+            match mcp_tool_to_responses_api_tool(qualified_name.clone(), tool.tool) {
                 Ok(converted_tool) => {
                     plan.push_spec(
                         ToolSpec::Function(converted_tool),
                         /*supports_parallel_tool_calls*/ false,
                         config.code_mode_enabled,
                     );
-                    plan.register_handler(name, ToolHandlerKind::Mcp);
+                    plan.register_handler(
+                        ToolName::namespaced(tool.callable_namespace, tool.callable_name),
+                        ToolHandlerKind::Mcp,
+                    );
                 }
                 Err(error) => {
                     tracing::error!(
-                        "Failed to convert {name:?} MCP tool to OpenAI tool: {error:?}"
+                        "Failed to convert {qualified_name:?} MCP tool to OpenAI tool: {error:?}"
                     );
                 }
             }

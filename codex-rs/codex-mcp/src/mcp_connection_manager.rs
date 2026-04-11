@@ -1192,13 +1192,25 @@ impl McpConnectionManager {
     }
 
     pub async fn resolve_tool_info(&self, name: &str, namespace: Option<&str>) -> Option<ToolInfo> {
-        let qualified_name = match namespace {
-            Some(namespace) if name.starts_with(namespace) => name.to_string(),
-            Some(namespace) => format!("{namespace}{name}"),
-            None => name.to_string(),
-        };
-
-        self.list_all_tools().await.get(&qualified_name).cloned()
+        let all_tools = self.list_all_tools().await;
+        if let Some(namespace) = namespace {
+            let qualified_name = format!("{namespace}{name}");
+            if let Some(tool) = all_tools.get(&qualified_name)
+                && tool.callable_namespace == namespace
+                && tool.callable_name == name
+            {
+                return Some(tool.clone());
+            }
+            if let Some(tool) = all_tools.get(name)
+                && tool.callable_namespace == namespace
+                && format!("{namespace}{}", tool.callable_name) == name
+            {
+                return Some(tool.clone());
+            }
+            None
+        } else {
+            all_tools.get(name).cloned()
+        }
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {

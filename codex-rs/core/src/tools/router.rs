@@ -126,16 +126,15 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let mcp_tool = session
+                if let Some(tool_info) = session
                     .resolve_mcp_tool_info(&name, namespace.as_deref())
-                    .await;
-                let tool_name = match namespace {
-                    Some(namespace) => ToolName::namespaced(namespace, name),
-                    None => ToolName::plain(name),
-                };
-                if let Some(tool_info) = mcp_tool {
+                    .await
+                {
                     Ok(Some(ToolCall {
-                        tool_name,
+                        tool_name: ToolName::namespaced(
+                            tool_info.callable_namespace,
+                            tool_info.callable_name,
+                        ),
                         call_id,
                         payload: ToolPayload::Mcp {
                             server: tool_info.server_name,
@@ -144,6 +143,10 @@ impl ToolRouter {
                         },
                     }))
                 } else {
+                    let tool_name = match namespace {
+                        Some(namespace) => ToolName::namespaced(namespace, name),
+                        None => ToolName::plain(name),
+                    };
                     Ok(Some(ToolCall {
                         tool_name,
                         call_id,
