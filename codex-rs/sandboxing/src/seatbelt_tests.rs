@@ -353,6 +353,35 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
 }
 
 #[test]
+fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
+    let policy = dynamic_network_policy(
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        },
+        /*enforce_managed_network*/ false,
+        &ProxyPolicyInputs {
+            ports: vec![],
+            has_proxy_config: true,
+            allow_local_binding: true,
+            ..ProxyPolicyInputs::default()
+        },
+    );
+
+    assert!(
+        policy.contains("(allow network-bind (local ip \"*:*\"))"),
+        "policy should still allow explicitly configured local binding:\n{policy}"
+    );
+    assert!(
+        !policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
+        "policy should not allow DNS egress when no proxy ports are available:\n{policy}"
+    );
+}
+
+#[test]
 fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_without_proxy_config() {
     let policy = dynamic_network_policy(
         &SandboxPolicy::WorkspaceWrite {
