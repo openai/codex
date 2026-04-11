@@ -60,14 +60,6 @@
         "unknown"
       ],
       "type": "string"
-    },
-    "WorkspaceRole": {
-      "enum": [
-        "account-owner",
-        "account-admin",
-        "standard-user"
-      ],
-      "type": "string"
     }
   },
   "properties": {
@@ -81,24 +73,8 @@
         }
       ]
     },
-    "isWorkspaceOwner": {
-      "type": [
-        "boolean",
-        "null"
-      ]
-    },
     "requiresOpenaiAuth": {
       "type": "boolean"
-    },
-    "workspaceRole": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/WorkspaceRole"
-        },
-        {
-          "type": "null"
-        }
-      ]
     }
   },
   "required": [

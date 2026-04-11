@@ -24,6 +24,7 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
@@ -772,14 +773,16 @@ async fn maybe_request_mcp_tool_approval(
         .enabled(Feature::ToolCallMcpElicitation);
 
     if routes_approval_to_guardian(turn_context) {
+        let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,
             turn_context,
+            review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
             monitor_reason.clone(),
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(sess, call_id, decision).await;
+        let decision = mcp_tool_approval_decision_from_guardian(sess, &review_id, decision).await;
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -969,7 +972,7 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
 
 async fn mcp_tool_approval_decision_from_guardian(
     sess: &Session,
-    call_id: &str,
+    review_id: &str,
     decision: ReviewDecision,
 ) -> McpToolApprovalDecision {
     match decision {
@@ -977,8 +980,8 @@ async fn mcp_tool_approval_decision_from_guardian(
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied => McpToolApprovalDecision::Decline {
-            message: Some(guardian_rejection_message(sess, call_id).await),
+        ReviewDecision::Denied | ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
+            message: Some(guardian_rejection_message(sess, review_id).await),
         },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }

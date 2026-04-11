@@ -92,7 +92,6 @@ pub fn parse_rate_limit_for_limit(
         primary,
         secondary,
         credits,
-        spend_control: None,
         plan_type: None,
     })
 }
@@ -156,7 +155,6 @@ pub fn parse_rate_limit_event(payload: &str) -> Option<RateLimitSnapshot> {
         primary,
         secondary,
         credits,
-        spend_control: None,
         plan_type: event.plan_type,
     })
 }

@@ -408,6 +408,7 @@ impl ThreadHistoryBuilder {
             GuardianAssessmentStatus::Denied | GuardianAssessmentStatus::Aborted => {
                 CommandExecutionStatus::Declined
             }
+            GuardianAssessmentStatus::TimedOut => CommandExecutionStatus::Failed,
             GuardianAssessmentStatus::Approved => return,
         };
         let Some(item) = build_item_from_guardian_event(payload, status) else {
@@ -2088,12 +2089,14 @@ mod tests {
                 local_images: Vec::new(),
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: "guardian-exec".into(),
+                id: "review-guardian-exec".into(),
+                target_item_id: Some("guardian-exec".into()),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "command",
                     "source": "shell",
@@ -2103,12 +2106,16 @@ mod tests {
                 .expect("guardian action"),
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: "guardian-exec".into(),
+                id: "review-guardian-exec".into(),
+                target_item_id: Some("guardian-exec".into()),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::Denied,
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("Would delete user data.".into()),
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: serde_json::from_value(serde_json::json!({
                     "type": "command",
                     "source": "shell",
@@ -2161,12 +2168,14 @@ mod tests {
                 local_images: Vec::new(),
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: "guardian-execve".into(),
+                id: "review-guardian-execve".into(),
+                target_item_id: Some("guardian-execve".into()),
                 turn_id: "turn-1".into(),
                 status: GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "execve",
                     "source": "shell",

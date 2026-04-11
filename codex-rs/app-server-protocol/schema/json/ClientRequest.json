@@ -1277,6 +1277,27 @@
       ],
       "type": "string"
     },
+    "McpServerToolCallParams": {
+      "properties": {
+        "_meta": true,
+        "arguments": true,
+        "server": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "threadId",
+        "tool"
+      ],
+      "type": "object"
+    },
     "MergeStrategy": {
       "enum": [
         "replace",
@@ -2562,17 +2583,6 @@
       ],
       "type": "object"
     },
-    "ThreadAddCreditsNudgeEmailParams": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
-    },
     "ThreadArchiveParams": {
       "properties": {
         "threadId": {
@@ -3221,9 +3231,26 @@
               "type": "null"
             }
           ]
+        },
+        "sessionStartSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadStartSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
+    },
+    "ThreadStartSource": {
+      "enum": [
+        "startup",
+        "clear"
+      ],
+      "type": "string"
     },
     "ThreadUnarchiveParams": {
       "properties": {
@@ -3818,30 +3845,6 @@
         "params"
       ],
       "title": "Thread/shellCommandRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/addCreditsNudgeEmail"
-          ],
-          "title": "Thread/addCreditsNudgeEmailRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadAddCreditsNudgeEmailParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Thread/addCreditsNudgeEmailRequest",
       "type": "object"
     },
     {
@@ -4585,6 +4588,30 @@
         "params"
       ],
       "title": "McpServer/resource/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "mcpServer/tool/call"
+          ],
+          "title": "McpServer/tool/callRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerToolCallParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "McpServer/tool/callRequest",
       "type": "object"
     },
     {

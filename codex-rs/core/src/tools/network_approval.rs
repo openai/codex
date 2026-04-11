@@ -1,6 +1,7 @@
 use crate::codex::Session;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::denied_network_policy_message;
@@ -369,12 +370,13 @@ impl NetworkApprovalService {
         };
         let owner_call = self.resolve_single_active_call().await;
         let guardian_approval_id = Self::approval_id_for_key(&key);
-        let approval_decision = if routes_approval_to_guardian(&turn_context) {
-            // TODO(ccunningham): Attach guardian network reviews to the reviewed tool item
-            // lifecycle instead of this temporary standalone network approval id.
+        let use_guardian = routes_approval_to_guardian(&turn_context);
+        let guardian_review_id = use_guardian.then(new_guardian_review_id);
+        let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
             review_approval_request(
                 &session,
                 &turn_context,
+                review_id,
                 GuardianApprovalRequest::NetworkAccess {
                     id: guardian_approval_id.clone(),
                     turn_id: owner_call
@@ -486,12 +488,10 @@ impl NetworkApprovalService {
                     PendingApprovalDecision::Deny
                 }
             },
-            ReviewDecision::Denied | ReviewDecision::Abort => {
-                if routes_approval_to_guardian(&turn_context) {
+            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+                if let Some(review_id) = guardian_review_id.as_deref() {
                     if let Some(owner_call) = owner_call.as_ref() {
-                        let message =
-                            guardian_rejection_message(session.as_ref(), &guardian_approval_id)
-                                .await;
+                        let message = guardian_rejection_message(session.as_ref(), review_id).await;
                         self.record_call_outcome(
                             &owner_call.registration_id,
                             NetworkApprovalOutcome::DeniedByPolicy(message),

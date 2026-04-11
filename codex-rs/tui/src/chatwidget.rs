@@ -52,6 +52,16 @@ use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
+use crate::legacy_core::DEFAULT_PROJECT_DOC_FILENAME;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config::Constrained;
+use crate::legacy_core::config::ConstraintResult;
+use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
+use crate::legacy_core::find_thread_name_by_id;
+use crate::legacy_core::plugins::PluginsManager;
+use crate::legacy_core::skills::model::SkillMetadata;
+#[cfg(target_os = "windows")]
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
@@ -67,7 +77,6 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
-use codex_app_server_protocol::AddCreditsNudgeEmailResult as AppServerAddCreditsNudgeEmailResult;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
@@ -92,21 +101,10 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::WorkspaceRole as AppServerWorkspaceRole;
 use codex_chatgpt::connectors;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
-use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
-use codex_core::config::Config;
-use codex_core::config::Constrained;
-use codex_core::config::ConstraintResult;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::find_thread_name_by_id;
-use codex_core::plugins::PluginsManager;
-use codex_core::skills::model::SkillMetadata;
-#[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::FEATURES;
 use codex_features::Feature;
 #[cfg(test)]
@@ -135,7 +133,6 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
-use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
 #[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 #[cfg(test)]
@@ -174,6 +171,7 @@ use codex_protocol::protocol::ExecCommandSource;
 #[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::GuardianAssessmentAction;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
@@ -194,7 +192,6 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_protocol::protocol::SpendControlSnapshot;
 #[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -333,6 +330,7 @@ use crate::history_cell;
 #[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HookCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
@@ -559,8 +557,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
-    pub(crate) initial_workspace_role: Option<AppServerWorkspaceRole>,
-    pub(crate) initial_is_workspace_owner: Option<bool>,
     pub(crate) initial_plan_type: Option<PlanType>,
     pub(crate) model: Option<String>,
     pub(crate) startup_tooltip_override: Option<String>,
@@ -605,32 +601,6 @@ enum RateLimitErrorKind {
     ServerOverloaded,
     UsageLimit,
     Generic,
-}
-
-pub(crate) const CODEX_USAGE_SETTINGS_URL: &str = "https://chatgpt.com/codex/settings/usage";
-const WORKSPACE_OWNER_NOTIFICATION_PROMPT: &str =
-    "Your workspace is out of credits. Request more from your workspace owner? [y/N]";
-const WORKSPACE_OWNER_NOTIFICATION_TITLE: &str = "Request more credits from your workspace owner?";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UsageBasedWorkspaceRateLimitState {
-    OwnerCreditsDepleted,
-    OwnerSpendCapReached,
-    MemberCreditsDepleted,
-    MemberSpendCapReached,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UsageBasedWorkspaceBlockKind {
-    CreditsDepleted,
-    SpendCapReached,
-}
-
-fn is_usage_based_workspace_plan(plan_type: PlanType) -> bool {
-    matches!(
-        plan_type,
-        PlanType::SelfServeBusinessUsageBased | PlanType::EnterpriseCbpUsageBased
-    )
 }
 
 #[cfg(test)]
@@ -788,8 +758,6 @@ pub(crate) struct ChatWidget {
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     has_chatgpt_account: bool,
-    workspace_role: Option<AppServerWorkspaceRole>,
-    is_workspace_owner: Option<bool>,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
@@ -800,8 +768,6 @@ pub(crate) struct ChatWidget {
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
-    notify_workspace_owner_in_flight: bool,
-    pending_workspace_owner_notification_prompt: bool,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     adaptive_chunking: AdaptiveChunkingPolicy,
@@ -878,6 +844,8 @@ pub(crate) struct ChatWidget {
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
+    // Active hook runs render in a dedicated live cell so they can run alongside tools.
+    active_hook_cell: Option<HookCell>,
     // Semantic status used for terminal-title status rendering.
     terminal_title_status_kind: TerminalTitleStatusKind,
     // Previous status header to restore after a transient stream retry.
@@ -2151,6 +2119,7 @@ impl ChatWidget {
             }
             self.thread_name = event.thread_name;
             self.refresh_terminal_title();
+            self.refresh_status_surfaces();
             self.request_redraw();
         }
     }
@@ -2359,6 +2328,9 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.retry_status_header = None;
+        if self.active_hook_cell.take().is_some() {
+            self.bump_active_cell_revision();
+        }
         self.pending_status_indicator_restore = false;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
@@ -2713,15 +2685,6 @@ impl ChatWidget {
                         balance: credits.balance.clone(),
                     });
             }
-            if snapshot.spend_control.is_none() {
-                snapshot.spend_control = self
-                    .rate_limit_snapshots_by_limit_id
-                    .get(&limit_id)
-                    .and_then(|display| display.spend_control.as_ref())
-                    .map(|spend_control| SpendControlSnapshot {
-                        reached: spend_control.reached,
-                    });
-            }
 
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
@@ -2790,7 +2753,6 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
         }
-        self.maybe_show_pending_workspace_owner_notification_prompt();
         self.refresh_status_line();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
@@ -2833,32 +2795,13 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
-        self.on_error_with_hint(message, /*hint*/ None);
-    }
-
-    fn on_error_with_hint(&mut self, message: String, hint: Option<String>) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        self.add_to_history(history_cell::new_error_event_with_hint(message, hint));
+        self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
-    }
-
-    fn on_rate_limit_error(&mut self, message: String) {
-        if self.should_prefetch_rate_limits() {
-            self.request_rate_limit_refresh();
-        }
-        let guidance = self.usage_based_workspace_rate_limit_error_guidance();
-        let should_prompt_workspace_owner = self.should_prompt_workspace_owner_notification();
-        let hint = guidance.as_ref().and_then(|(_, hint)| hint.clone());
-        let message = guidance.map(|(message, _)| message).unwrap_or(message);
-        self.on_error_with_hint(message, hint);
-        if should_prompt_workspace_owner {
-            self.pending_workspace_owner_notification_prompt = true;
-            self.maybe_show_pending_workspace_owner_notification_prompt();
-        }
     }
 
     fn handle_non_retry_error(
@@ -2877,7 +2820,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.on_rate_limit_error(message);
+                    self.on_error(message)
                 }
             }
         } else {
@@ -4060,34 +4003,125 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
-        let label = hook_event_label(event.run.event_name);
-        let mut message = format!("Running {label} hook");
-        if let Some(status_message) = event.run.status_message
-            && !status_message.is_empty()
-        {
-            message.push_str(": ");
-            message.push_str(&status_message);
+        self.flush_answer_stream_with_separator();
+        self.flush_completed_hook_output();
+        match self.active_hook_cell.as_mut() {
+            Some(cell) => {
+                cell.start_run(event.run);
+                self.bump_active_cell_revision();
+            }
+            None => {
+                self.active_hook_cell = Some(history_cell::new_active_hook_cell(
+                    event.run,
+                    self.config.animations,
+                ));
+                self.bump_active_cell_revision();
+            }
         }
-        self.add_to_history(history_cell::new_info_event(message, /*hint*/ None));
         self.request_redraw();
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
-        let status = format!("{:?}", event.run.status).to_lowercase();
-        let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
-        let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
-        for entry in event.run.entries {
-            let prefix = match entry.kind {
-                codex_protocol::protocol::HookOutputEntryKind::Warning => "warning: ",
-                codex_protocol::protocol::HookOutputEntryKind::Stop => "stop: ",
-                codex_protocol::protocol::HookOutputEntryKind::Feedback => "feedback: ",
-                codex_protocol::protocol::HookOutputEntryKind::Context => "hook context: ",
-                codex_protocol::protocol::HookOutputEntryKind::Error => "error: ",
-            };
-            lines.push(format!("  {prefix}{}", entry.text).into());
+        let completed = event.run;
+        let completed_existing_run = self
+            .active_hook_cell
+            .as_mut()
+            .map(|cell| cell.complete_run(completed.clone()))
+            .unwrap_or(false);
+        if completed_existing_run {
+            self.bump_active_cell_revision();
+        } else {
+            match self.active_hook_cell.as_mut() {
+                Some(cell) => {
+                    cell.add_completed_run(completed);
+                    self.bump_active_cell_revision();
+                }
+                None => {
+                    let cell =
+                        history_cell::new_completed_hook_cell(completed, self.config.animations);
+                    if !cell.is_empty() {
+                        self.active_hook_cell = Some(cell);
+                        self.bump_active_cell_revision();
+                    }
+                }
+            }
         }
-        self.add_to_history(PlainHistoryCell::new(lines));
+        self.flush_completed_hook_output();
+        self.finish_active_hook_cell_if_idle();
         self.request_redraw();
+    }
+
+    fn flush_completed_hook_output(&mut self) {
+        let Some(completed_cell) = self
+            .active_hook_cell
+            .as_mut()
+            .and_then(HookCell::take_completed_persistent_runs)
+        else {
+            return;
+        };
+        let active_cell_is_empty = self
+            .active_hook_cell
+            .as_ref()
+            .is_some_and(HookCell::is_empty);
+        if active_cell_is_empty {
+            self.active_hook_cell = None;
+        }
+        self.bump_active_cell_revision();
+        self.needs_final_message_separator = true;
+        self.app_event_tx
+            .send(AppEvent::InsertHistoryCell(Box::new(completed_cell)));
+    }
+
+    fn finish_active_hook_cell_if_idle(&mut self) {
+        let Some(cell) = self.active_hook_cell.as_ref() else {
+            return;
+        };
+        if cell.is_empty() {
+            self.active_hook_cell = None;
+            self.bump_active_cell_revision();
+            return;
+        }
+        if cell.should_flush()
+            && let Some(cell) = self.active_hook_cell.take()
+        {
+            self.bump_active_cell_revision();
+            self.needs_final_message_separator = true;
+            self.app_event_tx
+                .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        }
+    }
+
+    fn update_due_hook_visibility(&mut self) {
+        let Some(cell) = self.active_hook_cell.as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        if cell.advance_time(now) {
+            self.bump_active_cell_revision();
+        }
+        self.finish_active_hook_cell_if_idle();
+    }
+
+    fn schedule_hook_timer_if_needed(&self) {
+        if self.config.animations
+            && self
+                .active_hook_cell
+                .as_ref()
+                .is_some_and(HookCell::has_visible_running_run)
+        {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(50));
+        }
+
+        let Some(deadline) = self
+            .active_hook_cell
+            .as_ref()
+            .and_then(HookCell::next_timer_deadline)
+        else {
+            return;
+        };
+        let delay = deadline.saturating_duration_since(Instant::now());
+        self.frame_requester.schedule_frame_in(delay);
     }
 
     #[cfg(test)]
@@ -4137,6 +4171,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn pre_draw_tick(&mut self) {
+        self.update_due_hook_visibility();
+        self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
         if self.should_animate_terminal_title_spinner() {
             self.refresh_terminal_title();
@@ -4677,8 +4713,6 @@ impl ChatWidget {
             feedback,
             is_first_run,
             status_account_display,
-            initial_workspace_role,
-            initial_is_workspace_owner,
             initial_plan_type,
             model,
             startup_tooltip_override,
@@ -4740,8 +4774,6 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
-            workspace_role: initial_workspace_role,
-            is_workspace_owner: initial_is_workspace_owner,
             model_catalog,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
@@ -4752,8 +4784,6 @@ impl ChatWidget {
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
-            notify_workspace_owner_in_flight: false,
-            pending_workspace_owner_notification_prompt: false,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
@@ -4791,6 +4821,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            active_hook_cell: None,
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
@@ -4862,7 +4893,7 @@ impl ChatWidget {
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
-            codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
                     WindowsSandboxLevel::from_config(&widget.config),
                     WindowsSandboxLevel::RestrictedToken
@@ -5299,7 +5330,7 @@ impl ChatWidget {
                     let windows_degraded_sandbox_enabled =
                         matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
                     if !windows_degraded_sandbox_enabled
-                        || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                        || !crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
@@ -5393,7 +5424,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_rate_limit_refresh_request_id();
+                    let request_id = self.next_status_refresh_request_id;
+                    self.next_status_refresh_request_id =
+                        self.next_status_refresh_request_id.wrapping_add(1);
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
                     self.app_event_tx.send(AppEvent::RefreshRateLimits {
                         origin: RateLimitRefreshOrigin::StatusCommand { request_id },
@@ -5540,7 +5573,8 @@ impl ChatWidget {
                 else {
                     return;
                 };
-                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
+                let Some(name) = crate::legacy_core::util::normalize_thread_name(&prepared_args)
+                else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -5637,7 +5671,7 @@ impl ChatWidget {
             "Type a name and press Enter".to_string(),
             /*context_label*/ None,
             Box::new(move |name: String| {
-                let Some(name) = codex_core::util::normalize_thread_name(&name) else {
+                let Some(name) = crate::legacy_core::util::normalize_thread_name(&name) else {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_error_event("Thread name cannot be empty.".to_string()),
                     )));
@@ -5871,7 +5905,7 @@ impl ChatWidget {
 
             let app_mentions = find_app_mentions(&mentions, apps, &skill_names_lower);
             for app in app_mentions {
-                let slug = codex_core::connectors::connector_mention_slug(&app);
+                let slug = crate::legacy_core::connectors::connector_mention_slug(&app);
                 if bound_names.contains(&slug) || !selected_app_ids.insert(app.id.clone()) {
                     continue;
                 }
@@ -6581,17 +6615,19 @@ impl ChatWidget {
             }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
-                    notification.target_item_id,
+                    notification.review_id,
                     notification.turn_id,
                     notification.review,
+                    /*decision_source*/ None,
                     notification.action,
                 );
             }
             ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
                 self.on_guardian_review_notification(
-                    notification.target_item_id,
+                    notification.review_id,
                     notification.turn_id,
                     notification.review,
+                    Some(notification.decision_source),
                     notification.action,
                 );
             }
@@ -6651,18 +6687,6 @@ impl ChatWidget {
                         },
                     );
                 }
-            }
-            ServerNotification::AddCreditsNudgeEmailCompleted(notification) => {
-                let result = match notification.result {
-                    AppServerAddCreditsNudgeEmailResult::Sent => {
-                        Ok(AddCreditsNudgeEmailStatus::Sent)
-                    }
-                    AppServerAddCreditsNudgeEmailResult::CooldownActive => {
-                        Ok(AddCreditsNudgeEmailStatus::CooldownActive)
-                    }
-                    AppServerAddCreditsNudgeEmailResult::Failed { message } => Err(message),
-                };
-                self.finish_notify_workspace_owner(result);
             }
             ServerNotification::ThreadRealtimeSdp(notification) => {
                 if !from_replay {
@@ -6874,10 +6898,12 @@ impl ChatWidget {
         id: String,
         turn_id: String,
         review: codex_app_server_protocol::GuardianApprovalReview,
+        decision_source: Option<codex_app_server_protocol::AutoReviewDecisionSource>,
         action: GuardianApprovalReviewAction,
     ) {
         self.on_guardian_assessment(GuardianAssessmentEvent {
             id,
+            target_item_id: None,
             turn_id,
             status: match review.status {
                 codex_app_server_protocol::GuardianApprovalReviewStatus::InProgress => {
@@ -6888,6 +6914,9 @@ impl ChatWidget {
                 }
                 codex_app_server_protocol::GuardianApprovalReviewStatus::Denied => {
                     GuardianAssessmentStatus::Denied
+                }
+                codex_app_server_protocol::GuardianApprovalReviewStatus::TimedOut => {
+                    GuardianAssessmentStatus::TimedOut
                 }
                 codex_app_server_protocol::GuardianApprovalReviewStatus::Aborted => {
                     GuardianAssessmentStatus::Aborted
@@ -6924,6 +6953,11 @@ impl ChatWidget {
                 }
             }),
             rationale: review.rationale,
+            decision_source: decision_source.map(|source| match source {
+                codex_app_server_protocol::AutoReviewDecisionSource::Agent => {
+                    GuardianAssessmentDecisionSource::Agent
+                }
+            }),
             action: action.into(),
         });
     }
@@ -7072,7 +7106,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_rate_limit_error(message)
+                            self.on_error(message)
                         }
                     }
                 } else {
@@ -7128,9 +7162,6 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
-            EventMsg::AddCreditsNudgeEmailResponse(ev) => {
-                self.finish_notify_workspace_owner(ev.result);
-            }
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
                     Vec::new(),
@@ -7310,16 +7341,17 @@ impl ChatWidget {
 
     #[cfg(test)]
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
-        let hint = review
-            .user_facing_hint
-            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
+        let hint = review.user_facing_hint.unwrap_or_else(|| {
+            crate::legacy_core::review_prompts::user_facing_hint(&review.target)
+        });
         self.enter_review_mode_with_hint(hint, from_replay);
     }
 
     #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         if let Some(output) = review.review_output {
-            let review_markdown = codex_core::review_format::render_review_output_text(&output);
+            let review_markdown =
+                crate::legacy_core::review_format::render_review_output_text(&output);
             self.record_agent_markdown(&review_markdown);
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
@@ -7593,7 +7625,7 @@ impl ChatWidget {
     }
 
     fn open_theme_picker(&mut self) {
-        let codex_home = codex_core::config::find_codex_home().ok();
+        let codex_home = crate::legacy_core::config::find_codex_home().ok();
         let terminal_width = self
             .last_rendered_width
             .get()
@@ -8711,9 +8743,10 @@ impl ChatWidget {
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
-        let show_elevate_sandbox_hint = codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-            && windows_degraded_sandbox_enabled
-            && presets.iter().any(|preset| preset.id == "auto");
+        let show_elevate_sandbox_hint =
+            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                && windows_degraded_sandbox_enabled
+                && presets.iter().any(|preset| preset.id == "auto");
 
         let guardian_disabled_reason = |enabled: bool| {
             let mut next_features = self.config.features.get().clone();
@@ -8769,8 +8802,8 @@ impl ChatWidget {
                         == WindowsSandboxLevel::Disabled
                     {
                         let preset_clone = preset.clone();
-                        if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                            && codex_core::windows_sandbox::sandbox_setup_is_complete(
+                        if crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                            && crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
                                 self.config.codex_home.as_path(),
                             )
                         {
@@ -9226,7 +9259,7 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
-        if !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
+        if !crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
             // Legacy flow (pre-NUX): explain the experimental sandbox and let the user enable it
             // directly (no elevation prompts).
             let mut header = ColumnRenderable::new();
@@ -9512,7 +9545,7 @@ impl ChatWidget {
         self.config.permissions.windows_sandbox_mode = mode;
         #[cfg(target_os = "windows")]
         self.bottom_pane.set_windows_degraded_sandbox_active(
-            codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
                     WindowsSandboxLevel::from_config(&self.config),
                     WindowsSandboxLevel::RestrictedToken
@@ -9563,7 +9596,7 @@ impl ChatWidget {
             Feature::WindowsSandbox | Feature::WindowsSandboxElevated
         ) {
             self.bottom_pane.set_windows_degraded_sandbox_active(
-                codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     && matches!(
                         WindowsSandboxLevel::from_config(&self.config),
                         WindowsSandboxLevel::RestrictedToken
@@ -9670,268 +9703,19 @@ impl ChatWidget {
         self.plan_type
     }
 
-    pub(crate) fn current_is_workspace_owner(&self) -> Option<bool> {
-        self.workspace_role
-            .map(|role| {
-                matches!(
-                    role,
-                    AppServerWorkspaceRole::AccountOwner | AppServerWorkspaceRole::AccountAdmin
-                )
-            })
-            .or(self.is_workspace_owner)
-    }
-
-    pub(crate) fn current_workspace_role(&self) -> Option<AppServerWorkspaceRole> {
-        self.workspace_role
-    }
-
     pub(crate) fn has_chatgpt_account(&self) -> bool {
         self.has_chatgpt_account
-    }
-
-    fn usage_based_workspace_rate_limit_state(&self) -> Option<UsageBasedWorkspaceRateLimitState> {
-        let block_kind = self.usage_based_workspace_block_kind()?;
-        let is_workspace_owner = self.current_is_workspace_owner()?;
-        Some(match (is_workspace_owner, block_kind) {
-            (true, UsageBasedWorkspaceBlockKind::CreditsDepleted) => {
-                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted
-            }
-            (true, UsageBasedWorkspaceBlockKind::SpendCapReached) => {
-                UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached
-            }
-            (false, UsageBasedWorkspaceBlockKind::CreditsDepleted) => {
-                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted
-            }
-            (false, UsageBasedWorkspaceBlockKind::SpendCapReached) => {
-                UsageBasedWorkspaceRateLimitState::MemberSpendCapReached
-            }
-        })
-    }
-
-    fn usage_based_workspace_block_kind(&self) -> Option<UsageBasedWorkspaceBlockKind> {
-        let plan_type = self.plan_type?;
-        if !is_usage_based_workspace_plan(plan_type) {
-            return None;
-        }
-
-        let codex_snapshot = self.rate_limit_snapshots_by_limit_id.get("codex")?;
-        let credits_depleted = codex_snapshot
-            .credits
-            .as_ref()
-            .is_some_and(|credits| !credits.has_credits);
-        let spend_control_reached = codex_snapshot
-            .spend_control
-            .as_ref()
-            .map(|spend_control| spend_control.reached);
-
-        let blocked_state = match (credits_depleted, spend_control_reached) {
-            (true, _) => Some(true),
-            (false, Some(true)) => Some(false),
-            (false, Some(false)) => None,
-            // Older snapshots do not carry spend-control state, so preserve the
-            // historical interpretation for compatibility.
-            (false, None) => Some(false),
-        }?;
-
-        Some(match blocked_state {
-            true => UsageBasedWorkspaceBlockKind::CreditsDepleted,
-            false => UsageBasedWorkspaceBlockKind::SpendCapReached,
-        })
-    }
-
-    fn usage_based_workspace_rate_limit_error_guidance(&self) -> Option<(String, Option<String>)> {
-        if let Some(state) = self.usage_based_workspace_rate_limit_state() {
-            return match state {
-                UsageBasedWorkspaceRateLimitState::OwnerCreditsDepleted => Some((
-                    "Your workspace is out of credits.".to_string(),
-                    Some(format!(
-                        "Visit {CODEX_USAGE_SETTINGS_URL} to add workspace credits and continue using Codex."
-                    )),
-                )),
-                UsageBasedWorkspaceRateLimitState::OwnerSpendCapReached => Some((
-                    "Your workspace has reached its spend cap.".to_string(),
-                    Some(format!(
-                        "Visit {CODEX_USAGE_SETTINGS_URL} to increase your workspace spend cap and continue using Codex."
-                    )),
-                )),
-                UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted => {
-                    Some((WORKSPACE_OWNER_NOTIFICATION_PROMPT.to_string(), None))
-                }
-                UsageBasedWorkspaceRateLimitState::MemberSpendCapReached => Some((
-                    "Your workspace has reached its spend cap.".to_string(),
-                    Some(format!(
-                        "Ask an admin to increase your workspace spend cap. Visit {CODEX_USAGE_SETTINGS_URL} for usage settings."
-                    )),
-                )),
-            };
-        }
-
-        match self.usage_based_workspace_block_kind()? {
-            UsageBasedWorkspaceBlockKind::CreditsDepleted => Some((
-                "Your workspace is out of credits.".to_string(),
-                Some(format!(
-                    "If you're the workspace owner, visit {CODEX_USAGE_SETTINGS_URL} to add credits. Otherwise wait a moment while Codex refreshes your workspace status."
-                )),
-            )),
-            UsageBasedWorkspaceBlockKind::SpendCapReached => Some((
-                "Your workspace has reached its spend cap.".to_string(),
-                Some(format!(
-                    "Ask an admin to increase the workspace spend cap, or visit {CODEX_USAGE_SETTINGS_URL} for usage settings."
-                )),
-            )),
-        }
-    }
-
-    fn next_rate_limit_refresh_request_id(&mut self) -> u64 {
-        let request_id = self.next_status_refresh_request_id;
-        self.next_status_refresh_request_id = self.next_status_refresh_request_id.wrapping_add(1);
-        request_id
-    }
-
-    fn send_rate_limit_refresh_request(&self, request_id: u64) {
-        self.app_event_tx.send(AppEvent::RefreshRateLimits {
-            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-        });
-    }
-
-    fn request_rate_limit_refresh(&mut self) -> u64 {
-        let request_id = self.next_rate_limit_refresh_request_id();
-        self.send_rate_limit_refresh_request(request_id);
-        request_id
-    }
-
-    fn missing_usage_based_workspace_rate_limit_snapshot(&self) -> bool {
-        self.should_prefetch_rate_limits()
-            && self.plan_type.is_some()
-            && !self.rate_limit_snapshots_by_limit_id.contains_key("codex")
-    }
-
-    fn should_prompt_workspace_owner_notification(&self) -> bool {
-        if self.notify_workspace_owner_in_flight {
-            return false;
-        }
-
-        if matches!(
-            self.usage_based_workspace_rate_limit_state(),
-            Some(UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted)
-        ) {
-            return true;
-        }
-
-        let is_workspace_owner = self.current_is_workspace_owner();
-        if !self.plan_type.is_some_and(is_usage_based_workspace_plan)
-            || is_workspace_owner == Some(true)
-        {
-            return false;
-        }
-
-        let block_kind = self.usage_based_workspace_block_kind();
-        block_kind != Some(UsageBasedWorkspaceBlockKind::SpendCapReached)
-    }
-
-    fn maybe_show_pending_workspace_owner_notification_prompt(&mut self) {
-        if !self.pending_workspace_owner_notification_prompt {
-            return;
-        }
-        if self.notify_workspace_owner_in_flight {
-            self.pending_workspace_owner_notification_prompt = false;
-            return;
-        }
-        if !self.bottom_pane.no_modal_or_popup_active() {
-            return;
-        }
-
-        match self.usage_based_workspace_rate_limit_state() {
-            Some(UsageBasedWorkspaceRateLimitState::MemberCreditsDepleted) => {
-                self.pending_workspace_owner_notification_prompt = false;
-                self.open_workspace_owner_notification_prompt();
-            }
-            Some(_) => {
-                self.pending_workspace_owner_notification_prompt = false;
-            }
-            None => {
-                if self.usage_based_workspace_block_kind()
-                    == Some(UsageBasedWorkspaceBlockKind::CreditsDepleted)
-                    && self.current_is_workspace_owner().is_none()
-                {
-                    return;
-                }
-                if !self.missing_usage_based_workspace_rate_limit_snapshot() {
-                    self.pending_workspace_owner_notification_prompt = false;
-                }
-            }
-        }
-    }
-
-    fn open_workspace_owner_notification_prompt(&mut self) {
-        let items = vec![
-            SelectionItem {
-                name: "Yes".to_string(),
-                display_shortcut: Some(key_hint::plain(KeyCode::Char('y'))),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::NotifyWorkspaceOwner))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "No".to_string(),
-                display_shortcut: Some(key_hint::plain(KeyCode::Char('n'))),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(WORKSPACE_OWNER_NOTIFICATION_TITLE.to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            initial_selected_idx: Some(1),
-            ..Default::default()
-        });
-    }
-
-    pub(crate) fn start_notify_workspace_owner(&mut self) {
-        self.notify_workspace_owner_in_flight = true;
-        self.pending_workspace_owner_notification_prompt = false;
-    }
-
-    pub(crate) fn finish_notify_workspace_owner(
-        &mut self,
-        result: Result<AddCreditsNudgeEmailStatus, String>,
-    ) {
-        self.notify_workspace_owner_in_flight = false;
-        self.pending_workspace_owner_notification_prompt = false;
-        match result {
-            Ok(AddCreditsNudgeEmailStatus::Sent) => {
-                self.add_info_message("Workspace owner notified.".to_string(), /*hint*/ None);
-            }
-            Ok(AddCreditsNudgeEmailStatus::CooldownActive) => {
-                self.add_info_message(
-                    "Workspace owner was already notified recently.".to_string(),
-                    /*hint*/ None,
-                );
-            }
-            Err(_) => {
-                self.add_error_message(
-                    "Could not notify your workspace owner. Please try again.".to_string(),
-                );
-            }
-        }
     }
 
     pub(crate) fn update_account_state(
         &mut self,
         status_account_display: Option<StatusAccountDisplay>,
-        workspace_role: Option<AppServerWorkspaceRole>,
-        is_workspace_owner: Option<bool>,
         plan_type: Option<PlanType>,
         has_chatgpt_account: bool,
     ) {
         self.status_account_display = status_account_display;
-        self.workspace_role = workspace_role;
-        self.is_workspace_owner = is_workspace_owner;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
-        self.maybe_show_pending_workspace_owner_notification_prompt();
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
     }
@@ -10314,7 +10098,9 @@ impl ChatWidget {
         }
     }
 
-    fn plugins_for_mentions(&self) -> Option<&[codex_core::plugins::PluginCapabilitySummary]> {
+    fn plugins_for_mentions(
+        &self,
+    ) -> Option<&[crate::legacy_core::plugins::PluginCapabilitySummary]> {
         if !self.config.features.enabled(Feature::Plugins) {
             return None;
         }
@@ -10384,7 +10170,7 @@ impl ChatWidget {
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {
-        let resume_cmd = codex_core::util::resume_command(Some(name), thread_id)
+        let resume_cmd = crate::legacy_core::util::resume_command(Some(name), thread_id)
             .unwrap_or_else(|| format!("codex resume {name}"));
         let name = name.to_string();
         let line = vec![
@@ -11224,11 +11010,21 @@ impl ChatWidget {
     /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
     /// the main viewport updates.
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
-        let cell = self.active_cell.as_ref()?;
+        let cell = self.active_cell.as_ref();
+        let hook_cell = self.active_hook_cell.as_ref();
+        if cell.is_none() && hook_cell.is_none() {
+            return None;
+        }
         Some(ActiveCellTranscriptKey {
             revision: self.active_cell_revision,
-            is_stream_continuation: cell.is_stream_continuation(),
-            animation_tick: cell.transcript_animation_tick(),
+            is_stream_continuation: cell
+                .map(|cell| cell.is_stream_continuation())
+                .unwrap_or(false),
+            animation_tick: cell
+                .and_then(|cell| cell.transcript_animation_tick())
+                .or_else(|| {
+                    hook_cell.and_then(super::history_cell::HistoryCell::transcript_animation_tick)
+                }),
         })
     }
 
@@ -11239,8 +11035,18 @@ impl ChatWidget {
     /// should pass the same width the overlay uses; using a different width will cause wrapping
     /// mismatches between the main viewport and the transcript overlay.
     pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
-        let cell = self.active_cell.as_ref()?;
-        let lines = cell.transcript_lines(width);
+        let mut lines = Vec::new();
+        if let Some(cell) = self.active_cell.as_ref() {
+            lines.extend(cell.transcript_lines(width));
+        }
+        if let Some(hook_cell) = self.active_hook_cell.as_ref() {
+            // Compute hook lines first so hidden hooks do not add a separator.
+            let hook_lines = hook_cell.transcript_lines(width);
+            if !hook_lines.is_empty() && !lines.is_empty() {
+                lines.push("".into());
+            }
+            lines.extend(hook_lines);
+        }
         (!lines.is_empty()).then_some(lines)
     }
 
@@ -11266,8 +11072,17 @@ impl ChatWidget {
             )),
             None => RenderableItem::Owned(Box::new(())),
         };
+        let active_hook_cell_renderable = match &self.active_hook_cell {
+            Some(cell) if cell.should_render() => {
+                RenderableItem::Borrowed(cell).inset(Insets::tlbr(
+                    /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+                ))
+            }
+            _ => RenderableItem::Owned(Box::new(())),
+        };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        flex.push(/*flex*/ 0, active_hook_cell_renderable);
         flex.push(
             /*flex*/ 0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(
@@ -11494,16 +11309,6 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
-}
-
-fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
-    match event_name {
-        codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
-        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
-        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
-        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
-        codex_protocol::protocol::HookEventName::Stop => "Stop",
-    }
 }
 
 #[cfg(test)]

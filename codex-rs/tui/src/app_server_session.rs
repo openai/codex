@@ -1,4 +1,8 @@
 use crate::bottom_pane::FeedbackAudience;
+#[cfg(test)]
+use crate::legacy_core::append_message_history_entry;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::message_history_metadata;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerClient;
@@ -24,8 +28,6 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
-use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
-use codex_app_server_protocol::ThreadAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -57,6 +59,7 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
@@ -66,10 +69,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
-#[cfg(test)]
-use codex_core::append_message_history_entry;
-use codex_core::config::Config;
-use codex_core::message_history_metadata;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -104,8 +103,6 @@ pub(crate) struct AppServerBootstrap {
     pub(crate) account_email: Option<String>,
     pub(crate) auth_mode: Option<TelemetryAuthMode>,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
-    pub(crate) workspace_role: Option<codex_app_server_protocol::WorkspaceRole>,
-    pub(crate) is_workspace_owner: Option<bool>,
     pub(crate) plan_type: Option<codex_protocol::account::PlanType>,
     /// Whether the configured model provider needs OpenAI-style auth. Combined
     /// with `has_chatgpt_account` to decide if a startup rate-limit prefetch
@@ -220,8 +217,6 @@ impl AppServerSession {
             account_email,
             auth_mode,
             status_account_display,
-            workspace_role,
-            is_workspace_owner,
             plan_type,
             feedback_audience,
             has_chatgpt_account,
@@ -230,8 +225,6 @@ impl AppServerSession {
                 None,
                 Some(TelemetryAuthMode::ApiKey),
                 Some(StatusAccountDisplay::ApiKey),
-                None,
-                None,
                 None,
                 FeedbackAudience::External,
                 false,
@@ -249,30 +242,17 @@ impl AppServerSession {
                         email: Some(email),
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
-                    account.workspace_role,
-                    account.is_workspace_owner,
                     Some(plan_type),
                     feedback_audience,
                     true,
                 )
             }
-            None => (
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                FeedbackAudience::External,
-                false,
-            ),
+            None => (None, None, None, None, FeedbackAudience::External, false),
         };
         Ok(AppServerBootstrap {
             account_email,
             auth_mode,
             status_account_display,
-            workspace_role,
-            is_workspace_owner,
             plan_type,
             requires_openai_auth: account.requires_openai_auth,
             default_model,
@@ -304,6 +284,15 @@ impl AppServerSession {
     }
 
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
+        self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
+            .await
+    }
+
+    pub(crate) async fn start_thread_with_session_start_source(
+        &mut self,
+        config: &Config,
+        session_start_source: Option<ThreadStartSource>,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadStartResponse = self
             .client
@@ -313,6 +302,7 @@ impl AppServerSession {
                     config,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
+                    session_start_source,
                 ),
             })
             .await
@@ -567,24 +557,6 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
-        Ok(())
-    }
-
-    pub(crate) async fn thread_add_credits_nudge_email(
-        &mut self,
-        thread_id: ThreadId,
-    ) -> Result<()> {
-        let request_id = self.next_request_id();
-        let _: ThreadAddCreditsNudgeEmailResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadAddCreditsNudgeEmail {
-                request_id,
-                params: ThreadAddCreditsNudgeEmailParams {
-                    thread_id: thread_id.to_string(),
-                },
-            })
-            .await
-            .wrap_err("thread/addCreditsNudgeEmail failed in TUI")?;
         Ok(())
     }
 
@@ -895,6 +867,7 @@ fn thread_start_params_from_config(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
+    session_start_source: Option<ThreadStartSource>,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
@@ -905,6 +878,7 @@ fn thread_start_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
+        session_start_source,
         persist_extended_history: true,
         ..ThreadStartParams::default()
     }
@@ -1160,9 +1134,6 @@ pub(crate) fn app_server_rate_limit_snapshot_to_core(
         primary: snapshot.primary.map(app_server_rate_limit_window_to_core),
         secondary: snapshot.secondary.map(app_server_rate_limit_window_to_core),
         credits: snapshot.credits.map(app_server_credits_snapshot_to_core),
-        spend_control: snapshot
-            .spend_control
-            .map(app_server_spend_control_snapshot_to_core),
         plan_type: snapshot.plan_type,
     }
 }
@@ -1187,21 +1158,13 @@ fn app_server_credits_snapshot_to_core(
     }
 }
 
-fn app_server_spend_control_snapshot_to_core(
-    snapshot: codex_app_server_protocol::SpendControlSnapshot,
-) -> codex_protocol::protocol::SpendControlSnapshot {
-    codex_protocol::protocol::SpendControlSnapshot {
-        reached: snapshot.reached,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::legacy_core::config::ConfigBuilder;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
-    use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -1222,10 +1185,26 @@ mod tests {
             &config,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
         assert_eq!(params.model_provider, Some(config.model_provider_id));
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_can_mark_clear_source() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+
+        let params = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            Some(ThreadStartSource::Clear),
+        );
+
+        assert_eq!(params.session_start_source, Some(ThreadStartSource::Clear));
     }
 
     #[tokio::test]
@@ -1238,6 +1217,7 @@ mod tests {
             &config,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
@@ -1271,6 +1251,7 @@ mod tests {
             &config,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
+            /*session_start_source*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
