@@ -19,12 +19,22 @@ pub(super) struct EnrollRemoteServerRequest {
     pub(super) os: &'static str,
     pub(super) arch: &'static str,
     pub(super) app_server_version: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) server_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) environment_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct EnrollRemoteServerResponse {
     pub(super) server_id: String,
     pub(super) environment_id: String,
+    #[serde(default)]
+    pub(super) remote_control_token: Option<String>,
+    #[serde(default)]
+    pub(super) expires_at: Option<String>,
+    #[serde(default)]
+    pub(super) scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
