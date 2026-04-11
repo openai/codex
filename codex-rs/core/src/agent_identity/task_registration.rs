@@ -366,7 +366,6 @@ mod tests {
                     chatgpt_plan_type: None,
                     chatgpt_user_id: user_id.map(ToOwned::to_owned),
                     chatgpt_account_id: Some(account_id.to_string()),
-                    is_org_owner: None,
                     raw_jwt: fake_id_token(account_id, user_id),
                 },
                 access_token: format!("access-token-{account_id}"),
