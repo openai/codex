@@ -56,6 +56,90 @@ use tracing::warn;
 pub use crate::remote::RemoteAppServerClient;
 pub use crate::remote::RemoteAppServerConnectArgs;
 
+/// Transitional access to core-only embedded app-server types.
+///
+/// New TUI behavior should prefer the app-server protocol methods. This
+/// module exists so clients can remove a direct `codex-core` dependency
+/// while legacy startup/config paths are migrated to RPCs.
+pub mod legacy_core {
+    pub use codex_core::Cursor;
+    pub use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
+    pub use codex_core::INTERACTIVE_SESSION_SOURCES;
+    pub use codex_core::LOCAL_PROJECT_DOC_FILENAME;
+    pub use codex_core::McpManager;
+    pub use codex_core::PLUGIN_TEXT_MENTION_SIGIL;
+    pub use codex_core::RolloutRecorder;
+    pub use codex_core::TOOL_MENTION_SIGIL;
+    pub use codex_core::ThreadItem;
+    pub use codex_core::ThreadSortKey;
+    pub use codex_core::ThreadsPage;
+    pub use codex_core::append_message_history_entry;
+    pub use codex_core::check_execpolicy_for_warnings;
+    pub use codex_core::discover_project_doc_paths;
+    pub use codex_core::find_thread_meta_by_name_str;
+    pub use codex_core::find_thread_name_by_id;
+    pub use codex_core::find_thread_names_by_ids;
+    pub use codex_core::format_exec_policy_error_with_source;
+    pub use codex_core::grant_read_root_non_elevated;
+    pub use codex_core::lookup_message_history_entry;
+    pub use codex_core::message_history_metadata;
+    pub use codex_core::path_utils;
+    pub use codex_core::read_session_meta_line;
+    pub use codex_core::web_search_detail;
+
+    pub mod config {
+        pub use codex_core::config::*;
+
+        pub mod edit {
+            pub use codex_core::config::edit::*;
+        }
+    }
+
+    pub mod config_loader {
+        pub use codex_core::config_loader::*;
+    }
+
+    pub mod connectors {
+        pub use codex_core::connectors::*;
+    }
+
+    pub mod otel_init {
+        pub use codex_core::otel_init::*;
+    }
+
+    pub mod personality_migration {
+        pub use codex_core::personality_migration::*;
+    }
+
+    pub mod plugins {
+        pub use codex_core::plugins::*;
+    }
+
+    pub mod review_format {
+        pub use codex_core::review_format::*;
+    }
+
+    pub mod review_prompts {
+        pub use codex_core::review_prompts::*;
+    }
+
+    pub mod skills {
+        pub use codex_core::skills::*;
+    }
+
+    pub mod test_support {
+        pub use codex_core::test_support::*;
+    }
+
+    pub mod util {
+        pub use codex_core::util::*;
+    }
+
+    pub mod windows_sandbox {
+        pub use codex_core::windows_sandbox::*;
+    }
+}
+
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Raw app-server request result for typed in-process requests.
