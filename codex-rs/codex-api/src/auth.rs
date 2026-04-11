@@ -9,14 +9,17 @@ use http::HeaderValue;
 /// reach this interface.
 pub trait AuthProvider: Send + Sync {
     fn bearer_token(&self) -> Option<String>;
+    fn authorization_header_value(&self) -> Option<String> {
+        self.bearer_token().map(|token| format!("Bearer {token}"))
+    }
     fn account_id(&self) -> Option<String> {
         None
     }
 }
 
 pub(crate) fn add_auth_headers_to_header_map<A: AuthProvider>(auth: &A, headers: &mut HeaderMap) {
-    if let Some(token) = auth.bearer_token()
-        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+    if let Some(authorization) = auth.authorization_header_value()
+        && let Ok(header) = HeaderValue::from_str(&authorization)
     {
         let _ = headers.insert(http::header::AUTHORIZATION, header);
     }
