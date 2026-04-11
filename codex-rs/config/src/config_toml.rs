@@ -501,6 +501,28 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Runtime settings for the model-facing `shell_command` tool.
+    #[serde(default)]
+    pub shell_command: Option<ShellCommandToml>,
+
+    /// Runtime settings for the model-facing unified exec tools.
+    #[serde(default)]
+    pub unified_exec: Option<UnifiedExecToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ShellCommandToml {
+    /// On macOS, append seatbelt sandbox denials to sandboxed command output.
+    pub log_macos_seatbelt_denials: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct UnifiedExecToml {
+    /// On macOS, append seatbelt sandbox denials to sandboxed command output.
+    pub log_macos_seatbelt_denials: Option<bool>,
 }
 
 #[derive(Deserialize)]

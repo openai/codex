@@ -17,6 +17,8 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
 
+use crate::macos_denials::SeatbeltDenialLogger;
+use crate::macos_denials::format_sandbox_denials;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -295,6 +297,7 @@ pub fn build_exec_request(
     let options = ExecOptions {
         expiration,
         capture_policy,
+        log_macos_seatbelt_denials: false,
     };
     let mut exec_req = manager
         .transform(SandboxTransformRequest {
@@ -361,6 +364,7 @@ pub(crate) async fn execute_exec_request(
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides,
         arg0,
+        log_macos_seatbelt_denials,
     } = exec_request;
 
     let params = ExecParams {
@@ -385,6 +389,7 @@ pub(crate) async fn execute_exec_request(
         &file_system_sandbox_policy,
         windows_sandbox_filesystem_overrides.as_ref(),
         network_sandbox_policy,
+        log_macos_seatbelt_denials,
         stdout_stream,
         after_spawn,
     )
@@ -745,6 +750,39 @@ struct RawExecToolCallOutput {
     pub timed_out: bool,
 }
 
+fn append_capped_important(dst: &mut Vec<u8>, src: &[u8], max_bytes: usize) {
+    if src.len() >= max_bytes {
+        dst.clear();
+        dst.extend_from_slice(&src[..max_bytes]);
+        return;
+    }
+
+    let retained_len = max_bytes.saturating_sub(src.len()).min(dst.len());
+    dst.truncate(retained_len);
+    dst.extend_from_slice(src);
+}
+
+fn append_to_raw_stderr(
+    raw_output: &mut RawExecToolCallOutput,
+    bytes: &[u8],
+    retained_bytes_cap: Option<usize>,
+) {
+    match retained_bytes_cap {
+        Some(max_bytes) => append_capped_important(&mut raw_output.stderr.text, bytes, max_bytes),
+        None => raw_output.stderr.text.extend_from_slice(bytes),
+    }
+
+    raw_output.aggregated_output =
+        aggregate_output(&raw_output.stdout, &raw_output.stderr, retained_bytes_cap);
+
+    let aggregate_needs_denials = !raw_output.aggregated_output.text.ends_with(bytes);
+    if let Some(max_bytes) = retained_bytes_cap
+        && aggregate_needs_denials
+    {
+        append_capped_important(&mut raw_output.aggregated_output.text, bytes, max_bytes);
+    }
+}
+
 #[inline]
 fn append_capped(dst: &mut Vec<u8>, src: &[u8], max_bytes: usize) {
     if dst.len() >= max_bytes {
@@ -802,16 +840,17 @@ fn aggregate_output(
 #[allow(clippy::too_many_arguments)]
 async fn exec(
     params: ExecParams,
-    _sandbox: SandboxType,
+    sandbox: SandboxType,
     _sandbox_policy: &SandboxPolicy,
     _file_system_sandbox_policy: &FileSystemSandboxPolicy,
     _windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
     network_sandbox_policy: NetworkSandboxPolicy,
+    log_macos_seatbelt_denials: bool,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if _sandbox == SandboxType::WindowsRestrictedToken {
+    if sandbox == SandboxType::WindowsRestrictedToken {
         return exec_windows_sandbox(
             params,
             _sandbox_policy,
@@ -841,6 +880,11 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
+    let mut denial_logger = if log_macos_seatbelt_denials && sandbox == SandboxType::MacosSeatbelt {
+        SeatbeltDenialLogger::new()
+    } else {
+        None
+    };
     let child = spawn_child_async(SpawnChildRequest {
         program: PathBuf::from(program),
         args: args.into(),
@@ -855,10 +899,19 @@ async fn exec(
         env,
     })
     .await?;
+    if let Some(logger) = denial_logger.as_mut() {
+        logger.on_child_pid(child.id());
+    }
     if let Some(after_spawn) = after_spawn {
         after_spawn();
     }
-    consume_output(child, expiration, capture_policy, stdout_stream).await
+    let mut raw_output = consume_output(child, expiration, capture_policy, stdout_stream).await?;
+    if let Some(logger) = denial_logger
+        && let Some(bytes) = format_sandbox_denials(&logger.finish().await)
+    {
+        append_to_raw_stderr(&mut raw_output, &bytes, capture_policy.retained_bytes_cap());
+    }
+    Ok(raw_output)
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

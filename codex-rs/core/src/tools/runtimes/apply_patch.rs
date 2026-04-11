@@ -252,6 +252,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
+            log_macos_seatbelt_denials: false,
         };
         let env = attempt
             .env_for(command, options, /*network*/ None)

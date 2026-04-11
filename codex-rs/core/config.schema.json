@@ -1687,6 +1687,16 @@
       ],
       "type": "string"
     },
+    "ShellCommandToml": {
+      "additionalProperties": false,
+      "properties": {
+        "log_macos_seatbelt_denials": {
+          "description": "On macOS, append seatbelt sandbox denials to sandboxed command output.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -1826,6 +1836,24 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "shell_command": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ShellCommandToml"
+            }
+          ],
+          "default": null,
+          "description": "Runtime settings for the model-facing `shell_command` tool."
+        },
+        "unified_exec": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/UnifiedExecToml"
+            }
+          ],
+          "default": null,
+          "description": "Runtime settings for the model-facing unified exec tools."
+        },
         "view_image": {
           "default": null,
           "description": "Enable the `view_image` tool that lets the agent attach local images.",
@@ -1929,6 +1957,16 @@
           "default": null,
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "UnifiedExecToml": {
+      "additionalProperties": false,
+      "properties": {
+        "log_macos_seatbelt_denials": {
+          "description": "On macOS, append seatbelt sandbox denials to sandboxed command output.",
+          "type": "boolean"
         }
       },
       "type": "object"

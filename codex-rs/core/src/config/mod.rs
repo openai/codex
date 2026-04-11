@@ -543,6 +543,12 @@ pub struct Config {
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
+    /// Runtime settings for the model-facing `shell_command` tool.
+    pub shell_command: ShellCommandConfig,
+
+    /// Runtime settings for the model-facing unified exec tools.
+    pub unified_exec: UnifiedExecConfig,
+
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: u64,
@@ -612,6 +618,16 @@ impl Default for MultiAgentV2Config {
             hide_spawn_agent_metadata: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShellCommandConfig {
+    pub log_macos_seatbelt_denials: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnifiedExecConfig {
+    pub log_macos_seatbelt_denials: bool,
 }
 
 impl AuthManagerConfig for Config {
@@ -1336,6 +1352,52 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_shell_command_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> ShellCommandConfig {
+    let log_macos_seatbelt_denials = config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.shell_command.as_ref())
+        .and_then(|shell_command| shell_command.log_macos_seatbelt_denials)
+        .or_else(|| {
+            config_toml
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.shell_command.as_ref())
+                .and_then(|shell_command| shell_command.log_macos_seatbelt_denials)
+        })
+        .unwrap_or(false);
+
+    ShellCommandConfig {
+        log_macos_seatbelt_denials,
+    }
+}
+
+fn resolve_unified_exec_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> UnifiedExecConfig {
+    let log_macos_seatbelt_denials = config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.unified_exec.as_ref())
+        .and_then(|unified_exec| unified_exec.log_macos_seatbelt_denials)
+        .or_else(|| {
+            config_toml
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.unified_exec.as_ref())
+                .and_then(|unified_exec| unified_exec.log_macos_seatbelt_denials)
+        })
+        .unwrap_or(false);
+
+    UnifiedExecConfig {
+        log_macos_seatbelt_denials,
+    }
+}
+
 fn resolve_multi_agent_v2_config(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
@@ -1703,6 +1765,8 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let shell_command = resolve_shell_command_config(&cfg, &config_profile);
+        let unified_exec = resolve_unified_exec_config(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
 
         let agent_roles =
@@ -2142,6 +2206,8 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             use_experimental_unified_exec_tool,
+            shell_command,
+            unified_exec,
             background_terminal_max_timeout,
             ghost_snapshot,
             multi_agent_v2,

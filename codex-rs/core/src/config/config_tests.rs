@@ -15,7 +15,9 @@ use codex_config::config_toml::RealtimeToml;
 use codex_config::config_toml::RealtimeTransport;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_config::config_toml::ShellCommandToml;
 use codex_config::config_toml::ToolsToml;
+use codex_config::config_toml::UnifiedExecToml;
 use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
@@ -301,6 +303,8 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            shell_command: None,
+            unified_exec: None,
         })
     );
 }
@@ -320,6 +324,36 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            shell_command: None,
+            unified_exec: None,
+        })
+    );
+}
+
+#[test]
+fn tools_shell_command_and_unified_exec_config_deserializes() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.shell_command]
+log_macos_seatbelt_denials = true
+
+[tools.unified_exec]
+log_macos_seatbelt_denials = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            view_image: None,
+            shell_command: Some(ShellCommandToml {
+                log_macos_seatbelt_denials: Some(true),
+            }),
+            unified_exec: Some(UnifiedExecToml {
+                log_macos_seatbelt_denials: Some(false),
+            }),
         })
     );
 }
@@ -1679,6 +1713,55 @@ fn web_search_mode_disabled_overrides_legacy_request() {
     assert_eq!(
         resolve_web_search_mode(&cfg, &profile, &features),
         Some(WebSearchMode::Disabled)
+    );
+}
+
+#[test]
+fn tool_runtime_configs_default_to_false_and_prefer_profile() {
+    let cfg = ConfigToml {
+        tools: Some(ToolsToml {
+            shell_command: Some(ShellCommandToml {
+                log_macos_seatbelt_denials: Some(true),
+            }),
+            unified_exec: Some(UnifiedExecToml {
+                log_macos_seatbelt_denials: Some(false),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let profile = ConfigProfile {
+        tools: Some(ToolsToml {
+            shell_command: Some(ShellCommandToml {
+                log_macos_seatbelt_denials: Some(false),
+            }),
+            unified_exec: Some(UnifiedExecToml {
+                log_macos_seatbelt_denials: Some(true),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_shell_command_config(&cfg, &profile),
+        ShellCommandConfig {
+            log_macos_seatbelt_denials: false,
+        }
+    );
+    assert_eq!(
+        resolve_unified_exec_config(&cfg, &profile),
+        UnifiedExecConfig {
+            log_macos_seatbelt_denials: true,
+        }
+    );
+    assert_eq!(
+        resolve_shell_command_config(&ConfigToml::default(), &ConfigProfile::default()),
+        ShellCommandConfig::default(),
+    );
+    assert_eq!(
+        resolve_unified_exec_config(&ConfigToml::default(), &ConfigProfile::default()),
+        UnifiedExecConfig::default(),
     );
 }
 
@@ -4626,6 +4709,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
+            shell_command: ShellCommandConfig::default(),
+            unified_exec: UnifiedExecConfig::default(),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             multi_agent_v2: MultiAgentV2Config::default(),
@@ -4775,6 +4860,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
+        shell_command: ShellCommandConfig::default(),
+        unified_exec: UnifiedExecConfig::default(),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
@@ -4922,6 +5009,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
+        shell_command: ShellCommandConfig::default(),
+        unified_exec: UnifiedExecConfig::default(),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
@@ -5055,6 +5144,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
+        shell_command: ShellCommandConfig::default(),
+        unified_exec: UnifiedExecConfig::default(),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),

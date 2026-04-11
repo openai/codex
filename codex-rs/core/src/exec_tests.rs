@@ -280,6 +280,7 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
         &FileSystemSandboxPolicy::unrestricted(),
         /*windows_sandbox_filesystem_overrides*/ None,
         NetworkSandboxPolicy::Enabled,
+        /*log_macos_seatbelt_denials*/ false,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,
     )
@@ -320,6 +321,7 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
             &FileSystemSandboxPolicy::unrestricted(),
             /*windows_sandbox_filesystem_overrides*/ None,
             NetworkSandboxPolicy::Enabled,
+            /*log_macos_seatbelt_denials*/ false,
             /*stdout_stream*/ None,
             /*after_spawn*/ None,
         ),
@@ -938,6 +940,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
         /*windows_sandbox_filesystem_overrides*/ None,
         NetworkSandboxPolicy::Restricted,
+        /*log_macos_seatbelt_denials*/ false,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,
     )
