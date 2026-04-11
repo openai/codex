@@ -1,5 +1,6 @@
 use super::make_session_and_context_with_rx;
 use crate::messages::MessagePayload;
+use crate::timers::MAX_ACTIVE_TIMERS_PER_THREAD;
 use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;
 use codex_features::Feature;
@@ -107,4 +108,83 @@ async fn maybe_start_pending_timer_claims_only_one_timer_while_start_is_in_progr
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn create_timer_rejects_when_sqlite_thread_timer_limit_is_reached() {
+    let (mut session, _, _) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut session)
+        .expect("session should have no other references")
+        .features
+        .enable(Feature::Timers)
+        .expect("test config should allow feature update");
+    let config = {
+        let state = session.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .clone()
+    };
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should open");
+    let thread_id = session.conversation_id.to_string();
+    for index in 0..MAX_ACTIVE_TIMERS_PER_THREAD {
+        state_db
+            .create_thread_timer(&test_timer_params(&thread_id, &format!("timer-{index}")))
+            .await
+            .expect("seed timer");
+    }
+
+    let err = session
+        .create_timer(
+            ThreadTimerTrigger::Delay {
+                seconds: 10,
+                repeat: None,
+            },
+            MessagePayload {
+                content: "overflow".to_string(),
+                instructions: None,
+                meta: Default::default(),
+            },
+            TimerDelivery::AfterTurn,
+        )
+        .await
+        .expect_err("timer creation should reject full sqlite timer set");
+
+    assert_eq!(
+        err,
+        format!(
+            "too many active timers; each thread supports at most {MAX_ACTIVE_TIMERS_PER_THREAD} timers"
+        )
+    );
+    assert_eq!(
+        state_db
+            .list_thread_timers(&thread_id)
+            .await
+            .expect("list timers")
+            .len(),
+        MAX_ACTIVE_TIMERS_PER_THREAD
+    );
+}
+
+fn test_timer_params(thread_id: &str, id: &str) -> codex_state::ThreadTimerCreateParams {
+    codex_state::ThreadTimerCreateParams {
+        id: id.to_string(),
+        thread_id: thread_id.to_string(),
+        source: "agent".to_string(),
+        client_id: "codex-cli".to_string(),
+        trigger_json: r#"{"kind":"delay","seconds":10}"#.to_string(),
+        content: "existing timer".to_string(),
+        instructions: None,
+        meta_json: "{}".to_string(),
+        delivery: TimerDelivery::AfterTurn.as_str().to_string(),
+        created_at: 100,
+        next_run_at: Some(200),
+        last_run_at: None,
+        pending_run: false,
+    }
 }
