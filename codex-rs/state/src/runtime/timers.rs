@@ -138,17 +138,26 @@ WHERE thread_id = ?
         &self,
         thread_id: &str,
         id: &str,
+        due_at: i64,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
             r#"
 DELETE FROM thread_timers
 WHERE thread_id = ?
   AND id = ?
-  AND pending_run = 1
+  AND (
+    pending_run = 1
+    OR (
+      pending_run = 0
+      AND next_run_at IS NOT NULL
+      AND next_run_at <= ?
+    )
+  )
             "#,
         )
         .bind(thread_id)
         .bind(id)
+        .bind(due_at)
         .execute(self.pool.as_ref())
         .await?;
         Ok(result.rows_affected() > 0)
@@ -340,13 +349,13 @@ ORDER BY name
 
         assert!(
             runtime
-                .claim_one_shot_thread_timer("thread-1", "timer-1")
+                .claim_one_shot_thread_timer("thread-1", "timer-1", 110)
                 .await
                 .expect("claim timer")
         );
         assert!(
             !runtime
-                .claim_one_shot_thread_timer("thread-1", "timer-1")
+                .claim_one_shot_thread_timer("thread-1", "timer-1", 110)
                 .await
                 .expect("claim timer again")
         );
@@ -407,6 +416,33 @@ ORDER BY name
         assert_eq!(timers[0].next_run_at, Some(120));
         assert_eq!(timers[0].last_run_at, Some(110));
         assert!(!timers[0].pending_run);
+    }
+
+    #[tokio::test]
+    async fn one_shot_claim_consumes_overdue_timer_after_restart() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.trigger_json = r#"{"kind":"delay","seconds":10,"repeat":false}"#.to_string();
+        params.next_run_at = Some(110);
+        params.pending_run = false;
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create overdue one-shot timer");
+
+        assert!(
+            runtime
+                .claim_one_shot_thread_timer("thread-1", "timer-1", 110)
+                .await
+                .expect("claim overdue one-shot timer")
+        );
+        assert!(
+            runtime
+                .list_thread_timers("thread-1")
+                .await
+                .expect("list timers")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
