@@ -7,7 +7,11 @@ use codex_core::timers::ThreadTimer;
 use codex_core::timers::ThreadTimerTrigger;
 use codex_core::timers::TimerDelivery;
 use codex_features::Feature;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -284,10 +288,34 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
     ))
     .await?;
 
-    test.submit_turn("start").await?;
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "start".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
     wait_for_event_with_timeout(
         &test.codex,
-        |event| matches!(event, EventMsg::InjectedMessage(_)),
+        |event| match event {
+            EventMsg::InjectedMessage(event) => {
+                event.source == "external" && event.content == "queued hello"
+            }
+            _ => false,
+        },
         Duration::from_secs(20),
     )
     .await;
