@@ -1,6 +1,6 @@
 use crate::app_event_sender::AppEventSender;
 use base64::Engine;
-use codex_core::config::Config;
+use codex_app_server_client::legacy_core::config::Config;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use cpal::traits::DeviceTrait;

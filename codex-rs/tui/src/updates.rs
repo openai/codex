@@ -5,7 +5,7 @@ use crate::update_action::UpdateAction;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use codex_core::config::Config;
+use codex_app_server_client::legacy_core::config::Config;
 use codex_login::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;

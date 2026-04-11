@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use crate::app_command::AppCommand;
-use codex_core::config::Config;
+use codex_app_server_client::legacy_core::config::Config;
 use serde::Serialize;
 use serde_json::json;
 
@@ -88,7 +88,7 @@ pub(crate) fn maybe_init(config: &Config) {
     let path = if let Ok(path) = std::env::var("CODEX_TUI_SESSION_LOG_PATH") {
         PathBuf::from(path)
     } else {
-        let mut p = match codex_core::config::log_dir(config) {
+        let mut p = match codex_app_server_client::legacy_core::config::log_dir(config) {
             Ok(dir) => dir,
             Err(_) => std::env::temp_dir(),
         };

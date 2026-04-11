@@ -117,7 +117,8 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
-    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
+    let resolved_model =
+        codex_app_server_client::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),

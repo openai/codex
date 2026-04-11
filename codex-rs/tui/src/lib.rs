@@ -14,6 +14,22 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
+use codex_app_server_client::legacy_core::check_execpolicy_for_warnings;
+use codex_app_server_client::legacy_core::config::Config;
+use codex_app_server_client::legacy_core::config::ConfigBuilder;
+use codex_app_server_client::legacy_core::config::ConfigOverrides;
+use codex_app_server_client::legacy_core::config::find_codex_home;
+use codex_app_server_client::legacy_core::config::load_config_as_toml_with_cli_overrides;
+use codex_app_server_client::legacy_core::config::resolve_oss_provider;
+use codex_app_server_client::legacy_core::config_loader::CloudRequirementsLoader;
+use codex_app_server_client::legacy_core::config_loader::ConfigLoadError;
+use codex_app_server_client::legacy_core::config_loader::LoaderOverrides;
+use codex_app_server_client::legacy_core::config_loader::format_config_error_with_source;
+use codex_app_server_client::legacy_core::find_thread_meta_by_name_str;
+use codex_app_server_client::legacy_core::format_exec_policy_error_with_source;
+use codex_app_server_client::legacy_core::path_utils;
+use codex_app_server_client::legacy_core::read_session_meta_line;
+use codex_app_server_client::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -22,22 +38,6 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
-use codex_core::check_execpolicy_for_warnings;
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::resolve_oss_provider;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigLoadError;
-use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::format_config_error_with_source;
-use codex_core::find_thread_meta_by_name_str;
-use codex_core::format_exec_policy_error_with_source;
-use codex_core::path_utils;
-use codex_core::read_session_meta_line;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
@@ -166,7 +166,7 @@ mod voice;
 #[allow(dead_code)]
 mod voice {
     use crate::app_event_sender::AppEventSender;
-    use codex_core::config::Config;
+    use codex_app_server_client::legacy_core::config::Config;
     use codex_protocol::protocol::RealtimeAudioFrame;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -752,8 +752,11 @@ pub async fn run_main(
     };
 
     if let Err(err) =
-        codex_core::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
-            .await
+        codex_app_server_client::legacy_core::personality_migration::maybe_migrate_personality(
+            &codex_home,
+            &config_toml,
+        )
+        .await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
@@ -870,7 +873,7 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = codex_core::config::log_dir(&config)?;
+    let log_dir = codex_app_server_client::legacy_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -931,7 +934,7 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(
+        codex_app_server_client::legacy_core::otel_init::build_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
@@ -1732,13 +1735,13 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_client::legacy_core::config::ConfigBuilder;
+    use codex_app_server_client::legacy_core::config::ConfigOverrides;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::ConfigOverrides;
     use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;

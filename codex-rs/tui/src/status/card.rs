@@ -5,7 +5,7 @@ use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::config::Config;
+use codex_app_server_client::legacy_core::config::Config;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;

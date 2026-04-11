@@ -25,7 +25,7 @@ fn main() -> anyhow::Result<()> {
         let exit_info = run_main(
             inner,
             arg0_paths,
-            codex_core::config_loader::LoaderOverrides::default(),
+            codex_app_server_client::legacy_core::config_loader::LoaderOverrides::default(),
             /*remote*/ None,
             /*remote_auth_token*/ None,
         )

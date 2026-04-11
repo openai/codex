@@ -39,15 +39,15 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
+#[cfg(test)]
+use codex_app_server_client::legacy_core::McpManager;
+use codex_app_server_client::legacy_core::config::Config;
+#[cfg(test)]
+use codex_app_server_client::legacy_core::plugins::PluginsManager;
+use codex_app_server_client::legacy_core::web_search_detail;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_config::types::McpServerTransportConfig;
-#[cfg(test)]
-use codex_core::McpManager;
-use codex_core::config::Config;
-#[cfg(test)]
-use codex_core::plugins::PluginsManager;
-use codex_core::web_search_detail;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
@@ -2779,10 +2779,10 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use codex_app_server_client::legacy_core::config::Config;
+    use codex_app_server_client::legacy_core::config::ConfigBuilder;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigBuilder;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;
