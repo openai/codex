@@ -485,7 +485,7 @@ impl CoreShellActionProvider {
                                 EscalationDecision::deny(Some("User denied execution".to_string()))
                             }
                         },
-                        ReviewDecision::Denied => {
+                        ReviewDecision::Denied | ReviewDecision::TimedOut => {
                             let message = if let Some(review_id) =
                                 prompt_decision.guardian_review_id.as_deref()
                             {

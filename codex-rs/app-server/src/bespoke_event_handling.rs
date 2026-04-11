@@ -312,11 +312,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &assessment,
                 );
                 outgoing.send_server_notification(notification).await;
-                if matches!(
-                    assessment.status,
+                let completion_status = match assessment.status {
                     codex_protocol::protocol::GuardianAssessmentStatus::Denied
-                        | codex_protocol::protocol::GuardianAssessmentStatus::Aborted
-                ) && let Some((target_item_id, completion_item)) = pending_command_execution
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+                        Some(CommandExecutionStatus::Declined)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                        Some(CommandExecutionStatus::Failed)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::InProgress
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Approved => None,
+                };
+                if let Some(completion_status) = completion_status
+                    && let Some((target_item_id, completion_item)) = pending_command_execution
                 {
                     complete_command_execution_item(
                         &conversation_id,
@@ -327,7 +335,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         /*process_id*/ None,
                         CommandExecutionSource::Agent,
                         completion_item.command_actions,
-                        CommandExecutionStatus::Declined,
+                        completion_status,
                         &outgoing,
                         &thread_state,
                     )
@@ -3000,6 +3008,9 @@ mod tests {
                 Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 Some("too risky".to_string()),
             ),
+            GuardianAssessmentStatus::TimedOut => {
+                (None, None, Some("review timed out".to_string()))
+            }
             GuardianAssessmentStatus::Aborted => (None, None, None),
         };
         GuardianAssessmentEvent {

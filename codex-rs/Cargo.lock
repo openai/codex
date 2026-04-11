@@ -2846,7 +2846,6 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
- "codex-core",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",
