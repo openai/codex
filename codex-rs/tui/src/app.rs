@@ -3938,10 +3938,15 @@ impl App {
                         }
                         AppRunControl::Continue
                     }
-                    Some(event) = tui_events.next() => {
-                        match app.handle_tui_event(tui, &mut app_server, event).await {
-                            Ok(control) => control,
-                            Err(err) => break Err(err),
+                    event = tui_events.next() => {
+                        if let Some(event) = event {
+                            match app.handle_tui_event(tui, &mut app_server, event).await {
+                                Ok(control) => control,
+                                Err(err) => break Err(err),
+                            }
+                        } else {
+                            tracing::warn!("terminal input stream closed; shutting down active thread");
+                            app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst).await
                         }
                     }
                     app_server_event = app_server.next_event(), if listen_for_app_server_events => {
