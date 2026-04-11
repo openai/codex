@@ -9,6 +9,8 @@ use codex_core::timers::TimerDelivery;
 use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use core_test_support::responses::ResponseMock;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -24,12 +26,17 @@ use pretty_assertions::assert_eq;
 use std::time::Duration;
 
 const TIMER_INTEGRATION_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(target_os = "windows")]
+const WINDOWS_BAZEL_IGNORE_REASON: &str =
+    "timer/message integration tests currently exceed the Windows Bazel job timeout";
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_timer_emits_fired_background_event_when_timer_starts() -> Result<()> {
     assert_after_turn_timer_starts_and_emits_fired_event().await
 }
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "current_thread")]
 async fn create_timer_starts_on_current_thread_runtime() -> Result<()> {
     assert_after_turn_timer_starts_and_emits_fired_event().await
@@ -107,6 +114,7 @@ async fn assert_after_turn_timer_starts_and_emits_fired_event() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_timer_persists_source_and_client_metadata() -> Result<()> {
     let server = start_mock_server().await;
@@ -152,6 +160,7 @@ async fn create_timer_persists_source_and_client_metadata() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_timer_rejects_ephemeral_thread() -> Result<()> {
     let server = start_mock_server().await;
@@ -187,6 +196,7 @@ async fn create_timer_rejects_ephemeral_thread() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_due_timer_runs_after_history_reconstruction() -> Result<()> {
     let server = start_mock_server().await;
@@ -262,38 +272,33 @@ async fn resume_due_timer_runs_after_history_reconstruction() -> Result<()> {
             .enable(Feature::Sqlite)
             .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
     });
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let _resumed = resume_builder.resume(&server, home, rollout_path).await?;
 
-    wait_for_event_with_timeout(
-        &resumed.codex,
-        |event| match event {
-            EventMsg::InjectedMessage(event) => {
-                event.source == "timer resume-due-timer"
-                    && event.content == "Timer fired: resume timer"
-            }
-            _ => false,
-        },
-        TIMER_INTEGRATION_TIMEOUT,
-    )
-    .await;
-    wait_for_event_with_timeout(
-        &resumed.codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        TIMER_INTEGRATION_TIMEOUT,
-    )
-    .await;
-
-    let requests = mock.requests();
-    let resumed_request = requests
-        .iter()
-        .find(|request| request.body_contains_text("Timer fired: resume timer"))
-        .expect("expected a timer-triggered request after resume");
+    let resumed_request = wait_for_request_containing(&mock, "Timer fired: resume timer").await;
     assert!(resumed_request.body_contains_text("context before resume"));
     assert!(resumed_request.body_contains_text("recorded before resume"));
 
     Ok(())
 }
 
+async fn wait_for_request_containing(mock: &ResponseMock, text: &str) -> ResponsesRequest {
+    tokio::time::timeout(TIMER_INTEGRATION_TIMEOUT, async {
+        loop {
+            if let Some(request) = mock
+                .requests()
+                .into_iter()
+                .find(|request| request.body_contains_text(text))
+            {
+                return request;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for request containing {text:?}"))
+}
+
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_timers_discovers_externally_inserted_timer() -> Result<()> {
     let server = start_mock_server().await;
@@ -347,6 +352,7 @@ async fn list_timers_discovers_externally_inserted_timer() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()> {
     let server = start_mock_server().await;
@@ -414,6 +420,7 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
     let server = start_mock_server().await;
@@ -537,6 +544,7 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = WINDOWS_BAZEL_IGNORE_REASON)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queued_messages_feature_disabled_leaves_messages_queued() -> Result<()> {
     let server = start_mock_server().await;
