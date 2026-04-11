@@ -145,6 +145,10 @@ fn restore_hidden_terminal_title_items(
     mut items: Vec<TerminalTitleItem>,
     hidden_items: &[(usize, TerminalTitleItem)],
 ) -> Vec<TerminalTitleItem> {
+    if items.is_empty() {
+        return items;
+    }
+
     for (index, item) in hidden_items {
         if items.contains(item) {
             continue;
@@ -389,6 +393,28 @@ mod tests {
                 TerminalTitleItem::Model,
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn confirm_empty_selection_does_not_restore_hidden_github_pr() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let selected = ["project".to_string(), "github-pr".to_string()];
+        let mut view =
+            TerminalTitleSetupView::new(Some(&selected), /*github_pr_available*/ false, tx);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        loop {
+            let Some(event) = rx.recv().await else {
+                panic!("expected terminal title setup event");
+            };
+            if let AppEvent::TerminalTitleSetup { items } = event {
+                assert_eq!(items, Vec::<TerminalTitleItem>::new());
+                break;
+            }
+        }
     }
 
     #[test]
