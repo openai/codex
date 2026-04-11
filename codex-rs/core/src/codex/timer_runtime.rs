@@ -180,30 +180,20 @@ impl Session {
         let state_db = self.timer_state_db().await?;
         self.start_timer_db_sync_task(state_db.clone());
 
-        let runtime = self.timers.lock().await.remove_timer(id);
         let deleted = match state_db
             .delete_thread_timer(&self.thread_id_string(), id)
             .await
         {
             Ok(deleted) => deleted,
-            Err(err) => {
-                if let Some(runtime) = runtime {
-                    self.timers.lock().await.restore_runtime(runtime);
-                }
-                return Err(format!("failed to delete timer from sqlite: {err}"));
-            }
+            Err(err) => return Err(format!("failed to delete timer from sqlite: {err}")),
         };
+        let runtime = self.timers.lock().await.remove_timer(id);
         let Some(runtime) = runtime else {
             return Ok(deleted);
         };
-        if !deleted {
-            TimersState::cancel_runtime(&runtime);
-            self.emit_timer_updated_notification().await;
-            return Ok(false);
-        }
         TimersState::cancel_runtime(&runtime);
         self.emit_timer_updated_notification().await;
-        Ok(true)
+        Ok(deleted)
     }
 
     pub(crate) async fn maybe_start_pending_timer(self: &Arc<Self>) {

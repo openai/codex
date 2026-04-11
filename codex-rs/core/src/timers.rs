@@ -306,10 +306,6 @@ impl TimersState {
         self.timers.remove(id)
     }
 
-    pub(crate) fn restore_runtime(&mut self, runtime: TimerRuntime) {
-        self.timers.insert(runtime.timer.id.clone(), runtime);
-    }
-
     pub(crate) fn cancel_runtime(runtime: &TimerRuntime) {
         if let Some(cancel) = runtime.timer_cancel.as_ref() {
             cancel.cancel();
