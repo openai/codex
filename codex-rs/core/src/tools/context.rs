@@ -146,10 +146,8 @@ impl ToolOutput for McpToolOutput {
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        self.result.code_mode_result(&ToolPayload::Mcp {
-            server: String::new(),
-            tool: String::new(),
-            raw_arguments: String::new(),
+        serde_json::to_value(&self.result).unwrap_or_else(|err| {
+            JsonValue::String(format!("failed to serialize mcp result: {err}"))
         })
     }
 }
