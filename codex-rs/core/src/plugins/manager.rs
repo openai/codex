@@ -102,17 +102,28 @@ struct CachedFeaturedPluginIds {
     featured_plugin_ids: Vec<String>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct NonCuratedCacheRefreshRequest {
+    roots: Vec<AbsolutePathBuf>,
+    mode: NonCuratedCacheRefreshMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NonCuratedCacheRefreshMode {
+    IfVersionChanged,
+    ForceReinstall,
+}
+
 #[derive(Default)]
 struct NonCuratedCacheRefreshState {
-    requested_roots: Option<Vec<AbsolutePathBuf>>,
-    last_refreshed_roots: Option<Vec<AbsolutePathBuf>>,
+    requested: Option<NonCuratedCacheRefreshRequest>,
+    last_refreshed: Option<NonCuratedCacheRefreshRequest>,
     in_flight: bool,
 }
 
 #[derive(Default)]
 struct ConfiguredMarketplaceUpgradeState {
     in_flight: bool,
-    completed: bool,
 }
 
 fn featured_plugin_ids_cache_key(
@@ -1111,7 +1122,7 @@ impl PluginsManager {
                 Ok(state) => state,
                 Err(err) => err.into_inner(),
             };
-            if state.completed || state.in_flight {
+            if state.in_flight {
                 return;
             }
             state.in_flight = true;
@@ -1128,35 +1139,17 @@ impl PluginsManager {
             .name("plugins-marketplace-auto-upgrade".to_string())
             .spawn(move || {
                 let outcome = upgrade_configured_git_marketplaces(codex_home.as_path(), &config);
-                let cache_refresh_succeeded = if outcome.upgraded_roots.is_empty() {
-                    true
-                } else {
-                    match refresh_non_curated_plugin_cache(
-                        codex_home.as_path(),
+                if !outcome.upgraded_roots.is_empty() {
+                    manager.maybe_start_non_curated_plugin_cache_force_reinstall_for_roots(
                         &outcome.upgraded_roots,
-                    ) {
-                        Ok(cache_refreshed) => {
-                            if cache_refreshed {
-                                manager.clear_cache();
-                            }
-                            true
-                        }
-                        Err(err) => {
-                            manager.clear_cache();
-                            warn!(
-                                "failed to refresh non-curated plugin cache after marketplace auto-upgrade: {err}"
-                            );
-                            false
-                        }
-                    }
-                };
+                    );
+                }
 
                 let mut state = match manager.configured_marketplace_upgrade_state.write() {
                     Ok(state) => state,
                     Err(err) => err.into_inner(),
                 };
                 state.in_flight = false;
-                state.completed = outcome.all_succeeded && cache_refresh_succeeded;
             })
         {
             let mut state = match self.configured_marketplace_upgrade_state.write() {
@@ -1172,12 +1165,34 @@ impl PluginsManager {
         self: &Arc<Self>,
         roots: &[AbsolutePathBuf],
     ) {
+        self.maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
+            roots,
+            NonCuratedCacheRefreshMode::IfVersionChanged,
+        );
+    }
+
+    fn maybe_start_non_curated_plugin_cache_force_reinstall_for_roots(
+        self: &Arc<Self>,
+        roots: &[AbsolutePathBuf],
+    ) {
+        self.maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
+            roots,
+            NonCuratedCacheRefreshMode::ForceReinstall,
+        );
+    }
+
+    fn maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
+        self: &Arc<Self>,
+        roots: &[AbsolutePathBuf],
+        mode: NonCuratedCacheRefreshMode,
+    ) {
         let mut roots = roots.to_vec();
         roots.sort_unstable();
         roots.dedup();
         if roots.is_empty() {
             return;
         }
+        let request = NonCuratedCacheRefreshRequest { roots, mode };
 
         let should_spawn = {
             let mut state = match self.non_curated_cache_refresh_state.write() {
@@ -1185,13 +1200,25 @@ impl PluginsManager {
                 Err(err) => err.into_inner(),
             };
             // Collapse repeated plugin/list requests onto one worker and only queue another pass
-            // when the requested roots set actually changes.
-            if state.requested_roots.as_ref() == Some(&roots)
-                || (!state.in_flight && state.last_refreshed_roots.as_ref() == Some(&roots))
+            // when the requested roots set actually changes. Forced reinstall requests are not
+            // deduped against the last completed pass because the same marketplace root path can
+            // point at newly activated files after an auto-upgrade.
+            if state.requested.as_ref() == Some(&request)
+                || (mode == NonCuratedCacheRefreshMode::IfVersionChanged
+                    && !state.in_flight
+                    && state.last_refreshed.as_ref() == Some(&request))
             {
                 return;
             }
-            state.requested_roots = Some(roots);
+            if mode == NonCuratedCacheRefreshMode::IfVersionChanged
+                && state.requested.as_ref().is_some_and(|requested| {
+                    requested.mode == NonCuratedCacheRefreshMode::ForceReinstall
+                        && requested.roots == request.roots
+                })
+            {
+                return;
+            }
+            state.requested = Some(request);
             if state.in_flight {
                 false
             } else {
@@ -1213,7 +1240,7 @@ impl PluginsManager {
                 Err(err) => err.into_inner(),
             };
             state.in_flight = false;
-            state.requested_roots = None;
+            state.requested = None;
             warn!("failed to start non-curated plugin cache refresh task: {err}");
         }
     }
@@ -1267,15 +1294,15 @@ impl PluginsManager {
 
     fn run_non_curated_plugin_cache_refresh_loop(self: Arc<Self>) {
         loop {
-            let roots = {
+            let request = {
                 let state = match self.non_curated_cache_refresh_state.read() {
                     Ok(state) => state,
                     Err(err) => err.into_inner(),
                 };
-                state.requested_roots.clone()
+                state.requested.clone()
             };
 
-            let Some(roots) = roots else {
+            let Some(request) = request else {
                 let mut state = match self.non_curated_cache_refresh_state.write() {
                     Ok(state) => state,
                     Err(err) => err.into_inner(),
@@ -1284,30 +1311,33 @@ impl PluginsManager {
                 return;
             };
 
-            let refreshed =
-                match refresh_non_curated_plugin_cache(self.codex_home.as_path(), &roots) {
-                    Ok(cache_refreshed) => {
-                        if cache_refreshed {
-                            self.clear_cache();
-                        }
-                        true
-                    }
-                    Err(err) => {
+            let refreshed = match refresh_non_curated_plugin_cache(
+                self.codex_home.as_path(),
+                &request.roots,
+                request.mode,
+            ) {
+                Ok(cache_refreshed) => {
+                    if cache_refreshed {
                         self.clear_cache();
-                        warn!("failed to refresh non-curated plugin cache: {err}");
-                        false
                     }
-                };
+                    true
+                }
+                Err(err) => {
+                    self.clear_cache();
+                    warn!("failed to refresh non-curated plugin cache: {err}");
+                    false
+                }
+            };
 
             let mut state = match self.non_curated_cache_refresh_state.write() {
                 Ok(state) => state,
                 Err(err) => err.into_inner(),
             };
             if refreshed {
-                state.last_refreshed_roots = Some(roots.clone());
+                state.last_refreshed = Some(request.clone());
             }
-            if state.requested_roots.as_ref() == Some(&roots) {
-                state.requested_roots = None;
+            if state.requested.as_ref() == Some(&request) {
+                state.requested = None;
                 state.in_flight = false;
                 return;
             }
@@ -1557,6 +1587,7 @@ fn refresh_curated_plugin_cache(
 fn refresh_non_curated_plugin_cache(
     codex_home: &Path,
     additional_roots: &[AbsolutePathBuf],
+    mode: NonCuratedCacheRefreshMode,
 ) -> Result<bool, String> {
     let configured_non_curated_plugin_ids =
         non_curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
@@ -1625,7 +1656,9 @@ fn refresh_non_curated_plugin_cache(
             continue;
         };
 
-        if store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str()) {
+        if mode == NonCuratedCacheRefreshMode::IfVersionChanged
+            && store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str())
+        {
             continue;
         }
 
