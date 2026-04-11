@@ -481,7 +481,7 @@ async fn auth_manager_notifies_when_auth_state_changes() {
     let dir = tempdir().unwrap();
     let manager = AuthManager::shared(
         dir.path().to_path_buf(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     );
     let mut auth_state_rx = manager.subscribe_auth_state();
