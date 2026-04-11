@@ -11,6 +11,7 @@ use codex_tools::DiscoverableTool;
 use codex_tools::ToolHandlerKind;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanDeferredTool;
+use codex_tools::ToolRegistryPlanMcpTool;
 use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
@@ -29,16 +30,21 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
     }
 }
 
-struct McpToolPlanInputs {
-    mcp_tools: HashMap<String, rmcp::model::Tool>,
+struct McpToolPlanInputs<'a> {
+    mcp_tools: Vec<ToolRegistryPlanMcpTool<'a>>,
     tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
-fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs {
+fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
     McpToolPlanInputs {
         mcp_tools: mcp_tools
             .iter()
-            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
+            .map(|(qualified_name, tool)| ToolRegistryPlanMcpTool {
+                qualified_name: qualified_name.clone(),
+                callable_name: tool.callable_name.clone(),
+                callable_namespace: tool.callable_namespace.clone(),
+                tool: &tool.tool,
+            })
             .collect(),
         tool_namespaces: mcp_tools
             .iter()
@@ -114,7 +120,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ToolRegistryPlanParams {
             mcp_tools: mcp_tool_plan_inputs
                 .as_ref()
-                .map(|inputs| &inputs.mcp_tools),
+                .map(|inputs| inputs.mcp_tools.as_slice()),
             deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
             tool_namespaces: mcp_tool_plan_inputs
                 .as_ref()

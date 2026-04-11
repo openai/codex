@@ -647,6 +647,68 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
+async fn resolve_tool_info_accepts_flat_and_split_callable_names() {
+    let startup_tools = vec![create_test_tool("rmcp", "echo")];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "rmcp".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            startup_snapshot: Some(startup_tools),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        },
+    );
+
+    let flat = manager
+        .resolve_tool_info("mcp__rmcp__echo", None)
+        .await
+        .expect("flat qualified MCP tool name should resolve");
+    let split = manager
+        .resolve_tool_info("echo", Some("mcp__rmcp__"))
+        .await
+        .expect("split MCP tool namespace and name should resolve");
+    let split_with_flat_name = manager
+        .resolve_tool_info("mcp__rmcp__echo", Some("mcp__rmcp__"))
+        .await
+        .expect("flat MCP tool name with namespace should resolve");
+
+    let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
+    assert_eq!(
+        (
+            flat.server_name.as_str(),
+            flat.callable_namespace.as_str(),
+            flat.callable_name.as_str(),
+            flat.tool.name.as_ref(),
+        ),
+        expected
+    );
+    assert_eq!(
+        (
+            split.server_name.as_str(),
+            split.callable_namespace.as_str(),
+            split.callable_name.as_str(),
+            split.tool.name.as_ref(),
+        ),
+        expected
+    );
+    assert_eq!(
+        (
+            split_with_flat_name.server_name.as_str(),
+            split_with_flat_name.callable_namespace.as_str(),
+            split_with_flat_name.callable_name.as_str(),
+            split_with_flat_name.tool.name.as_ref(),
+        ),
+        expected
+    );
+}
+
+#[tokio::test]
 async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()

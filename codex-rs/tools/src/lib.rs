@@ -120,6 +120,7 @@ pub use tool_registry_plan_types::ToolHandlerSpec;
 pub use tool_registry_plan_types::ToolNamespace;
 pub use tool_registry_plan_types::ToolRegistryPlan;
 pub use tool_registry_plan_types::ToolRegistryPlanDeferredTool;
+pub use tool_registry_plan_types::ToolRegistryPlanMcpTool;
 pub use tool_registry_plan_types::ToolRegistryPlanParams;
 pub use tool_spec::ConfiguredToolSpec;
 pub use tool_spec::ResponsesApiWebSearchFilters;
