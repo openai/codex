@@ -590,6 +590,7 @@ impl Session {
                 .claim_recurring_thread_timer(
                     &thread_id,
                     &claimed.timer.id,
+                    claimed.context.queued_at,
                     claimed.previous_last_run_at,
                     &params,
                 )
