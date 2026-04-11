@@ -129,6 +129,7 @@ pub(super) async fn try_run_zsh_fork(
         expiration: _sandbox_expiration,
         capture_policy: _capture_policy,
         sandbox,
+        windows_sandbox_policy_cwd: sandbox_policy_cwd,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
         sandbox_policy,
@@ -156,7 +157,7 @@ pub(super) async fn try_run_zsh_fork(
         network: sandbox_network,
         windows_sandbox_level,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
+        sandbox_policy_cwd,
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -254,7 +255,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
+        sandbox_policy_cwd: ctx.turn.cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -691,7 +692,7 @@ struct CoreShellCommandExecutor {
     network: Option<codex_network_proxy::NetworkProxy>,
     windows_sandbox_level: WindowsSandboxLevel,
     arg0: Option<String>,
-    sandbox_policy_cwd: PathBuf,
+    sandbox_policy_cwd: AbsolutePathBuf,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }
@@ -734,6 +735,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
+                windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
                 sandbox_policy: self.sandbox_policy.clone(),
@@ -873,8 +875,11 @@ impl CoreShellCommandExecutor {
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: false,
         })?;
-        let mut exec_request =
-            crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, options);
+        let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+            exec_request,
+            options,
+            self.sandbox_policy_cwd.clone(),
+        );
         if let Some(network) = exec_request.network.as_ref() {
             network.apply_to_env(&mut exec_request.env);
         }

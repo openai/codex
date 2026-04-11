@@ -363,7 +363,16 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map(|request| {
-                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
+                let windows_sandbox_policy_cwd =
+                    codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                        self.sandbox_cwd.to_path_buf(),
+                    )
+                    .unwrap_or_else(|_| request.cwd.clone());
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+                    request,
+                    options,
+                    windows_sandbox_policy_cwd,
+                )
             })
     }
 }

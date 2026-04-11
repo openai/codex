@@ -311,7 +311,11 @@ pub fn build_exec_request(
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })
-        .map(|request| ExecRequest::from_sandbox_exec_request(request, options))
+        .map(|request| {
+            let windows_sandbox_policy_cwd = AbsolutePathBuf::try_from(sandbox_cwd.to_path_buf())
+                .unwrap_or_else(|_| request.cwd.clone());
+            ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_policy_cwd)
+        })
         .map_err(CodexErr::from)?;
     let use_windows_elevated_backend = windows_sandbox_uses_elevated_backend(
         exec_req.windows_sandbox_level,
@@ -353,6 +357,7 @@ pub(crate) async fn execute_exec_request(
         expiration,
         capture_policy,
         sandbox,
+        windows_sandbox_policy_cwd: _,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
         sandbox_policy,
