@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import re
 import shutil
 import subprocess
@@ -244,8 +245,18 @@ def stage_release_pair(
 
     shutil.copyfile(binding_path, staged_binding)
 
+    staged_checksums = output_dir / f"rusty_v8_release_{target}.sha256"
+    with staged_checksums.open("w", encoding="utf-8") as checksums:
+        for path in [staged_library, staged_binding]:
+            digest = hashlib.sha256()
+            with path.open("rb") as artifact:
+                for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            checksums.write(f"{digest.hexdigest()}  {path.name}\n")
+
     print(staged_library)
     print(staged_binding)
+    print(staged_checksums)
 
 
 def parse_args() -> argparse.Namespace:
