@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -13,6 +14,7 @@ async fn plan_implementation_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
@@ -37,6 +39,27 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     };
     assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let plan_markdown = "- Step 1\n- Step 2\n";
+    chat.on_plan_item_completed(plan_markdown.to_string());
+    let _ = drain_insert_history(&mut rx);
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::ClearUiAndSubmitUserMessage { text } = event else {
+        panic!("expected ClearUiAndSubmitUserMessage, got {event:?}");
+    };
+    assert_eq!(
+        text,
+        plan_implementation_clear_context_message(plan_markdown)
+    );
 }
 
 #[tokio::test]

@@ -244,8 +244,10 @@ use tracing::warn;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
+const PLAN_IMPLEMENTATION_CLEAR_CONTEXT: &str = "Yes, clear context and implement";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX: &str = "Implement the approved plan below in a fresh context. Treat the plan as the\nsource of user intent, re-read files as needed, and carry the work through\nimplementation and verification.";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
@@ -255,6 +257,10 @@ const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
+
+fn plan_implementation_clear_context_message(plan_markdown: &str) -> String {
+    format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}")
+}
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -784,6 +790,8 @@ pub(crate) struct ChatWidget {
     /// may still return the response from before the rollback. Keeping this as
     /// a single cache avoids coupling copy state to the backtrack transcript.
     last_agent_markdown: Option<String>,
+    /// Raw markdown of the most recently completed proposed plan.
+    latest_proposed_plan_markdown: Option<String>,
     /// Whether this turn already produced a copyable response.
     ///
     /// `TurnComplete.last_agent_message` is a fallback source: use it only when no earlier
@@ -2240,6 +2248,7 @@ impl ChatWidget {
         };
         if !plan_text.trim().is_empty() {
             self.record_agent_markdown(&plan_text);
+            self.latest_proposed_plan_markdown = Some(plan_text.clone());
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
@@ -2319,6 +2328,7 @@ impl ChatWidget {
         self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
+        self.latest_proposed_plan_markdown = None;
         self.last_plan_progress = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
@@ -2479,6 +2489,19 @@ impl ChatWidget {
             }
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
+        let (clear_context_actions, clear_context_disabled_reason) =
+            match self.latest_proposed_plan_markdown.as_deref() {
+                Some(plan_markdown) if !plan_markdown.trim().is_empty() => {
+                    let user_text = plan_implementation_clear_context_message(plan_markdown);
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::ClearUiAndSubmitUserMessage {
+                            text: user_text.clone(),
+                        });
+                    })];
+                    (actions, None)
+                }
+                _ => (Vec::new(), Some("No approved plan available".to_string())),
+            };
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
@@ -2487,6 +2510,16 @@ impl ChatWidget {
                 is_current: false,
                 actions: implement_actions,
                 disabled_reason: implement_disabled_reason,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_CLEAR_CONTEXT.to_string(),
+                description: Some("Fresh thread with this plan.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: clear_context_actions,
+                disabled_reason: clear_context_disabled_reason,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -4805,6 +4838,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             last_agent_markdown: None,
+            latest_proposed_plan_markdown: None,
             saw_copy_source_this_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
