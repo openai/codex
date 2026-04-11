@@ -1,6 +1,10 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestGuardianReview;
+use codex_hooks::PermissionRequestOutcome;
+use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -10,8 +14,10 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
@@ -143,6 +149,44 @@ pub(crate) async fn run_pre_tool_use_hooks(
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
     if should_block { block_reason } else { None }
+}
+
+pub(crate) async fn run_permission_request_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    run_id_suffix: String,
+    tool_name: String,
+    command: String,
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<PermissionProfile>,
+    justification: Option<String>,
+    guardian_review: Option<PermissionRequestGuardianReview>,
+) -> Option<PermissionRequestDecision> {
+    let request = PermissionRequestRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name,
+        run_id_suffix,
+        command,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
+        guardian_review,
+    };
+    let preview_runs = sess.hooks().preview_permission_request(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let PermissionRequestOutcome {
+        hook_events,
+        decision,
+    } = sess.hooks().run_permission_request(request).await;
+    emit_hook_completed_events(sess, turn_context, hook_events).await;
+
+    decision
 }
 
 pub(crate) async fn run_post_tool_use_hooks(

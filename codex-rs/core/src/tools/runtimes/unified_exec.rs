@@ -20,6 +20,7 @@ use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::Sandboxable;
@@ -49,6 +50,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
+    pub hook_command: String,
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
@@ -89,6 +91,21 @@ impl<'a> UnifiedExecRuntime<'a> {
             shell_mode,
         }
     }
+
+    fn guardian_request(
+        req: &UnifiedExecRequest,
+        ctx: &ApprovalCtx<'_>,
+    ) -> GuardianApprovalRequest {
+        GuardianApprovalRequest::ExecCommand {
+            id: ctx.call_id.to_string(),
+            command: req.command.clone(),
+            cwd: req.cwd.to_path_buf(),
+            sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
+            justification: req.justification.clone(),
+            tty: req.tty,
+        }
+    }
 }
 
 impl Sandboxable for UnifiedExecRuntime<'_> {
@@ -120,6 +137,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         ctx: ApprovalCtx<'b>,
     ) -> BoxFuture<'b, ReviewDecision> {
         let keys = self.approval_keys(req);
+        let guardian_request = Self::guardian_request(req, &ctx);
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -134,15 +152,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     session,
                     turn,
                     review_id,
-                    GuardianApprovalRequest::ExecCommand {
-                        id: call_id,
-                        command,
-                        cwd,
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                        tty: req.tty,
-                    },
+                    guardian_request,
                     retry_reason,
                 )
                 .await;
@@ -175,6 +185,26 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         req: &UnifiedExecRequest,
     ) -> Option<ExecApprovalRequirement> {
         Some(req.exec_approval_requirement.clone())
+    }
+
+    fn permission_request_payload(
+        &self,
+        req: &UnifiedExecRequest,
+    ) -> Option<PermissionRequestPayload> {
+        Some(PermissionRequestPayload::bash(
+            req.hook_command.clone(),
+            req.sandbox_permissions,
+            req.additional_permissions.clone(),
+            req.justification.clone(),
+        ))
+    }
+
+    fn guardian_approval_request(
+        &self,
+        req: &UnifiedExecRequest,
+        ctx: &ApprovalCtx<'_>,
+    ) -> Option<GuardianApprovalRequest> {
+        Some(Self::guardian_request(req, ctx))
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {

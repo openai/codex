@@ -6,6 +6,7 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::guardian::GuardianApprovalRequest;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
@@ -14,6 +15,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -129,6 +131,32 @@ pub(crate) struct ApprovalCtx<'a> {
     pub guardian_review_id: Option<String>,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PermissionRequestPayload {
+    pub tool_name: String,
+    pub command: String,
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub justification: Option<String>,
+}
+
+impl PermissionRequestPayload {
+    pub(crate) fn bash(
+        command: String,
+        sandbox_permissions: SandboxPermissions,
+        additional_permissions: Option<PermissionProfile>,
+        justification: Option<String>,
+    ) -> Self {
+        Self {
+            tool_name: "Bash".to_string(),
+            command,
+            sandbox_permissions,
+            additional_permissions,
+            justification,
+        }
+    }
 }
 
 // Specifies what tool orchestrator should do with a given tool call.
@@ -270,6 +298,23 @@ pub(crate) trait Approvable<Req> {
     /// Return `Some(_)` to specify a custom exec approval requirement, or `None`
     /// to fall back to policy-based default.
     fn exec_approval_requirement(&self, _req: &Req) -> Option<ExecApprovalRequirement> {
+        None
+    }
+
+    fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
+        None
+    }
+
+    /// Build the guardian request that corresponds to this approval prompt.
+    ///
+    /// Runtimes that can route approvals through guardian should return the
+    /// same request they would pass to `review_approval_request`, so shared
+    /// orchestration can run guardian once and reuse that decision as fallback.
+    fn guardian_approval_request(
+        &self,
+        _req: &Req,
+        _ctx: &ApprovalCtx<'_>,
+    ) -> Option<GuardianApprovalRequest> {
         None
     }
 

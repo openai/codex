@@ -3,10 +3,12 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -237,6 +239,79 @@ elif mode == "exit_2":
     Ok(())
 }
 
+fn write_permission_request_hook(
+    home: &Path,
+    matcher: Option<&str>,
+    mode: &str,
+    reason: &str,
+) -> Result<()> {
+    let script_path = home.join("permission_request_hook.py");
+    let log_path = home.join("permission_request_hook_log.jsonl");
+    let mode_json = serde_json::to_string(mode).context("serialize permission request mode")?;
+    let reason_json =
+        serde_json::to_string(reason).context("serialize permission request reason")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{log_path}")
+mode = {mode_json}
+reason = {reason_json}
+
+payload = json.load(sys.stdin)
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+if mode == "allow":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{"behavior": "allow"}}
+        }}
+    }}))
+elif mode == "deny":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "deny",
+                "message": reason
+            }}
+        }}
+    }}))
+elif mode == "exit_2":
+    sys.stderr.write(reason + "\n")
+    raise SystemExit(2)
+"#,
+        log_path = log_path.display(),
+        mode_json = mode_json,
+        reason_json = reason_json,
+    );
+
+    let mut group = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": format!("python3 {}", script_path.display()),
+            "statusMessage": "running permission request hook",
+        }]
+    });
+    if let Some(matcher) = matcher {
+        group["matcher"] = Value::String(matcher.to_string());
+    }
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PermissionRequest": [group]
+        }
+    });
+
+    fs::write(&script_path, script).context("write permission request hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_post_tool_use_hook(
     home: &Path,
     matcher: Option<&str>,
@@ -394,6 +469,15 @@ fn read_pre_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> 
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse pre tool use hook log line"))
+        .collect()
+}
+
+fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("permission_request_hook_log.jsonl"))
+        .context("read permission request hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse permission request hook log line"))
         .collect()
 }
 
@@ -1002,6 +1086,202 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     );
 
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_allows_shell_command_without_user_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-shell-command";
+    let marker = std::env::temp_dir().join("permissionrequest-shell-command-marker");
+    let command = format!("printf allowed > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request hook allowed it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some("^Bash$"),
+                "allow",
+                "should not be used for allow",
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover permission request marker")?;
+    }
+
+    test.submit_turn_with_policies(
+        "run the shell command after hook approval",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("allowed"),
+        "shell command output should reach the model after hook approval",
+    );
+    assert!(
+        marker.exists(),
+        "approved command should create marker file"
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["guardian_review"], Value::Null);
+    assert!(
+        hook_inputs[0].get("tool_use_id").is_none(),
+        "PermissionRequest input should not include a tool_use_id",
+    );
+    assert!(
+        hook_inputs[0]["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_receives_guardian_review_before_fallback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-guardian-review";
+    let marker = std::env::temp_dir().join("permissionrequest-guardian-review-marker");
+    let command = format!("printf guardian > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "medium",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The user asked to run this local marker command.",
+    })
+    .to_string();
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message("msg-guardian", &guardian_assessment),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "guardian fallback allowed it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_permission_request_hook(home, Some("^Bash$"), "quiet", "unused")
+            {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::GuardianApproval)
+                .expect("test config should allow feature update");
+            config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover guardian review marker")?;
+    }
+
+    test.submit_turn_with_policies(
+        "run the shell command after guardian review",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "guardian decision should be reused instead of running a second review",
+    );
+    assert!(
+        marker.exists(),
+        "guardian-approved fallback should create marker file",
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]["guardian_review"],
+        serde_json::json!({
+            "status": "approved",
+            "decision": "allow",
+            "risk_level": "medium",
+            "user_authorization": "high",
+            "rationale": "The user asked to run this local marker command.",
+        })
+    );
+
     Ok(())
 }
 

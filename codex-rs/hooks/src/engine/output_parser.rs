@@ -19,6 +19,19 @@ pub(crate) struct PreToolUseOutput {
     pub invalid_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PermissionRequestDecision {
+    Allow,
+    Deny { message: String },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PermissionRequestOutput {
+    pub universal: UniversalOutput,
+    pub decision: Option<PermissionRequestDecision>,
+    pub invalid_reason: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PostToolUseOutput {
     pub universal: UniversalOutput,
@@ -48,6 +61,9 @@ pub(crate) struct StopOutput {
 
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
+use crate::schema::PermissionRequestBehaviorWire;
+use crate::schema::PermissionRequestCommandOutputWire;
+use crate::schema::PermissionRequestDecisionWire;
 use crate::schema::PostToolUseCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
@@ -111,6 +127,29 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     Some(PreToolUseOutput {
         universal,
         block_reason,
+        invalid_reason,
+    })
+}
+
+pub(crate) fn parse_permission_request(stdout: &str) -> Option<PermissionRequestOutput> {
+    let wire: PermissionRequestCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let hook_specific_output = wire.hook_specific_output.as_ref();
+    let decision = hook_specific_output.and_then(|output| output.decision.as_ref());
+    let invalid_reason = unsupported_permission_request_universal(&universal).or_else(|| {
+        hook_specific_output.and_then(|output| {
+            unsupported_permission_request_hook_specific_output(output.decision.as_ref())
+        })
+    });
+    let decision = if invalid_reason.is_none() {
+        decision.map(permission_request_decision)
+    } else {
+        None
+    };
+
+    Some(PermissionRequestOutput {
+        universal,
+        decision,
         invalid_reason,
     })
 }
@@ -235,11 +274,53 @@ fn unsupported_pre_tool_use_universal(universal: &UniversalOutput) -> Option<Str
     }
 }
 
+fn unsupported_permission_request_universal(universal: &UniversalOutput) -> Option<String> {
+    if !universal.continue_processing {
+        Some("PermissionRequest hook returned unsupported continue:false".to_string())
+    } else if universal.stop_reason.is_some() {
+        Some("PermissionRequest hook returned unsupported stopReason".to_string())
+    } else if universal.suppress_output {
+        Some("PermissionRequest hook returned unsupported suppressOutput".to_string())
+    } else {
+        None
+    }
+}
+
 fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
     if universal.suppress_output {
         Some("PostToolUse hook returned unsupported suppressOutput".to_string())
     } else {
         None
+    }
+}
+
+fn unsupported_permission_request_hook_specific_output(
+    decision: Option<&PermissionRequestDecisionWire>,
+) -> Option<String> {
+    let decision = decision?;
+    if decision.updated_input.is_some() {
+        Some("PermissionRequest hook returned unsupported updatedInput".to_string())
+    } else if decision.updated_permissions.is_some() {
+        Some("PermissionRequest hook returned unsupported updatedPermissions".to_string())
+    } else if decision.interrupt {
+        Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
+    } else {
+        None
+    }
+}
+
+fn permission_request_decision(
+    decision: &PermissionRequestDecisionWire,
+) -> PermissionRequestDecision {
+    match decision.behavior {
+        PermissionRequestBehaviorWire::Allow => PermissionRequestDecision::Allow,
+        PermissionRequestBehaviorWire::Deny => PermissionRequestDecision::Deny {
+            message: decision
+                .message
+                .as_deref()
+                .and_then(trimmed_reason)
+                .unwrap_or_else(|| "PermissionRequest hook denied approval".to_string()),
+        },
     }
 }
 

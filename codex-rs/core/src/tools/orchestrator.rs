@@ -6,9 +6,15 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::guardian::GuardianApprovalReview;
+use crate::guardian::GuardianApprovalReviewResult;
+use crate::guardian::GuardianApprovalReviewStatus;
+use crate::guardian::GuardianAssessmentOutcome;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::new_guardian_review_id;
+use crate::guardian::review_approval_request_with_review;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -23,6 +29,11 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestGuardianReview;
+use codex_hooks::PermissionRequestGuardianReviewDecision;
+use codex_hooks::PermissionRequestGuardianReviewStatus as HookGuardianReviewStatus;
+use codex_otel::SessionTelemetry;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -113,11 +124,7 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
-        let otel_user = ToolDecisionSource::User;
-        let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
-        let otel_cfg = ToolDecisionSource::Config;
         let use_guardian = routes_approval_to_guardian(turn_ctx);
-
         // 1) Approval
         let mut already_approved = false;
 
@@ -126,7 +133,12 @@ impl ToolOrchestrator {
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
+                otel.tool_decision(
+                    otel_tn,
+                    otel_ci,
+                    &ReviewDecision::Approved,
+                    ToolDecisionSource::Config,
+                );
             }
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
@@ -141,14 +153,16 @@ impl ToolOrchestrator {
                     retry_reason: reason,
                     network_approval_context: None,
                 };
-                let decision = tool.start_approval_async(req, approval_ctx).await;
-                let otel_source = if use_guardian {
-                    otel_automated_reviewer.clone()
-                } else {
-                    otel_user.clone()
-                };
-
-                otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+                let decision = Self::request_approval(
+                    tool,
+                    req,
+                    approval_ctx,
+                    turn_ctx,
+                    &otel,
+                    otel_tn,
+                    otel_ci,
+                )
+                .await?;
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
@@ -296,14 +310,16 @@ impl ToolOrchestrator {
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
-
-                    let decision = tool.start_approval_async(req, approval_ctx).await;
-                    let otel_source = if use_guardian {
-                        otel_automated_reviewer
-                    } else {
-                        otel_user
-                    };
-                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+                    let decision = Self::request_approval(
+                        tool,
+                        req,
+                        approval_ctx,
+                        turn_ctx,
+                        &otel,
+                        otel_tn,
+                        otel_ci,
+                    )
+                    .await?;
 
                     match decision {
                         ReviewDecision::Denied
@@ -365,10 +381,128 @@ impl ToolOrchestrator {
             Err(err) => Err(err),
         }
     }
+
+    // Centralize one approval prompt for three possible decision makers. If
+    // this prompt would normally route to guardian, run guardian first and pass
+    // its result to PermissionRequest hooks as advisory context. The hook can
+    // still answer the prompt; if it stays quiet, reuse the guardian decision
+    // instead of asking guardian again. Without a hook or reusable guardian
+    // result, fall back to the runtime's normal approval path.
+    async fn request_approval<Rq, Out, T>(
+        tool: &mut T,
+        req: &Rq,
+        approval_ctx: ApprovalCtx<'_>,
+        turn_ctx: &crate::codex::TurnContext,
+        otel: &SessionTelemetry,
+        otel_tn: &str,
+        otel_ci: &str,
+    ) -> Result<ReviewDecision, ToolError>
+    where
+        T: ToolRuntime<Rq, Out>,
+    {
+        let guardian_review = if routes_approval_to_guardian(turn_ctx) {
+            match tool.guardian_approval_request(req, &approval_ctx) {
+                Some(request) => Some(
+                    review_approval_request_with_review(
+                        approval_ctx.session,
+                        approval_ctx.turn,
+                        approval_ctx
+                            .guardian_review_id
+                            .clone()
+                            .expect("guardian review id should be present for guardian approvals"),
+                        request,
+                        approval_ctx.retry_reason.clone(),
+                    )
+                    .await,
+                ),
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(permission_request) = tool.permission_request_payload(req) {
+            match run_permission_request_hooks(
+                approval_ctx.session,
+                approval_ctx.turn,
+                approval_ctx.call_id.to_string(),
+                permission_request.tool_name,
+                permission_request.command,
+                permission_request.sandbox_permissions,
+                permission_request.additional_permissions,
+                permission_request.justification,
+                guardian_review
+                    .as_ref()
+                    .map(|review| permission_request_guardian_review(review.review.clone())),
+            )
+            .await
+            {
+                Some(PermissionRequestDecision::Allow) => {
+                    otel.tool_decision(
+                        otel_tn,
+                        otel_ci,
+                        &ReviewDecision::Approved,
+                        ToolDecisionSource::Config,
+                    );
+                    return Ok(ReviewDecision::Approved);
+                }
+                Some(PermissionRequestDecision::Deny { message }) => {
+                    otel.tool_decision(
+                        otel_tn,
+                        otel_ci,
+                        &ReviewDecision::Denied,
+                        ToolDecisionSource::Config,
+                    );
+                    return Err(ToolError::Rejected(message));
+                }
+                None => {}
+            }
+        }
+
+        if let Some(GuardianApprovalReviewResult { decision, .. }) = guardian_review {
+            otel.tool_decision(
+                otel_tn,
+                otel_ci,
+                &decision,
+                ToolDecisionSource::AutomatedReviewer,
+            );
+            return Ok(decision);
+        }
+
+        let decision = tool.start_approval_async(req, approval_ctx).await;
+        let otel_source = if routes_approval_to_guardian(turn_ctx) {
+            ToolDecisionSource::AutomatedReviewer
+        } else {
+            ToolDecisionSource::User
+        };
+        otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+        Ok(decision)
+    }
 }
 
 fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // Keep approval reason terse and stable for UX/tests, but accept the
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
+}
+
+fn permission_request_guardian_review(
+    review: GuardianApprovalReview,
+) -> PermissionRequestGuardianReview {
+    PermissionRequestGuardianReview {
+        status: match review.status {
+            GuardianApprovalReviewStatus::Approved => HookGuardianReviewStatus::Approved,
+            GuardianApprovalReviewStatus::Denied => HookGuardianReviewStatus::Denied,
+            GuardianApprovalReviewStatus::Aborted => HookGuardianReviewStatus::Aborted,
+            GuardianApprovalReviewStatus::Failed => HookGuardianReviewStatus::Failed,
+            GuardianApprovalReviewStatus::TimedOut => HookGuardianReviewStatus::TimedOut,
+        },
+        decision: review.decision.map(|decision| match decision {
+            GuardianAssessmentOutcome::Allow => PermissionRequestGuardianReviewDecision::Allow,
+            GuardianAssessmentOutcome::Deny => PermissionRequestGuardianReviewDecision::Deny,
+        }),
+        risk_level: review.risk_level,
+        user_authorization: review.user_authorization,
+        rationale: review.rationale,
+    }
 }
