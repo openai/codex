@@ -2049,6 +2049,18 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "agent_identity_base_url": {
+      "description": "Base URL for agent identity registration requests.",
+      "type": "string"
+    },
+    "agent_identity_biscuit_base_url": {
+      "description": "Base URL for minting human biscuits used by agent identity registration requests.",
+      "type": "string"
+    },
+    "agent_identity_biscuit_target_url": {
+      "description": "Target URL used when minting the human biscuit for agent identity registration.",
+      "type": "string"
+    },
     "agents": {
       "allOf": [
         {
