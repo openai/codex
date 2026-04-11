@@ -15,6 +15,7 @@ use super::marketplace::ResolvedMarketplacePlugin;
 use super::marketplace::list_marketplaces;
 use super::marketplace::load_marketplace;
 use super::marketplace::resolve_marketplace_plugin;
+use super::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use super::read_curated_plugins_sha;
 use super::remote::RemotePluginFetchError;
 use super::remote::RemotePluginMutationError;
@@ -106,6 +107,12 @@ struct NonCuratedCacheRefreshState {
     requested_roots: Option<Vec<AbsolutePathBuf>>,
     last_refreshed_roots: Option<Vec<AbsolutePathBuf>>,
     in_flight: bool,
+}
+
+#[derive(Default)]
+struct ConfiguredMarketplaceUpgradeState {
+    in_flight: bool,
+    completed: bool,
 }
 
 fn featured_plugin_ids_cache_key(
@@ -321,6 +328,7 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
+    configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
     remote_sync_lock: Mutex<()>,
@@ -348,6 +356,9 @@ impl PluginsManager {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             featured_plugin_ids_cache: RwLock::new(None),
+            configured_marketplace_upgrade_state: RwLock::new(
+                ConfiguredMarketplaceUpgradeState::default(),
+            ),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
             remote_sync_lock: Mutex::new(()),
@@ -1073,6 +1084,7 @@ impl PluginsManager {
     ) {
         if config.features.enabled(Feature::Plugins) {
             self.start_curated_repo_sync();
+            self.maybe_start_configured_marketplace_upgrade_for_config(config);
             start_startup_remote_plugin_sync_once(
                 Arc::clone(self),
                 self.codex_home.clone(),
@@ -1094,6 +1106,76 @@ impl PluginsManager {
                     );
                 }
             });
+        }
+    }
+
+    pub fn maybe_start_configured_marketplace_upgrade_for_config(
+        self: &Arc<Self>,
+        config: &Config,
+    ) {
+        if !config.features.enabled(Feature::Plugins) {
+            return;
+        }
+
+        let should_spawn = {
+            let mut state = match self.configured_marketplace_upgrade_state.write() {
+                Ok(state) => state,
+                Err(err) => err.into_inner(),
+            };
+            if state.completed || state.in_flight {
+                return;
+            }
+            state.in_flight = true;
+            true
+        };
+        if !should_spawn {
+            return;
+        }
+
+        let manager = Arc::clone(self);
+        let codex_home = self.codex_home.clone();
+        let config = config.clone();
+        if let Err(err) = std::thread::Builder::new()
+            .name("plugins-marketplace-auto-upgrade".to_string())
+            .spawn(move || {
+                let outcome = upgrade_configured_git_marketplaces(codex_home.as_path(), &config);
+                let cache_refresh_succeeded = if outcome.upgraded_roots.is_empty() {
+                    true
+                } else {
+                    match refresh_non_curated_plugin_cache(
+                        codex_home.as_path(),
+                        &outcome.upgraded_roots,
+                    ) {
+                        Ok(cache_refreshed) => {
+                            if cache_refreshed {
+                                manager.clear_cache();
+                            }
+                            true
+                        }
+                        Err(err) => {
+                            manager.clear_cache();
+                            warn!(
+                                "failed to refresh non-curated plugin cache after marketplace auto-upgrade: {err}"
+                            );
+                            false
+                        }
+                    }
+                };
+
+                let mut state = match manager.configured_marketplace_upgrade_state.write() {
+                    Ok(state) => state,
+                    Err(err) => err.into_inner(),
+                };
+                state.in_flight = false;
+                state.completed = outcome.all_succeeded && cache_refresh_succeeded;
+            })
+        {
+            let mut state = match self.configured_marketplace_upgrade_state.write() {
+                Ok(state) => state,
+                Err(err) => err.into_inner(),
+            };
+            state.in_flight = false;
+            warn!("failed to start configured marketplace auto-upgrade task: {err}");
         }
     }
 
