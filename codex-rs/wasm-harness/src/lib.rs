@@ -2,24 +2,29 @@
 //!
 //! This crate intentionally starts outside `codex-core`: the first milestone is
 //! a working browser boundary that streams Codex-shaped turn events. Later
-//! iterations can replace the sampler callback with the real Codex
+//! iterations can replace the direct model request with the real Codex
 //! `RegularTask` / `run_turn` path as host services become injectable.
 
 use js_sys::Function;
-use js_sys::Promise;
 use js_sys::Reflect;
 use serde::Deserialize;
 use serde::Serialize;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
+use web_sys::Headers;
+use web_sys::RequestInit;
+use web_sys::RequestMode;
+use web_sys::Response;
 
 const DEFAULT_INSTRUCTIONS: &str = "You are Codex running in a browser WASM prototype.";
+const RESPONSES_API_URL: &str = "https://api.openai.com/v1/responses";
+const RESPONSES_MODEL: &str = "gpt-5.1";
 
 /// Browser entrypoint for the prototype harness.
 #[wasm_bindgen]
 pub struct BrowserCodex {
-    sampler: Option<Function>,
+    api_key: String,
     next_turn_id: u32,
 }
 
@@ -27,16 +32,21 @@ pub struct BrowserCodex {
 impl BrowserCodex {
     /// Creates a new browser harness.
     ///
-    /// `sampler` may be a JavaScript function that accepts a request object and
-    /// returns either a string, `{ message: string }`, or a Promise for either.
-    /// When omitted, the harness uses a deterministic local demo response.
+    /// `api_key` may be empty. When it is empty, the harness uses a
+    /// deterministic local demo response. When it is present, the harness makes
+    /// a browser `fetch` call to the Responses API from Rust/WASM.
     #[wasm_bindgen(constructor)]
     #[must_use]
-    pub fn new(sampler: JsValue) -> Self {
+    pub fn new(api_key: String) -> Self {
         Self {
-            sampler: sampler.dyn_into::<Function>().ok(),
+            api_key,
             next_turn_id: 0,
         }
+    }
+
+    /// Updates the API key used by future turns.
+    pub fn set_api_key(&mut self, api_key: String) {
+        self.api_key = api_key;
     }
 
     /// Submits one browser turn and calls `on_event` for every emitted event.
@@ -68,8 +78,7 @@ impl BrowserCodex {
             },
         )?;
 
-        let request = SamplingRequest::new(turn_id.clone(), prompt.clone());
-        let agent_message = self.sample(request).await?;
+        let agent_message = self.sample(&prompt).await?;
 
         emit_event(
             &on_event,
@@ -98,37 +107,21 @@ impl BrowserCodex {
 }
 
 impl BrowserCodex {
-    async fn sample(&self, request: SamplingRequest) -> Result<String, JsValue> {
-        let Some(sampler) = &self.sampler else {
-            return Ok(default_demo_response(&request.prompt));
-        };
+    async fn sample(&self, prompt: &str) -> Result<String, JsValue> {
+        if self.api_key.trim().is_empty() {
+            return Ok(default_demo_response(prompt));
+        }
 
-        let request_json = serde_json::to_string(&request).map_err(js_error)?;
-        let request_value = js_sys::JSON::parse(&request_json)?;
-        let sampled = sampler.call1(&JsValue::NULL, &request_value)?;
-        let resolved = JsFuture::from(Promise::resolve(&sampled)).await?;
-        extract_message(resolved)
+        sample_with_responses_api(self.api_key.trim(), prompt).await
     }
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SamplingRequest {
-    turn_id: String,
-    prompt: String,
+struct ResponsesRequest<'a> {
+    model: &'static str,
     instructions: &'static str,
-    tools: Vec<String>,
-}
-
-impl SamplingRequest {
-    fn new(turn_id: String, prompt: String) -> Self {
-        Self {
-            turn_id,
-            prompt,
-            instructions: DEFAULT_INSTRUCTIONS,
-            tools: Vec::new(),
-        }
-    }
+    input: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,9 +151,100 @@ enum HarnessEvent<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SamplerResponse {
+struct ResponsesBody {
+    output_text: Option<String>,
+    output: Option<Vec<ResponsesOutputItem>>,
+    error: Option<ResponsesError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesError {
     message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesOutputItem {
+    content: Option<Vec<ResponsesContentItem>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesContentItem {
+    text: Option<String>,
+    output_text: Option<String>,
+}
+
+async fn sample_with_responses_api(api_key: &str, prompt: &str) -> Result<String, JsValue> {
+    let body = ResponsesRequest {
+        model: RESPONSES_MODEL,
+        instructions: DEFAULT_INSTRUCTIONS,
+        input: prompt,
+    };
+    let body = serde_json::to_string(&body).map_err(js_error)?;
+
+    let headers = Headers::new()?;
+    headers.append("Authorization", &format!("Bearer {api_key}"))?;
+    headers.append("Content-Type", "application/json")?;
+
+    let request = RequestInit::new();
+    request.set_method("POST");
+    request.set_mode(RequestMode::Cors);
+    request.set_headers(&headers);
+    request.set_body(&JsValue::from_str(&body));
+
+    let window = web_sys::window().ok_or_else(|| js_error("window is unavailable"))?;
+    let response_value =
+        JsFuture::from(window.fetch_with_str_and_init(RESPONSES_API_URL, &request))
+            .await
+            .map_err(response_error)?;
+    let response: Response = response_value.dyn_into()?;
+    let status = response.status();
+    let ok = response.ok();
+    let json = JsFuture::from(response.json()?)
+        .await
+        .map_err(response_error)?;
+    let response_body = parse_response_body(json)?;
+
+    if !ok {
+        let message = response_body
+            .error
+            .and_then(|err| err.message)
+            .unwrap_or_else(|| format!("Responses API returned {status}"));
+        return Err(js_error(message));
+    }
+
+    Ok(extract_response_text(response_body))
+}
+
+fn parse_response_body(value: JsValue) -> Result<ResponsesBody, JsValue> {
+    let json = js_sys::JSON::stringify(&value)?
+        .as_string()
+        .ok_or_else(|| js_error("Responses API returned non-JSON output"))?;
+    serde_json::from_str(&json).map_err(js_error)
+}
+
+fn extract_response_text(response: ResponsesBody) -> String {
+    if let Some(output_text) = response.output_text
+        && !output_text.is_empty()
+    {
+        return output_text;
+    }
+
+    let mut chunks = Vec::new();
+    for item in response.output.unwrap_or_default() {
+        for content in item.content.unwrap_or_default() {
+            if let Some(text) = content.text {
+                chunks.push(text);
+            } else if let Some(output_text) = content.output_text {
+                chunks.push(output_text);
+            }
+        }
+    }
+
+    if chunks.is_empty() {
+        "Responses API returned no output text.".to_string()
+    } else {
+        chunks.join("\n")
+    }
 }
 
 fn emit_event(on_event: &Function, event: &HarnessEvent<'_>) -> Result<(), JsValue> {
@@ -170,39 +254,30 @@ fn emit_event(on_event: &Function, event: &HarnessEvent<'_>) -> Result<(), JsVal
     Ok(())
 }
 
-fn extract_message(value: JsValue) -> Result<String, JsValue> {
-    if let Some(message) = value.as_string() {
-        return Ok(message);
-    }
-
-    if value.is_object() {
-        if let Some(message) = Reflect::get(&value, &JsValue::from_str("message"))?.as_string() {
-            return Ok(message);
-        }
-
-        let json = js_sys::JSON::stringify(&value)?;
-        if let Some(json) = json.as_string()
-            && let Ok(response) = serde_json::from_str::<SamplerResponse>(&json)
-            && let Some(message) = response.message
-        {
-            return Ok(message);
-        }
-    }
-
-    Err(js_error(
-        "sampler must return a string or an object with a string message field",
-    ))
-}
-
 fn default_demo_response(prompt: &str) -> String {
     if prompt.to_ascii_lowercase().contains("hello world") {
         "Here is a minimal hello world example:\n\n```js\nconsole.log(\"hello world\");\n```"
             .to_string()
     } else {
         format!(
-            "Browser Codex prototype received the prompt, but no model sampler was configured: {prompt}"
+            "Browser Codex prototype received the prompt, but no API key was configured: {prompt}"
         )
     }
+}
+
+fn response_error(error: JsValue) -> JsValue {
+    if let Some(message) = error.as_string() {
+        return js_error(message);
+    }
+
+    if error.is_object()
+        && let Ok(value) = Reflect::get(&error, &JsValue::from_str("message"))
+        && let Some(message) = value.as_string()
+    {
+        return js_error(message);
+    }
+
+    js_error("Responses API request failed")
 }
 
 fn js_error(message: impl ToString) -> JsValue {

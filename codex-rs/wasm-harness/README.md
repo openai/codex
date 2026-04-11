@@ -9,10 +9,10 @@ establishes the intended browser API shape:
 - stream Codex-shaped turn events back to the page; and
 - resolve after a `turn_complete` event.
 
-The sampler is currently a JavaScript callback so the browser demo can keep
-network and credential policy outside the WASM bundle. The demo page uses a
-deterministic local sampler by default, or a direct Responses API request when
-the user enters an API key.
+The sampler is currently implemented in Rust/WASM. The demo page uses a
+deterministic local response by default, or passes the user's API key into the
+WASM facade so Rust can make a direct browser `fetch` request to the Responses
+API.
 
 The API key field is for local prototype use only: it stores the key in browser
 `localStorage` and sends it directly from the page. A production browser
@@ -22,6 +22,11 @@ long-lived API keys in the page origin.
 The next step is to replace the callback boundary with a real model transport
 and then wire the facade to the Codex turn loop after host services are
 injectable.
+
+The `real-core` feature is an explicit compile probe for depending on
+`codex-core`. It currently does not build for `wasm32-unknown-unknown`; the
+first blocker is native Tokio/Mio networking pulled through the host-heavy
+`codex-core` dependency graph.
 
 ## Current Limitations
 

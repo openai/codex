@@ -12,12 +12,23 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+real-core = ["dep:codex-core"]
+
 [dependencies]
+codex-core = { workspace = true, optional = true }
 js-sys = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Headers",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Window",
+] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
