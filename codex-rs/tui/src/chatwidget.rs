@@ -4554,10 +4554,14 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
         self.flush_answer_stream_with_separator();
-        self.notify(Notification::UserInputRequested {
-            question_count: ev.questions.len(),
-            summary: Notification::user_input_request_summary(&ev.questions),
-        });
+        let question_count = ev.questions.len();
+        let summary = Notification::user_input_request_summary(&ev.questions);
+        let title = match (question_count, summary.as_deref()) {
+            (1, Some(summary)) => summary.to_string(),
+            (1, None) => "Question requested".to_string(),
+            (count, _) => format!("{count} questions requested"),
+        };
+        self.notify(Notification::PlanModePrompt { title });
         self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
     }
@@ -11135,26 +11139,11 @@ impl Renderable for ChatWidget {
 
 #[derive(Debug)]
 enum Notification {
-    AgentTurnComplete {
-        response: String,
-    },
-    ExecApprovalRequested {
-        command: String,
-    },
-    EditApprovalRequested {
-        cwd: PathBuf,
-        changes: Vec<PathBuf>,
-    },
-    ElicitationRequested {
-        server_name: String,
-    },
-    PlanModePrompt {
-        title: String,
-    },
-    UserInputRequested {
-        question_count: usize,
-        summary: Option<String>,
-    },
+    AgentTurnComplete { response: String },
+    ExecApprovalRequested { command: String },
+    EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    ElicitationRequested { server_name: String },
+    PlanModePrompt { title: String },
 }
 
 impl Notification {
@@ -11187,14 +11176,6 @@ impl Notification {
             Notification::PlanModePrompt { title } => {
                 format!("Plan mode prompt: {title}")
             }
-            Notification::UserInputRequested {
-                question_count,
-                summary,
-            } => match (*question_count, summary.as_deref()) {
-                (1, Some(summary)) => format!("Question requested: {summary}"),
-                (1, None) => "Question requested".to_string(),
-                (count, _) => format!("Questions requested: {count}"),
-            },
         }
     }
 
@@ -11205,7 +11186,6 @@ impl Notification {
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. } => "approval-requested",
             Notification::PlanModePrompt { .. } => "plan-mode-prompt",
-            Notification::UserInputRequested { .. } => "user-input-requested",
         }
     }
 
@@ -11215,8 +11195,7 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. }
-            | Notification::PlanModePrompt { .. }
-            | Notification::UserInputRequested { .. } => 1,
+            | Notification::PlanModePrompt { .. } => 1,
         }
     }
 
