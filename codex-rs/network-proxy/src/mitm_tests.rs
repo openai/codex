@@ -26,11 +26,17 @@ fn policy_ctx(
 
 #[tokio::test]
 async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
-    let app_state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-        allowed_domains: vec!["example.com".to_string()],
-        ..NetworkProxySettings::default()
+    let app_state = Arc::new(network_proxy_state_for_policy({
+        let mut network = NetworkProxySettings::default();
+        network.set_allowed_domains(vec!["example.com".to_string()]);
+        network
     }));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Limited, "example.com", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Limited,
+        "example.com",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::POST)
         .uri("/v1/responses?api_key=secret")
@@ -59,11 +65,17 @@ async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
 
 #[tokio::test]
 async fn mitm_policy_rejects_host_mismatch() {
-    let app_state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-        allowed_domains: vec!["example.com".to_string()],
-        ..NetworkProxySettings::default()
+    let app_state = Arc::new(network_proxy_state_for_policy({
+        let mut network = NetworkProxySettings::default();
+        network.set_allowed_domains(vec!["example.com".to_string()]);
+        network
     }));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "example.com", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Full,
+        "example.com",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::GET)
         .uri("/")
@@ -82,12 +94,18 @@ async fn mitm_policy_rejects_host_mismatch() {
 
 #[tokio::test]
 async fn mitm_policy_rechecks_local_private_target_after_connect() {
-    let app_state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-        allowed_domains: vec!["example.com".to_string()],
-        allow_local_binding: false,
-        ..NetworkProxySettings::default()
+    let app_state = Arc::new(network_proxy_state_for_policy({
+        let mut network = NetworkProxySettings::default();
+        network.set_allowed_domains(vec!["example.com".to_string()]);
+        network.allow_local_binding = false;
+        network
     }));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "10.0.0.1", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Full,
+        "10.0.0.1",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::GET)
         .uri("/health?token=secret")

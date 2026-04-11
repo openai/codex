@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -253,7 +253,9 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
         .resume(&server, home.clone(), rollout_path.clone())
         .await?;
 
-    let first_phase2_request = wait_for_request(&responses, 1).await.remove(0);
+    let first_phase2_request = wait_for_request(&responses, /*expected_count*/ 1)
+        .await
+        .remove(0);
     let first_phase2_prompt = phase2_prompt_text(&first_phase2_request);
     assert!(
         first_phase2_prompt.contains("- selected inputs this run: 1"),
@@ -295,7 +297,9 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     let selection = {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let selection = db.get_phase2_input_selection(1, 30).await?;
+            let selection = db
+                .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+                .await?;
             if selection.selected.is_empty()
                 && selection.retained_thread_ids.is_empty()
                 && selection.removed.len() == 1
@@ -340,7 +344,7 @@ async fn build_test_codex(server: &wiremock::MockServer, home: Arc<TempDir>) -> 
 async fn init_state_db(home: &Arc<TempDir>) -> Result<Arc<codex_state::StateRuntime>> {
     let db =
         codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".into()).await?;
-    db.mark_backfill_complete(None).await?;
+    db.mark_backfill_complete(/*last_watermark*/ None).await?;
     Ok(db)
 }
 
@@ -379,7 +383,7 @@ async fn seed_stage1_output(
 }
 
 async fn wait_for_single_request(mock: &ResponseMock) -> ResponsesRequest {
-    wait_for_request(mock, 1).await.remove(0)
+    wait_for_request(mock, /*expected_count*/ 1).await.remove(0)
 }
 
 async fn wait_for_request(mock: &ResponseMock, expected_count: usize) -> Vec<ResponsesRequest> {
@@ -412,7 +416,9 @@ async fn wait_for_phase2_success(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let selection = db.get_phase2_input_selection(1, 30).await?;
+        let selection = db
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+            .await?;
         if selection.selected.len() == 1
             && selection.selected[0].thread_id == expected_thread_id
             && selection.retained_thread_ids == vec![expected_thread_id]
@@ -439,7 +445,10 @@ async fn seed_stage1_output_for_existing_thread(
 ) -> Result<()> {
     let owner = ThreadId::new();
     let claim = db
-        .try_claim_stage1_job(thread_id, owner, updated_at, 3_600, 64)
+        .try_claim_stage1_job(
+            thread_id, owner, updated_at, /*lease_seconds*/ 3_600,
+            /*max_running_jobs*/ 64,
+        )
         .await?;
     let ownership_token = match claim {
         codex_state::Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,

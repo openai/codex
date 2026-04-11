@@ -6,13 +6,10 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
-use crate::exec::ExecToolCallOutput;
-use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::guardian_rejection_message;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
-use crate::sandboxing::SandboxManager;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;
@@ -27,9 +24,14 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
@@ -112,7 +114,9 @@ impl ToolOrchestrator {
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
         let otel_user = ToolDecisionSource::User;
+        let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
         let otel_cfg = ToolDecisionSource::Config;
+        let use_guardian = routes_approval_to_guardian(turn_ctx);
 
         // 1) Approval
         let mut already_approved = false;
@@ -128,21 +132,28 @@ impl ToolOrchestrator {
                 return Err(ToolError::Rejected(reason));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+                let guardian_review_id = use_guardian.then(new_guardian_review_id);
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
+                    guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason,
                     network_approval_context: None,
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
+                let otel_source = if use_guardian {
+                    otel_automated_reviewer.clone()
+                } else {
+                    otel_user.clone()
+                };
 
-                otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
+                otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if routes_approval_to_guardian(turn_ctx) {
-                            GUARDIAN_REJECTION_MESSAGE.to_string()
+                        let reason = if let Some(review_id) = guardian_review_id.as_deref() {
+                            guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
                         } else {
                             "rejected by user".to_string()
                         };
@@ -172,7 +183,7 @@ impl ToolOrchestrator {
             .network
             .is_some();
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
-            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
+            SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
                 &turn_ctx.file_system_sandbox_policy,
                 turn_ctx.network_sandbox_policy,
@@ -182,8 +193,7 @@ impl ToolOrchestrator {
             ),
         };
 
-        // Platform-specific flag gating is handled by SandboxManager::select_initial
-        // via crate::safety::get_platform_sandbox(..).
+        // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
@@ -277,21 +287,29 @@ impl ToolOrchestrator {
                     .should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
+                    let guardian_review_id = use_guardian.then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
-                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
+                    let otel_source = if use_guardian {
+                        otel_automated_reviewer
+                    } else {
+                        otel_user
+                    };
+                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if routes_approval_to_guardian(turn_ctx) {
-                                GUARDIAN_REJECTION_MESSAGE.to_string()
+                            let reason = if let Some(review_id) = guardian_review_id.as_deref() {
+                                guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
+                                    .await
                             } else {
                                 "rejected by user".to_string()
                             };
@@ -312,7 +330,7 @@ impl ToolOrchestrator {
                 }
 
                 let escalated_attempt = SandboxAttempt {
-                    sandbox: crate::exec::SandboxType::None,
+                    sandbox: SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
                     file_system_policy: &turn_ctx.file_system_sandbox_policy,
                     network_policy: turn_ctx.network_sandbox_policy,

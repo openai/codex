@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
 use codex_core::test_support::all_model_presets;
+use codex_models_manager::client_version_to_whole;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -27,7 +28,8 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         },
         supported_in_api: preset.supported_in_api,
         priority,
-        upgrade: preset.upgrade.as_ref().map(|u| u.into()),
+        additional_speed_tiers: preset.additional_speed_tiers.clone(),
+        upgrade: preset.upgrade.as_ref().map(Into::into),
         base_instructions: "base instructions".to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
@@ -37,7 +39,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         availability_nux: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
@@ -45,7 +47,6 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
     }
@@ -85,7 +86,7 @@ pub fn write_models_cache_with_models(
     let cache_path = codex_home.join("models_cache.json");
     // DateTime<Utc> serializes to RFC3339 format by default with serde
     let fetched_at: DateTime<Utc> = Utc::now();
-    let client_version = codex_core::models_manager::client_version_to_whole();
+    let client_version = client_version_to_whole();
     let cache = json!({
         "fetched_at": fetched_at,
         "etag": null,

@@ -122,6 +122,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -147,7 +148,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: codex_protocol::models::local_image_open_tag_text(1),
+                text: codex_protocol::models::local_image_open_tag_text(/*label_number*/ 1),
             },
             ContentItem::InputImage { image_url },
             ContentItem::InputText {
@@ -205,6 +206,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,

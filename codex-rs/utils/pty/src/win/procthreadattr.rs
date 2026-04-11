@@ -19,8 +19,8 @@
 // SOFTWARE.
 
 use super::psuedocon::HPCON;
-use anyhow::ensure;
 use anyhow::Error;
+use anyhow::ensure;
 use std::io::Error as IoError;
 use std::mem;
 use std::ptr;

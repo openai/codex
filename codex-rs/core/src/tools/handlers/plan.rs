@@ -1,70 +1,50 @@
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::JsonSchema;
-use async_trait::async_trait;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
-use std::collections::BTreeMap;
-use std::sync::LazyLock;
+use serde_json::Value as JsonValue;
 
 pub struct PlanHandler;
 
-pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
-    let mut plan_item_props = BTreeMap::new();
-    plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
-    plan_item_props.insert(
-        "status".to_string(),
-        JsonSchema::String {
-            description: Some("One of: pending, in_progress, completed".to_string()),
-        },
-    );
+pub struct PlanToolOutput;
 
-    let plan_items_schema = JsonSchema::Array {
-        description: Some("The list of steps".to_string()),
-        items: Box::new(JsonSchema::Object {
-            properties: plan_item_props,
-            required: Some(vec!["step".to_string(), "status".to_string()]),
-            additional_properties: Some(false.into()),
-        }),
-    };
+const PLAN_UPDATED_MESSAGE: &str = "Plan updated";
 
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "explanation".to_string(),
-        JsonSchema::String { description: None },
-    );
-    properties.insert("plan".to_string(), plan_items_schema);
+impl ToolOutput for PlanToolOutput {
+    fn log_preview(&self) -> String {
+        PLAN_UPDATED_MESSAGE.to_string()
+    }
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "update_plan".to_string(),
-        description: r#"Updates the task plan.
-Provide an optional explanation and a list of plan items, each with a step and status.
-At most one step can be in_progress at a time.
-"#
-        .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["plan".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-});
+    fn success_for_logging(&self) -> bool {
+        true
+    }
 
-#[async_trait]
+    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        let mut output = FunctionCallOutputPayload::from_text(PLAN_UPDATED_MESSAGE.to_string());
+        output.success = Some(true);
+
+        ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output,
+        }
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        JsonValue::Object(serde_json::Map::new())
+    }
+}
+
 impl ToolHandler for PlanHandler {
-    type Output = FunctionToolOutput;
+    type Output = PlanToolOutput;
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -88,10 +68,9 @@ impl ToolHandler for PlanHandler {
             }
         };
 
-        let content =
-            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
+        handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
 
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
+        Ok(PlanToolOutput)
     }
 }
 

@@ -93,4 +93,53 @@ describe("CodexExec", () => {
     expect(imageIndex).toBeGreaterThan(-1);
     expect(resumeIndex).toBeLessThan(imageIndex);
   });
+
+  it("allows overriding the env passed to the Codex CLI", async () => {
+    const { CodexExec } = await import("../src/exec");
+    spawnMock.mockClear();
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+
+    setImmediate(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("exit", 0, null);
+    });
+
+    process.env.CODEX_ENV_SHOULD_NOT_LEAK = "leak";
+
+    try {
+      const exec = new CodexExec("codex", {
+        CODEX_HOME: "/tmp/codex-home",
+        CUSTOM_ENV: "custom",
+      });
+
+      for await (const _ of exec.run({
+        input: "custom env",
+        apiKey: "test",
+        baseUrl: "https://example.test",
+      })) {
+        // no-op
+      }
+
+      const commandArgs = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+      expect(commandArgs).toBeDefined();
+      const spawnOptions = spawnMock.mock.calls[0]?.[2] as child_process.SpawnOptions | undefined;
+      const spawnEnv = spawnOptions?.env as Record<string, string> | undefined;
+      expect(spawnEnv).toBeDefined();
+      if (!spawnEnv || !commandArgs) {
+        throw new Error("Spawn args missing");
+      }
+
+      expect(spawnEnv.CODEX_HOME).toBe("/tmp/codex-home");
+      expect(spawnEnv.CUSTOM_ENV).toBe("custom");
+      expect(spawnEnv.CODEX_ENV_SHOULD_NOT_LEAK).toBeUndefined();
+      expect(spawnEnv.CODEX_API_KEY).toBe("test");
+      expect(spawnEnv.CODEX_INTERNAL_ORIGINATOR_OVERRIDE).toBeDefined();
+      expect(commandArgs).toContain("--config");
+      expect(commandArgs).toContain(`openai_base_url=${JSON.stringify("https://example.test")}`);
+    } finally {
+      delete process.env.CODEX_ENV_SHOULD_NOT_LEAK;
+    }
+  });
 });

@@ -1,4 +1,4 @@
-use codex_core::features::Feature;
+use codex_features::Feature;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -18,14 +18,22 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
     )
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ChildAgentsMd)
-            .expect("test config should allow feature update");
-        std::fs::write(config.cwd.join("AGENTS.md"), "be nice").expect("write AGENTS.md");
-    });
-    let test = builder.build(&server).await.expect("build test codex");
+    let mut builder = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ChildAgentsMd)
+                .expect("test config should allow feature update");
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            let agents_md = cwd.join("AGENTS.md");
+            fs.write_file(&agents_md, b"be nice".to_vec()).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+    let test = builder
+        .build_remote_aware(&server)
+        .await
+        .expect("build test codex");
 
     test.submit_turn("hello").await.expect("submit turn");
 
@@ -66,7 +74,10 @@ async fn hierarchical_agents_emits_when_no_project_doc() {
             .enable(Feature::ChildAgentsMd)
             .expect("test config should allow feature update");
     });
-    let test = builder.build(&server).await.expect("build test codex");
+    let test = builder
+        .build_remote_aware(&server)
+        .await
+        .expect("build test codex");
 
     test.submit_turn("hello").await.expect("submit turn");
 

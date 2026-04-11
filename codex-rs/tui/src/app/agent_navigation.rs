@@ -106,7 +106,10 @@ impl AgentNavigationState {
         if let Some(entry) = self.threads.get_mut(&thread_id) {
             entry.is_closed = true;
         } else {
-            self.upsert(thread_id, None, None, true);
+            self.upsert(
+                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                /*is_closed*/ true,
+            );
         }
     }
 
@@ -117,6 +120,16 @@ impl AgentNavigationState {
     pub(crate) fn clear(&mut self) {
         self.threads.clear();
         self.order.clear();
+    }
+
+    /// Removes a tracked thread entirely from picker metadata and traversal order.
+    ///
+    /// This is reserved for entries that were only discovered opportunistically and never became
+    /// replayable local threads. Keeping those around after the backend confirms they are gone
+    /// would leave ghost rows in `/agent`.
+    pub(crate) fn remove(&mut self, thread_id: ThreadId) {
+        self.threads.remove(&thread_id);
+        self.order.retain(|candidate| *candidate != thread_id);
     }
 
     /// Returns whether there is at least one tracked thread other than the primary one.
@@ -139,6 +152,14 @@ impl AgentNavigationState {
         self.order
             .iter()
             .filter_map(|thread_id| self.threads.get(thread_id).map(|entry| (*thread_id, entry)))
+            .collect()
+    }
+
+    /// Returns tracked thread ids in the same stable order used by the picker.
+    pub(crate) fn tracked_thread_ids(&self) -> Vec<ThreadId> {
+        self.ordered_threads()
+            .into_iter()
+            .map(|(thread_id, _)| thread_id)
             .collect()
     }
 
@@ -202,7 +223,11 @@ impl AgentNavigationState {
                         is_primary,
                     )
                 })
-                .unwrap_or_else(|| format_agent_picker_item_name(None, None, is_primary)),
+                .unwrap_or_else(|| {
+                    format_agent_picker_item_name(
+                        /*agent_nickname*/ None, /*agent_role*/ None, is_primary,
+                    )
+                }),
         )
     }
 
@@ -246,18 +271,23 @@ mod tests {
         let second_agent_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000103").expect("valid thread");
 
-        state.upsert(main_thread_id, None, None, false);
+        state.upsert(
+            main_thread_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
         state.upsert(
             first_agent_id,
             Some("Robie".to_string()),
             Some("explorer".to_string()),
-            false,
+            /*is_closed*/ false,
         );
         state.upsert(
             second_agent_id,
             Some("Bob".to_string()),
             Some("worker".to_string()),
-            false,
+            /*is_closed*/ false,
         );
 
         (state, main_thread_id, first_agent_id, second_agent_id)
@@ -271,7 +301,7 @@ mod tests {
             first_agent_id,
             Some("Robie".to_string()),
             Some("worker".to_string()),
-            true,
+            /*is_closed*/ true,
         );
 
         assert_eq!(

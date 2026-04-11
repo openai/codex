@@ -41,7 +41,9 @@ pub use cli::Cli;
 /// A single match result returned from the search.
 ///
 /// * `score` – Relevance score returned by `nucleo`.
-/// * `path`  – Path to the matched file (relative to the search directory).
+/// * `path`  – Path to the matched entry (file or directory), relative to the
+///   search directory.
+/// * `match_type` – Whether this match is a file or directory.
 /// * `indices` – Optional list of character indices that matched the query.
 ///   These are only filled when the caller of [`run`] sets
 ///   `options.compute_indices` to `true`. The indices vector follows the
@@ -52,9 +54,17 @@ pub use cli::Cli;
 pub struct FileMatch {
     pub score: u32,
     pub path: PathBuf,
+    pub match_type: MatchType,
     pub root: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchType {
+    File,
+    Directory,
 }
 
 impl FileMatch {
@@ -185,10 +195,10 @@ pub fn create_session(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
-        cancelled: cancelled.clone(),
+        cancelled,
         shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
-        work_tx: work_tx.clone(),
+        work_tx,
     });
 
     let matcher_inner = inner.clone();
@@ -261,7 +271,7 @@ pub async fn run_main<T: Reporter>(
             compute_indices,
             respect_gitignore: true,
         },
-        None,
+        /*cancel_flag*/ None,
     )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;
@@ -326,7 +336,7 @@ where
 fn create_pattern(pattern: &str) -> Pattern {
     Pattern::new(
         pattern,
-        CaseMatching::Smart,
+        CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
     )
@@ -386,7 +396,7 @@ fn get_file_path<'a>(path: &'a Path, search_directories: &[PathBuf]) -> Option<(
     rel_path.to_str().map(|p| (root_idx, p))
 }
 
-/// Walks the search directories and feeds discovered file paths into `nucleo`
+/// Walks the search directories and feeds discovered paths into `nucleo`
 /// via the injector.
 ///
 /// The walker uses `require_git(true)` to match git's own ignore semantics:
@@ -448,9 +458,6 @@ fn walker_worker(
                 Ok(entry) => entry,
                 Err(_) => return ignore::WalkState::Continue,
             };
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                return ignore::WalkState::Continue;
-            }
             let path = entry.path();
             let Some(full_path) = path.to_str() else {
                 return ignore::WalkState::Continue;
@@ -501,7 +508,7 @@ fn matcher_worker(
                         nucleo.pattern.reparse(
                             0,
                             &query,
-                            CaseMatching::Smart,
+                            CaseMatching::Ignore,
                             Normalization::Smart,
                             append,
                         );
@@ -552,9 +559,15 @@ fn matcher_worker(
                             } else {
                                 None
                             };
+                            let match_type = if Path::new(full_path).is_dir() {
+                                MatchType::Directory
+                            } else {
+                                MatchType::File
+                            };
                             Some(FileMatch {
                                 score: match_.score,
                                 path: PathBuf::from(relative_path),
+                                match_type,
                                 root: inner.search_directories[root_idx].clone(),
                                 indices,
                             })
@@ -598,13 +611,14 @@ struct RunReporter {
 
 impl SessionReporter for RunReporter {
     fn on_update(&self, snapshot: &FileSearchSnapshot) {
-        #[expect(clippy::unwrap_used)]
+        #[allow(clippy::unwrap_used)]
         let mut guard = self.snapshot.write().unwrap();
         *guard = snapshot.clone();
     }
 
     fn on_complete(&self) {
         let (cv, mutex) = &self.completed;
+        #[allow(clippy::unwrap_used)]
         let mut completed = mutex.lock().unwrap();
         *completed = true;
         cv.notify_all();
@@ -614,10 +628,15 @@ impl SessionReporter for RunReporter {
 impl RunReporter {
     fn wait_for_complete(&self) -> FileSearchSnapshot {
         let (cv, mutex) = &self.completed;
+        #[allow(clippy::unwrap_used)]
         let mut completed = mutex.lock().unwrap();
         while !*completed {
-            completed = cv.wait(completed).unwrap();
+            #[allow(clippy::unwrap_used)]
+            {
+                completed = cv.wait(completed).unwrap();
+            }
         }
+        #[allow(clippy::unwrap_used)]
         self.snapshot.read().unwrap().clone()
     }
 }
@@ -776,13 +795,13 @@ mod tests {
 
     #[test]
     fn session_scanned_file_count_is_monotonic_across_queries() {
-        let dir = create_temp_tree(200);
+        let dir = create_temp_tree(/*file_count*/ 200);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -801,13 +820,13 @@ mod tests {
 
     #[test]
     fn session_streams_updates_before_walk_complete() {
-        let dir = create_temp_tree(600);
+        let dir = create_temp_tree(/*file_count*/ 600);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -829,7 +848,7 @@ mod tests {
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -860,7 +879,7 @@ mod tests {
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -880,8 +899,8 @@ mod tests {
 
     #[test]
     fn dropping_session_does_not_cancel_siblings_with_shared_cancel_flag() {
-        let root_a = create_temp_tree(200);
-        let root_b = create_temp_tree(4_000);
+        let root_a = create_temp_tree(/*file_count*/ 200);
+        let root_b = create_temp_tree(/*file_count*/ 4_000);
         let cancel_flag = Arc::new(AtomicBool::new(false));
 
         let reporter_a = Arc::new(RecordingReporter::default());
@@ -914,13 +933,13 @@ mod tests {
 
     #[test]
     fn session_emits_updates_when_query_changes() {
-        let dir = create_temp_tree(200);
+        let dir = create_temp_tree(/*file_count*/ 200);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("session");
 
@@ -940,7 +959,7 @@ mod tests {
 
     #[test]
     fn run_returns_matches_for_query() {
-        let dir = create_temp_tree(40);
+        let dir = create_temp_tree(/*file_count*/ 40);
         let options = FileSearchOptions {
             limit: NonZero::new(20).unwrap(),
             exclude: Vec::new(),
@@ -948,8 +967,13 @@ mod tests {
             compute_indices: false,
             respect_gitignore: true,
         };
-        let results =
-            run("file-000", vec![dir.path().to_path_buf()], options, None).expect("run ok");
+        let results = run(
+            "file-000",
+            vec![dir.path().to_path_buf()],
+            options,
+            /*cancel_flag*/ None,
+        )
+        .expect("run ok");
 
         assert!(!results.matches.is_empty());
         assert!(results.total_match_count >= results.matches.len());
@@ -962,8 +986,35 @@ mod tests {
     }
 
     #[test]
+    fn run_returns_directory_matches_for_query() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("docs/guides")).unwrap();
+        fs::write(dir.path().join("docs/guides/intro.md"), "intro").unwrap();
+        fs::write(dir.path().join("docs/readme.md"), "readme").unwrap();
+
+        let results = run(
+            "guides",
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            /*cancel_flag*/ None,
+        )
+        .expect("run ok");
+
+        assert!(results.matches.iter().any(|m| {
+            m.path == std::path::Path::new("docs").join("guides")
+                && m.match_type == MatchType::Directory
+        }));
+    }
+
+    #[test]
     fn cancel_exits_run() {
-        let dir = create_temp_tree(200);
+        let dir = create_temp_tree(/*file_count*/ 200);
         let cancel_flag = Arc::new(AtomicBool::new(true));
         let search_dir = dir.path().to_path_buf();
         let options = FileSearchOptions {
@@ -1019,7 +1070,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1039,7 +1090,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1083,7 +1134,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1103,7 +1154,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(
@@ -1123,7 +1174,7 @@ mod tests {
                 compute_indices: false,
                 respect_gitignore: true,
             },
-            None,
+            /*cancel_flag*/ None,
         )
         .expect("run ok");
         assert!(

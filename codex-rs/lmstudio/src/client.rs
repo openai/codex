@@ -1,5 +1,5 @@
-use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::config::Config;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use std::io;
 use std::path::Path;
 
@@ -125,7 +125,7 @@ impl LMStudioClient {
 
     // Find lms, checking fallback paths if not in PATH
     fn find_lms() -> std::io::Result<String> {
-        Self::find_lms_with_home_dir(None)
+        Self::find_lms_with_home_dir(/*home_dir*/ None)
     }
 
     fn find_lms_with_home_dir(home_dir: Option<&str>) -> std::io::Result<String> {

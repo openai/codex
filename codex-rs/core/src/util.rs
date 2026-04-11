@@ -4,10 +4,9 @@ use std::time::Duration;
 
 use codex_protocol::ThreadId;
 use rand::Rng;
-use tracing::debug;
 use tracing::error;
 
-use crate::parse_command::shlex_join;
+use codex_shell_command::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
@@ -37,6 +36,55 @@ macro_rules! feedback_tags {
     };
 }
 
+struct Auth401FeedbackSnapshot<'a> {
+    request_id: &'a str,
+    cf_ray: &'a str,
+    error: &'a str,
+    error_code: &'a str,
+}
+
+impl<'a> Auth401FeedbackSnapshot<'a> {
+    fn from_optional_fields(
+        request_id: Option<&'a str>,
+        cf_ray: Option<&'a str>,
+        error: Option<&'a str>,
+        error_code: Option<&'a str>,
+    ) -> Self {
+        Self {
+            request_id: request_id.unwrap_or(""),
+            cf_ray: cf_ray.unwrap_or(""),
+            error: error.unwrap_or(""),
+            error_code: error_code.unwrap_or(""),
+        }
+    }
+}
+
+pub(crate) fn emit_feedback_auth_recovery_tags(
+    auth_recovery_mode: &str,
+    auth_recovery_phase: &str,
+    auth_recovery_outcome: &str,
+    auth_request_id: Option<&str>,
+    auth_cf_ray: Option<&str>,
+    auth_error: Option<&str>,
+    auth_error_code: Option<&str>,
+) {
+    let auth_401 = Auth401FeedbackSnapshot::from_optional_fields(
+        auth_request_id,
+        auth_cf_ray,
+        auth_error,
+        auth_error_code,
+    );
+    feedback_tags!(
+        auth_recovery_mode = auth_recovery_mode,
+        auth_recovery_phase = auth_recovery_phase,
+        auth_recovery_outcome = auth_recovery_outcome,
+        auth_401_request_id = auth_401.request_id,
+        auth_401_cf_ray = auth_401.cf_ray,
+        auth_401_error = auth_401.error,
+        auth_401_error_code = auth_401.error_code
+    );
+}
+
 pub fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
     let base = (INITIAL_DELAY_MS as f64 * exp) as u64;
@@ -50,21 +98,6 @@ pub(crate) fn error_or_panic(message: impl std::string::ToString) {
     } else {
         error!("{}", message.to_string());
     }
-}
-
-pub(crate) fn try_parse_error_message(text: &str) -> String {
-    debug!("Parsing server error response: {}", text);
-    let json = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
-    if let Some(error) = json.get("error")
-        && let Some(message) = error.get("message")
-        && let Some(message_str) = message.as_str()
-    {
-        return message_str.to_string();
-    }
-    if text.is_empty() {
-        return "Unknown error".to_string();
-    }
-    text.to_string()
 }
 
 pub fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {

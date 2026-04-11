@@ -315,7 +315,7 @@ mod tests {
         };
 
         outgoing_message_sender
-            .send_event_as_notification(&event, None)
+            .send_event_as_notification(&event, /*meta*/ None)
             .await;
 
         let result = outgoing_rx.recv().await.unwrap();

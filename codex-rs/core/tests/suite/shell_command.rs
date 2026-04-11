@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use codex_core::features::Feature;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -113,7 +112,13 @@ async fn shell_command_works() -> anyhow::Result<()> {
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call";
-    mount_shell_responses(&harness, call_id, "echo 'hello, world'", None).await;
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "echo 'hello, world'",
+        /*login*/ None,
+    )
+    .await;
     harness.submit("run the echo command").await?;
 
     let output = harness.function_call_stdout(call_id).await;
@@ -184,7 +189,13 @@ async fn pipe_output_with_login() -> anyhow::Result<()> {
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call-second-extra-no-login";
-    mount_shell_responses(&harness, call_id, "echo 'hello, world' | cat", None).await;
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "echo 'hello, world' | cat",
+        /*login*/ None,
+    )
+    .await;
     harness.submit("run the command without login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
@@ -225,7 +236,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
         &harness,
         call_id,
         command,
-        None,
+        /*login*/ None,
         Duration::from_millis(200),
     )
     .await;
@@ -245,28 +256,23 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// This test verifies that a shell, particularly PowerShell, can correctly
+/// handle unicode output when the UTF-8 BOM is used. See
+/// https://github.com/openai/codex/pull/7902 for more context.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(true ; "with_login")]
 #[test_case(false ; "without_login")]
 async fn unicode_output(login: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    #[allow(clippy::expect_used)]
-    let harness = shell_command_harness_with(|builder| {
-        builder.with_model("gpt-5.2").with_config(|config| {
-            config
-                .features
-                .enable(Feature::PowershellUtf8)
-                .expect("test config should allow feature update");
-        })
-    })
-    .await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.2")).await?;
 
-    // We use a child process on windows instead of a direct builtin like 'echo' to ensure that Powershell
-    // config is actually being set correctly.
     let call_id = "unicode_output";
     let command = if cfg!(windows) {
-        "cmd /c echo naïve_café"
+        // We use a child process on Windows instead of a PowerShell command
+        // like `Write-Output` to ensure that the Powershell config is set
+        // correctly.
+        "cmd.exe /c echo naïve_café"
     } else {
         "echo \"naïve_café\""
     };
@@ -286,16 +292,7 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
 async fn unicode_output_with_newlines(login: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    #[allow(clippy::expect_used)]
-    let harness = shell_command_harness_with(|builder| {
-        builder.with_model("gpt-5.2").with_config(|config| {
-            config
-                .features
-                .enable(Feature::PowershellUtf8)
-                .expect("test config should allow feature update");
-        })
-    })
-    .await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.2")).await?;
 
     let call_id = "unicode_output";
     mount_shell_responses_with_timeout(

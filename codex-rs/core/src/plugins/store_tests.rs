@@ -1,18 +1,36 @@
 use super::*;
+use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
-fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
+fn write_plugin_with_version(
+    root: &Path,
+    dir_name: &str,
+    manifest_name: &str,
+    manifest_version: Option<&str>,
+) {
     let plugin_root = root.join(dir_name);
     fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
     fs::create_dir_all(plugin_root.join("skills")).unwrap();
+    let version = manifest_version
+        .map(|manifest_version| format!(r#","version":"{manifest_version}""#))
+        .unwrap_or_default();
     fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        format!(r#"{{"name":"{manifest_name}"}}"#),
+        format!(r#"{{"name":"{manifest_name}"{version}}}"#),
     )
     .unwrap();
     fs::write(plugin_root.join("skills/SKILL.md"), "skill").unwrap();
     fs::write(plugin_root.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+}
+
+fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
+    write_plugin_with_version(
+        root,
+        dir_name,
+        manifest_name,
+        /*manifest_version*/ None,
+    );
 }
 
 #[test]
@@ -110,6 +128,62 @@ fn install_with_version_uses_requested_cache_version() {
 }
 
 #[test]
+fn install_uses_manifest_version_when_present() {
+    let tmp = tempdir().unwrap();
+    write_plugin_with_version(
+        tmp.path(),
+        "sample-plugin",
+        "sample-plugin",
+        Some("1.2.3-beta+7"),
+    );
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
+            plugin_id.clone(),
+        )
+        .unwrap();
+
+    let installed_path = tmp
+        .path()
+        .join("plugins/cache/debug/sample-plugin/1.2.3-beta+7");
+    assert_eq!(
+        result,
+        PluginInstallResult {
+            plugin_id,
+            plugin_version: "1.2.3-beta+7".to_string(),
+            installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
+        }
+    );
+    assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
+}
+
+#[test]
+fn install_rejects_blank_manifest_version() {
+    let tmp = tempdir().unwrap();
+    write_plugin_with_version(tmp.path(), "sample-plugin", "sample-plugin", Some("   "));
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let err = PluginStore::new(tmp.path().to_path_buf())
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
+            plugin_id,
+        )
+        .expect_err("blank manifest version should be rejected");
+    let err = err.to_string().replace('\\', "/");
+
+    assert!(
+        err.starts_with("invalid plugin version in manifest "),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.ends_with("sample-plugin/.codex-plugin/plugin.json: must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn active_plugin_version_reads_version_directory_name() {
     let tmp = tempdir().unwrap();
     write_plugin(
@@ -127,6 +201,50 @@ fn active_plugin_version_reads_version_directory_name() {
     assert_eq!(
         store.active_plugin_root(&plugin_id).unwrap().as_path(),
         tmp.path().join("plugins/cache/debug/sample-plugin/local")
+    );
+}
+
+#[test]
+fn active_plugin_version_prefers_default_local_version_when_multiple_versions_exist() {
+    let tmp = tempdir().unwrap();
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/0123456789abcdef",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/local",
+        "sample-plugin",
+    );
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some("local".to_string())
+    );
+}
+
+#[test]
+fn active_plugin_version_returns_last_sorted_version_when_default_is_missing() {
+    let tmp = tempdir().unwrap();
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/0123456789abcdef",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/fedcba9876543210",
+        "sample-plugin",
+    );
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some("fedcba9876543210".to_string())
     );
 }
 

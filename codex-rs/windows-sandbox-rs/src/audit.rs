@@ -33,10 +33,10 @@ const SKIP_DIR_SUFFIXES: &[&str] = &[
 ];
 
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
-    if let Ok(abs) = p.canonicalize() {
-        if set.insert(abs.clone()) {
-            out.push(abs);
-        }
+    if let Ok(abs) = p.canonicalize()
+        && set.insert(abs.clone())
+    {
+        out.push(abs);
     }
 }
 
@@ -81,7 +81,7 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
     let mut world = world_sid()?;
     let psid_world = world.as_mut_ptr() as *mut c_void;
     let write_mask = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES;
-    path_mask_allows(path, &[psid_world], write_mask, false)
+    path_mask_allows(path, &[psid_world], write_mask, /*require_all_bits*/ false)
 }
 
 pub fn audit_everyone_writable(
@@ -194,8 +194,7 @@ pub fn audit_everyone_writable(
         }
         crate::logging::log_note(
             &format!(
-                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
-                list
+                "AUDIT: world-writable scan FAILED; cwd={cwd:?}; checked={checked}; duration_ms={elapsed_ms}; flagged:{list}",
             ),
             logs_base_dir,
         );
@@ -229,7 +228,7 @@ pub fn apply_world_writable_scan_and_denies(
         logs_base_dir,
     ) {
         log_note(
-            &format!("AUDIT: failed to apply capability deny ACEs: {}", err),
+            &format!("AUDIT: failed to apply capability deny ACEs: {err}"),
             logs_base_dir,
         );
     }

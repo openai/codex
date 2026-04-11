@@ -3,9 +3,12 @@
 
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
+use codex_exec_server::EnvironmentManager;
+use codex_login::default_client::set_default_client_residency_requirement;
 use codex_utils_cli::CliConfigOverrides;
 
 use rmcp::model::ClientNotification;
@@ -55,6 +58,7 @@ pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
 ) -> IoResult<()> {
+    let environment_manager = Arc::new(EnvironmentManager::from_env());
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
     let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
@@ -68,6 +72,7 @@ pub async fn run_main(
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
+    set_default_client_residency_requirement(config.enforce_residency.value());
 
     let otel = codex_core::otel_init::build_provider(
         &config,
@@ -127,7 +132,8 @@ pub async fn run_main(
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             arg0_paths,
-            std::sync::Arc::new(config),
+            Arc::new(config),
+            environment_manager,
         );
         async move {
             while let Some(msg) = incoming_rx.recv().await {
@@ -177,8 +183,8 @@ pub async fn run_main(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_config::types::OtelExporterKind;
     use codex_core::config::ConfigBuilder;
-    use codex_core::config::types::OtelExporterKind;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempfile::TempDir;

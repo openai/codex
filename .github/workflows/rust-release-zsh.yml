@@ -1,0 +1,95 @@
+name: rust-release-zsh
+
+on:
+  workflow_call:
+
+env:
+  ZSH_COMMIT: 77045ef899e53b9598bebc5a41db93a548a40ca6
+  ZSH_PATCH: codex-rs/shell-escalation/patches/zsh-exec-wrapper.patch
+
+jobs:
+  linux:
+    name: Build zsh (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    container:
+      image: ${{ matrix.image }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: ubuntu:24.04
+            archive_name: codex-zsh-x86_64-unknown-linux-musl.tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: arm64v8/ubuntu:24.04
+            archive_name: codex-zsh-aarch64-unknown-linux-musl.tar.gz
+
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            autoconf \
+            bison \
+            build-essential \
+            ca-certificates \
+            gettext \
+            git \
+            libncursesw5-dev
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Build, smoke-test, and stage zsh artifact
+        shell: bash
+        run: |
+          "${GITHUB_WORKSPACE}/.github/scripts/build-zsh-release-artifact.sh" \
+            "dist/zsh/${{ matrix.target }}/${{ matrix.archive_name }}"
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: codex-zsh-${{ matrix.target }}
+          path: dist/zsh/${{ matrix.target }}/*
+
+  darwin:
+    name: Build zsh (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            variant: macos-15
+            archive_name: codex-zsh-aarch64-apple-darwin.tar.gz
+
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v autoconf >/dev/null 2>&1; then
+            brew install autoconf
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Build, smoke-test, and stage zsh artifact
+        shell: bash
+        run: |
+          "${GITHUB_WORKSPACE}/.github/scripts/build-zsh-release-artifact.sh" \
+            "dist/zsh/${{ matrix.target }}/${{ matrix.archive_name }}"
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: codex-zsh-${{ matrix.target }}
+          path: dist/zsh/${{ matrix.target }}/*

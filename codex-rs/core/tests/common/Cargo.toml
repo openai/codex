@@ -7,22 +7,36 @@ license.workspace = true
 [lib]
 path = "lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 assert_cmd = { workspace = true }
 base64 = { workspace = true }
+codex-arg0 = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
+codex-login = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 ctor = { workspace = true }
 futures = { workspace = true }
 notify = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["net", "time"] }
 tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }

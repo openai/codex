@@ -1,31 +1,59 @@
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+
+pub struct ElevatedSandboxCaptureRequest<'a> {
+    pub policy_json_or_preset: &'a str,
+    pub sandbox_policy_cwd: &'a Path,
+    pub codex_home: &'a Path,
+    pub command: Vec<String>,
+    pub cwd: &'a Path,
+    pub env_map: HashMap<String, String>,
+    pub timeout_ms: Option<u64>,
+    pub use_private_desktop: bool,
+    pub proxy_enforced: bool,
+    pub read_roots_override: Option<&'a [PathBuf]>,
+    pub write_roots_override: Option<&'a [PathBuf]>,
+    pub deny_write_paths_override: &'a [PathBuf],
+}
+
 mod windows_impl {
+    use super::ElevatedSandboxCaptureRequest;
     use crate::acl::allow_null_device;
-    use crate::allow::compute_allow_paths;
-    use crate::allow::AllowDenyPaths;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
-    use crate::helper_materialization::resolve_helper_for_launch;
     use crate::helper_materialization::HelperExecutable;
+    use crate::helper_materialization::resolve_helper_for_launch;
     use crate::identity::require_logon_sandbox_creds;
+    use crate::ipc_framed::FramedMessage;
+    use crate::ipc_framed::Message;
+    use crate::ipc_framed::OutputStream;
+    use crate::ipc_framed::SpawnRequest;
+    use crate::ipc_framed::decode_bytes;
+    use crate::ipc_framed::read_frame;
+    use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
     use crate::logging::log_note;
     use crate::logging::log_start;
     use crate::logging::log_success;
-    use crate::policy::parse_policy;
     use crate::policy::SandboxPolicy;
+    use crate::policy::parse_policy;
     use crate::token::convert_string_sid_to_sid;
     use crate::winutil::quote_windows_arg;
+    use crate::winutil::resolve_sid;
+    use crate::winutil::string_from_sid_bytes;
     use crate::winutil::to_wide;
     use anyhow::Result;
-    use rand::rngs::SmallRng;
     use rand::Rng;
     use rand::SeedableRng;
+    use rand::rngs::SmallRng;
     use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::fs;
+    use std::fs::File;
     use std::io;
+    use std::os::windows::io::FromRawHandle;
     use std::path::Path;
     use std::path::PathBuf;
     use std::ptr;
@@ -38,15 +66,12 @@ mod windows_impl {
     use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
     use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
     use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
-    // PIPE_ACCESS_DUPLEX is 0x00000003; not exposed in windows-sys 0.52, so use the value directly.
-    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+    const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
+    const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
     use windows_sys::Win32::System::Pipes::PIPE_READMODE_BYTE;
     use windows_sys::Win32::System::Pipes::PIPE_TYPE_BYTE;
     use windows_sys::Win32::System::Pipes::PIPE_WAIT;
     use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
-    use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
-    use windows_sys::Win32::System::Threading::INFINITE;
     use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
     use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
@@ -61,16 +86,16 @@ mod windows_impl {
                 return Some(cur);
             }
             if marker.is_file() {
-                if let Ok(txt) = std::fs::read_to_string(&marker) {
-                    if let Some(rest) = txt.trim().strip_prefix("gitdir:") {
-                        let gitdir = rest.trim();
-                        let resolved = if Path::new(gitdir).is_absolute() {
-                            PathBuf::from(gitdir)
-                        } else {
-                            cur.join(gitdir)
-                        };
-                        return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
-                    }
+                if let Ok(txt) = std::fs::read_to_string(&marker)
+                    && let Some(rest) = txt.trim().strip_prefix("gitdir:")
+                {
+                    let gitdir = rest.trim();
+                    let resolved = if Path::new(gitdir).is_absolute() {
+                        PathBuf::from(gitdir)
+                    } else {
+                        cur.join(gitdir)
+                    };
+                    return resolved.parent().map(Path::to_path_buf).or(Some(cur));
                 }
                 return Some(cur);
             }
@@ -120,13 +145,16 @@ mod windows_impl {
     /// Generates a unique named-pipe path used to communicate with the runner process.
     fn pipe_name(suffix: &str) -> String {
         let mut rng = SmallRng::from_entropy();
-        format!(r"\\.\pipe\codex-runner-{:x}-{}", rng.gen::<u128>(), suffix)
+        format!(
+            r"\\.\pipe\codex-runner-{:x}-{}",
+            rng.r#gen::<u128>(),
+            suffix
+        )
     }
 
-    /// Creates a named pipe with permissive ACLs so the sandbox user can connect.
-    fn create_named_pipe(name: &str, access: u32) -> io::Result<HANDLE> {
-        // Allow sandbox users to connect by granting Everyone full access on the pipe.
-        let sddl = to_wide("D:(A;;GA;;;WD)");
+    /// Creates a named pipe whose DACL only allows the sandbox user to connect.
+    fn create_named_pipe(name: &str, access: u32, sandbox_sid: &str) -> io::Result<HANDLE> {
+        let sddl = to_wide(format!("D:(A;;GA;;;{sandbox_sid})"));
         let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
         let ok = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -182,52 +210,64 @@ mod windows_impl {
 
     pub use crate::windows_impl::CaptureResult;
 
-    #[derive(serde::Serialize)]
-    struct RunnerPayload {
-        policy_json_or_preset: String,
-        sandbox_policy_cwd: PathBuf,
-        // Writable log dir for sandbox user (.codex in sandbox profile).
-        codex_home: PathBuf,
-        // Real user's CODEX_HOME for shared data (caps, config).
-        real_codex_home: PathBuf,
-        cap_sids: Vec<String>,
-        request_file: Option<PathBuf>,
-        command: Vec<String>,
-        cwd: PathBuf,
-        env_map: HashMap<String, String>,
-        timeout_ms: Option<u64>,
-        use_private_desktop: bool,
-        stdin_pipe: String,
-        stdout_pipe: String,
-        stderr_pipe: String,
+    fn read_spawn_ready(pipe_read: &mut File) -> Result<()> {
+        let msg = read_frame(pipe_read)?
+            .ok_or_else(|| anyhow::anyhow!("runner pipe closed before spawn_ready"))?;
+        match msg.message {
+            Message::SpawnReady { .. } => Ok(()),
+            Message::Error { payload } => Err(anyhow::anyhow!("runner error: {}", payload.message)),
+            other => Err(anyhow::anyhow!(
+                "expected spawn_ready from runner, got {other:?}"
+            )),
+        }
     }
 
     /// Launches the command runner under the sandbox user and captures its output.
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
-        policy_json_or_preset: &str,
-        sandbox_policy_cwd: &Path,
-        codex_home: &Path,
-        command: Vec<String>,
-        cwd: &Path,
-        mut env_map: HashMap<String, String>,
-        timeout_ms: Option<u64>,
-        use_private_desktop: bool,
+        request: ElevatedSandboxCaptureRequest<'_>,
     ) -> Result<CaptureResult> {
+        let ElevatedSandboxCaptureRequest {
+            policy_json_or_preset,
+            sandbox_policy_cwd,
+            codex_home,
+            command,
+            cwd,
+            mut env_map,
+            timeout_ms,
+            use_private_desktop,
+            proxy_enforced,
+            read_roots_override,
+            write_roots_override,
+            deny_write_paths_override,
+        } = request;
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
         inject_git_safe_directory(&mut env_map, cwd, None);
-        let current_dir = cwd.to_path_buf();
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
         ensure_codex_home_exists(&sandbox_base)?;
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let sandbox_creds =
-            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
+        let sandbox_creds = require_logon_sandbox_creds(
+            &policy,
+            sandbox_policy_cwd,
+            cwd,
+            &env_map,
+            codex_home,
+            read_roots_override,
+            write_roots_override,
+            deny_write_paths_override,
+            proxy_enforced,
+        )?;
+        let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
+            io::Error::new(io::ErrorKind::PermissionDenied, err.to_string())
+        })?;
+        let sandbox_sid = string_from_sid_bytes(&sandbox_sid)
+            .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))?;
         // Build capability SID for ACL grants.
         if matches!(
             &policy,
@@ -235,93 +275,49 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
-        if !policy.has_full_disk_read_access() {
-            anyhow::bail!(
-                "Restricted read-only access is not yet supported by the Windows sandbox backend"
-            );
-        }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sids) = match &policy {
-            SandboxPolicy::ReadOnly { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                vec![caps.readonly.clone()],
-            ),
-            SandboxPolicy::WorkspaceWrite { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                vec![
-                    caps.workspace.clone(),
-                    crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
-                ],
-            ),
+            SandboxPolicy::ReadOnly { .. } => {
+                #[allow(clippy::unwrap_used)]
+                let psid = unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() };
+                (psid, vec![caps.readonly])
+            }
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                #[allow(clippy::unwrap_used)]
+                let psid = unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() };
+                (
+                    psid,
+                    vec![
+                        caps.workspace,
+                        crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
+                    ],
+                )
+            }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
             }
         };
 
-        let AllowDenyPaths { allow: _, deny: _ } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
-        // Deny/allow ACEs are now applied during setup; avoid per-command churn.
         unsafe {
             allow_null_device(psid_to_use);
         }
 
-        // Prepare named pipes for runner.
-        let stdin_name = pipe_name("stdin");
-        let stdout_name = pipe_name("stdout");
-        let stderr_name = pipe_name("stderr");
-        let h_stdin_pipe = create_named_pipe(
-            &stdin_name,
-            PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        )?;
-        let h_stdout_pipe = create_named_pipe(
-            &stdout_name,
-            PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        )?;
-        let h_stderr_pipe = create_named_pipe(
-            &stderr_name,
-            PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        )?;
+        let pipe_in_name = pipe_name("in");
+        let pipe_out_name = pipe_name("out");
+        let h_pipe_in = create_named_pipe(&pipe_in_name, PIPE_ACCESS_OUTBOUND, &sandbox_sid)?;
+        let h_pipe_out = create_named_pipe(&pipe_out_name, PIPE_ACCESS_INBOUND, &sandbox_sid)?;
 
         // Launch runner as sandbox user via CreateProcessWithLogonW.
         let runner_exe = find_runner_exe(codex_home, logs_base_dir);
         let runner_cmdline = runner_exe
             .to_str()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
-        // Write request to a file under the sandbox base dir for the runner to read.
-        // TODO(iceweasel) - use a different mechanism for invoking the runner.
-        let base_tmp = sandbox_base.join("requests");
-        std::fs::create_dir_all(&base_tmp)?;
-        let mut rng = SmallRng::from_entropy();
-        let req_file = base_tmp.join(format!("request-{:x}.json", rng.gen::<u128>()));
-        let payload = RunnerPayload {
-            policy_json_or_preset: policy_json_or_preset.to_string(),
-            sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
-            codex_home: sandbox_base.clone(),
-            real_codex_home: codex_home.to_path_buf(),
-            cap_sids: cap_sids.clone(),
-            request_file: Some(req_file.clone()),
-            command: command.clone(),
-            cwd: cwd.to_path_buf(),
-            env_map: env_map.clone(),
-            timeout_ms,
-            use_private_desktop,
-            stdin_pipe: stdin_name.clone(),
-            stdout_pipe: stdout_name.clone(),
-            stderr_pipe: stderr_name.clone(),
-        };
-        let payload_json = serde_json::to_string(&payload)?;
-        if let Err(e) = fs::write(&req_file, &payload_json) {
-            log_note(
-                &format!("error writing request file {}: {}", req_file.display(), e),
-                logs_base_dir,
-            );
-            return Err(e.into());
-        }
         let runner_full_cmd = format!(
-            "{} {}",
+            "{} {} {}",
             quote_windows_arg(&runner_cmdline),
-            quote_windows_arg(&format!("--request-file={}", req_file.display()))
+            quote_windows_arg(&format!("--pipe-in={pipe_in_name}")),
+            quote_windows_arg(&format!("--pipe-out={pipe_out_name}"))
         );
         let mut cmdline_vec: Vec<u16> = to_wide(&runner_full_cmd);
         let exe_w: Vec<u16> = to_wide(&runner_cmdline);
@@ -378,76 +374,102 @@ mod windows_impl {
                 ),
                 logs_base_dir,
             );
-            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
+            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
         }
 
-        // Pipes are no longer passed as std handles; no stdin payload is sent.
-        connect_pipe(h_stdin_pipe)?;
-        connect_pipe(h_stdout_pipe)?;
-        connect_pipe(h_stderr_pipe)?;
-        unsafe {
-            CloseHandle(h_stdin_pipe);
-        }
-
-        // Read stdout/stderr.
-        let (tx_out, rx_out) = std::sync::mpsc::channel::<Vec<u8>>();
-        let (tx_err, rx_err) = std::sync::mpsc::channel::<Vec<u8>>();
-        let t_out = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 8192];
-            loop {
-                let mut read_bytes: u32 = 0;
-                let ok = unsafe {
-                    windows_sys::Win32::Storage::FileSystem::ReadFile(
-                        h_stdout_pipe,
-                        tmp.as_mut_ptr(),
-                        tmp.len() as u32,
-                        &mut read_bytes,
-                        std::ptr::null_mut(),
-                    )
-                };
-                if ok == 0 || read_bytes == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&tmp[..read_bytes as usize]);
-            }
-            let _ = tx_out.send(buf);
-        });
-        let t_err = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 8192];
-            loop {
-                let mut read_bytes: u32 = 0;
-                let ok = unsafe {
-                    windows_sys::Win32::Storage::FileSystem::ReadFile(
-                        h_stderr_pipe,
-                        tmp.as_mut_ptr(),
-                        tmp.len() as u32,
-                        &mut read_bytes,
-                        std::ptr::null_mut(),
-                    )
-                };
-                if ok == 0 || read_bytes == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&tmp[..read_bytes as usize]);
-            }
-            let _ = tx_err.send(buf);
-        });
-
-        let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
-        let res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
-        let timed_out = res == 0x0000_0102;
-        let mut exit_code_u32: u32 = 1;
-        if !timed_out {
+        if let Err(err) = connect_pipe(h_pipe_in) {
             unsafe {
-                GetExitCodeProcess(pi.hProcess, &mut exit_code_u32);
+                CloseHandle(h_pipe_in);
+                CloseHandle(h_pipe_out);
+                if pi.hThread != 0 {
+                    CloseHandle(pi.hThread);
+                }
+                if pi.hProcess != 0 {
+                    CloseHandle(pi.hProcess);
+                }
             }
-        } else {
-            unsafe {
-                windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
-            }
+            return Err(err.into());
         }
+        if let Err(err) = connect_pipe(h_pipe_out) {
+            unsafe {
+                CloseHandle(h_pipe_in);
+                CloseHandle(h_pipe_out);
+                if pi.hThread != 0 {
+                    CloseHandle(pi.hThread);
+                }
+                if pi.hProcess != 0 {
+                    CloseHandle(pi.hProcess);
+                }
+            }
+            return Err(err.into());
+        }
+
+        let result = (|| -> Result<CaptureResult> {
+            let mut pipe_write = unsafe { File::from_raw_handle(h_pipe_in as _) };
+            let mut pipe_read = unsafe { File::from_raw_handle(h_pipe_out as _) };
+
+            let spawn_request = FramedMessage {
+                version: 1,
+                message: Message::SpawnRequest {
+                    payload: Box::new(SpawnRequest {
+                        command: command.clone(),
+                        cwd: cwd.to_path_buf(),
+                        env: env_map.clone(),
+                        policy_json_or_preset: policy_json_or_preset.to_string(),
+                        sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+                        codex_home: sandbox_base.clone(),
+                        real_codex_home: codex_home.to_path_buf(),
+                        cap_sids,
+                        timeout_ms,
+                        tty: false,
+                        stdin_open: false,
+                        use_private_desktop,
+                    }),
+                },
+            };
+            write_frame(&mut pipe_write, &spawn_request)?;
+            read_spawn_ready(&mut pipe_read)?;
+            drop(pipe_write);
+
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let (exit_code, timed_out) = loop {
+                let msg = read_frame(&mut pipe_read)?
+                    .ok_or_else(|| anyhow::anyhow!("runner pipe closed before exit"))?;
+                match msg.message {
+                    Message::SpawnReady { .. } => {}
+                    Message::Output { payload } => {
+                        let bytes = decode_bytes(&payload.data_b64)?;
+                        match payload.stream {
+                            OutputStream::Stdout => stdout.extend_from_slice(&bytes),
+                            OutputStream::Stderr => stderr.extend_from_slice(&bytes),
+                        }
+                    }
+                    Message::Exit { payload } => break (payload.exit_code, payload.timed_out),
+                    Message::Error { payload } => {
+                        return Err(anyhow::anyhow!("runner error: {}", payload.message));
+                    }
+                    other => {
+                        return Err(anyhow::anyhow!(
+                            "unexpected runner message during capture: {other:?}"
+                        ));
+                    }
+                }
+            };
+
+            if exit_code == 0 {
+                log_success(&command, logs_base_dir);
+            } else {
+                log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
+            }
+
+            Ok(CaptureResult {
+                exit_code,
+                stdout,
+                stderr,
+                timed_out,
+            })
+        })();
 
         unsafe {
             if pi.hThread != 0 {
@@ -456,31 +478,9 @@ mod windows_impl {
             if pi.hProcess != 0 {
                 CloseHandle(pi.hProcess);
             }
-            CloseHandle(h_stdout_pipe);
-            CloseHandle(h_stderr_pipe);
-        }
-        let _ = t_out.join();
-        let _ = t_err.join();
-        let stdout = rx_out.recv().unwrap_or_default();
-        let stderr = rx_err.recv().unwrap_or_default();
-        let exit_code = if timed_out {
-            128 + 64
-        } else {
-            exit_code_u32 as i32
-        };
-
-        if exit_code == 0 {
-            log_success(&command, logs_base_dir);
-        } else {
-            log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
         }
 
-        Ok(CaptureResult {
-            exit_code,
-            stdout,
-            stderr,
-            timed_out,
-        })
+        result
     }
 
     #[cfg(test)]
@@ -499,12 +499,12 @@ mod windows_impl {
 
         #[test]
         fn applies_network_block_when_access_is_disabled() {
-            assert!(!workspace_policy(false).has_full_network_access());
+            assert!(!workspace_policy(/*network_access*/ false).has_full_network_access());
         }
 
         #[test]
         fn skips_network_block_when_access_is_allowed() {
-            assert!(workspace_policy(true).has_full_network_access());
+            assert!(workspace_policy(/*network_access*/ true).has_full_network_access());
         }
 
         #[test]
@@ -519,11 +519,9 @@ pub use windows_impl::run_windows_sandbox_capture;
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use anyhow::bail;
+    use super::ElevatedSandboxCaptureRequest;
     use anyhow::Result;
-    use codex_protocol::protocol::SandboxPolicy;
-    use std::collections::HashMap;
-    use std::path::Path;
+    use anyhow::bail;
 
     #[derive(Debug, Default)]
     pub struct CaptureResult {
@@ -536,14 +534,7 @@ mod stub {
     /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
-        _policy_json_or_preset: &str,
-        _sandbox_policy_cwd: &Path,
-        _codex_home: &Path,
-        _command: Vec<String>,
-        _cwd: &Path,
-        _env_map: HashMap<String, String>,
-        _timeout_ms: Option<u64>,
-        _use_private_desktop: bool,
+        _request: ElevatedSandboxCaptureRequest<'_>,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

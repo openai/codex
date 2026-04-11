@@ -3,9 +3,12 @@ use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
+use crate::setup::offline_proxy_settings_from_env;
 use crate::setup::run_elevated_setup;
+use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
+use crate::setup::SandboxNetworkIdentity;
 use crate::setup::SandboxUserRecord;
 use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
@@ -17,6 +20,7 @@ use base64::Engine;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 struct SandboxIdentity {
@@ -33,7 +37,8 @@ pub struct SandboxCreds {
 /// Returns true when the on-disk setup artifacts exist and match the current
 /// setup version.
 ///
-/// This reuses the same marker/users validation used by `require_logon_sandbox_creds`.
+/// This is a coarse readiness check; `require_logon_sandbox_creds` performs the
+/// additional runtime validation for offline firewall settings.
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
     if !marker_ok {
@@ -101,7 +106,10 @@ fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     Ok(pwd)
 }
 
-fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<SandboxIdentity>> {
+fn select_identity(
+    network_identity: SandboxNetworkIdentity,
+    codex_home: &Path,
+) -> Result<Option<SandboxIdentity>> {
     let _marker = match load_marker(codex_home)? {
         Some(m) if m.version_matches() => m,
         _ => return Ok(None),
@@ -110,43 +118,59 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
         Some(u) if u.version_matches() => u,
         _ => return Ok(None),
     };
-    let chosen = if !policy.has_full_network_access() {
-        users.offline
-    } else {
-        users.online
+    let chosen = match network_identity {
+        SandboxNetworkIdentity::Offline => users.offline,
+        SandboxNetworkIdentity::Online => users.online,
     };
     let password = decode_password(&chosen)?;
     Ok(Some(SandboxIdentity {
-        username: chosen.username.clone(),
+        username: chosen.username,
         password,
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn require_logon_sandbox_creds(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
+    read_roots_override: Option<&[PathBuf]>,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_write_paths_override: &[PathBuf],
+    proxy_enforced: bool,
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
-    let needed_read = gather_read_roots(command_cwd, policy, codex_home);
-    let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
+    let needed_read = read_roots_override
+        .map(<[PathBuf]>::to_vec)
+        .unwrap_or_else(|| gather_read_roots(command_cwd, policy, codex_home));
+    let needed_write = write_roots_override
+        .map(<[PathBuf]>::to_vec)
+        .unwrap_or_else(|| gather_write_roots(policy, policy_cwd, command_cwd, env_map));
+    let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
+    let desired_offline_proxy_settings =
+        offline_proxy_settings_from_env(env_map, network_identity);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
-    let mut _existing_marker: Option<SetupMarker> = None;
 
     let mut identity = match load_marker(codex_home)? {
         Some(marker) if marker.version_matches() => {
-            _existing_marker = Some(marker.clone());
-            let selected = select_identity(policy, codex_home)?;
-            if selected.is_none() {
-                setup_reason =
-                    Some("sandbox users missing or incompatible with marker version".to_string());
+            if let Some(reason) =
+                marker.request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
+            {
+                setup_reason = Some(reason);
+                None
+            } else {
+                let selected = select_identity(network_identity, codex_home)?;
+                if selected.is_none() {
+                    setup_reason =
+                        Some("sandbox users missing or incompatible with marker version".to_string());
+                }
+                selected
             }
-            selected
         }
         _ => {
             setup_reason = Some("sandbox setup marker missing or incompatible".to_string());
@@ -164,18 +188,38 @@ pub fn require_logon_sandbox_creds(
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }
         run_elevated_setup(
+            crate::setup::SandboxSetupRequest {
+                policy,
+                policy_cwd,
+                command_cwd,
+                env_map,
+                codex_home,
+                proxy_enforced,
+            },
+            crate::setup::SetupRootOverrides {
+                read_roots: Some(needed_read.clone()),
+                write_roots: Some(needed_write.clone()),
+                deny_write_paths: Some(deny_write_paths_override.to_vec()),
+            },
+        )?;
+        identity = select_identity(network_identity, codex_home)?;
+    }
+    // Always refresh ACLs (non-elevated) for current roots via the setup binary.
+    run_setup_refresh_with_overrides(
+        crate::setup::SandboxSetupRequest {
             policy,
             policy_cwd,
             command_cwd,
             env_map,
             codex_home,
-            Some(needed_read.clone()),
-            Some(needed_write.clone()),
-        )?;
-        identity = select_identity(policy, codex_home)?;
-    }
-    // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    crate::setup::run_setup_refresh(policy, policy_cwd, command_cwd, env_map, codex_home)?;
+            proxy_enforced,
+        },
+        crate::setup::SetupRootOverrides {
+            read_roots: Some(needed_read),
+            write_roots: Some(needed_write),
+            deny_write_paths: Some(deny_write_paths_override.to_vec()),
+        },
+    )?;
     let identity = identity.ok_or_else(|| {
         anyhow!(
             "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"

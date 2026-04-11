@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
@@ -268,7 +268,7 @@ async fn report_agent_job_result_rejects_wrong_thread() -> Result<()> {
         .expect("job_id from csv");
     let job = db.get_agent_job(job_id.as_str()).await?.expect("job");
     let items = db
-        .list_agent_job_items(job.id.as_str(), None, Some(10))
+        .list_agent_job_items(job.id.as_str(), /*status*/ None, Some(10))
         .await?;
     let item = items.first().expect("item");
     let wrong_thread_id = "00000000-0000-0000-0000-000000000000";

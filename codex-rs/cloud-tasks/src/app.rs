@@ -125,7 +125,7 @@ pub async fn load_tasks(
     // In later milestones, add a small debounce, spinner, and error display.
     let tasks = tokio::time::timeout(
         Duration::from_secs(5),
-        backend.list_tasks(env, Some(20), None),
+        backend.list_tasks(env, Some(20), /*cursor*/ None),
     )
     .await??;
     // Hide review-only tasks from the main list.
@@ -408,7 +408,7 @@ mod tests {
             &self,
             id: TaskId,
         ) -> codex_cloud_tasks_client::Result<TaskSummary> {
-            self.list_tasks(None, None, None)
+            self.list_tasks(/*env*/ None, /*limit*/ None, /*cursor*/ None)
                 .await?
                 .tasks
                 .into_iter()
@@ -497,7 +497,7 @@ mod tests {
         let backend = FakeBackend { by_env };
 
         // Act + Assert
-        let root = load_tasks(&backend, None).await.unwrap();
+        let root = load_tasks(&backend, /*env*/ None).await.unwrap();
         assert_eq!(root.len(), 2);
         assert_eq!(root[0].title, "root-1");
 

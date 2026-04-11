@@ -275,7 +275,12 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
-        if dacl_mask_allows(p_dacl, &[*sid], allow_mask, true) {
+        if dacl_mask_allows(
+            p_dacl,
+            &[*sid],
+            allow_mask,
+            /*require_all_bits*/ true,
+        ) {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {
@@ -322,13 +327,13 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
                 if !p_sd.is_null() {
                     LocalFree(p_sd as HLOCAL);
                 }
-                return Err(anyhow!("SetNamedSecurityInfoW failed: {}", code3));
+                return Err(anyhow!("SetNamedSecurityInfoW failed: {code3}"));
             }
         } else {
             if !p_sd.is_null() {
                 LocalFree(p_sd as HLOCAL);
             }
-            return Err(anyhow!("SetEntriesInAclW failed: {}", code2));
+            return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
     }
     if !p_sd.is_null() {
@@ -396,7 +401,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         &mut p_sd,
     );
     if code != ERROR_SUCCESS {
-        return Err(anyhow!("GetNamedSecurityInfoW failed: {}", code));
+        return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
     }
     // Already has write? Skip costly DACL rewrite.
     if dacl_has_write_allow_for_sid(p_dacl, psid) {
@@ -462,7 +467,7 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
         &mut p_sd,
     );
     if code != ERROR_SUCCESS {
-        return Err(anyhow!("GetNamedSecurityInfoW failed: {}", code));
+        return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
     }
     let mut added = false;
     if !dacl_has_write_deny_for_sid(p_dacl, psid) {

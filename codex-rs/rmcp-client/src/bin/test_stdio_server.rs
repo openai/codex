@@ -22,6 +22,7 @@ use rmcp::model::ResourceTemplate;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
+use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task;
@@ -85,11 +86,30 @@ impl TestToolServer {
         }))
         .expect("echo tool schema should deserialize");
 
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed(name),
             Cow::Borrowed(description),
             Arc::new(schema),
-        )
+        );
+        #[expect(clippy::expect_used)]
+        let output_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "echo": { "type": "string" },
+                "env": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "null" }
+                    ]
+                }
+            },
+            "required": ["echo", "env"],
+            "additionalProperties": false
+        }))
+        .expect("echo tool output schema should deserialize");
+        tool.output_schema = Some(Arc::new(output_schema));
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     fn image_tool() -> Tool {
@@ -101,11 +121,13 @@ impl TestToolServer {
         }))
         .expect("image tool schema should deserialize");
 
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed("image"),
             Cow::Borrowed("Return a single image content block."),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     /// Tool intended for manual testing of Codex TUI rendering for MCP image tool results.
@@ -154,13 +176,15 @@ impl TestToolServer {
         }))
         .expect("image_scenario tool schema should deserialize");
 
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed("image_scenario"),
             Cow::Borrowed(
                 "Return content blocks for manual testing of MCP image rendering scenarios.",
             ),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     fn memo_resource() -> Resource {

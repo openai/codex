@@ -36,7 +36,7 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 
 use crate::config::Config;
-use crate::config::types::HistoryPersistence;
+use codex_config::types::HistoryPersistence;
 
 use codex_protocol::ThreadId;
 #[cfg(unix)]
@@ -66,14 +66,22 @@ fn history_filepath(config: &Config) -> PathBuf {
     path
 }
 
-/// Append a `text` entry associated with `conversation_id` to the history file. Uses
-/// advisory file locking to ensure that concurrent writes do not interleave,
-/// which entails a small amount of blocking I/O internally.
-pub(crate) async fn append_entry(
-    text: &str,
-    conversation_id: &ThreadId,
-    config: &Config,
-) -> Result<()> {
+/// Append a `text` entry associated with `conversation_id` to the history file.
+///
+/// Uses advisory file locking (`File::try_lock`) with a retry loop to ensure
+/// concurrent writes from multiple TUI processes do not interleave. The lock
+/// acquisition and write are performed inside `spawn_blocking` so the caller's
+/// async runtime is not blocked.
+///
+/// The entry is silently skipped when `config.history.persistence` is
+/// [`HistoryPersistence::None`].
+///
+/// # Errors
+///
+/// Returns an I/O error if the history file cannot be opened/created, the
+/// system clock is before the Unix epoch, or the exclusive lock cannot be
+/// acquired after [`MAX_RETRIES`] attempts.
+pub async fn append_entry(text: &str, conversation_id: &ThreadId, config: &Config) -> Result<()> {
     match config.history.persistence {
         HistoryPersistence::SaveAll => {
             // Save everything: proceed.
@@ -243,22 +251,29 @@ fn trim_target_bytes(max_bytes: u64, newest_entry_len: u64) -> u64 {
     soft_cap_bytes.max(newest_entry_len)
 }
 
-/// Asynchronously fetch the history file's *identifier* (inode on Unix) and
-/// the current number of entries by counting newline characters.
-pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
+/// Asynchronously fetch the history file's *identifier* and current entry count.
+///
+/// The identifier is the file's inode on Unix or creation time on Windows.
+/// The entry count is derived by counting newline bytes in the file. Returns
+/// `(0, 0)` when the file does not exist or its metadata cannot be read. If
+/// metadata succeeds but the file cannot be opened or scanned, returns
+/// `(log_id, 0)` so callers can still detect that a history file exists.
+pub async fn history_metadata(config: &Config) -> (u64, usize) {
     let path = history_filepath(config);
     history_metadata_for_file(&path).await
 }
 
-/// Given a `log_id` (on Unix this is the file's inode number,
-/// on Windows this is the file's creation time) and a zero-based
-/// `offset`, return the corresponding `HistoryEntry` if the identifier matches
-/// the current history file **and** the requested offset exists. Any I/O or
-/// parsing errors are logged and result in `None`.
+/// Look up a single history entry by file identity and zero-based offset.
 ///
-/// Note this function is not async because it uses a sync advisory file
-/// locking API.
-pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
+/// Returns `Some(entry)` when the current history file's identifier (inode on
+/// Unix, creation time on Windows) matches `log_id` **and** a valid JSON
+/// record exists at `offset`. Returns `None` on any mismatch, I/O error, or
+/// parse failure, all of which are logged at `warn` level.
+///
+/// This function is synchronous because it acquires a shared advisory file lock
+/// via `File::try_lock_shared`. Callers on an async runtime should wrap it in
+/// `spawn_blocking`.
+pub fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
     let path = history_filepath(config);
     lookup_history_entry(&path, log_id, offset)
 }

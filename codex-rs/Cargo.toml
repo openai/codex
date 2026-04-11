@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "analytics",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -11,20 +12,27 @@ members = [
     "apply-patch",
     "arg0",
     "feedback",
+    "features",
     "codex-backend-openapi-models",
+    "code-mode",
     "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
+    "cloud-tasks-mock-client",
     "cli",
+    "collaboration-mode-templates",
     "connectors",
     "config",
     "shell-command",
     "shell-escalation",
     "skills",
     "core",
+    "core-skills",
     "hooks",
+    "instructions",
     "secrets",
     "exec",
+    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -32,19 +40,28 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "codex-mcp",
     "mcp-server",
+    "model-provider-info",
+    "models-manager",
     "network-proxy",
     "ollama",
     "process-hardening",
     "protocol",
+    "realtime-webrtc",
+    "rollout",
     "rmcp-client",
     "responses-api-proxy",
+    "response-debug-context",
+    "sandboxing",
     "stdio-to-uds",
     "otel",
     "tui",
+    "tools",
+    "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
-    "utils/git",
+    "git-utils",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -59,15 +76,18 @@ members = [
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
+    "utils/output-truncation",
+    "utils/path-utils",
+    "utils/plugins",
     "utils/fuzzy-match",
     "utils/stream-parser",
+    "utils/template",
     "codex-client",
     "codex-api",
     "state",
+    "terminal-detection",
     "codex-experimental-api-macros",
-    "test-macros",
-    "package-manager",
-    "artifacts",
+    "plugin",
 ]
 resolver = "2"
 
@@ -83,10 +103,9 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal
 app_test_support = { path = "app-server/tests/common" }
+codex-analytics = { path = "analytics" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
-codex-artifacts = { path = "artifacts" }
-codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
@@ -98,36 +117,53 @@ codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
+codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
 codex-cloud-requirements = { path = "cloud-requirements" }
-codex-connectors = { path = "connectors" }
+codex-cloud-tasks-client = { path = "cloud-tasks-client" }
+codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
+codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
+codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
+codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
+codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
+codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
-codex-git = { path = "utils/git" }
+codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-mcp = { path = "codex-mcp" }
 codex-mcp-server = { path = "mcp-server" }
+codex-model-provider-info = { path = "model-provider-info" }
+codex-models-manager = { path = "models-manager" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
+codex-plugin = { path = "plugin" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-realtime-webrtc = { path = "realtime-webrtc" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
+codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-rollout = { path = "rollout" }
+codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
-codex-test-macros = { path = "test-macros" }
+codex-terminal-detection = { path = "terminal-detection" }
+codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
@@ -140,6 +176,9 @@ codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
+codex-utils-output-truncation = { path = "utils/output-truncation" }
+codex-utils-path = { path = "utils/path-utils" }
+codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
@@ -147,6 +186,8 @@ codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
+codex-utils-template = { path = "utils/template" }
+codex-v8-poc = { path = "v8-poc" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -157,7 +198,7 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
-askama = "0.15.4"
+arc-swap = "1.9.0"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -172,6 +213,7 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
+constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
 crossterm = "0.28.1"
 csv = "1.3.1"
@@ -182,26 +224,26 @@ dirs = "6"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
 encoding_rs = "0.8.35"
-fd-lock = "4.0.4"
 env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
-flate2 = "1.1.4"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 globset = "0.4"
+hmac = "0.12.1"
 http = "1.3.1"
+iana-time-zone = "0.1.64"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
-iana-time-zone = "0.1.64"
 include_dir = "0.7.4"
 indexmap = "2.12.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
+jsonwebtoken = "9.3.1"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
@@ -228,6 +270,7 @@ portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
+quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
@@ -274,7 +317,6 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
-tar = "0.4.44"
 test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
@@ -305,10 +347,12 @@ unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
+v8 = "=146.4.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "8"
+whoami = "1.6.1"
 wildmatch = "2.6.1"
 zip = "2.4.2"
 zstd = "0.13"
@@ -361,7 +405,8 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets"
+    "codex-utils-template",
+    "codex-v8-poc",
 ]
 
 [profile.release]

@@ -1,7 +1,7 @@
 use super::*;
-use crate::config::types::WindowsToml;
-use crate::features::Features;
-use crate::features::FeaturesToml;
+use codex_config::types::WindowsToml;
+use codex_features::Features;
+use codex_features::FeaturesToml;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -52,8 +52,11 @@ fn elevated_wins_when_both_flags_are_enabled() {
 #[test]
 fn legacy_mode_prefers_elevated() {
     let mut entries = BTreeMap::new();
-    entries.insert("experimental_windows_sandbox".to_string(), true);
-    entries.insert("elevated_windows_sandbox".to_string(), true);
+    entries.insert(
+        "experimental_windows_sandbox".to_string(),
+        /*value*/ true,
+    );
+    entries.insert("elevated_windows_sandbox".to_string(), /*value*/ true);
 
     assert_eq!(
         legacy_windows_sandbox_mode_from_entries(&entries),
@@ -64,7 +67,10 @@ fn legacy_mode_prefers_elevated() {
 #[test]
 fn legacy_mode_supports_alias_key() {
     let mut entries = BTreeMap::new();
-    entries.insert("enable_experimental_windows_sandbox".to_string(), true);
+    entries.insert(
+        "enable_experimental_windows_sandbox".to_string(),
+        /*value*/ true,
+    );
 
     assert_eq!(
         legacy_windows_sandbox_mode_from_entries(&entries),
@@ -98,9 +104,12 @@ fn resolve_windows_sandbox_mode_prefers_profile_windows() {
 #[test]
 fn resolve_windows_sandbox_mode_falls_back_to_legacy_keys() {
     let mut entries = BTreeMap::new();
-    entries.insert("experimental_windows_sandbox".to_string(), true);
+    entries.insert(
+        "experimental_windows_sandbox".to_string(),
+        /*value*/ true,
+    );
     let cfg = ConfigToml {
-        features: Some(FeaturesToml { entries }),
+        features: Some(FeaturesToml::from(entries)),
         ..Default::default()
     };
 
@@ -113,20 +122,22 @@ fn resolve_windows_sandbox_mode_falls_back_to_legacy_keys() {
 #[test]
 fn resolve_windows_sandbox_mode_profile_legacy_false_blocks_top_level_legacy_true() {
     let mut profile_entries = BTreeMap::new();
-    profile_entries.insert("experimental_windows_sandbox".to_string(), false);
+    profile_entries.insert(
+        "experimental_windows_sandbox".to_string(),
+        /*value*/ false,
+    );
     let profile = ConfigProfile {
-        features: Some(FeaturesToml {
-            entries: profile_entries,
-        }),
+        features: Some(FeaturesToml::from(profile_entries)),
         ..Default::default()
     };
 
     let mut cfg_entries = BTreeMap::new();
-    cfg_entries.insert("experimental_windows_sandbox".to_string(), true);
+    cfg_entries.insert(
+        "experimental_windows_sandbox".to_string(),
+        /*value*/ true,
+    );
     let cfg = ConfigToml {
-        features: Some(FeaturesToml {
-            entries: cfg_entries,
-        }),
+        features: Some(FeaturesToml::from(cfg_entries)),
         ..Default::default()
     };
 

@@ -1,9 +1,15 @@
-use super::*;
-
+use codex_git_utils::GitInfo;
+use codex_git_utils::GitSha;
+use codex_git_utils::collect_git_info;
+use codex_git_utils::get_has_changes;
+use codex_git_utils::git_diff_to_remote;
+use codex_git_utils::recent_commits;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use core_test_support::skip_if_sandbox;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tokio::process::Command;
 
 // Helper function to create a test git repository
 async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
@@ -66,7 +72,7 @@ async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
 #[tokio::test]
 async fn test_recent_commits_non_git_directory_returns_empty() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let entries = recent_commits(temp_dir.path(), 10).await;
+    let entries = recent_commits(temp_dir.path(), /*limit*/ 10).await;
     assert!(entries.is_empty(), "expected no commits outside a git repo");
 }
 
@@ -127,7 +133,7 @@ async fn test_recent_commits_orders_and_limits() {
         .expect("git commit 3");
 
     // Request the latest 3 commits; should be our three changes in reverse time order.
-    let entries = recent_commits(&repo_path, 3).await;
+    let entries = recent_commits(&repo_path, /*limit*/ 3).await;
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].subject, "third change");
     assert_eq!(entries[1].subject, "second change");
@@ -191,7 +197,7 @@ async fn test_collect_git_info_git_repository() {
 
     // Should have commit hash
     assert!(git_info.commit_hash.is_some());
-    let commit_hash = git_info.commit_hash.unwrap();
+    let commit_hash = git_info.commit_hash.unwrap().0;
     assert_eq!(commit_hash.len(), 40); // SHA-1 hash should be 40 characters
     assert!(commit_hash.chars().all(|c| c.is_ascii_hexdigit()));
 
@@ -558,7 +564,7 @@ async fn test_get_git_working_tree_state_unpushed_commit() {
 #[test]
 fn test_git_info_serialization() {
     let git_info = GitInfo {
-        commit_hash: Some("abc123def456".to_string()),
+        commit_hash: Some(GitSha::new("abc123def456")),
         branch: Some("main".to_string()),
         repository_url: Some("https://github.com/example/repo.git".to_string()),
     };

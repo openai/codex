@@ -3,6 +3,8 @@
 //! The same sandbox- and feature-gating rules are used by both the composer
 //! and the command popup. Centralizing them here keeps those call sites small
 //! and ensures they stay in sync.
+use std::str::FromStr;
+
 use codex_utils_fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
@@ -12,6 +14,7 @@ use crate::slash_command::built_in_slash_commands;
 pub(crate) struct BuiltinCommandFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
+    pub(crate) plugins_command_enabled: bool,
     pub(crate) fast_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
@@ -29,6 +32,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
                 || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
         })
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
+        .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
         .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
@@ -38,10 +42,11 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
 
 /// Find a single built-in command by exact name, after applying the gating rules.
 pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
+    let cmd = SlashCommand::from_str(name).ok()?;
     builtins_for_input(flags)
         .into_iter()
-        .find(|(command_name, _)| *command_name == name)
-        .map(|(_, cmd)| cmd)
+        .any(|(_, visible_cmd)| visible_cmd == cmd)
+        .then_some(cmd)
 }
 
 /// Whether any visible built-in fuzzily matches the provided prefix.
@@ -60,6 +65,7 @@ mod tests {
         BuiltinCommandFlags {
             collaboration_modes_enabled: true,
             connectors_enabled: true,
+            plugins_command_enabled: true,
             fast_command_enabled: true,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
@@ -79,6 +85,22 @@ mod tests {
         assert_eq!(
             find_builtin_command("clear", all_enabled_flags()),
             Some(SlashCommand::Clear)
+        );
+    }
+
+    #[test]
+    fn stop_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("stop", all_enabled_flags()),
+            Some(SlashCommand::Stop)
+        );
+    }
+
+    #[test]
+    fn clean_command_alias_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("clean", all_enabled_flags()),
+            Some(SlashCommand::Stop)
         );
     }
 

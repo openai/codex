@@ -167,13 +167,16 @@ impl PlanStreamController {
         }
 
         self.state.clear();
-        self.emit(out_lines, true)
+        self.emit(out_lines, /*include_bottom_padding*/ true)
     }
 
     /// Step animation: commit at most one queued line and handle end-of-drain cleanup.
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.step();
-        (self.emit(step, false), self.state.is_idle())
+        (
+            self.emit(step, /*include_bottom_padding*/ false),
+            self.state.is_idle(),
+        )
     }
 
     /// Step animation: commit at most `max_lines` queued lines.
@@ -185,7 +188,10 @@ impl PlanStreamController {
         max_lines: usize,
     ) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.drain_n(max_lines.max(1));
-        (self.emit(step, false), self.state.is_idle())
+        (
+            self.emit(step, /*include_bottom_padding*/ false),
+            self.state.is_idle(),
+        )
     }
 
     /// Returns the current number of queued plan lines waiting to be displayed.
@@ -265,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let mut ctrl = StreamController::new(None, &test_cwd());
+        let mut ctrl = StreamController::new(/*width*/ None, &test_cwd());
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)
@@ -364,7 +370,12 @@ mod tests {
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
         let test_cwd = test_cwd();
-        crate::markdown::append_markdown(&source, None, Some(test_cwd.as_path()), &mut rendered);
+        crate::markdown::append_markdown(
+            &source,
+            /*width*/ None,
+            Some(test_cwd.as_path()),
+            &mut rendered,
+        );
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);

@@ -140,9 +140,9 @@ fn load_or_create_ca() -> Result<(String, String)> {
     //
     // We intentionally use create-new semantics: if a key already exists, we should not overwrite
     // it silently (that would invalidate previously-trusted cert chains).
-    write_atomic_create_new(&key_path, key_pem.as_bytes(), 0o600)
+    write_atomic_create_new(&key_path, key_pem.as_bytes(), /*mode*/ 0o600)
         .with_context(|| format!("failed to persist CA key {}", key_path.display()))?;
-    if let Err(err) = write_atomic_create_new(&cert_path, cert_pem.as_bytes(), 0o644)
+    if let Err(err) = write_atomic_create_new(&cert_path, cert_pem.as_bytes(), /*mode*/ 0o644)
         .with_context(|| format!("failed to persist CA cert {}", cert_path.display()))
     {
         // Avoid leaving a partially-created CA around (cert missing) if the second write fails.

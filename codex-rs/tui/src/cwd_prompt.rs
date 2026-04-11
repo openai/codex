@@ -212,20 +212,23 @@ impl WidgetRef for &CwdPromptScreen {
                 "Session = latest cwd recorded in the {action_past} session"
             ))
             .dim()
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.push(
-            Line::from("Current = your current working directory".dim())
-                .inset(Insets::tlbr(0, 2, 0, 0)),
+            Line::from("Current = your current working directory".dim()).inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.push("");
         column.push(selection_option_row(
-            0,
+            /*index*/ 0,
             format!("Use session directory ({session_cwd})"),
             self.highlighted == CwdSelection::Session,
         ));
         column.push(selection_option_row(
-            1,
+            /*index*/ 1,
             format!("Use current directory ({current_cwd})"),
             self.highlighted == CwdSelection::Current,
         ));
@@ -236,7 +239,9 @@ impl WidgetRef for &CwdPromptScreen {
                 key_hint::plain(KeyCode::Enter).into(),
                 " to continue".dim(),
             ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.render(area, buf);
     }
@@ -263,7 +268,8 @@ mod tests {
     #[test]
     fn cwd_prompt_snapshot() {
         let screen = new_prompt();
-        let mut terminal = Terminal::new(VT100Backend::new(80, 14)).expect("terminal");
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 80, /*height*/ 14)).expect("terminal");
         terminal
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render cwd prompt");
@@ -278,7 +284,8 @@ mod tests {
             "/Users/example/current".to_string(),
             "/Users/example/session".to_string(),
         );
-        let mut terminal = Terminal::new(VT100Backend::new(80, 14)).expect("terminal");
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 80, /*height*/ 14)).expect("terminal");
         terminal
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render cwd prompt");

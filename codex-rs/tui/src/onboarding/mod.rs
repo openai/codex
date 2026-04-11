@@ -1,5 +1,5 @@
 mod auth;
-pub mod onboarding_screen;
+pub(crate) mod onboarding_screen;
 mod trust_directory;
-pub use trust_directory::TrustDirectorySelection;
+pub(crate) use auth::mark_url_hyperlink;
 mod welcome;

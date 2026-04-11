@@ -18,8 +18,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
+use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -59,7 +59,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     let turn = start_plan_mode_turn(&mut mcp).await?;
     let (_, completed_items, plan_deltas, turn_completed) =
         collect_turn_notifications(&mut mcp).await?;
-    wait_for_responses_request_count(&server, 1).await?;
+    wait_for_responses_request_count(&server, /*expected_count*/ 1).await?;
 
     assert_eq!(turn_completed.turn.id, turn.id);
     assert_eq!(turn_completed.turn.status, TurnStatus::Completed);
@@ -116,7 +116,7 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
 
     let _turn = start_plan_mode_turn(&mut mcp).await?;
     let (_, completed_items, plan_deltas, _) = collect_turn_notifications(&mut mcp).await?;
-    wait_for_responses_request_count(&server, 1).await?;
+    wait_for_responses_request_count(&server, /*expected_count*/ 1).await?;
 
     let has_plan_item = completed_items
         .iter()

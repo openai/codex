@@ -10,26 +10,37 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginUninstallResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::protocol::Event;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 
-use codex_core::config::types::ApprovalsReviewer;
-use codex_core::features::Feature;
+use codex_config::types::ApprovalsReviewer;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_realtime_webrtc::RealtimeWebrtcEvent;
+use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -66,10 +77,26 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+/// Distinguishes why a rate-limit refresh was requested so the completion
+/// handler can route the result correctly.
+///
+/// A `StartupPrefetch` fires once, concurrently with the rest of TUI init, and
+/// only updates the cached snapshots (no status card to finalize). A
+/// `StatusCommand` is tied to a specific `/status` invocation and must call
+/// `finish_status_rate_limit_refresh` when done so the card stops showing a
+/// "refreshing" state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RateLimitRefreshOrigin {
+    /// Eagerly fetched after bootstrap so the first `/status` already has data.
+    StartupPrefetch,
+    /// User-initiated via `/status`; the `request_id` correlates with the
+    /// status card that should be updated when the fetch completes.
+    StatusCommand { request_id: u64 },
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
-    CodexEvent(Event),
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
@@ -78,13 +105,13 @@ pub(crate) enum AppEvent {
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,
-        op: codex_protocol::protocol::Op,
+        op: Op,
     },
 
-    /// Forward an event from a non-primary thread into the app-level thread router.
-    ThreadEvent {
+    /// Deliver a synthetic history lookup response to a specific thread channel.
+    ThreadHistoryEntryResponse {
         thread_id: ThreadId,
-        event: Event,
+        event: GetHistoryEntryResponseEvent,
     },
 
     /// Start a new session.
@@ -96,6 +123,9 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+
+    /// Resume a thread by UUID or thread name inside the running TUI session.
+    ResumeSessionByIdOrName(String),
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -109,11 +139,12 @@ pub(crate) enum AppEvent {
     Exit(ExitMode),
 
     /// Request to exit the application due to a fatal error.
+    #[allow(dead_code)]
     FatalExitRequest(String),
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_protocol::protocol::Op),
+    CodexOp(Op),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -128,8 +159,16 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Result of refreshing rate limits
-    RateLimitSnapshotFetched(RateLimitSnapshot),
+    /// Refresh account rate limits in the background.
+    RefreshRateLimits {
+        origin: RateLimitRefreshOrigin,
+    },
+
+    /// Result of refreshing rate limits.
+    RateLimitsLoaded {
+        origin: RateLimitRefreshOrigin,
+        result: Result<Vec<RateLimitSnapshot>, String>,
+    },
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {
@@ -159,6 +198,92 @@ pub(crate) enum AppEvent {
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,
+    },
+
+    /// Fetch plugin marketplace state for the provided working directory.
+    FetchPluginsList {
+        cwd: PathBuf,
+    },
+
+    /// Result of fetching plugin marketplace state.
+    PluginsLoaded {
+        cwd: PathBuf,
+        result: Result<PluginListResponse, String>,
+    },
+
+    /// Replace the plugins popup with a plugin-detail loading state.
+    OpenPluginDetailLoading {
+        plugin_display_name: String,
+    },
+
+    /// Fetch detail for a specific plugin from a marketplace.
+    FetchPluginDetail {
+        cwd: PathBuf,
+        params: PluginReadParams,
+    },
+
+    /// Result of fetching plugin detail.
+    PluginDetailLoaded {
+        cwd: PathBuf,
+        result: Result<PluginReadResponse, String>,
+    },
+
+    /// Replace the plugins popup with an install loading state.
+    OpenPluginInstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Replace the plugins popup with an uninstall loading state.
+    OpenPluginUninstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Install a specific plugin from a marketplace.
+    FetchPluginInstall {
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of installing a plugin.
+    PluginInstallLoaded {
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+        result: Result<PluginInstallResponse, String>,
+    },
+
+    /// Uninstall a specific plugin by canonical plugin id.
+    FetchPluginUninstall {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of uninstalling a plugin.
+    PluginUninstallLoaded {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+        result: Result<PluginUninstallResponse, String>,
+    },
+
+    /// Advance the post-install plugin app-auth flow.
+    PluginInstallAuthAdvance {
+        refresh_connectors: bool,
+    },
+
+    /// Abandon the post-install plugin app-auth flow.
+    PluginInstallAuthAbandon,
+
+    /// Fetch MCP inventory via app-server RPCs and render it into history.
+    FetchMcpInventory,
+
+    /// Result of fetching MCP inventory via app-server RPCs.
+    McpInventoryLoaded {
+        result: Result<Vec<McpServerStatus>, String>,
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
@@ -210,10 +335,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Persist the selected realtime microphone or speaker to top-level config.
-    #[cfg_attr(
-        any(target_os = "linux", not(feature = "voice-input")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     PersistRealtimeAudioDeviceSelection {
         kind: RealtimeAudioDeviceKind,
         name: Option<String>,
@@ -223,6 +345,17 @@ pub(crate) enum AppEvent {
     RestartRealtimeAudioDevice {
         kind: RealtimeAudioDeviceKind,
     },
+
+    /// Result of creating a TUI-owned realtime WebRTC offer.
+    RealtimeWebrtcOfferCreated {
+        result: Result<RealtimeWebrtcOffer, String>,
+    },
+
+    /// Peer-connection lifecycle event from a TUI-owned realtime WebRTC session.
+    RealtimeWebrtcEvent(RealtimeWebrtcEvent),
+
+    /// Local microphone level from a TUI-owned realtime WebRTC session.
+    RealtimeWebrtcLocalAudioLevel(u16),
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
@@ -393,21 +526,6 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
-    /// Voice transcription finished for the given placeholder id.
-    #[cfg(not(target_os = "linux"))]
-    TranscriptionComplete {
-        id: String,
-        text: String,
-    },
-
-    /// Voice transcription failed; remove the placeholder identified by `id`.
-    #[cfg(not(target_os = "linux"))]
-    TranscriptionFailed {
-        id: String,
-        #[allow(dead_code)]
-        error: String,
-    },
-
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 
@@ -437,6 +555,21 @@ pub(crate) enum AppEvent {
         category: FeedbackCategory,
     },
 
+    /// Submit feedback for the current thread via the app-server feedback RPC.
+    SubmitFeedback {
+        category: FeedbackCategory,
+        reason: Option<String>,
+        include_logs: bool,
+    },
+
+    /// Result of a feedback upload request initiated by the TUI.
+    FeedbackSubmitted {
+        origin_thread_id: Option<ThreadId>,
+        category: FeedbackCategory,
+        include_logs: bool,
+        result: Result<String, String>,
+    },
+
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 
@@ -452,10 +585,27 @@ pub(crate) enum AppEvent {
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
 
+    /// Apply a user-confirmed terminal-title item ordering/selection.
+    TerminalTitleSetup {
+        items: Vec<TerminalTitleItem>,
+    },
+    /// Apply a temporary terminal-title preview while the setup UI is open.
+    TerminalTitleSetupPreview {
+        items: Vec<TerminalTitleItem>,
+    },
+    /// Dismiss the terminal-title setup UI without changing config.
+    TerminalTitleSetupCancelled,
+
     /// Apply a user-confirmed syntax theme selection.
     SyntaxThemeSelected {
         name: String,
     },
+}
+
+#[derive(Debug)]
+pub(crate) struct RealtimeWebrtcOffer {
+    pub(crate) offer_sdp: String,
+    pub(crate) handle: RealtimeWebrtcSessionHandle,
 }
 
 /// The exit strategy requested by the UI layer.

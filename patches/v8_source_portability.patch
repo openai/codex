@@ -1,0 +1,327 @@
+# What: make upstream V8 sources build cleanly in this hermetic toolchain setup.
+# Scope: minimal source-level portability fixes only, such as libexecinfo guards,
+# weak glibc symbol handling, and warning annotations; no dependency
+# include-path rewrites or intentional V8 feature changes.
+diff --git a/orig/v8-14.6.202.11/src/base/bits.h b/mod/v8-14.6.202.11/src/base/bits.h
+index 179a10f..4791e96 100644
+--- a/orig/v8-14.6.202.11/src/base/bits.h
++++ b/mod/v8-14.6.202.11/src/base/bits.h
+@@ -270,11 +270,17 @@ inline constexpr uint32_t RoundDownToPowerOfTwo32(uint32_t value) {
+ }
+ 
+ // Precondition: 0 <= shift < 32
++#ifdef RotateRight32
++#undef RotateRight32
++#endif
+ inline constexpr uint32_t RotateRight32(uint32_t value, uint32_t shift) {
+   return (value >> shift) | (value << ((32 - shift) & 31));
+ }
+ 
+ // Precondition: 0 <= shift < 32
++#ifdef RotateLeft32
++#undef RotateLeft32
++#endif
+ inline constexpr uint32_t RotateLeft32(uint32_t value, uint32_t shift) {
+   return (value << shift) | (value >> ((32 - shift) & 31));
+ }
+diff --git a/orig/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc b/mod/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc
+index 6176ed4..a02043d 100644
+--- a/orig/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc
++++ b/mod/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc
+@@ -64,6 +64,7 @@ namespace {
+ volatile sig_atomic_t in_signal_handler = 0;
+ bool dump_stack_in_signal_handler = true;
+ 
++#if HAVE_EXECINFO_H
+ // The prefix used for mangled symbols, per the Itanium C++ ABI:
+ // http://www.codesourcery.com/cxx-abi/abi.html#mangling
+ const char kMangledSymbolPrefix[] = "_Z";
+@@ -73,7 +74,6 @@ const char kMangledSymbolPrefix[] = "_Z";
+ const char kSymbolCharacters[] =
+     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+ 
+-#if HAVE_EXECINFO_H
+ // Demangles C++ symbols in the given text. Example:
+ //
+ // "out/Debug/base_unittests(_ZN10StackTraceC1Ev+0x20) [0x817778c]"
+diff --git a/orig/v8-14.6.202.11/src/base/export-template.h b/mod/v8-14.6.202.11/src/base/export-template.h
+index 861cfe4..1e73954 100644
+--- a/orig/v8-14.6.202.11/src/base/export-template.h
++++ b/mod/v8-14.6.202.11/src/base/export-template.h
+@@ -153,8 +153,10 @@
+ 
+ EXPORT_TEMPLATE_TEST(DEFAULT, );
+ EXPORT_TEMPLATE_TEST(DEFAULT, __attribute__((visibility("default"))));
++#if defined(_MSC_VER)
+ EXPORT_TEMPLATE_TEST(MSVC_HACK, __declspec(dllexport));
+ EXPORT_TEMPLATE_TEST(DEFAULT, __declspec(dllimport));
++#endif
+ 
+ #undef EXPORT_TEMPLATE_TEST
+ #undef EXPORT_TEMPLATE_TEST_DEFAULT_DEFAULT
+diff --git a/orig/v8-14.6.202.11/src/base/platform/platform-posix.cc b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
+index 420df0b..6f47969 100644
+--- a/orig/v8-14.6.202.11/src/base/platform/platform-posix.cc
++++ b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
+@@ -95,7 +95,7 @@ extern int madvise(caddr_t, size_t, int);
+ #endif
+ 
+ #if defined(V8_LIBC_GLIBC)
+-extern "C" void* __libc_stack_end;
++extern "C" void* __libc_stack_end V8_WEAK;
+ #endif
+ 
+ namespace v8 {
+@@ -1476,7 +1476,8 @@ Stack::StackSlot Stack::ObtainCurrentThreadStackStart() {
+   // __libc_stack_end is process global and thus is only valid for
+   // the main thread. Check whether this is the main thread by checking
+   // __libc_stack_end is within the thread's stack.
+-  if ((base <= __libc_stack_end) && (__libc_stack_end <= stack_start)) {
++  if (__libc_stack_end != nullptr &&
++      (base <= __libc_stack_end) && (__libc_stack_end <= stack_start)) {
+     DCHECK(MainThreadIsCurrentThread());
+     return __libc_stack_end;
+   }
+diff --git a/orig/v8-14.6.202.11/src/base/platform/platform-win32.cc b/mod/v8-14.6.202.11/src/base/platform/platform-win32.cc
+index f5d9ddc..542ea1a 100644
+--- a/orig/v8-14.6.202.11/src/base/platform/platform-win32.cc
++++ b/mod/v8-14.6.202.11/src/base/platform/platform-win32.cc
+@@ -69,9 +69,7 @@ static_assert(offsetof(V8_CRITICAL_SECTION, SpinCount) ==
+ // Extra functions for MinGW. Most of these are the _s functions which are in
+ // the Microsoft Visual Studio C++ CRT.
+ #ifdef __MINGW32__
+-
+-
+-#ifndef __MINGW64_VERSION_MAJOR
++#if !defined(__MINGW64_VERSION_MAJOR)
+ 
+ #define _TRUNCATE 0
+ #define STRUNCATE 80
+@@ -81,9 +79,6 @@ inline void MemoryFence() {
+   __asm__ __volatile__("xchgl %%eax,%0 ":"=r" (barrier));
+ }
+ 
+-#endif  // __MINGW64_VERSION_MAJOR
+-
+-
+ int localtime_s(tm* out_tm, const time_t* time) {
+   tm* posix_local_time_struct = localtime_r(time, out_tm);
+   if (posix_local_time_struct == nullptr) return 1;
+@@ -134,6 +129,8 @@ int strncpy_s(char* dest, size_t dest_size, const char* source, size_t count) {
+   return 0;
+ }
+ 
++#endif  // !defined(__MINGW64_VERSION_MAJOR)
++
+ #endif  // __MINGW32__
+ 
+ namespace v8 {
+@@ -743,8 +740,10 @@ void OS::StrNCpy(char* dest, int length, const char* src, size_t n) {
+ }
+ 
+ 
++#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
+ #undef _TRUNCATE
+ #undef STRUNCATE
++#endif
+ 
+ DEFINE_LAZY_LEAKY_OBJECT_GETTER(RandomNumberGenerator,
+                                 GetPlatformRandomNumberGenerator)
+@@ -1894,3 +1893,4 @@ Stack::StackSlot Stack::GetCurrentStackPosition() {
+ 
+ }  // namespace base
+ }  // namespace v8
++
+diff --git a/orig/v8-14.6.202.11/src/base/platform/time.cc b/mod/v8-14.6.202.11/src/base/platform/time.cc
+index 8390288..cba6cd5 100644
+--- a/orig/v8-14.6.202.11/src/base/platform/time.cc
++++ b/mod/v8-14.6.202.11/src/base/platform/time.cc
+@@ -782,12 +782,12 @@ bool ThreadTicks::IsSupported() {
+ #elif defined(__PASE__)
+   // Thread CPU time accounting is unavailable in PASE
+   return false;
++#elif defined(V8_OS_WIN)
++  return IsSupportedWin();
+ #elif (defined(_POSIX_THREAD_CPUTIME) && (_POSIX_THREAD_CPUTIME >= 0)) || \
+     defined(V8_OS_DARWIN) || defined(V8_OS_ANDROID) ||                    \
+     defined(V8_OS_SOLARIS) || defined(V8_OS_ZOS)
+   return true;
+-#elif defined(V8_OS_WIN)
+-  return IsSupportedWin();
+ #else
+   return false;
+ #endif
+@@ -804,13 +804,13 @@ ThreadTicks ThreadTicks::Now() {
+   return ThreadTicks(ComputeThreadTicks());
+ #elif V8_OS_FUCHSIA
+   return ThreadTicks(GetFuchsiaThreadTicks());
++#elif V8_OS_WIN
++  return ThreadTicks::GetForThread(::GetCurrentThread());
+ #elif (defined(_POSIX_THREAD_CPUTIME) && (_POSIX_THREAD_CPUTIME >= 0)) || \
+     defined(V8_OS_ANDROID) || defined(V8_OS_ZOS)
+   return ThreadTicks(ClockNow(CLOCK_THREAD_CPUTIME_ID));
+ #elif V8_OS_SOLARIS
+   return ThreadTicks(gethrvtime() / Time::kNanosecondsPerMicrosecond);
+-#elif V8_OS_WIN
+-  return ThreadTicks::GetForThread(::GetCurrentThread());
+ #else
+   UNREACHABLE();
+ #endif
+diff --git a/orig/v8-14.6.202.11/src/heap/base/asm/x64/push_registers_masm.asm b/mod/v8-14.6.202.11/src/heap/base/asm/x64/push_registers_masm.asm
+index d0d0563..72e230b 100644
+--- a/orig/v8-14.6.202.11/src/heap/base/asm/x64/push_registers_masm.asm
++++ b/mod/v8-14.6.202.11/src/heap/base/asm/x64/push_registers_masm.asm
+@@ -1,70 +1,30 @@
+-;; Copyright 2020 the V8 project authors. All rights reserved.
+-;; Use of this source code is governed by a BSD-style license that can be
+-;; found in the LICENSE file.
+-
+-;; MASM syntax
+-;; https://docs.microsoft.com/en-us/cpp/assembler/masm/microsoft-macro-assembler-reference?view=vs-2019
+-
+-public PushAllRegistersAndIterateStack
+-
+-.code
+-PushAllRegistersAndIterateStack proc frame
+-    ;; Push all callee-saved registers to get them on the stack for conservative
+-    ;; stack scanning.
+-    ;;
+-    ;; We maintain 16-byte alignment at calls. There is an 8-byte return address
+-    ;; on the stack and we push 232 bytes which maintains 16-byte stack
+-    ;; alignment at the call.
+-    ;; Source: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention
+-    ;;
+-    ;; rbp is callee-saved. Maintain proper frame pointer for debugging.
+-    push rbp
+-    .pushreg rbp
+-    mov rbp, rsp
+-    .setframe rbp, 0
+-    push 0CDCDCDh  ;; Dummy for alignment.
+-    .allocstack 8
+-    push rsi
+-    .pushreg rsi
+-    push rdi
+-    .pushreg rdi
+-    push rbx
+-    .pushreg rbx
+-    push r12
+-    .pushreg r12
+-    push r13
+-    .pushreg r13
+-    push r14
+-    .pushreg r14
+-    push r15
+-    .pushreg r15
+-    sub rsp, 160
+-    .allocstack 160
+-    .endprolog
+-    ;; Use aligned instrs as we are certain that the stack is properly aligned.
+-    movdqa  xmmword ptr [rsp + 144], xmm6
+-    movdqa  xmmword ptr [rsp + 128], xmm7
+-    movdqa  xmmword ptr [rsp + 112], xmm8
+-    movdqa  xmmword ptr [rsp + 96], xmm9
+-    movdqa  xmmword ptr [rsp + 80], xmm10
+-    movdqa  xmmword ptr [rsp + 64], xmm11
+-    movdqa  xmmword ptr [rsp + 48], xmm12
+-    movdqa  xmmword ptr [rsp + 32], xmm13
+-    movdqa  xmmword ptr [rsp + 16], xmm14
+-    movdqa  xmmword ptr [rsp], xmm15
+-    ;; Pass 1st parameter (rcx) unchanged (Stack*).
+-    ;; Pass 2nd parameter (rdx) unchanged (StackVisitor*).
+-    ;; Save 3rd parameter (r8; IterateStackCallback)
+-    mov r9, r8
+-    ;; Pass 3rd parameter as rsp (stack pointer).
+-    mov r8, rsp
+-    ;; Call the callback.
+-    call r9
+-    ;; Pop the callee-saved registers.
+-    add rsp, 224
+-    ;; Restore rbp as it was used as frame pointer.
+-    pop rbp
+-    ret
+-    PushAllRegistersAndIterateStack endp
+-
+-end
++.text
++.globl PushAllRegistersAndIterateStack
++.seh_proc PushAllRegistersAndIterateStack
++PushAllRegistersAndIterateStack:
++  push %rbp
++  .seh_pushreg %rbp
++  mov %rsp, %rbp
++  .seh_setframe %rbp, 0
++  push $0xCDCDCD
++  .seh_stackalloc 8
++  push %rsi
++  .seh_pushreg %rsi
++  push %rdi
++  .seh_pushreg %rdi
++  push %rbx
++  .seh_pushreg %rbx
++  push %r12
++  .seh_pushreg %r12
++  push %r13
++  .seh_pushreg %r13
++  push %r14
++  .seh_pushreg %r14
++  push %r15
++  .seh_pushreg %r15
++  sub $160, %rsp
++  .seh_stackalloc 160
++  # Preserve Windows unwind metadata even though this is now GNU syntax.
++  # Without the .seh_* directives, SEH and stack walking can mis-handle
++  # unwinding across this callback frame.
++  .seh_endprologue
++  movdqa %xmm6, 144(%rsp)
++  movdqa %xmm7, 128(%rsp)
++  movdqa %xmm8, 112(%rsp)
++  movdqa %xmm9, 96(%rsp)
++  movdqa %xmm10, 80(%rsp)
++  movdqa %xmm11, 64(%rsp)
++  movdqa %xmm12, 48(%rsp)
++  movdqa %xmm13, 32(%rsp)
++  movdqa %xmm14, 16(%rsp)
++  movdqa %xmm15, 0(%rsp)
++  mov %r8, %r9
++  mov %rsp, %r8
++  call *%r9
++  add $224, %rsp
++  pop %rbp
++  ret
++.seh_endproc
+diff --git a/orig/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc b/mod/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
+index bda0e43..b44f1d9 100644
+--- a/orig/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
++++ b/mod/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
+@@ -23,7 +23,7 @@ extern int pkey_free(int pkey) V8_WEAK;
+ 
+ namespace {
+ 
+-bool KernelHasPkruFix() {
++[[maybe_unused]] bool KernelHasPkruFix() {
+   // PKU was broken on Linux kernels before 5.13 (see
+   // https://lore.kernel.org/all/20210623121456.399107624@linutronix.de/).
+   // A fix is also included in the 5.4.182 and 5.10.103 versions ("x86/fpu:
+diff --git a/orig/v8-14.6.202.11/src/profiler/heap-snapshot-generator.cc b/mod/v8-14.6.202.11/src/profiler/heap-snapshot-generator.cc
+index 27e748f..cbf886c 100644
+--- a/orig/v8-14.6.202.11/src/profiler/heap-snapshot-generator.cc
++++ b/mod/v8-14.6.202.11/src/profiler/heap-snapshot-generator.cc
+@@ -429,11 +429,11 @@ HeapSnapshot::HeapSnapshot(HeapProfiler* profiler,
+   static_assert(kSystemPointerSize != 4 || sizeof(HeapGraphEdge) == 12);
+   static_assert(kSystemPointerSize != 8 || sizeof(HeapGraphEdge) == 24);
+   static_assert(kSystemPointerSize != 4 || sizeof(HeapEntry) == 32);
+-#if V8_CC_MSVC
++#if V8_CC_MSVC || V8_OS_WIN
+   static_assert(kSystemPointerSize != 8 || sizeof(HeapEntry) == 48);
+ #else   // !V8_CC_MSVC
+   static_assert(kSystemPointerSize != 8 || sizeof(HeapEntry) == 40);
+-#endif  // !V8_CC_MSVC
++#endif  // !V8_CC_MSVC || V8_OS_WIN
+   memset(&gc_subroot_entries_, 0, sizeof(gc_subroot_entries_));
+ }
+ 
+@@ -3878,3 +3878,4 @@ void HeapSnapshotJSONSerializer::SerializeLocations() {
+ }
+ 
+ }  // namespace v8::internal
++

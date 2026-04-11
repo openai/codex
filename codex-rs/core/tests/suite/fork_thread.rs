@@ -1,3 +1,4 @@
+use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
@@ -52,6 +53,7 @@ async fn fork_thread_twice_drops_to_first_message() {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             })
             .await
             .unwrap();
@@ -110,7 +112,13 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork1,
         ..
     } = thread_manager
-        .fork_thread(1, config_for_fork.clone(), base_path.clone(), false, None)
+        .fork_thread(
+            ForkSnapshot::TruncateBeforeNthUserMessage(1),
+            config_for_fork.clone(),
+            base_path.clone(),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
         .await
         .expect("fork 1");
 
@@ -118,9 +126,8 @@ async fn fork_thread_twice_drops_to_first_message() {
 
     // GetHistory on fork1 flushed; the file is ready.
     let fork1_items = read_items(&fork1_path);
-    assert!(fork1_items.len() > expected_after_first.len());
     pretty_assertions::assert_eq!(
-        serde_json::to_value(&fork1_items[..expected_after_first.len()]).unwrap(),
+        serde_json::to_value(&fork1_items).unwrap(),
         serde_json::to_value(&expected_after_first).unwrap()
     );
 
@@ -129,7 +136,13 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork2,
         ..
     } = thread_manager
-        .fork_thread(0, config_for_fork.clone(), fork1_path.clone(), false, None)
+        .fork_thread(
+            ForkSnapshot::TruncateBeforeNthUserMessage(0),
+            config_for_fork.clone(),
+            fork1_path.clone(),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
         .await
         .expect("fork 2");
 
@@ -143,9 +156,8 @@ async fn fork_thread_twice_drops_to_first_message() {
         .unwrap_or(0);
     let expected_after_second: Vec<RolloutItem> = fork1_items[..cut_last_on_fork1].to_vec();
     let fork2_items = read_items(&fork2_path);
-    assert!(fork2_items.len() > expected_after_second.len());
     pretty_assertions::assert_eq!(
-        serde_json::to_value(&fork2_items[..expected_after_second.len()]).unwrap(),
+        serde_json::to_value(&fork2_items).unwrap(),
         serde_json::to_value(&expected_after_second).unwrap()
     );
 }

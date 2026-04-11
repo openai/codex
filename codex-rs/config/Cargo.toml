@@ -8,12 +8,19 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-features = { workspace = true }
+codex-git-utils = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+dunce = { workspace = true }
 futures = { workspace = true, features = ["alloc", "std"] }
 multimap = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }
@@ -23,8 +30,9 @@ tokio = { workspace = true, features = ["fs"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
+wildmatch = { workspace = true }
 
 [dev-dependencies]
-anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

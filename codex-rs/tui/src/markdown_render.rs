@@ -87,7 +87,7 @@ impl IndentContext {
 }
 
 pub fn render_markdown_text(input: &str) -> Text<'static> {
-    render_markdown_text_with_width(input, None)
+    render_markdown_text_with_width(input, /*width*/ None)
 }
 
 /// Render markdown using the current process working directory for local file-link display.
@@ -227,8 +227,8 @@ where
                 self.push_line(Line::from("———"));
                 self.needs_newline = true;
             }
-            Event::Html(html) => self.html(html, false),
-            Event::InlineHtml(html) => self.html(html, true),
+            Event::Html(html) => self.html(html, /*inline*/ false),
+            Event::InlineHtml(html) => self.html(html, /*inline*/ true),
             Event::FootnoteReference(_) => {}
             Event::TaskListMarker(_) => {}
         }
@@ -352,8 +352,11 @@ where
             self.push_blank_line();
             self.needs_newline = false;
         }
-        self.indent_stack
-            .push(IndentContext::new(vec![Span::from("> ")], None, false));
+        self.indent_stack.push(IndentContext::new(
+            vec![Span::from("> ")],
+            /*marker*/ None,
+            /*is_list*/ false,
+        ));
     }
 
     fn end_blockquote(&mut self) {
@@ -512,8 +515,11 @@ where
             let indent_len = if is_ordered { width + 2 } else { width + 1 };
             vec![Span::from(" ".repeat(indent_len))]
         };
-        self.indent_stack
-            .push(IndentContext::new(indent_prefix, marker, true));
+        self.indent_stack.push(IndentContext::new(
+            indent_prefix,
+            marker,
+            /*is_list*/ true,
+        ));
         self.needs_newline = false;
     }
 
@@ -538,8 +544,8 @@ where
 
         self.indent_stack.push(IndentContext::new(
             vec![indent.unwrap_or_default()],
-            None,
-            false,
+            /*marker*/ None,
+            /*is_list*/ false,
         ));
         self.needs_newline = true;
     }
@@ -659,7 +665,7 @@ where
         let was_pending = self.pending_marker_line;
 
         self.current_initial_indent = self.prefix_spans(was_pending);
-        self.current_subsequent_indent = self.prefix_spans(false);
+        self.current_subsequent_indent = self.prefix_spans(/*pending_marker_line*/ false);
         self.current_line_style = style;
         self.current_line_content = Some(line);
         self.current_line_in_code_block = self.in_code_block;
@@ -783,7 +789,9 @@ fn parse_local_link_target(dest_url: &str) -> Option<(String, Option<String>)> {
         location_suffix = Some(suffix);
     }
 
-    Some((expand_local_link_path(path_text), location_suffix))
+    let decoded_path_text =
+        urlencoding::decode(path_text).unwrap_or(std::borrow::Cow::Borrowed(path_text));
+    Some((expand_local_link_path(&decoded_path_text), location_suffix))
 }
 
 /// Normalize a hash fragment like `L12` or `L12C3-L14C9` into the display suffix we render.

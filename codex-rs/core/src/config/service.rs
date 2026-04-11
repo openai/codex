@@ -1,4 +1,3 @@
-use super::ConfigToml;
 use super::deserialize_config_toml_with_base;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
@@ -29,6 +28,7 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::config_toml::ConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
@@ -140,6 +140,16 @@ impl ConfigService {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn without_managed_config_for_tests(codex_home: PathBuf) -> Self {
+        Self::new(
+            codex_home,
+            Vec::new(),
+            LoaderOverrides::without_managed_config_for_tests(),
+            CloudRequirementsLoader::default(),
+        )
+    }
+
     pub async fn read(
         &self,
         params: ConfigReadParams,
@@ -183,7 +193,10 @@ impl ConfigService {
             origins: layers.origins(),
             layers: params.include_layers.then(|| {
                 layers
-                    .get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
+                    .get_layers(
+                        ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                        /*include_disabled*/ true,
+                    )
                     .iter()
                     .map(|layer| layer.as_layer())
                     .collect()
@@ -252,8 +265,7 @@ impl ConfigService {
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigServiceError> {
         let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.codex_home)
-                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
+            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.codex_home);
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
                 .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?,

@@ -73,8 +73,13 @@ ignore = [
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; pulled in via starlark_map/starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via ratatui/rmcp/starlark used by tui/execpolicy; no fixed release yet" },
-    # TODO(joshka, nornagon): remove this exception when once we update the ratatui fork to a version that uses lru 0.13+.
-    { id = "RUSTSEC-2026-0002", reason = "lru 0.12.5 is pulled in via ratatui fork; cannot upgrade until the fork is updated" },
+    # TODO: remove these exceptions once the workspace updates aws-lc-rs/aws-lc-sys past the affected releases.
+    { id = "RUSTSEC-2026-0044", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
+    { id = "RUSTSEC-2026-0045", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
+    { id = "RUSTSEC-2026-0046", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
+    { id = "RUSTSEC-2026-0047", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
+    { id = "RUSTSEC-2026-0048", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
+    { id = "RUSTSEC-2026-0049", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
     # TODO(fcoury): remove this exception when syntect drops yaml-rust and bincode, or updates to versions that have fixed the vulnerabilities.
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
@@ -94,8 +99,11 @@ ignore = [
 # [possible values: any SPDX 3.11 short identifier (+ optional exception)].
 allow = [
     # Apache-2.0 - https://www.apache.org/licenses/LICENSE-2.0
-    # Used by: allocative, anyhow, arboard, askama, assert_cmd, assert_matches, async-channel, async-trait, base64, chardetng, chrono, clap, clap_complete, color-eyre, ctor, diffy, dirs, dunce, encoding_rs, env_logger, escargot, eventsource-stream, futures, http, image, indexmap, insta, itertools, keyring, landlock, lazy_static, libc, log, maplit, multimap, once_cell, opentelemetry, opentelemetry-appender-tracing, opentelemetry-otlp, opentelemetry-semantic-conventions, opentelemetry_sdk, pathdiff, predicates, pretty_assertions, rand, regex-lite, reqwest, seccompiler, serde, serde_json, serde_with, sha1, sha2, shlex, similar, socket2, starlark, supports-color, sys-locale, tempfile, test-log, thiserror, time, tiny_http, toml, toml_edit, unicode-segmentation, unicode-width, url, uuid, webbrowser, wiremock, zeroize
+    # Used by: allocative, anyhow, arboard, assert_cmd, assert_matches, async-channel, async-trait, base64, chardetng, chrono, clap, clap_complete, color-eyre, ctor, diffy, dirs, dunce, encoding_rs, env_logger, escargot, eventsource-stream, futures, http, image, indexmap, insta, itertools, keyring, landlock, lazy_static, libc, log, maplit, multimap, once_cell, opentelemetry, opentelemetry-appender-tracing, opentelemetry-otlp, opentelemetry-semantic-conventions, opentelemetry_sdk, pathdiff, predicates, pretty_assertions, rand, regex-lite, reqwest, seccompiler, serde, serde_json, serde_with, sha1, sha2, shlex, similar, socket2, starlark, supports-color, sys-locale, tempfile, test-log, thiserror, time, tiny_http, toml, toml_edit, unicode-segmentation, unicode-width, url, uuid, webbrowser, wiremock, zeroize
     "Apache-2.0",
+    # Apache-2.0 WITH LLVM-exception - https://spdx.org/licenses/LLVM-exception.html
+    # Used by: target-lexicon
+    "Apache-2.0 WITH LLVM-exception",
     # BSD-2-Clause - https://opensource.org/license/bsd-2-clause
     # Used by: transitive only
     "BSD-2-Clause",
@@ -115,7 +123,7 @@ allow = [
     # Used by: transitive only
     "ISC",
     # MIT - https://opensource.org/license/mit
-    # Used by: allocative, ansi-to-tui, anyhow, arboard, askama, assert_cmd, assert_matches, async-channel, async-stream, async-trait, axum, base64, bytes, chardetng, chrono, clap, clap_complete, color-eyre, crossterm, ctor, derive_more, diffy, dirs, dotenvy, encoding_rs, env-flags, env_logger, escargot, eventsource-stream, futures, http, ignore, image, indexmap, itertools, keyring, landlock, lazy_static, libc, log, lru, maplit, mime_guess, multimap, once_cell, openssl-sys, os_info, owo-colors, path-absolutize, pathdiff, portable-pty, predicates, pretty_assertions, pulldown-cmark, rand, ratatui, ratatui-macros, regex-lite, reqwest, rmcp, schemars, serde, serde_json, serde_with, serial_test, sha1, sha2, shlex, socket2, strum, strum_macros, sys-locale, tempfile, test-log, textwrap, thiserror, time, tiny_http, tokio, tokio-stream, tokio-test, tokio-util, toml, toml_edit, tonic, tracing, tracing-appender, tracing-subscriber, tracing-test, tree-sitter, tree-sitter-bash, tree-sitter-highlight, ts-rs, uds_windows, unicode-segmentation, unicode-width, url, urlencoding, uuid, vt100, walkdir, webbrowser, which, wildmatch, wiremock, zeroize
+    # Used by: allocative, ansi-to-tui, anyhow, arboard, assert_cmd, assert_matches, async-channel, async-stream, async-trait, axum, base64, bytes, chardetng, chrono, clap, clap_complete, color-eyre, crossterm, ctor, derive_more, diffy, dirs, dotenvy, encoding_rs, env-flags, env_logger, escargot, eventsource-stream, futures, http, ignore, image, indexmap, itertools, keyring, landlock, lazy_static, libc, log, lru, maplit, mime_guess, multimap, once_cell, openssl-sys, os_info, owo-colors, path-absolutize, pathdiff, portable-pty, predicates, pretty_assertions, pulldown-cmark, rand, ratatui, ratatui-macros, regex-lite, reqwest, rmcp, schemars, serde, serde_json, serde_with, serial_test, sha1, sha2, shlex, socket2, strum, strum_macros, sys-locale, tempfile, test-log, textwrap, thiserror, time, tiny_http, tokio, tokio-stream, tokio-test, tokio-util, toml, toml_edit, tonic, tracing, tracing-appender, tracing-subscriber, tracing-test, tree-sitter, tree-sitter-bash, tree-sitter-highlight, ts-rs, uds_windows, unicode-segmentation, unicode-width, url, urlencoding, uuid, vt100, walkdir, webbrowser, which, wildmatch, wiremock, zeroize
     "MIT",
     # MIT-0 - https://opensource.org/license/mit-0
     # Used by: dunce

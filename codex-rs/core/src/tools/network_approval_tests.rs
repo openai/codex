@@ -1,6 +1,7 @@
 use super::*;
 use codex_network_proxy::BlockedRequestArgs;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -67,7 +68,7 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
     }
 
     let seeded = NetworkApprovalService::default();
-    source.copy_session_approved_hosts_to(&seeded).await;
+    source.sync_session_approved_hosts_to(&seeded).await;
 
     let mut copied = seeded
         .session_approved_hosts
@@ -97,6 +98,48 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
                 port: 8443,
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
+    let source = NetworkApprovalService::default();
+    {
+        let mut approved_hosts = source.session_approved_hosts.lock().await;
+        approved_hosts.insert(HostApprovalKey {
+            host: "source.example.com".to_string(),
+            protocol: "https",
+            port: 443,
+        });
+    }
+
+    let target = NetworkApprovalService::default();
+    {
+        let mut approved_hosts = target.session_approved_hosts.lock().await;
+        approved_hosts.insert(HostApprovalKey {
+            host: "stale.example.com".to_string(),
+            protocol: "https",
+            port: 8443,
+        });
+    }
+
+    source.sync_session_approved_hosts_to(&target).await;
+
+    let copied = target
+        .session_approved_hosts
+        .lock()
+        .await
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        copied,
+        vec![HostApprovalKey {
+            host: "source.example.com".to_string(),
+            protocol: "https",
+            port: 443,
+        }]
     );
 }
 
@@ -135,6 +178,19 @@ fn only_never_policy_disables_network_approval_flow() {
     assert!(allows_network_approval_flow(AskForApproval::OnRequest));
     assert!(allows_network_approval_flow(AskForApproval::OnFailure));
     assert!(allows_network_approval_flow(AskForApproval::UnlessTrusted));
+}
+
+#[test]
+fn network_approval_flow_is_limited_to_restricted_sandbox_modes() {
+    assert!(sandbox_policy_allows_network_approval_flow(
+        &SandboxPolicy::new_read_only_policy()
+    ));
+    assert!(sandbox_policy_allows_network_approval_flow(
+        &SandboxPolicy::new_workspace_write_policy()
+    ));
+    assert!(!sandbox_policy_allows_network_approval_flow(
+        &SandboxPolicy::DangerFullAccess
+    ));
 }
 
 fn denied_blocked_request(host: &str) -> BlockedRequest {

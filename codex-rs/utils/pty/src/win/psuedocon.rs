@@ -21,9 +21,9 @@
 
 use super::WinChild;
 use crate::win::procthreadattr::ProcThreadAttributeList;
+use anyhow::Error;
 use anyhow::bail;
 use anyhow::ensure;
-use anyhow::Error;
 use filedescriptor::FileDescriptor;
 use filedescriptor::OwnedHandle;
 use lazy_static::lazy_static;
@@ -130,6 +130,10 @@ impl Drop for PsuedoCon {
 }
 
 impl PsuedoCon {
+    pub fn raw_handle(&self) -> HPCON {
+        self.con
+    }
+
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {
@@ -168,7 +172,7 @@ impl PsuedoCon {
         si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
 
-        let mut attrs = ProcThreadAttributeList::with_capacity(1)?;
+        let mut attrs = ProcThreadAttributeList::with_capacity(/*num_attributes*/ 1)?;
         attrs.set_pty(self.con)?;
         si.lpAttributeList = attrs.as_mut_ptr();
 
@@ -352,8 +356,8 @@ fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
 
 #[cfg(test)]
 mod tests {
-    use super::windows_build_number;
     use super::MIN_CONPTY_BUILD;
+    use super::windows_build_number;
 
     #[test]
     fn windows_build_number_returns_value() {

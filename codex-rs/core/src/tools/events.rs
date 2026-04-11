@@ -1,23 +1,23 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
-use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
-use crate::parse_command::parse_command;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandBeginEvent;
-use crate::protocol::ExecCommandEndEvent;
-use crate::protocol::ExecCommandSource;
-use crate::protocol::ExecCommandStatus;
-use crate::protocol::FileChange;
-use crate::protocol::PatchApplyBeginEvent;
-use crate::protocol::PatchApplyEndEvent;
-use crate::protocol::PatchApplyStatus;
-use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandStatus;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::PatchApplyStatus;
+use codex_protocol::protocol::TurnDiffEvent;
+use codex_shell_command::parse_command::parse_command;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -162,7 +162,14 @@ impl ToolEmitter {
             ) => {
                 emit_exec_stage(
                     ctx,
-                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None, None),
+                    ExecCommandInput::new(
+                        command,
+                        cwd.as_path(),
+                        parsed_cmd,
+                        *source,
+                        /*interaction_input*/ None,
+                        /*process_id*/ None,
+                    ),
                     stage,
                 )
                 .await;
@@ -233,7 +240,7 @@ impl ToolEmitter {
                     changes.clone(),
                     String::new(),
                     (*message).to_string(),
-                    false,
+                    /*success*/ false,
                     PatchApplyStatus::Failed,
                 )
                 .await;
@@ -247,7 +254,7 @@ impl ToolEmitter {
                     changes.clone(),
                     String::new(),
                     (*message).to_string(),
-                    false,
+                    /*success*/ false,
                     PatchApplyStatus::Declined,
                 )
                 .await;
@@ -269,7 +276,7 @@ impl ToolEmitter {
                         cwd.as_path(),
                         parsed_cmd,
                         *source,
-                        None,
+                        /*interaction_input*/ None,
                         process_id.as_deref(),
                     ),
                     stage,

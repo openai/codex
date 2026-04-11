@@ -1,14 +1,11 @@
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::is_safe_command::is_known_safe_command;
-use crate::protocol::EventMsg;
-use crate::protocol::TerminalInteractionEvent;
+use crate::maybe_emit_implicit_skill_invocation;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
-use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
@@ -17,15 +14,22 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
-use async_trait::async_trait;
+use codex_features::Feature;
+use codex_otel::SessionTelemetry;
+use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_tools::UnifiedExecShellMode;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,7 +85,6 @@ fn default_tty() -> bool {
     false
 }
 
-#[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     type Output = ExecCommandToolOutput;
 
@@ -102,7 +105,7 @@ impl ToolHandler for UnifiedExecHandler {
             return true;
         };
 
-        let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
+        let Ok(params) = parse_arguments::<ExecCommandArgs>(arguments) else {
             return true;
         };
         let command = match get_command(
@@ -115,6 +118,42 @@ impl ToolHandler for UnifiedExecHandler {
             Err(_) => return true,
         };
         !is_known_safe_command(&command)
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        if invocation.tool_name != "exec_command" {
+            return None;
+        }
+
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        parse_arguments::<ExecCommandArgs>(arguments)
+            .ok()
+            .map(|args| PreToolUsePayload { command: args.cmd })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        let ToolPayload::Function { arguments } = payload else {
+            return None;
+        };
+
+        let args = parse_arguments::<ExecCommandArgs>(arguments).ok()?;
+        if args.tty {
+            return None;
+        }
+
+        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        Some(PostToolUsePayload {
+            command: args.cmd,
+            tool_response,
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -137,19 +176,26 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
+        let Some(environment) = turn.environment.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "unified exec is unavailable in this session".to_string(),
+            ));
+        };
+        let fs = environment.get_filesystem();
+
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
-                let args: ExecCommandArgs =
-                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
+                let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+                let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
-                    turn.as_ref(),
+                    context.turn.as_ref(),
                     &args.cmd,
-                    args.workdir.as_deref(),
+                    &workdir,
                 )
                 .await;
                 let process_id = manager.allocate_process_id().await;
@@ -237,6 +283,7 @@ impl ToolHandler for UnifiedExecHandler {
                 if let Some(output) = intercept_apply_patch(
                     &command,
                     &cwd,
+                    fs.as_ref(),
                     Some(yield_time_ms),
                     context.session.clone(),
                     context.turn.clone(),
@@ -260,6 +307,7 @@ impl ToolHandler for UnifiedExecHandler {
                     });
                 }
 
+                emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
                 manager
                     .exec_command(
                         ExecCommandRequest {
@@ -321,6 +369,14 @@ impl ToolHandler for UnifiedExecHandler {
 
         Ok(response)
     }
+}
+
+fn emit_unified_exec_tty_metric(session_telemetry: &SessionTelemetry, tty: bool) {
+    session_telemetry.counter(
+        TOOL_CALL_UNIFIED_EXEC_METRIC,
+        /*inc*/ 1,
+        &[("tty", if tty { "true" } else { "false" })],
+    );
 }
 
 pub(crate) fn get_command(

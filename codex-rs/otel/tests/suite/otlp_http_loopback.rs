@@ -1,10 +1,10 @@
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
+use codex_otel::OtelExporter;
+use codex_otel::OtelHttpProtocol;
 use codex_otel::OtelProvider;
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSettings;
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::metrics::Result;
+use codex_otel::OtelSettings;
+use codex_otel::Result;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::io::Write as _;
@@ -178,7 +178,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
         },
     ))?;
 
-    metrics.counter("codex.turns", 1, &[("source", "test")])?;
+    metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
     metrics.shutdown()?;
 
     server.join().expect("server join");

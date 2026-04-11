@@ -3,6 +3,7 @@ name = "codex-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "codex"
@@ -29,15 +30,21 @@ codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-mcp = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-tui = { workspace = true }
+codex-utils-path = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::ServiceTier;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
@@ -35,7 +35,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     ]])
     .await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_windows_cmd_shell();
 
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn_with_policy(
@@ -183,7 +183,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     ]])
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_windows_cmd_shell().with_config(|config| {
         config
             .features
             .enable(Feature::ResponsesWebsocketsV2)
@@ -273,7 +273,10 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
     });
     let test = builder.build_with_websocket_server(&server).await?;
 
-    let warmup = server.wait_for_request(0, 0).await.body_json();
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await
+        .body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup.get("service_tier"), None);
@@ -326,12 +329,16 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
     });
     let test = builder.build_with_websocket_server(&server).await?;
 
-    let warmup = server.wait_for_request(0, 0).await.body_json();
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await
+        .body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["service_tier"].as_str(), Some("priority"));
 
-    test.submit_turn_with_service_tier("hello", None).await?;
+    test.submit_turn_with_service_tier("hello", /*service_tier*/ None)
+        .await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -382,14 +389,18 @@ async fn websocket_v2_next_turn_uses_updated_service_tier() -> Result<()> {
     });
     let test = builder.build_with_websocket_server(&server).await?;
 
-    let warmup = server.wait_for_request(0, 0).await.body_json();
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await
+        .body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup.get("service_tier"), None);
 
     test.submit_turn_with_service_tier("first", Some(ServiceTier::Fast))
         .await?;
-    test.submit_turn_with_service_tier("second", None).await?;
+    test.submit_turn_with_service_tier("second", /*service_tier*/ None)
+        .await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();

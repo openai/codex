@@ -1,11 +1,8 @@
 use super::*;
-use crate::tools::context::ToolInvocation;
-use async_trait::async_trait;
 use pretty_assertions::assert_eq;
 
 struct TestHandler;
 
-#[async_trait]
 impl ToolHandler for TestHandler {
     type Output = crate::tools::context::FunctionToolOutput;
 
@@ -30,7 +27,7 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
         (namespaced_name, Arc::clone(&namespaced_handler)),
     ]));
 
-    let plain = registry.handler(tool_name, None);
+    let plain = registry.handler(tool_name, /*namespace*/ None);
     let namespaced = registry.handler(tool_name, Some(namespace));
     let missing_namespaced = registry.handler(tool_name, Some("mcp__codex_apps__calendar"));
 

@@ -5,8 +5,9 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_core::CodexAuth;
-use codex_core::models_manager::manager::RefreshStrategy;
+use codex_login::CodexAuth;
+use codex_models_manager::client_version_to_whole;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -44,7 +45,7 @@ const DIFFERENT_VERSION_MODEL: &str = "codex-test-different-version";
 async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     let server = MockServer::start().await;
 
-    let remote_model = test_remote_model(REMOTE_MODEL, 1);
+    let remote_model = test_remote_model(REMOTE_MODEL, /*priority*/ 1);
     let models_mock = responses::mount_models_once_with_etag(
         &server,
         ModelsResponse {
@@ -96,6 +97,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: test.session_configured.model.clone(),
             effort: None,
@@ -137,11 +139,11 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn uses_cache_when_version_matches() -> Result<()> {
     let server = MockServer::start().await;
-    let cached_model = test_remote_model(VERSIONED_MODEL, 1);
+    let cached_model = test_remote_model(VERSIONED_MODEL, /*priority*/ 1);
     let models_mock = responses::mount_models_once(
         &server,
         ModelsResponse {
-            models: vec![test_remote_model("remote", 2)],
+            models: vec![test_remote_model("remote", /*priority*/ 2)],
         },
     )
     .await;
@@ -152,7 +154,7 @@ async fn uses_cache_when_version_matches() -> Result<()> {
             let cache = ModelsCache {
                 fetched_at: Utc::now(),
                 etag: None,
-                client_version: Some(codex_core::models_manager::client_version_to_whole()),
+                client_version: Some(client_version_to_whole()),
                 models: vec![cached_model],
             };
             let cache_path = home.join(CACHE_FILE);
@@ -184,11 +186,11 @@ async fn uses_cache_when_version_matches() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refreshes_when_cache_version_missing() -> Result<()> {
     let server = MockServer::start().await;
-    let cached_model = test_remote_model(MISSING_VERSION_MODEL, 1);
+    let cached_model = test_remote_model(MISSING_VERSION_MODEL, /*priority*/ 1);
     let models_mock = responses::mount_models_once(
         &server,
         ModelsResponse {
-            models: vec![test_remote_model("remote-missing", 2)],
+            models: vec![test_remote_model("remote-missing", /*priority*/ 2)],
         },
     )
     .await;
@@ -231,9 +233,9 @@ async fn refreshes_when_cache_version_missing() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refreshes_when_cache_version_differs() -> Result<()> {
     let server = MockServer::start().await;
-    let cached_model = test_remote_model(DIFFERENT_VERSION_MODEL, 1);
+    let cached_model = test_remote_model(DIFFERENT_VERSION_MODEL, /*priority*/ 1);
     let models_response = ModelsResponse {
-        models: vec![test_remote_model("remote-different", 2)],
+        models: vec![test_remote_model("remote-different", /*priority*/ 2)],
     };
     let mut models_mocks = Vec::new();
     for _ in 0..3 {
@@ -243,7 +245,7 @@ async fn refreshes_when_cache_version_differs() -> Result<()> {
     let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     builder = builder
         .with_pre_build_hook(move |home| {
-            let client_version = codex_core::models_manager::client_version_to_whole();
+            let client_version = client_version_to_whole();
             let cache = ModelsCache {
                 fetched_at: Utc::now(),
                 etag: None,
@@ -333,6 +335,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         visibility: ModelVisibility::List,
         supported_in_api: true,
         priority,
+        additional_speed_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -343,7 +346,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         availability_nux: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
@@ -351,7 +354,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
     }

@@ -6,23 +6,27 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::error::CodexErr;
-#[cfg(test)]
-use crate::protocol::SandboxPolicy;
-use crate::sandboxing::CommandSpec;
-use crate::sandboxing::SandboxManager;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::error::CodexErr;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+#[cfg(test)]
+use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformError;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use futures::Future;
 use futures::future::BoxFuture;
 use serde::Serialize;
@@ -94,7 +98,7 @@ where
 
     services.session_telemetry.counter(
         "codex.approval.requested",
-        1,
+        /*inc*/ 1,
         &[
             ("tool", tool_name),
             ("approved", decision.to_opaque_string()),
@@ -116,6 +120,13 @@ pub(crate) struct ApprovalCtx<'a> {
     pub session: &'a Arc<Session>,
     pub turn: &'a Arc<TurnContext>,
     pub call_id: &'a str,
+    /// Guardian review lifecycle ID for this approval, when guardian is reviewing it.
+    ///
+    /// This is separate from `call_id`: `call_id` identifies the tool item under
+    /// review, while this ID identifies the review itself. Keeping both lets
+    /// denial handling, overrides, and app-server notifications refer to the
+    /// review without overloading the tool call ID as a review ID.
+    pub guardian_review_id: Option<String>,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
 }
@@ -280,15 +291,6 @@ pub(crate) trait Approvable<Req> {
     ) -> BoxFuture<'a, ReviewDecision>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SandboxablePreference {
-    Auto,
-    #[allow(dead_code)] // Will be used by later tools.
-    Require,
-    #[allow(dead_code)] // Will be used by later tools.
-    Forbid,
-}
-
 pub(crate) trait Sandboxable {
     fn sandbox_preference(&self) -> SandboxablePreference;
     fn escalate_on_failure(&self) -> bool {
@@ -323,8 +325,8 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 }
 
 pub(crate) struct SandboxAttempt<'a> {
-    pub sandbox: crate::exec::SandboxType,
-    pub policy: &'a crate::protocol::SandboxPolicy,
+    pub sandbox: SandboxType,
+    pub policy: &'a codex_protocol::protocol::SandboxPolicy,
     pub file_system_policy: &'a FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
     pub enforce_managed_network: bool,
@@ -339,12 +341,13 @@ pub(crate) struct SandboxAttempt<'a> {
 impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
-        spec: CommandSpec,
+        command: SandboxCommand,
+        options: ExecOptions,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
-            .transform(crate::sandboxing::SandboxTransformRequest {
-                spec,
+            .transform(SandboxTransformRequest {
+                command,
                 policy: self.policy,
                 file_system_policy: self.file_system_policy,
                 network_policy: self.network_policy,
@@ -352,12 +355,15 @@ impl<'a> SandboxAttempt<'a> {
                 enforce_managed_network: self.enforce_managed_network,
                 network,
                 sandbox_policy_cwd: self.sandbox_cwd,
-                #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions: None,
-                codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
+                codex_linux_sandbox_exe: self
+                    .codex_linux_sandbox_exe
+                    .map(std::path::PathBuf::as_path),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            })
+            .map(|request| {
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })
     }
 }

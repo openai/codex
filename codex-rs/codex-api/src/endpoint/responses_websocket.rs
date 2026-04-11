@@ -6,8 +6,8 @@ use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
-use crate::sse::responses::ResponsesStreamEvent;
-use crate::sse::responses::process_responses_event;
+use crate::sse::ResponsesStreamEvent;
+use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
@@ -214,6 +214,7 @@ impl ResponsesWebsocketConnection {
     pub async fn stream_request(
         &self,
         request: ResponsesWsRequest,
+        connection_reused: bool,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -258,6 +259,7 @@ impl ResponsesWebsocketConnection {
                         request_body,
                         idle_timeout,
                         telemetry,
+                        connection_reused,
                     )
                     .await
                 };
@@ -534,6 +536,7 @@ async fn run_websocket_response_stream(
     request_body: Value,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+    connection_reused: bool,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     let request_text = match serde_json::to_string(&request_body) {
@@ -553,7 +556,11 @@ async fn run_websocket_response_stream(
         .map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")));
 
     if let Some(t) = telemetry.as_ref() {
-        t.on_ws_request(request_start.elapsed(), result.as_ref().err());
+        t.on_ws_request(
+            request_start.elapsed(),
+            result.as_ref().err(),
+            connection_reused,
+        );
     }
 
     result?;

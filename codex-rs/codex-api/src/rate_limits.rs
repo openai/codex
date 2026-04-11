@@ -20,7 +20,7 @@ impl Display for RateLimitError {
 
 /// Parses the default Codex rate-limit header family into a `RateLimitSnapshot`.
 pub fn parse_default_rate_limit(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    parse_rate_limit_for_limit(headers, None)
+    parse_rate_limit_for_limit(headers, /*limit_id*/ None)
 }
 
 /// Parses all known rate-limit header families into update records keyed by limit id.
@@ -277,7 +277,7 @@ mod tests {
             HeaderValue::from_static("1704069000"),
         );
 
-        let snapshot = parse_rate_limit_for_limit(&headers, None).expect("snapshot");
+        let snapshot = parse_rate_limit_for_limit(&headers, /*limit_id*/ None).expect("snapshot");
         assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
         assert_eq!(snapshot.limit_name, None);
         let primary = snapshot.primary.expect("primary");

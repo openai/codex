@@ -1,5 +1,8 @@
 use super::*;
-use crate::models_manager::model_info::model_info_from_slug;
+use codex_models_manager::model_info::model_info_from_slug;
+use pretty_assertions::assert_eq;
+use tempfile::tempdir;
+use tokio::fs as tokio_fs;
 
 #[test]
 fn build_stage_one_input_message_truncates_rollout_using_model_context_window() {
@@ -48,4 +51,86 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
     .unwrap();
 
     assert!(message.contains(&expected_truncated));
+}
+
+#[test]
+fn build_consolidation_prompt_renders_embedded_template() {
+    let temp = tempdir().unwrap();
+    let memories_dir = temp.path().join("memories");
+
+    let prompt = build_consolidation_prompt(&memories_dir, &Phase2InputSelection::default());
+
+    assert!(prompt.contains(&format!(
+        "Folder structure (under {}/):",
+        memories_dir.display()
+    )));
+    assert!(!prompt.contains("Memory extensions (under"));
+    assert!(!prompt.contains("<extension_name>/instructions.md"));
+    assert!(prompt.contains("**Diff since last consolidation:**"));
+    assert!(prompt.contains("- selected inputs this run: 0"));
+}
+
+#[tokio::test]
+async fn build_consolidation_prompt_points_to_extensions_without_inlining_them() {
+    let temp = tempdir().unwrap();
+    let memories_dir = temp.path().join("memories");
+    let extension_dir = temp.path().join("memories_extensions/tape_recorder");
+    tokio_fs::create_dir_all(extension_dir.join("resources"))
+        .await
+        .unwrap();
+    tokio_fs::write(
+        extension_dir.join("instructions.md"),
+        "source-specific instructions\n",
+    )
+    .await
+    .unwrap();
+    tokio_fs::write(
+        extension_dir.join("resources/notes.md"),
+        "source-specific resource\n",
+    )
+    .await
+    .unwrap();
+
+    let prompt = build_consolidation_prompt(&memories_dir, &Phase2InputSelection::default());
+    let memory_extensions_dir = temp.path().join("memories_extensions");
+
+    assert!(prompt.contains(&format!(
+        "Memory extensions (under {}/)",
+        memory_extensions_dir.display()
+    )));
+    assert!(prompt.contains(&format!("Under `{}/`:", memory_extensions_dir.display())));
+    assert!(prompt.contains("<extension_name>/instructions.md"));
+    assert!(prompt.contains("Optional source-specific inputs:"));
+    assert!(!prompt.contains("source-specific instructions"));
+    assert!(!prompt.contains("source-specific resource"));
+}
+
+#[tokio::test]
+async fn build_memory_tool_developer_instructions_renders_embedded_template() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path();
+    let memories_dir = codex_home.join("memories");
+    tokio_fs::create_dir_all(&memories_dir).await.unwrap();
+    tokio_fs::write(
+        memories_dir.join("memory_summary.md"),
+        "Short memory summary for tests.",
+    )
+    .await
+    .unwrap();
+
+    let instructions = build_memory_tool_developer_instructions(codex_home)
+        .await
+        .unwrap();
+
+    assert!(instructions.contains(&format!(
+        "- {}/memory_summary.md (already provided below; do NOT open again)",
+        memories_dir.display()
+    )));
+    assert!(instructions.contains("Short memory summary for tests."));
+    assert_eq!(
+        instructions
+            .matches("========= MEMORY_SUMMARY BEGINS =========")
+            .count(),
+        1
+    );
 }

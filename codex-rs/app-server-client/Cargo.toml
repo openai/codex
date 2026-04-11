@@ -16,13 +16,18 @@ codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-feedback = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tokio-tungstenite = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -464,7 +464,7 @@ fn is_domain_label(label: &str) -> bool {
 pub(crate) fn url_preserving_wrap_options<'a>(opts: RtOptions<'a>) -> RtOptions<'a> {
     opts.word_separator(textwrap::WordSeparator::AsciiSpace)
         .word_splitter(textwrap::WordSplitter::Custom(split_non_url_word))
-        .break_words(false)
+        .break_words(/*break_words*/ false)
 }
 
 /// Custom `textwrap::WordSplitter` callback. Returns empty (no split
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     fn trivial_unstyled_no_indents_wide_width() {
         let line = Line::from("hello");
-        let out = word_wrap_line(&line, 10);
+        let out = word_wrap_line(&line, /*width_or_options*/ 10);
         assert_eq!(out.len(), 1);
         assert_eq!(concat_line(&out[0]), "hello");
     }
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn simple_unstyled_wrap_narrow_width() {
         let line = Line::from("hello world");
-        let out = word_wrap_line(&line, 5);
+        let out = word_wrap_line(&line, /*width_or_options*/ 5);
         assert_eq!(out.len(), 2);
         assert_eq!(concat_line(&out[0]), "hello");
         assert_eq!(concat_line(&out[1]), "world");
@@ -915,7 +915,7 @@ mod tests {
     #[test]
     fn simple_styled_wrap_preserves_styles() {
         let line = Line::from(vec!["hello ".red(), "world".into()]);
-        let out = word_wrap_line(&line, 6);
+        let out = word_wrap_line(&line, /*width_or_options*/ 6);
         assert_eq!(out.len(), 2);
         // First line should carry the red style
         assert_eq!(concat_line(&out[0]), "hello");
@@ -929,7 +929,7 @@ mod tests {
 
     #[test]
     fn with_initial_and_subsequent_indents() {
-        let opts = RtOptions::new(8)
+        let opts = RtOptions::new(/*width*/ 8)
             .initial_indent(Line::from("- "))
             .subsequent_indent(Line::from("  "));
         let line = Line::from("hello world foo");
@@ -946,7 +946,7 @@ mod tests {
 
     #[test]
     fn empty_initial_indent_subsequent_spaces() {
-        let opts = RtOptions::new(8)
+        let opts = RtOptions::new(/*width*/ 8)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from("    "));
         let line = Line::from("hello world foobar");
@@ -960,7 +960,7 @@ mod tests {
     #[test]
     fn empty_input_yields_single_empty_line() {
         let line = Line::from("");
-        let out = word_wrap_line(&line, 10);
+        let out = word_wrap_line(&line, /*width_or_options*/ 10);
         assert_eq!(out.len(), 1);
         assert_eq!(concat_line(&out[0]), "");
     }
@@ -968,7 +968,7 @@ mod tests {
     #[test]
     fn leading_spaces_preserved_on_first_line() {
         let line = Line::from("   hello");
-        let out = word_wrap_line(&line, 8);
+        let out = word_wrap_line(&line, /*width_or_options*/ 8);
         assert_eq!(out.len(), 1);
         assert_eq!(concat_line(&out[0]), "   hello");
     }
@@ -976,7 +976,7 @@ mod tests {
     #[test]
     fn multiple_spaces_between_words_dont_start_next_line_with_spaces() {
         let line = Line::from("hello   world");
-        let out = word_wrap_line(&line, 8);
+        let out = word_wrap_line(&line, /*width_or_options*/ 8);
         assert_eq!(out.len(), 2);
         assert_eq!(concat_line(&out[0]), "hello");
         assert_eq!(concat_line(&out[1]), "world");
@@ -984,7 +984,7 @@ mod tests {
 
     #[test]
     fn break_words_false_allows_overflow_for_long_word() {
-        let opts = RtOptions::new(5).break_words(false);
+        let opts = RtOptions::new(/*width*/ 5).break_words(/*break_words*/ false);
         let line = Line::from("supercalifragilistic");
         let out = word_wrap_line(&line, opts);
         assert_eq!(out.len(), 1);
@@ -994,7 +994,7 @@ mod tests {
     #[test]
     fn hyphen_splitter_breaks_at_hyphen() {
         let line = Line::from("hello-world");
-        let out = word_wrap_line(&line, 7);
+        let out = word_wrap_line(&line, /*width_or_options*/ 7);
         assert_eq!(out.len(), 2);
         assert_eq!(concat_line(&out[0]), "hello-");
         assert_eq!(concat_line(&out[1]), "world");
@@ -1002,7 +1002,7 @@ mod tests {
 
     #[test]
     fn indent_consumes_width_leaving_one_char_space() {
-        let opts = RtOptions::new(4)
+        let opts = RtOptions::new(/*width*/ 4)
             .initial_indent(Line::from(">>>>"))
             .subsequent_indent(Line::from("--"));
         let line = Line::from("hello");
@@ -1016,7 +1016,7 @@ mod tests {
     #[test]
     fn wide_unicode_wraps_by_display_width() {
         let line = Line::from("😀😀😀");
-        let out = word_wrap_line(&line, 4);
+        let out = word_wrap_line(&line, /*width_or_options*/ 4);
         assert_eq!(out.len(), 2);
         assert_eq!(concat_line(&out[0]), "😀😀");
         assert_eq!(concat_line(&out[1]), "😀");
@@ -1026,7 +1026,7 @@ mod tests {
     fn styled_split_within_span_preserves_style() {
         use ratatui::style::Stylize;
         let line = Line::from(vec!["abcd".red()]);
-        let out = word_wrap_line(&line, 2);
+        let out = word_wrap_line(&line, /*width_or_options*/ 2);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].spans.len(), 1);
         assert_eq!(out[1].spans.len(), 1);
@@ -1038,7 +1038,7 @@ mod tests {
 
     #[test]
     fn wrap_lines_applies_initial_indent_only_once() {
-        let opts = RtOptions::new(8)
+        let opts = RtOptions::new(/*width*/ 8)
             .initial_indent(Line::from("- "))
             .subsequent_indent(Line::from("  "));
 
@@ -1057,14 +1057,14 @@ mod tests {
     #[test]
     fn wrap_lines_without_indents_is_concat_of_single_wraps() {
         let lines = vec![Line::from("hello"), Line::from("world!")];
-        let out = word_wrap_lines(lines, 10);
+        let out = word_wrap_lines(lines, /*width_or_options*/ 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world!"]);
     }
 
     #[test]
     fn wrap_lines_borrowed_applies_initial_indent_only_once() {
-        let opts = RtOptions::new(8)
+        let opts = RtOptions::new(/*width*/ 8)
             .initial_indent(Line::from("- "))
             .subsequent_indent(Line::from("  "));
 
@@ -1081,7 +1081,7 @@ mod tests {
     #[test]
     fn wrap_lines_borrowed_without_indents_is_concat_of_single_wraps() {
         let lines = [Line::from("hello"), Line::from("world!")];
-        let out = word_wrap_lines_borrowed(lines.iter(), 10);
+        let out = word_wrap_lines_borrowed(lines.iter(), /*width_or_options*/ 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world!"]);
     }
@@ -1089,7 +1089,7 @@ mod tests {
     #[test]
     fn wrap_lines_accepts_borrowed_iterators() {
         let lines = [Line::from("hello world"), Line::from("foo bar baz")];
-        let out = word_wrap_lines(lines, 10);
+        let out = word_wrap_lines(lines, /*width_or_options*/ 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world", "foo bar", "baz"]);
     }
@@ -1097,7 +1097,7 @@ mod tests {
     #[test]
     fn wrap_lines_accepts_str_slices() {
         let lines = ["hello world", "goodnight moon"];
-        let out = word_wrap_lines(lines, 12);
+        let out = word_wrap_lines(lines, /*width_or_options*/ 12);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello world", "goodnight", "moon"]);
     }
@@ -1105,9 +1105,9 @@ mod tests {
     #[test]
     fn line_height_counts_double_width_emoji() {
         let line = "😀😀😀".into(); // each emoji ~ width 2
-        assert_eq!(word_wrap_line(&line, 4).len(), 2);
-        assert_eq!(word_wrap_line(&line, 2).len(), 3);
-        assert_eq!(word_wrap_line(&line, 6).len(), 1);
+        assert_eq!(word_wrap_line(&line, /*width_or_options*/ 4).len(), 2);
+        assert_eq!(word_wrap_line(&line, /*width_or_options*/ 2).len(), 3);
+        assert_eq!(word_wrap_line(&line, /*width_or_options*/ 6).len(), 1);
     }
 
     #[test]
@@ -1116,7 +1116,7 @@ mod tests {
         let line = Line::from(sample);
         let lines = [line];
         // Force small width to exercise wrapping at spaces.
-        let wrapped = word_wrap_lines_borrowed(&lines, 40);
+        let wrapped = word_wrap_lines_borrowed(&lines, /*width_or_options*/ 40);
         let joined: String = wrapped.iter().map(ToString::to_string).join("\n");
         assert_eq!(
             joined,
@@ -1134,10 +1134,10 @@ them."#
         let line = Line::from(
             "http://example.com/long-url-with-dashes-wider-than-terminal-window/blah-blah-blah-text/more-gibberish-text",
         );
-        let opts = RtOptions::new(24)
+        let opts = RtOptions::new(/*width*/ 24)
             .word_separator(textwrap::WordSeparator::AsciiSpace)
             .word_splitter(textwrap::WordSplitter::NoHyphenation)
-            .break_words(false);
+            .break_words(/*break_words*/ false);
 
         let out = word_wrap_line(&line, opts);
 
@@ -1229,7 +1229,7 @@ them."#
     #[test]
     fn adaptive_wrap_line_keeps_long_url_like_token_intact() {
         let line = Line::from("example.test/a-very-long-path-with-many-segments-and-query?x=1&y=2");
-        let out = adaptive_wrap_line(&line, RtOptions::new(20));
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 20));
         assert_eq!(out.len(), 1);
         assert_eq!(
             concat_line(&out[0]),
@@ -1240,7 +1240,7 @@ them."#
     #[test]
     fn adaptive_wrap_line_preserves_default_behavior_for_non_url_tokens() {
         let line = Line::from("a_very_long_token_without_spaces_to_force_wrapping");
-        let out = adaptive_wrap_line(&line, RtOptions::new(20));
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 20));
         assert!(
             out.len() > 1,
             "expected non-url token to wrap with default options"
@@ -1251,7 +1251,7 @@ them."#
     fn adaptive_wrap_line_mixed_line_wraps_long_non_url_token() {
         let long_non_url = "a_very_long_token_without_spaces_to_force_wrapping";
         let line = Line::from(format!("see https://ex.com {long_non_url}"));
-        let out = adaptive_wrap_line(&line, RtOptions::new(24));
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 24));
 
         assert!(
             out.iter()
@@ -1269,7 +1269,7 @@ them."#
     fn map_owned_wrapped_line_to_range_recovers_on_non_prefix_mismatch() {
         // Match source chars first, then introduce a non-penalty mismatch.
         // The function should recover and return the mapped prefix range.
-        let range = map_owned_wrapped_line_to_range("hello world", 0, "helloX", "");
+        let range = map_owned_wrapped_line_to_range("hello world", /*cursor*/ 0, "helloX", "");
         assert_eq!(range, 0..5);
     }
 
@@ -1285,7 +1285,7 @@ them."#
         let text = "- item one and some more words";
         // Simulate what textwrap would produce for the first continuation line
         // when subsequent_indent = "- ": it prepends "- " to the source slice.
-        let range = map_owned_wrapped_line_to_range(text, 0, "- - item one", "- ");
+        let range = map_owned_wrapped_line_to_range(text, /*cursor*/ 0, "- - item one", "- ");
         // The mapper should skip the synthetic "- " prefix and map "- item one"
         // back to source bytes 0..10.
         assert_eq!(range, 0..10);
@@ -1330,7 +1330,7 @@ them."#
             panic!("expected at least one wrapped line");
         };
 
-        let mapped = map_owned_wrapped_line_to_range(text, 0, line.as_ref(), "- ");
+        let mapped = map_owned_wrapped_line_to_range(text, /*cursor*/ 0, line.as_ref(), "- ");
         let expected_len = line
             .as_ref()
             .strip_prefix("- ")

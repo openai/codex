@@ -4,8 +4,8 @@ use std::fs;
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::config::types::Personality;
-use codex_core::features::Feature;
+use codex_config::types::Personality;
+use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -121,6 +121,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -144,6 +145,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             final_output_json_schema: None,
             cwd: preturn_context_diff_cwd,
             approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -222,6 +224,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             final_output_json_schema: None,
             cwd: cwd_one.clone(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -245,6 +248,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             final_output_json_schema: None,
             cwd: cwd_two,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -318,6 +322,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -354,6 +359,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             final_output_json_schema: None,
             cwd: resume_override_cwd,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: resumed.session_configured.model.clone(),
             effort: resumed.config.model_reasoning_effort,
@@ -416,6 +422,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -461,6 +468,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

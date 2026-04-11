@@ -1,0 +1,171 @@
+--- a/cargo/private/cargo_build_script_runner/bin.rs
++++ b/cargo/private/cargo_build_script_runner/bin.rs
+@@ -24,6 +24,85 @@
+ use cargo_build_script_runner::cargo_manifest_dir::{remove_symlink, symlink, RunfilesMaker};
+ use cargo_build_script_runner::{BuildScriptOutput, CompileAndLinkFlags};
+ 
++#[cfg(windows)]
++fn normalize_windows_relative_path(path: &str) -> String {
++    path.replace('/', "\\")
++}
++
++#[cfg(not(windows))]
++fn normalize_windows_relative_path(path: &str) -> String {
++    path.to_owned()
++}
++
++fn exec_root_join(exec_root: &Path, relative: &str) -> PathBuf {
++    exec_root.join(normalize_windows_relative_path(relative))
++}
++
++#[cfg(windows)]
++#[link(name = "Kernel32")]
++unsafe extern "system" {
++    fn GetShortPathNameW(
++        lpszLongPath: *const u16,
++        lpszShortPath: *mut u16,
++        cchBuffer: u32,
++    ) -> u32;
++}
++
++#[cfg(windows)]
++fn windows_extended_length_path(path: &Path) -> PathBuf {
++    let path = path.as_os_str().to_string_lossy();
++    if path.starts_with(r"\\?\") {
++        PathBuf::from(path.to_string())
++    } else if let Some(stripped) = path.strip_prefix(r"\\") {
++        PathBuf::from(format!(r"\\?\UNC\{stripped}"))
++    } else {
++        PathBuf::from(format!(r"\\?\{path}"))
++    }
++}
++
++#[cfg(windows)]
++fn shorten_windows_path(path: &Path) -> PathBuf {
++    use std::os::windows::ffi::OsStrExt;
++
++    let long_path = windows_extended_length_path(path);
++    let long_path = long_path
++        .as_os_str()
++        .encode_wide()
++        .chain(Some(0))
++        .collect::<Vec<u16>>();
++
++    unsafe {
++        let required = GetShortPathNameW(long_path.as_ptr(), std::ptr::null_mut(), 0);
++        if required == 0 {
++            return path.to_owned();
++        }
++
++        let mut short_path = vec![0u16; required as usize];
++        let written = GetShortPathNameW(long_path.as_ptr(), short_path.as_mut_ptr(), required);
++        if written == 0 {
++            path.to_owned()
++        } else {
++            let short_path = PathBuf::from(
++                <std::ffi::OsString as std::os::windows::ffi::OsStringExt>::from_wide(
++                    &short_path[..written as usize],
++                ),
++            );
++            PathBuf::from(
++                short_path
++                    .as_os_str()
++                    .to_string_lossy()
++                    .trim_start_matches(r"\\?\")
++                    .to_string(),
++            )
++        }
++    }
++}
++
++#[cfg(not(windows))]
++fn shorten_windows_path(path: &Path) -> PathBuf {
++    path.to_owned()
++}
++
+ fn run_buildrs() -> Result<(), String> {
+     // We use exec_root.join rather than std::fs::canonicalize, to avoid resolving symlinks, as
+     // some execution strategies and remote execution environments may use symlinks in ways which
+@@ -31,10 +110,11 @@ fn run_buildrs() -> Result<(), String> {
+     // directory - resolving these may cause tools which inspect $0, or try to resolve files
+     // relative to themselves, to fail.
+     let exec_root = env::current_dir().expect("Failed to get current directory");
+-    let manifest_dir_env = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR was not set");
+-    let rustc_env = env::var("RUSTC").expect("RUSTC was not set");
+-    let manifest_dir = exec_root.join(manifest_dir_env);
+-    let rustc = exec_root.join(&rustc_env);
++    let manifest_dir_env =
++        normalize_windows_relative_path(&env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR was not set"));
++    let rustc_env = normalize_windows_relative_path(&env::var("RUSTC").expect("RUSTC was not set"));
++    let manifest_dir = exec_root_join(&exec_root, &manifest_dir_env);
++    let rustc = shorten_windows_path(&exec_root_join(&exec_root, &rustc_env));
+     let Args {
+         progname,
+         crate_links,
+@@ -55,7 +135,8 @@ fn run_buildrs() -> Result<(), String> {
+         cargo_manifest_maker.create_runfiles_dir().unwrap()
+     }
+ 
+-    let out_dir_abs = exec_root.join(out_dir);
++    let out_dir_abs = shorten_windows_path(&exec_root_join(&exec_root, &out_dir));
+     // For some reason Google's RBE does not create the output directory, force create it.
+     create_dir_all(&out_dir_abs)
+         .unwrap_or_else(|_| panic!("Failed to make output directory: {:?}", out_dir_abs));
+@@ -89,11 +170,12 @@ fn run_buildrs() -> Result<(), String> {
+ 
+     let working_directory = resolve_rundir(&rundir, &exec_root, &manifest_dir)?;
+ 
+-    let mut command = Command::new(exec_root.join(progname));
++    let mut command = Command::new(exec_root_join(&exec_root, &progname));
+     command
+-        .current_dir(&working_directory)
++        .current_dir(shorten_windows_path(&working_directory))
+         .envs(target_env_vars)
+         .env("OUT_DIR", &out_dir_abs)
++        .env("RULES_RUST_BAZEL_BUILD_SCRIPT_RUNNER", "1")
+         .env("CARGO_MANIFEST_DIR", manifest_dir)
+         .env("RUSTC", rustc)
+         .env("RUST_BACKTRACE", "full");
+@@ -123,7 +205,7 @@ fn run_buildrs() -> Result<(), String> {
+ 
+     for tool_env_var in &["CC", "CXX", "LD"] {
+         if let Some(tool_path) = env::var_os(tool_env_var) {
+-            command.env(tool_env_var, exec_root.join(tool_path));
++            command.env(tool_env_var, exec_root_join(&exec_root, &tool_path.to_string_lossy()));
+         }
+     }
+ 
+@@ -139,7 +221,7 @@ fn run_buildrs() -> Result<(), String> {
+             command.env_remove("AR");
+             command.env_remove("ARFLAGS");
+         } else {
+-            command.env("AR", exec_root.join(ar_path));
++            command.env("AR", exec_root_join(&exec_root, &ar_path.to_string_lossy()));
+         }
+     }
+ 
+@@ -257,7 +339,8 @@ fn resolve_rundir(rundir: &str, exec_root: &Path, manifest_dir: &Path) -> Result
+     if rundir.is_empty() {
+         return Ok(manifest_dir.to_owned());
+     }
+-    let rundir_path = Path::new(rundir);
++    let rundir = normalize_windows_relative_path(rundir);
++    let rundir_path = Path::new(&rundir);
+     if rundir_path.is_absolute() {
+         return Err(format!("rundir must be empty (to run in manifest path) or relative path (relative to exec root), but was {:?}", rundir));
+     }
+diff --git a/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs b/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
+--- a/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
++++ b/cargo/private/cargo_build_script_runner/cargo_manifest_dir.rs
+@@ -282,7 +282,7 @@
+     /// been copied into the runfiles directory.
+     fn drain_runfiles_dir_windows(&self) -> Result<(), String> {
+         for dest in self.runfiles.values() {
+-            if !self
++            if self
+                 .filename_suffixes_to_retain
+                 .iter()
+                 .any(|suffix| dest.ends_with(suffix))
+             {
+                 continue;
+             }

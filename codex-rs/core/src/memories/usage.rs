@@ -1,11 +1,11 @@
-use crate::is_safe_command::is_known_safe_command;
-use crate::parse_command::parse_command;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::unified_exec::ExecCommandArgs;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_shell_command::parse_command::parse_command;
 use std::path::PathBuf;
 
 const MEMORIES_USAGE_METRIC: &str = "codex.memories.usage";
@@ -41,7 +41,7 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
     for kind in kinds {
         invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
-            1,
+            /*inc*/ 1,
             &[
                 ("kind", kind.as_tag()),
                 ("tool", invocation.tool_name.as_str()),
@@ -80,12 +80,20 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
     match invocation.tool_name.as_str() {
         "shell" => serde_json::from_str::<ShellToolCallParams>(arguments)
             .ok()
-            .map(|params| (params.command, invocation.turn.resolve_path(params.workdir))),
+            .map(|params| {
+                (
+                    params.command,
+                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                )
+            }),
         "shell_command" => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .ok()
             .map(|params| {
                 if !invocation.turn.tools_config.allow_login_shell && params.login == Some(true) {
-                    return (Vec::new(), invocation.turn.resolve_path(params.workdir));
+                    return (
+                        Vec::new(),
+                        invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                    );
                 }
                 let use_login_shell = params
                     .login
@@ -94,7 +102,10 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     .session
                     .user_shell()
                     .derive_exec_args(&params.command, use_login_shell);
-                (command, invocation.turn.resolve_path(params.workdir))
+                (
+                    command,
+                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                )
             }),
         "exec_command" => serde_json::from_str::<ExecCommandArgs>(arguments)
             .ok()
@@ -106,7 +117,10 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     invocation.turn.tools_config.allow_login_shell,
                 )
                 .ok()?;
-                Some((command, invocation.turn.resolve_path(params.workdir)))
+                Some((
+                    command,
+                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                ))
             }),
         _ => None,
     }

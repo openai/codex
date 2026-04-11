@@ -20,7 +20,6 @@ use crate::unix::escalate_protocol::EscalateRequest;
 use crate::unix::escalate_protocol::EscalateResponse;
 use crate::unix::escalate_protocol::EscalationDecision;
 use crate::unix::escalate_protocol::EscalationExecution;
-use crate::unix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::unix::escalate_protocol::SuperExecMessage;
 use crate::unix::escalate_protocol::SuperExecResult;
 use crate::unix::escalation_policy::EscalationPolicy;
@@ -64,13 +63,13 @@ pub trait ShellCommandExecutor: Send + Sync {
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct ExecParams {
-    /// The the string of Zsh/shell to execute.
+    /// The command string to pass to the shell via `-c` or `-lc`.
     pub command: String,
     /// The working directory to execute the command in. Must be an absolute path.
     pub workdir: String,
     /// The timeout for the command in milliseconds.
     pub timeout_ms: Option<u64>,
-    /// Launch Bash with -lc instead of -c: defaults to true.
+    /// Launch the shell with -lc instead of -c: defaults to true.
     pub login: Option<bool>,
 }
 
@@ -126,18 +125,18 @@ impl Drop for EscalationSession {
 }
 
 pub struct EscalateServer {
-    bash_path: PathBuf,
+    shell_path: PathBuf,
     execve_wrapper: PathBuf,
     policy: Arc<dyn EscalationPolicy>,
 }
 
 impl EscalateServer {
-    pub fn new<Policy>(bash_path: PathBuf, execve_wrapper: PathBuf, policy: Policy) -> Self
+    pub fn new<Policy>(shell_path: PathBuf, execve_wrapper: PathBuf, policy: Policy) -> Self
     where
         Policy: EscalationPolicy + Send + Sync + 'static,
     {
         Self {
-            bash_path,
+            shell_path,
             execve_wrapper,
             policy: Arc::new(policy),
         }
@@ -153,7 +152,7 @@ impl EscalateServer {
         let env_overlay = session.env().clone();
         let client_socket = Arc::clone(&session.client_socket);
         let command = vec![
-            self.bash_path.to_string_lossy().to_string(),
+            self.shell_path.to_string_lossy().to_string(),
             if params.login == Some(false) {
                 "-c".to_string()
             } else {
@@ -209,10 +208,6 @@ impl EscalateServer {
         );
         env.insert(
             EXEC_WRAPPER_ENV_VAR.to_string(),
-            self.execve_wrapper.to_string_lossy().to_string(),
-        );
-        env.insert(
-            LEGACY_BASH_EXEC_WRAPPER_ENV_VAR.to_string(),
             self.execve_wrapper.to_string_lossy().to_string(),
         );
         Ok(EscalationSession {
@@ -279,7 +274,7 @@ async fn handle_escalate_session_with_policy(
         _ = parent_cancellation_token.cancelled() => return Ok(()),
         _ = session_cancellation_token.cancelled() => return Ok(()),
     };
-    let program = AbsolutePathBuf::resolve_path_against_base(file, workdir.as_path())?;
+    let program = AbsolutePathBuf::resolve_path_against_base(file, workdir.as_path());
     let decision = tokio::select! {
         decision = policy.determine_action(&program, &argv, &workdir) => {
             decision.context("failed to determine escalation action")?
@@ -595,7 +590,7 @@ mod tests {
     /// overlay and does not need to touch the configured shell or wrapper
     /// executable paths.
     ///
-    /// The `/bin/bash` and `/tmp/codex-execve-wrapper` values here are
+    /// The `/bin/zsh` and `/tmp/codex-execve-wrapper` values here are
     /// intentionally fake sentinels: this test asserts that the paths are
     /// copied into the exported environment and that the socket fd stays valid
     /// until `close_client_socket()` is called.
@@ -605,8 +600,8 @@ mod tests {
         let execve_wrapper = PathBuf::from("/tmp/codex-execve-wrapper");
         let execve_wrapper_str = execve_wrapper.to_string_lossy().to_string();
         let server = EscalateServer::new(
-            PathBuf::from("/bin/bash"),
-            execve_wrapper.clone(),
+            PathBuf::from("/bin/zsh"),
+            execve_wrapper,
             DeterministicEscalationPolicy {
                 decision: EscalationDecision::run(),
             },
@@ -618,10 +613,6 @@ mod tests {
         )?;
         let env = session.env();
         assert_eq!(env.get(EXEC_WRAPPER_ENV_VAR), Some(&execve_wrapper_str));
-        assert_eq!(
-            env.get(LEGACY_BASH_EXEC_WRAPPER_ENV_VAR),
-            Some(&execve_wrapper_str)
-        );
         let socket_fd = env
             .get(ESCALATE_SOCKET_ENV_VAR)
             .expect("session should export shell escalation socket");
@@ -727,7 +718,7 @@ mod tests {
         let workdir = tmp.path().join("workspace");
         std::fs::create_dir(&workdir)?;
         let workdir = AbsolutePathBuf::try_from(workdir)?;
-        let expected_file = workdir.join("bin/tool")?;
+        let expected_file = workdir.join("bin/tool");
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
             Arc::new(AssertingEscalationPolicy {

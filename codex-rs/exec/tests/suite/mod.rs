@@ -6,6 +6,7 @@ mod ephemeral;
 mod mcp_required_exit;
 mod originator;
 mod output_schema;
+mod prompt_stdin;
 mod resume;
 mod sandbox;
 mod server_error_exit;

@@ -74,7 +74,7 @@ unified_exec = true
 "#;
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), original)?;
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -108,7 +108,7 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -178,12 +178,7 @@ async fn read_includes_origins_and_layers() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
     );
 
@@ -237,6 +232,54 @@ async fn read_includes_origins_and_layers() {
     ));
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn write_value_succeeds_when_managed_preferences_expand_home_directory_paths() -> Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"\n")?;
+
+    let mut loader_overrides =
+        LoaderOverrides::with_managed_config_path_for_tests(tmp.path().join("managed_config.toml"));
+    loader_overrides.managed_preferences_base64 = Some(
+        base64::prelude::BASE64_STANDARD.encode(
+            r#"
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write]
+writable_roots = ["~/code"]
+"#
+            .as_bytes(),
+        ),
+    );
+
+    let service = ConfigService::new(
+        tmp.path().to_path_buf(),
+        vec![],
+        loader_overrides,
+        CloudRequirementsLoader::default(),
+    );
+
+    let response = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+            key_path: "model".to_string(),
+            value: serde_json::json!("updated"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+    assert_eq!(response.status, WriteStatus::Ok);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config"),
+        "model = \"updated\"\n"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn write_value_reports_override() {
     let tmp = tempdir().expect("tempdir");
@@ -253,12 +296,7 @@ async fn write_value_reports_override() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
     );
 
@@ -304,7 +342,7 @@ async fn version_conflict_rejected() {
     let user_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&user_path, "model = \"user\"").unwrap();
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
     let error = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -327,7 +365,7 @@ async fn write_value_defaults_to_user_config_path() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
             file_path: None,
@@ -357,12 +395,7 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
     );
 
@@ -391,7 +424,7 @@ async fn reserved_builtin_provider_override_rejected() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"\n").unwrap();
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
     let error = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -422,12 +455,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: None,
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        LoaderOverrides::without_managed_config_for_tests(),
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
                 feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
@@ -473,12 +501,7 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: None,
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        LoaderOverrides::without_managed_config_for_tests(),
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
                 feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
@@ -535,12 +558,7 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         cli_overrides,
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
     );
 
@@ -593,12 +611,7 @@ async fn write_value_reports_managed_override() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
     );
 
@@ -650,7 +663,7 @@ alpha = "a"
 
     std::fs::write(&path, base)?;
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::without_managed_config_for_tests(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
             file_path: Some(path.display().to_string()),

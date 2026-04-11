@@ -20,9 +20,6 @@ common:windows --host_platform=//:local_windows
 common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
 common --@llvm//config:experimental_stub_libgcc_s
 
-# We need to use the sh toolchain on windows so we don't send host bash paths to the linux executor.
-common:windows --@rules_rust//rust/settings:experimental_use_sh_toolchain_for_bootstrap_process_wrapper
-
 # TODO(zbarsky): rules_rust doesn't implement this flag properly with remote exec...
 # common --@rules_rust//rust/settings:pipelined_compilation
 
@@ -47,6 +44,7 @@ common --remote_timeout=3600
 common --noexperimental_throttle_remote_action_building
 common --experimental_remote_execution_keepalive
 common --grpc_keepalive_time=30s
+common --experimental_remote_downloader=grpcs://remote.buildbuddy.io
 
 # This limits both in-flight executions and concurrent downloads. Even with high number
 # of jobs execution will still be limited by CPU cores, so this just pays a bit of
@@ -60,3 +58,98 @@ common:remote --jobs=800
 # Enable pipelined compilation since we are not bound by local CPU count.
 #common:remote --@rules_rust//rust/settings:pipelined_compilation
 
+# GitHub Actions CI configs.
+common:ci --remote_download_minimal
+common:ci --keep_going
+common:ci --verbose_failures
+common:ci --build_metadata=REPO_URL=https://github.com/openai/codex.git
+common:ci --build_metadata=ROLE=CI
+common:ci --build_metadata=VISIBILITY=PUBLIC
+
+# Disable disk cache in CI since we have a remote one and aren't using persistent workers.
+common:ci --disk_cache=
+
+# Shared config for the main Bazel CI workflow.
+common:ci-bazel --config=ci
+common:ci-bazel --build_metadata=TAG_workflow=bazel
+
+# Shared config for Bazel-backed Rust linting.
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+build:clippy --@rules_rust//rust/settings:clippy.toml=//codex-rs:clippy.toml
+# Keep this deny-list in sync with `codex-rs/Cargo.toml` `[workspace.lints.clippy]`.
+# Cargo applies those lint levels to member crates that opt into `[lints] workspace = true`
+# in their own `Cargo.toml`, but `rules_rust` Bazel clippy does not read Cargo lint levels.
+# `clippy.toml` can configure lint behavior, but it cannot set allow/warn/deny/forbid levels.
+build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::expect_used
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::identity_op
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_clamp
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_filter
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_find
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_flatten
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_map
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_memcpy
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_non_exhaustive
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_ok_or
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_range_contains
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_retain
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_strip
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_try_fold
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_unwrap_or
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_borrow
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_borrowed_reference
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_collect
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_late_init
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_option_as_deref
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_question_mark
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::needless_update
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_clone
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_closure
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_closure_for_method_calls
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::redundant_static_lifetimes
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::trivially_copy_pass_by_ref
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::uninlined_format_args
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_filter_map
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_lazy_evaluations
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_sort_by
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_to_owned
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unwrap_used
+
+# Shared config for Bazel-backed argument-comment-lint.
+build:argument-comment-lint --aspects=//tools/argument-comment-lint:lint_aspect.bzl%rust_argument_comment_lint_aspect
+build:argument-comment-lint --output_groups=argument_comment_lint_checks
+build:argument-comment-lint --@rules_rust//rust/toolchain/channel=nightly
+
+# Rearrange caches on Windows so they're on the same volume as the checkout.
+common:ci-windows --config=ci-bazel
+common:ci-windows --build_metadata=TAG_os=windows
+common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+
+# We prefer to run the build actions entirely remotely so we can dial up the concurrency.
+# We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
+
+# On linux, we can do a full remote build/test, by targeting the right (x86/arm) runners, so we have coverage of both.
+# Linux crossbuilds don't work until we untangle the libc constraint mess.
+common:ci-linux --config=ci-bazel
+common:ci-linux --build_metadata=TAG_os=linux
+common:ci-linux --config=remote
+common:ci-linux --strategy=remote
+common:ci-linux --platforms=//:rbe
+
+# On mac, we can run all the build actions remotely but test actions locally.
+common:ci-macos --config=ci-bazel
+common:ci-macos --build_metadata=TAG_os=macos
+common:ci-macos --config=remote
+common:ci-macos --strategy=remote
+common:ci-macos --strategy=TestRunner=darwin-sandbox,local
+
+# Linux-only V8 CI config.
+common:ci-v8 --config=ci
+common:ci-v8 --build_metadata=TAG_workflow=v8
+common:ci-v8 --build_metadata=TAG_os=linux
+common:ci-v8 --config=remote
+common:ci-v8 --strategy=remote
+
+# Optional per-user local overrides.
+try-import %workspace%/user.bazelrc

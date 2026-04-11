@@ -22,13 +22,16 @@ use crate::win::psuedocon::PsuedoCon;
 use anyhow::Error;
 use filedescriptor::FileDescriptor;
 use filedescriptor::Pipe;
-use portable_pty::cmdbuilder::CommandBuilder;
 use portable_pty::Child;
 use portable_pty::MasterPty;
 use portable_pty::PtyPair;
 use portable_pty::PtySize;
 use portable_pty::PtySystem;
 use portable_pty::SlavePty;
+use portable_pty::cmdbuilder::CommandBuilder;
+use std::mem::ManuallyDrop;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::RawHandle;
 use std::sync::Arc;
 use std::sync::Mutex;
 use winapi::um::wincon::COORD;
@@ -36,25 +39,68 @@ use winapi::um::wincon::COORD;
 #[derive(Default)]
 pub struct ConPtySystem {}
 
+fn create_conpty_handles(
+    size: PtySize,
+) -> anyhow::Result<(PsuedoCon, FileDescriptor, FileDescriptor)> {
+    let stdin = Pipe::new()?;
+    let stdout = Pipe::new()?;
+
+    let con = PsuedoCon::new(
+        COORD {
+            X: size.cols as i16,
+            Y: size.rows as i16,
+        },
+        stdin.read,
+        stdout.write,
+    )?;
+
+    Ok((con, stdin.write, stdout.read))
+}
+
+pub struct RawConPty {
+    con: PsuedoCon,
+    input_write: FileDescriptor,
+    output_read: FileDescriptor,
+}
+
+impl RawConPty {
+    pub fn new(cols: i16, rows: i16) -> anyhow::Result<Self> {
+        let (con, input_write, output_read) = create_conpty_handles(PtySize {
+            rows: rows as u16,
+            cols: cols as u16,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        Ok(Self {
+            con,
+            input_write,
+            output_read,
+        })
+    }
+
+    pub fn pseudoconsole_handle(&self) -> RawHandle {
+        self.con.raw_handle()
+    }
+
+    pub fn into_raw_handles(self) -> (RawHandle, RawHandle, RawHandle) {
+        let me = ManuallyDrop::new(self);
+        (
+            me.con.raw_handle(),
+            me.input_write.as_raw_handle(),
+            me.output_read.as_raw_handle(),
+        )
+    }
+}
+
 impl PtySystem for ConPtySystem {
     fn openpty(&self, size: PtySize) -> anyhow::Result<PtyPair> {
-        let stdin = Pipe::new()?;
-        let stdout = Pipe::new()?;
-
-        let con = PsuedoCon::new(
-            COORD {
-                X: size.cols as i16,
-                Y: size.rows as i16,
-            },
-            stdin.read,
-            stdout.write,
-        )?;
+        let (con, writable, readable) = create_conpty_handles(size)?;
 
         let master = ConPtyMasterPty {
             inner: Arc::new(Mutex::new(Inner {
                 con,
-                readable: stdout.read,
-                writable: Some(stdin.write),
+                readable,
+                writable: Some(writable),
                 size,
             })),
         };

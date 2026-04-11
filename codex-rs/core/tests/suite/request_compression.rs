@@ -1,7 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
-use codex_core::CodexAuth;
-use codex_core::features::Feature;
+use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -45,6 +45,7 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -92,6 +93,7 @@ async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 

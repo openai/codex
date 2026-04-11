@@ -13,12 +13,13 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use codex_chatgpt::connectors::AppInfo;
+use codex_core::TOOL_MENTION_SIGIL;
 use codex_core::connectors::connector_mention_slug;
-use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
 use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::skills::model::SkillToolDependency;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_protocol::protocol::SkillsListEntry;
@@ -61,7 +62,7 @@ impl ChatWidget {
 
     pub(crate) fn open_manage_skills_popup(&mut self) {
         if self.skills_all.is_empty() {
-            self.add_info_message("No skills available.".to_string(), None);
+            self.add_info_message("No skills available.".to_string(), /*hint*/ None);
             return;
         }
 
@@ -133,7 +134,7 @@ impl ChatWidget {
         }
         self.add_info_message(
             format!("{enabled_count} skills enabled, {disabled_count} skills disabled"),
-            None,
+            /*hint*/ None,
         );
     }
 
@@ -141,6 +142,31 @@ impl ChatWidget {
         let skills = skills_for_cwd(&self.config.cwd, &response.skills);
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
+    }
+
+    pub(crate) fn annotate_skill_reads_in_parsed_cmd(
+        &self,
+        mut parsed_cmd: Vec<ParsedCommand>,
+    ) -> Vec<ParsedCommand> {
+        if self.skills_all.is_empty() {
+            return parsed_cmd;
+        }
+
+        for parsed in &mut parsed_cmd {
+            let ParsedCommand::Read { name, path, .. } = parsed else {
+                continue;
+            };
+            if name != "SKILL.md" {
+                continue;
+            }
+
+            // Best effort only: annotate exact SKILL.md path matches from the loaded skills list.
+            if let Some(skill) = self.skills_all.iter().find(|skill| skill.path == *path) {
+                *name = format!("{name} ({} skill)", skill.name);
+            }
+        }
+
+        parsed_cmd
     }
 }
 
@@ -191,8 +217,6 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
                     .collect(),
             }),
         policy: None,
-        permission_profile: None,
-        managed_network_override: None,
         path_to_skills_md: skill.path.clone(),
         scope: skill.scope,
     }

@@ -12,10 +12,10 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use codex_config::types::OAuthCredentialsStoreMode;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";
@@ -62,9 +62,11 @@ pub async fn determine_streamable_http_auth_status(
 
 /// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
 pub async fn supports_oauth_login(url: &str) -> Result<bool> {
-    Ok(discover_streamable_http_oauth(url, None, None)
-        .await?
-        .is_some())
+    Ok(discover_streamable_http_oauth(
+        url, /*http_headers*/ None, /*env_http_headers*/ None,
+    )
+    .await?
+    .is_some())
 }
 
 pub async fn discover_streamable_http_oauth(
@@ -274,12 +276,12 @@ mod tests {
         let status = determine_streamable_http_auth_status(
             "server",
             "not-a-url",
-            None,
+            /*bearer_token_env_var*/ None,
             Some(HashMap::from([(
                 "Authorization".to_string(),
                 "Bearer token".to_string(),
             )])),
-            None,
+            /*env_http_headers*/ None,
             OAuthCredentialsStoreMode::Keyring,
         )
         .await
@@ -295,8 +297,8 @@ mod tests {
         let status = determine_streamable_http_auth_status(
             "server",
             "not-a-url",
-            None,
-            None,
+            /*bearer_token_env_var*/ None,
+            /*http_headers*/ None,
             Some(HashMap::from([(
                 "Authorization".to_string(),
                 "CODEX_RMCP_CLIENT_AUTH_STATUS_TEST_TOKEN".to_string(),
@@ -318,10 +320,14 @@ mod tests {
         }))
         .await;
 
-        let discovery = discover_streamable_http_oauth(&server.url, None, None)
-            .await
-            .expect("discovery should succeed")
-            .expect("oauth support should be detected");
+        let discovery = discover_streamable_http_oauth(
+            &server.url,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+        )
+        .await
+        .expect("discovery should succeed")
+        .expect("oauth support should be detected");
 
         assert_eq!(
             discovery.scopes_supported,
@@ -338,10 +344,14 @@ mod tests {
         }))
         .await;
 
-        let discovery = discover_streamable_http_oauth(&server.url, None, None)
-            .await
-            .expect("discovery should succeed")
-            .expect("oauth support should be detected");
+        let discovery = discover_streamable_http_oauth(
+            &server.url,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+        )
+        .await
+        .expect("discovery should succeed")
+        .expect("oauth support should be detected");
 
         assert_eq!(discovery.scopes_supported, None);
     }

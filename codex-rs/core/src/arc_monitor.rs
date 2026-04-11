@@ -8,8 +8,9 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::content_items_to_text;
-use crate::default_client::build_reqwest_client;
 use crate::event_mapping::is_contextual_user_message_content;
+use codex_login::CodexAuth;
+use codex_login::default_client::build_reqwest_client;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 
@@ -99,6 +100,7 @@ pub(crate) async fn monitor_action(
     sess: &Session,
     turn_context: &TurnContext,
     action: serde_json::Value,
+    protection_client_callsite: &'static str,
 ) -> ArcMonitorOutcome {
     let auth = match turn_context.auth_manager.as_ref() {
         Some(auth_manager) => match auth_manager.auth().await {
@@ -138,17 +140,15 @@ pub(crate) async fn monitor_action(
             return ArcMonitorOutcome::Ok;
         }
     };
-    let body = build_arc_monitor_request(sess, turn_context, action).await;
+    let body =
+        build_arc_monitor_request(sess, turn_context, action, protection_client_callsite).await;
     let client = build_reqwest_client();
     let mut request = client
         .post(&url)
         .timeout(ARC_MONITOR_TIMEOUT)
         .json(&body)
         .bearer_auth(token);
-    if let Some(account_id) = auth
-        .as_ref()
-        .and_then(crate::auth::CodexAuth::get_account_id)
-    {
+    if let Some(account_id) = auth.as_ref().and_then(CodexAuth::get_account_id) {
         request = request.header("chatgpt-account-id", account_id);
     }
 
@@ -236,6 +236,7 @@ async fn build_arc_monitor_request(
     sess: &Session,
     turn_context: &TurnContext,
     action: serde_json::Map<String, serde_json::Value>,
+    protection_client_callsite: &'static str,
 ) -> ArcMonitorRequest {
     let history = sess.clone_history().await;
     let mut messages = build_arc_monitor_messages(history.raw_items());
@@ -254,7 +255,7 @@ async fn build_arc_monitor_request(
             codex_thread_id: conversation_id.clone(),
             codex_turn_id: turn_context.sub_id.clone(),
             conversation_id: Some(conversation_id),
-            protection_client_callsite: None,
+            protection_client_callsite: Some(protection_client_callsite.to_string()),
         },
         messages: Some(messages),
         input: None,

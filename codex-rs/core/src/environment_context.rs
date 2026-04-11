@@ -70,8 +70,8 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
-        let cwd = if before.cwd != after.cwd {
-            Some(after.cwd.clone())
+        let cwd = if before.cwd.as_path() != after.cwd.as_path() {
+            Some(after.cwd.to_path_buf())
         } else {
             None
         };
@@ -82,17 +82,24 @@ impl EnvironmentContext {
         } else {
             before_network
         };
-        EnvironmentContext::new(cwd, shell.clone(), current_date, timezone, network, None)
+        EnvironmentContext::new(
+            cwd,
+            shell.clone(),
+            current_date,
+            timezone,
+            network,
+            /*subagents*/ None,
+        )
     }
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
-            Some(turn_context.cwd.clone()),
+            Some(turn_context.cwd.to_path_buf()),
             shell.clone(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
-            None,
+            /*subagents*/ None,
         )
     }
 
@@ -103,7 +110,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
-            None,
+            /*subagents*/ None,
         )
     }
 
@@ -123,8 +130,16 @@ impl EnvironmentContext {
             .as_ref()?;
 
         Some(NetworkContext {
-            allowed_domains: network.allowed_domains.clone().unwrap_or_default(),
-            denied_domains: network.denied_domains.clone().unwrap_or_default(),
+            allowed_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
+                .unwrap_or_default(),
+            denied_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
+                .unwrap_or_default(),
         })
     }
 

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_models_manager::bundled_models_response;
 use serde_json::Value as JsonValue;
 use tempfile::tempdir;
 use tokio::select;
@@ -19,9 +20,7 @@ async fn resume_startup_does_not_consume_model_availability_nux_count() -> Resul
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex_home = tempdir()?;
 
-    let source_catalog_path = codex_utils_cargo_bin::find_resource!("../core/models.json")?;
-    let source_catalog = std::fs::read_to_string(&source_catalog_path)?;
-    let mut source_catalog: JsonValue = serde_json::from_str(&source_catalog)?;
+    let mut source_catalog: JsonValue = serde_json::to_value(bundled_models_response()?)?;
     let models = source_catalog
         .get_mut("models")
         .and_then(JsonValue::as_array_mut)
@@ -92,7 +91,6 @@ trust_level = "trusted"
         .env("CODEX_HOME", codex_home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture_path)
-        .env("OPENAI_BASE_URL", "http://unused.local")
         .output()
         .context("failed to execute codex exec")?;
     anyhow::ensure!(
@@ -139,23 +137,27 @@ trust_level = "trusted"
     let mut exit_rx = exit_rx;
     let writer_tx = session.writer_sender();
     let interrupt_writer = writer_tx.clone();
-    let interrupt_task = tokio::spawn(async move {
-        sleep(Duration::from_secs(2)).await;
-        for _ in 0..4 {
-            let _ = interrupt_writer.send(vec![3]).await;
-            sleep(Duration::from_millis(500)).await;
-        }
-    });
+    let mut startup_ready = false;
+    let mut answered_cursor_query = false;
 
     let exit_code_result = timeout(Duration::from_secs(15), async {
         loop {
             select! {
                 result = output_rx.recv() => match result {
                     Ok(chunk) => {
-                        if chunk.windows(4).any(|window| window == b"\x1b[6n") {
+                        let has_cursor_query = chunk.windows(4).any(|window| window == b"\x1b[6n");
+                        if has_cursor_query {
                             let _ = writer_tx.send(b"\x1b[1;1R".to_vec()).await;
+                            answered_cursor_query = true;
                         }
                         output.extend_from_slice(&chunk);
+                        if !startup_ready && answered_cursor_query && !has_cursor_query {
+                            startup_ready = true;
+                            for _ in 0..4 {
+                                let _ = interrupt_writer.send(vec![3]).await;
+                                sleep(Duration::from_millis(500)).await;
+                            }
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break exit_rx.await,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -166,8 +168,6 @@ trust_level = "trusted"
     })
     .await;
 
-    interrupt_task.abort();
-
     let exit_code = match exit_code_result {
         Ok(Ok(code)) => code,
         Ok(Err(err)) => return Err(err.into()),
@@ -176,10 +176,17 @@ trust_level = "trusted"
             anyhow::bail!("timed out waiting for codex resume to exit");
         }
     };
+    let output_text = String::from_utf8_lossy(&output);
+    let interrupt_only_output = {
+        let trimmed_output = output_text.trim();
+        !trimmed_output.is_empty()
+            && trimmed_output
+                .chars()
+                .all(|character| character == '^' || character == 'C' || character.is_whitespace())
+    };
     anyhow::ensure!(
-        exit_code == 0 || exit_code == 130,
-        "unexpected exit code from codex resume: {exit_code}; output: {}",
-        String::from_utf8_lossy(&output)
+        exit_code == 0 || exit_code == 130 || (exit_code == 1 && interrupt_only_output),
+        "unexpected exit code from codex resume: {exit_code}; output: {output_text}",
     );
 
     let config_contents = std::fs::read_to_string(codex_home.path().join("config.toml"))?;

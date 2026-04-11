@@ -1,5 +1,5 @@
-use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -69,6 +69,7 @@ async fn continue_after_stream_error() {
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -76,6 +77,7 @@ async fn continue_after_stream_error() {
         request_max_retries: Some(1),
         stream_max_retries: Some(1),
         stream_idle_timeout_ms: Some(2_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -96,6 +98,7 @@ async fn continue_after_stream_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();
@@ -115,6 +118,7 @@ async fn continue_after_stream_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();

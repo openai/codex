@@ -2,6 +2,7 @@
 use crate::config::NetworkMode;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
 use anyhow::ensure;
 use globset::GlobBuilder;
 use globset::GlobSet;
@@ -58,14 +59,14 @@ fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
         || ip.is_unspecified()
         || ip.is_multicast()
         || ip.is_broadcast()
-        || ipv4_in_cidr(ip, [0, 0, 0, 0], 8) // "this network" (RFC 1122)
-        || ipv4_in_cidr(ip, [100, 64, 0, 0], 10) // CGNAT (RFC 6598)
-        || ipv4_in_cidr(ip, [192, 0, 0, 0], 24) // IETF Protocol Assignments (RFC 6890)
-        || ipv4_in_cidr(ip, [192, 0, 2, 0], 24) // TEST-NET-1 (RFC 5737)
-        || ipv4_in_cidr(ip, [198, 18, 0, 0], 15) // Benchmarking (RFC 2544)
-        || ipv4_in_cidr(ip, [198, 51, 100, 0], 24) // TEST-NET-2 (RFC 5737)
-        || ipv4_in_cidr(ip, [203, 0, 113, 0], 24) // TEST-NET-3 (RFC 5737)
-        || ipv4_in_cidr(ip, [240, 0, 0, 0], 4) // Reserved (RFC 6890)
+        || ipv4_in_cidr(ip, [0, 0, 0, 0], /*prefix*/ 8) // "this network" (RFC 1122)
+        || ipv4_in_cidr(ip, [100, 64, 0, 0], /*prefix*/ 10) // CGNAT (RFC 6598)
+        || ipv4_in_cidr(ip, [192, 0, 0, 0], /*prefix*/ 24) // IETF Protocol Assignments (RFC 6890)
+        || ipv4_in_cidr(ip, [192, 0, 2, 0], /*prefix*/ 24) // TEST-NET-1 (RFC 5737)
+        || ipv4_in_cidr(ip, [198, 18, 0, 0], /*prefix*/ 15) // Benchmarking (RFC 2544)
+        || ipv4_in_cidr(ip, [198, 51, 100, 0], /*prefix*/ 24) // TEST-NET-2 (RFC 5737)
+        || ipv4_in_cidr(ip, [203, 0, 113, 0], /*prefix*/ 24) // TEST-NET-3 (RFC 5737)
+        || ipv4_in_cidr(ip, [240, 0, 0, 0], /*prefix*/ 4) // Reserved (RFC 6890)
 }
 
 fn ipv4_in_cidr(ip: Ipv4Addr, base: [u8; 4], prefix: u8) -> bool {
@@ -151,19 +152,38 @@ pub(crate) fn is_global_wildcard_domain_pattern(pattern: &str) -> bool {
         .any(|candidate| candidate == "*")
 }
 
-pub(crate) fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GlobalWildcard {
+    Allow,
+    Reject,
+}
+
+pub(crate) fn compile_allowlist_globset(patterns: &[String]) -> Result<GlobSet> {
+    compile_globset_with_policy(patterns, GlobalWildcard::Allow)
+}
+
+pub(crate) fn compile_denylist_globset(patterns: &[String]) -> Result<GlobSet> {
+    compile_globset_with_policy(patterns, GlobalWildcard::Reject)
+}
+
+fn compile_globset_with_policy(
+    patterns: &[String],
+    global_wildcard: GlobalWildcard,
+) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
-        ensure!(
-            !is_global_wildcard_domain_pattern(pattern),
-            "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
-        );
+        if global_wildcard == GlobalWildcard::Reject && is_global_wildcard_domain_pattern(pattern) {
+            bail!(
+                "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
+            );
+        }
         let pattern = normalize_pattern(pattern);
         // Supported domain patterns:
         // - "example.com": match the exact host
         // - "*.example.com": match any subdomain (not the apex)
         // - "**.example.com": match the apex and any subdomain
+        // - "*": match every host when explicitly enabled for allowlist compilation
         for candidate in expand_domain_pattern(&pattern) {
             if !seen.insert(candidate.clone()) {
                 continue;
@@ -333,7 +353,7 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_trailing_dots() {
-        let set = compile_globset(&["Example.COM.".to_string()]).unwrap();
+        let set = compile_denylist_globset(&["Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("example.com"));
         assert_eq!(false, set.is_match("api.example.com"));
@@ -341,15 +361,25 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_wildcards() {
-        let set = compile_globset(&["*.Example.COM.".to_string()]).unwrap();
+        let set = compile_denylist_globset(&["*.Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("api.example.com"));
         assert_eq!(false, set.is_match("example.com"));
     }
 
     #[test]
+    fn compile_globset_supports_mid_label_wildcards() {
+        let set = compile_denylist_globset(&["region*.v2.argotunnel.com".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("region1.v2.argotunnel.com"));
+        assert_eq!(true, set.is_match("region.v2.argotunnel.com"));
+        assert_eq!(false, set.is_match("xregion1.v2.argotunnel.com"));
+        assert_eq!(false, set.is_match("foo.region1.v2.argotunnel.com"));
+    }
+
+    #[test]
     fn compile_globset_normalizes_apex_and_subdomains() {
-        let set = compile_globset(&["**.Example.COM.".to_string()]).unwrap();
+        let set = compile_denylist_globset(&["**.Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("example.com"));
         assert_eq!(true, set.is_match("api.example.com"));
@@ -357,7 +387,7 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_bracketed_ipv6_literals() {
-        let set = compile_globset(&["[::1]".to_string()]).unwrap();
+        let set = compile_denylist_globset(&["[::1]".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("::1"));
     }

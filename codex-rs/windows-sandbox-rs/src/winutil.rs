@@ -1,7 +1,15 @@
+use anyhow::Result;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+use windows_sys::Win32::Security::CopySid;
+use windows_sys::Win32::Security::GetLengthSid;
+use windows_sys::Win32::Security::LookupAccountNameW;
+use windows_sys::Win32::Security::SID_NAME_USE;
 use windows_sys::Win32::System::Diagnostics::Debug::FormatMessageW;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_FROM_SYSTEM;
@@ -75,7 +83,7 @@ pub fn format_last_error(err: i32) -> String {
             std::ptr::null_mut(),
         );
         if len == 0 || buf_ptr.is_null() {
-            return format!("Win32 error {}", err);
+            return format!("Win32 error {err}");
         }
         let slice = std::slice::from_raw_parts(buf_ptr, len as usize);
         let mut s = String::from_utf16_lossy(slice);
@@ -101,4 +109,84 @@ pub fn string_from_sid_bytes(sid: &[u8]) -> Result<String, String> {
         let _ = LocalFree(str_ptr as HLOCAL);
         Ok(out)
     }
+}
+
+const SID_ADMINISTRATORS: &str = "S-1-5-32-544";
+const SID_USERS: &str = "S-1-5-32-545";
+const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
+const SID_EVERYONE: &str = "S-1-1-0";
+const SID_SYSTEM: &str = "S-1-5-18";
+
+pub fn resolve_sid(name: &str) -> Result<Vec<u8>> {
+    if let Some(sid_str) = well_known_sid_str(name) {
+        return sid_bytes_from_string(sid_str);
+    }
+    let name_w = to_wide(OsStr::new(name));
+    let mut sid_buffer = vec![0u8; 68];
+    let mut sid_len: u32 = sid_buffer.len() as u32;
+    let mut domain: Vec<u16> = Vec::new();
+    let mut domain_len: u32 = 0;
+    let mut use_type: SID_NAME_USE = 0;
+    loop {
+        let ok = unsafe {
+            LookupAccountNameW(
+                std::ptr::null(),
+                name_w.as_ptr(),
+                sid_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                &mut sid_len,
+                domain.as_mut_ptr(),
+                &mut domain_len,
+                &mut use_type,
+            )
+        };
+        if ok != 0 {
+            sid_buffer.truncate(sid_len as usize);
+            return Ok(sid_buffer);
+        }
+        let err = unsafe { GetLastError() };
+        if err == ERROR_INSUFFICIENT_BUFFER {
+            sid_buffer.resize(sid_len as usize, 0);
+            domain.resize(domain_len as usize, 0);
+            continue;
+        }
+        return Err(anyhow::anyhow!("LookupAccountNameW failed for {name}: {err}"));
+    }
+}
+
+fn well_known_sid_str(name: &str) -> Option<&'static str> {
+    match name {
+        "Administrators" => Some(SID_ADMINISTRATORS),
+        "Users" => Some(SID_USERS),
+        "Authenticated Users" => Some(SID_AUTHENTICATED_USERS),
+        "Everyone" => Some(SID_EVERYONE),
+        "SYSTEM" => Some(SID_SYSTEM),
+        _ => None,
+    }
+}
+
+fn sid_bytes_from_string(sid_str: &str) -> Result<Vec<u8>> {
+    let sid_w = to_wide(OsStr::new(sid_str));
+    let mut psid: *mut std::ffi::c_void = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
+        return Err(anyhow::anyhow!(
+            "ConvertStringSidToSidW failed for {sid_str}: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let sid_len = unsafe { GetLengthSid(psid) };
+    if sid_len == 0 {
+        unsafe {
+            LocalFree(psid as _);
+        }
+        return Err(anyhow::anyhow!("GetLengthSid failed for {sid_str}"));
+    }
+    let mut out = vec![0u8; sid_len as usize];
+    let ok = unsafe { CopySid(sid_len, out.as_mut_ptr() as *mut std::ffi::c_void, psid) };
+    unsafe {
+        LocalFree(psid as _);
+    }
+    if ok == 0 {
+        return Err(anyhow::anyhow!("CopySid failed for {sid_str}"));
+    }
+    Ok(out)
 }

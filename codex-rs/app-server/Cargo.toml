@@ -29,9 +29,14 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
     "ws",
 ] }
+codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
+codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-otel = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
@@ -40,19 +45,30 @@ codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
+codex-mcp = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-rollout = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
+codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+constant_time_eq = { workspace = true }
 futures = { workspace = true }
+gethostname = { workspace = true }
+hmac = { workspace = true }
+jsonwebtoken = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
@@ -67,8 +83,8 @@ tokio-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
-walkdir = { workspace = true }
 
 [dev-dependencies]
 app_test_support = { workspace = true }

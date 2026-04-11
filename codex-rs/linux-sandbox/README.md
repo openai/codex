@@ -7,13 +7,30 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
-On Linux, the bubblewrap pipeline uses the vendored bubblewrap path compiled
-into this binary.
+On Linux, the bubblewrap pipeline prefers the first `bwrap` found on `PATH`
+outside the current working directory whenever it is available. If `bwrap` is
+present but too old to support
+`--argv0`, the helper keeps using system bubblewrap and switches to a
+no-`--argv0` compatibility path for the inner re-exec. If `bwrap` is missing,
+the helper falls back to the vendored bubblewrap path compiled into this
+binary.
+Codex also surfaces a startup warning when `bwrap` is missing so users know it
+is falling back to the vendored helper. Codex surfaces the same startup warning
+path when bubblewrap cannot create user namespaces.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
-- Bubblewrap is the default filesystem sandbox pipeline and is standardized on
-  the vendored path.
+- Bubblewrap is the default filesystem sandbox pipeline.
+- If `bwrap` is present on `PATH` outside the current working directory, the
+  helper uses it.
+- If `bwrap` is present but too old to support `--argv0`, the helper uses a
+  no-`--argv0` compatibility path for the inner re-exec.
+- If `bwrap` is missing, the helper falls back to the vendored bubblewrap
+  path.
+- If `bwrap` is missing, Codex also surfaces a startup warning instead of
+  printing directly from the sandbox helper.
+- If bubblewrap cannot create user namespaces, Codex surfaces a startup warning
+  instead of waiting for a runtime sandbox failure.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)

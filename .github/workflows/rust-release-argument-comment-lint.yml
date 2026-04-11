@@ -1,0 +1,103 @@
+name: rust-release-argument-comment-lint
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        required: true
+        type: boolean
+
+jobs:
+  skip:
+    if: ${{ !inputs.publish }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Skipping argument-comment-lint release assets for prerelease tag"
+
+  build:
+    if: ${{ inputs.publish }}
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            archive_name: argument-comment-lint-aarch64-apple-darwin.tar.gz
+            lib_name: libargument_comment_lint@nightly-2025-09-18-aarch64-apple-darwin.dylib
+            runner_binary: argument-comment-lint
+            cargo_dylint_binary: cargo-dylint
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive_name: argument-comment-lint-x86_64-unknown-linux-gnu.tar.gz
+            lib_name: libargument_comment_lint@nightly-2025-09-18-x86_64-unknown-linux-gnu.so
+            runner_binary: argument-comment-lint
+            cargo_dylint_binary: cargo-dylint
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_name: argument-comment-lint-aarch64-unknown-linux-gnu.tar.gz
+            lib_name: libargument_comment_lint@nightly-2025-09-18-aarch64-unknown-linux-gnu.so
+            runner_binary: argument-comment-lint
+            cargo_dylint_binary: cargo-dylint
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            archive_name: argument-comment-lint-x86_64-pc-windows-msvc.zip
+            lib_name: argument_comment_lint@nightly-2025-09-18-x86_64-pc-windows-msvc.dll
+            runner_binary: argument-comment-lint.exe
+            cargo_dylint_binary: cargo-dylint.exe
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          toolchain: nightly-2025-09-18
+          targets: ${{ matrix.target }}
+          components: llvm-tools-preview, rustc-dev, rust-src
+
+      - name: Install tooling
+        shell: bash
+        run: |
+          install_root="${RUNNER_TEMP}/argument-comment-lint-tools"
+          cargo install --locked cargo-dylint --root "$install_root"
+          cargo install --locked dylint-link
+          echo "INSTALL_ROOT=$install_root" >> "$GITHUB_ENV"
+
+      - name: Cargo build
+        working-directory: tools/argument-comment-lint
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          dest="dist/argument-comment-lint/${{ matrix.target }}"
+          mkdir -p "$dest"
+          package_root="${RUNNER_TEMP}/argument-comment-lint"
+          rm -rf "$package_root"
+          mkdir -p "$package_root/bin" "$package_root/lib"
+
+          cp "tools/argument-comment-lint/target/${{ matrix.target }}/release/${{ matrix.runner_binary }}" \
+            "$package_root/bin/${{ matrix.runner_binary }}"
+          cp "${INSTALL_ROOT}/bin/${{ matrix.cargo_dylint_binary }}" \
+            "$package_root/bin/${{ matrix.cargo_dylint_binary }}"
+          cp "tools/argument-comment-lint/target/${{ matrix.target }}/release/${{ matrix.lib_name }}" \
+            "$package_root/lib/${{ matrix.lib_name }}"
+
+          archive_path="$dest/${{ matrix.archive_name }}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            (cd "${RUNNER_TEMP}" && 7z a "$GITHUB_WORKSPACE/$archive_path" argument-comment-lint >/dev/null)
+          else
+            (cd "${RUNNER_TEMP}" && tar -czf "$GITHUB_WORKSPACE/$archive_path" argument-comment-lint)
+          fi
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: argument-comment-lint-${{ matrix.target }}
+          path: dist/argument-comment-lint/${{ matrix.target }}/*

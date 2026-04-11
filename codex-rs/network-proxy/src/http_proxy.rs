@@ -187,7 +187,7 @@ async fn http_connect_accept(
             client_addr(&req),
             Some("CONNECT".to_string()),
             NetworkProtocol::HttpsConnect,
-            None,
+            /*audit_endpoint_override*/ None,
         )
         .await);
     }
@@ -469,7 +469,7 @@ async fn http_plain_proxy(
             return Ok(proxy_disabled_response(
                 &app_state,
                 socket_path,
-                0,
+                /*port*/ 0,
                 client_addr(&req),
                 Some(req.method().as_str().to_string()),
                 NetworkProtocol::Http,
@@ -495,7 +495,11 @@ async fn http_plain_proxy(
             warn!(
                 "unix socket blocked by method policy (client={client}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
             );
-            return Ok(json_blocked("unix-socket", REASON_METHOD_NOT_ALLOWED, None));
+            return Ok(json_blocked(
+                "unix-socket",
+                REASON_METHOD_NOT_ALLOWED,
+                /*details*/ None,
+            ));
         }
 
         if !unix_socket_permissions_supported() {
@@ -560,7 +564,11 @@ async fn http_plain_proxy(
                 );
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
-                Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED, None))
+                Ok(json_blocked(
+                    "unix-socket",
+                    REASON_NOT_ALLOWED,
+                    /*details*/ None,
+                ))
             }
             Err(err) => {
                 warn!("unix socket check failed: {err}");
@@ -610,7 +618,7 @@ async fn http_plain_proxy(
             client_addr(&req),
             Some(req.method().as_str().to_string()),
             NetworkProtocol::Http,
-            None,
+            /*audit_endpoint_override*/ None,
         )
         .await);
     }
@@ -994,9 +1002,10 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..Default::default()
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["example.com".to_string()]);
+            policy
         };
         let state = Arc::new(network_proxy_state_for_policy(policy));
         state.set_network_mode(NetworkMode::Limited).await.unwrap();
@@ -1009,7 +1018,9 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_connect_accept(None, req).await.unwrap_err();
+        let response = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
@@ -1019,9 +1030,10 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_allows_allowlisted_host_in_full_mode() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..Default::default()
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["example.com".to_string()]);
+            policy
         };
         let state = Arc::new(network_proxy_state_for_policy(policy));
 
@@ -1033,7 +1045,9 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let (response, _request) = http_connect_accept(None, req).await.unwrap();
+        let (response, _request) = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -1054,17 +1068,20 @@ mod tests {
             let _ = timeout(Duration::from_secs(1), stream.read(&mut buf)).await;
         });
 
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["127.0.0.1".to_string()],
-            allow_local_binding: true,
-            ..NetworkProxySettings::default()
+        let state = Arc::new(network_proxy_state_for_policy({
+            let mut network = NetworkProxySettings::default();
+            network.set_allowed_domains(vec!["127.0.0.1".to_string()]);
+            network.allow_local_binding = true;
+            network
         }));
         let listener =
             StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("proxy listener should bind");
         let proxy_addr = listener
             .local_addr()
             .expect("proxy listener should expose local addr");
-        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(state, listener, None));
+        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(
+            state, listener, /*policy_decider*/ None,
+        ));
 
         let mut stream = tokio::net::TcpStream::connect(proxy_addr)
             .await
@@ -1114,7 +1131,9 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await.unwrap();
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
@@ -1137,7 +1156,9 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await.unwrap();
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
 
         if cfg!(target_os = "macos") {
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -1153,9 +1174,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test(flavor = "current_thread")]
     async fn http_plain_proxy_attempts_allowed_unix_socket_proxy() {
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-            allow_unix_sockets: vec!["/tmp/test.sock".to_string()],
-            ..NetworkProxySettings::default()
+        let state = Arc::new(network_proxy_state_for_policy({
+            let mut network = NetworkProxySettings::default();
+            network.set_allow_unix_sockets(vec!["/tmp/test.sock".to_string()]);
+            network
         }));
 
         let mut req = Request::builder()
@@ -1166,16 +1188,19 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await.unwrap();
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     }
 
     #[tokio::test]
     async fn http_connect_accept_denies_denylisted_host() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["**.openai.com".to_string()],
-            denied_domains: vec!["api.openai.com".to_string()],
-            ..Default::default()
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["**.openai.com".to_string()]);
+            policy.set_denied_domains(vec!["api.openai.com".to_string()]);
+            policy
         };
         let state = Arc::new(network_proxy_state_for_policy(policy));
 
@@ -1187,7 +1212,9 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_connect_accept(None, req).await.unwrap_err();
+        let response = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
@@ -1208,7 +1235,7 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_plain_proxy(None, req).await;
+        let response = http_plain_proxy(/*policy_decider*/ None, req).await;
         assert_eq!(response.unwrap().status(), StatusCode::BAD_REQUEST);
     }
 

@@ -5,6 +5,8 @@ use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::NetworkConstraints;
+use codex_core::config_loader::NetworkDomainPermissionToml;
+use codex_core::config_loader::NetworkUnixSocketPermissionToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::ResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement;
@@ -60,7 +62,10 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
             .bold()
             .into(),
     );
-    let layers = stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true);
+    let layers = stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ true,
+    );
     if layers.is_empty() {
         lines.push("  <none>".dim().into());
     } else {
@@ -95,6 +100,20 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(reviewers) = requirements_toml.allowed_approvals_reviewers.as_ref() {
+        let value = join_or_empty(
+            reviewers
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        );
+        requirement_lines.push(requirement_line(
+            "allowed_approvals_reviewers",
+            value,
+            requirements.approvals_reviewer.source.as_ref(),
+        ));
+    }
+
     if let Some(modes) = requirements_toml.allowed_sandbox_modes.as_ref() {
         let value = join_or_empty(
             modes
@@ -122,6 +141,22 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
             "allowed_web_search_modes",
             value,
             requirements.web_search_mode.source.as_ref(),
+        ));
+    }
+
+    if let Some(feature_requirements) = requirements.feature_requirements.as_ref() {
+        let value = join_or_empty(
+            feature_requirements
+                .value
+                .entries
+                .iter()
+                .map(|(feature, enabled)| format!("{feature}={enabled}"))
+                .collect::<Vec<_>>(),
+        );
+        requirement_lines.push(requirement_line(
+            "features",
+            value,
+            Some(&feature_requirements.source),
         ));
     }
 
@@ -186,7 +221,7 @@ fn render_non_file_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>>
 
 fn render_session_flag_details(config: &TomlValue) -> Vec<Line<'static>> {
     let mut pairs = Vec::new();
-    flatten_toml_key_values(config, None, &mut pairs);
+    flatten_toml_key_values(config, /*prefix*/ None, &mut pairs);
 
     if pairs.is_empty() {
         return vec!["     - <none>".dim().into()];
@@ -330,10 +365,10 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets,
-        allowed_domains,
+        domains,
         managed_allowed_domains_only,
-        denied_domains,
-        allow_unix_sockets,
+        danger_full_access_denylist_only,
+        unix_sockets,
         allow_local_binding,
     } = network;
 
@@ -359,21 +394,29 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
             "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
         ));
     }
-    if let Some(allowed_domains) = allowed_domains {
-        parts.push(format!("allowed_domains=[{}]", allowed_domains.join(", ")));
+    if let Some(domains) = domains {
+        parts.push(format!(
+            "domains={}",
+            format_network_permission_entries(&domains.entries, format_network_domain_permission)
+        ));
     }
     if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
         parts.push(format!(
             "managed_allowed_domains_only={managed_allowed_domains_only}"
         ));
     }
-    if let Some(denied_domains) = denied_domains {
-        parts.push(format!("denied_domains=[{}]", denied_domains.join(", ")));
-    }
-    if let Some(allow_unix_sockets) = allow_unix_sockets {
+    if let Some(danger_full_access_denylist_only) = danger_full_access_denylist_only {
         parts.push(format!(
-            "allow_unix_sockets=[{}]",
-            allow_unix_sockets.join(", ")
+            "danger_full_access_denylist_only={danger_full_access_denylist_only}"
+        ));
+    }
+    if let Some(unix_sockets) = unix_sockets {
+        parts.push(format!(
+            "unix_sockets={}",
+            format_network_permission_entries(
+                &unix_sockets.entries,
+                format_network_unix_socket_permission,
+            )
         ));
     }
     if let Some(allow_local_binding) = allow_local_binding {
@@ -381,6 +424,33 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     }
 
     join_or_empty(parts)
+}
+
+fn format_network_permission_entries<T: Copy>(
+    entries: &std::collections::BTreeMap<String, T>,
+    format_value: impl Fn(T) -> &'static str,
+) -> String {
+    let parts = entries
+        .iter()
+        .map(|(key, value)| format!("{key}={}", format_value(*value)))
+        .collect::<Vec<_>>();
+    format!("{{{}}}", parts.join(", "))
+}
+
+fn format_network_domain_permission(permission: NetworkDomainPermissionToml) -> &'static str {
+    match permission {
+        NetworkDomainPermissionToml::Allow => "allow",
+        NetworkDomainPermissionToml::Deny => "deny",
+    }
+}
+
+fn format_network_unix_socket_permission(
+    permission: NetworkUnixSocketPermissionToml,
+) -> &'static str {
+    match permission {
+        NetworkUnixSocketPermissionToml::Allow => "allow",
+        NetworkUnixSocketPermissionToml::None => "none",
+    }
 }
 
 #[cfg(test)]
@@ -394,14 +464,20 @@ mod tests {
     use codex_core::config_loader::ConfigRequirements;
     use codex_core::config_loader::ConfigRequirementsToml;
     use codex_core::config_loader::ConstrainedWithSource;
+    use codex_core::config_loader::FeatureRequirementsToml;
     use codex_core::config_loader::McpServerIdentity;
     use codex_core::config_loader::McpServerRequirement;
     use codex_core::config_loader::NetworkConstraints;
+    use codex_core::config_loader::NetworkDomainPermissionToml;
+    use codex_core::config_loader::NetworkDomainPermissionsToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionsToml;
     use codex_core::config_loader::RequirementSource;
     use codex_core::config_loader::ResidencyRequirement;
     use codex_core::config_loader::SandboxModeRequirement;
     use codex_core::config_loader::Sourced;
     use codex_core::config_loader::WebSearchModeRequirement;
+    use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
@@ -485,6 +561,10 @@ mod tests {
                 Constrained::allow_any(AskForApproval::OnRequest),
                 Some(RequirementSource::CloudRequirements),
             ),
+            approvals_reviewer: ConstrainedWithSource::new(
+                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
+            ),
             sandbox_policy: ConstrainedWithSource::new(
                 Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 Some(RequirementSource::SystemRequirementsToml {
@@ -510,10 +590,22 @@ mod tests {
                 Constrained::allow_any(WebSearchMode::Cached),
                 Some(RequirementSource::CloudRequirements),
             ),
+            feature_requirements: Some(Sourced::new(
+                FeatureRequirementsToml {
+                    entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
+                },
+                RequirementSource::CloudRequirements,
+            )),
             network: Some(Sourced::new(
                 NetworkConstraints {
                     enabled: Some(true),
-                    allowed_domains: Some(vec!["example.com".to_string()]),
+                    domains: Some(NetworkDomainPermissionsToml {
+                        entries: BTreeMap::from([(
+                            "example.com".to_string(),
+                            NetworkDomainPermissionToml::Allow,
+                        )]),
+                    }),
+                    danger_full_access_denylist_only: Some(true),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
@@ -523,9 +615,13 @@ mod tests {
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
-            feature_requirements: None,
+            guardian_policy_config: None,
+            feature_requirements: Some(FeatureRequirementsToml {
+                entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
+            }),
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
                 McpServerRequirement {
@@ -559,6 +655,9 @@ mod tests {
         assert!(
             rendered.contains("allowed_approval_policies: on-request (source: cloud requirements)")
         );
+        assert!(rendered.contains(
+            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+        ));
         assert!(
             rendered.contains(
                 format!(
@@ -573,13 +672,72 @@ mod tests {
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
             )
         );
+        assert!(rendered.contains("features: guardian_approval=true (source: cloud requirements)"));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, allowed_domains=[example.com] (source: cloud requirements)"
+            "experimental_network: enabled=true, domains={example.com=allow}, danger_full_access_denylist_only=true (source: cloud requirements)"
         ));
         assert!(!rendered.contains("  - rules:"));
     }
+
+    #[test]
+    fn debug_config_output_lists_approvals_reviewer_as_requirement() {
+        let requirements = ConfigRequirements {
+            approvals_reviewer: ConstrainedWithSource::new(
+                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
+            ),
+            ..ConfigRequirements::default()
+        };
+        let requirements_toml = ConfigRequirementsToml {
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+            ..ConfigRequirementsToml::default()
+        };
+        let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+            .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(rendered.contains(
+            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+        ));
+        assert!(!rendered.contains("Requirements:\n  <none>"));
+    }
+
+    #[test]
+    fn debug_config_output_formats_unix_socket_permissions() {
+        let requirements = ConfigRequirements {
+            network: Some(Sourced::new(
+                NetworkConstraints {
+                    unix_sockets: Some(NetworkUnixSocketPermissionsToml {
+                        entries: BTreeMap::from([
+                            (
+                                "/tmp/codex.sock".to_string(),
+                                NetworkUnixSocketPermissionToml::Allow,
+                            ),
+                            (
+                                "/tmp/blocked.sock".to_string(),
+                                NetworkUnixSocketPermissionToml::None,
+                            ),
+                        ]),
+                    }),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            )),
+            ..ConfigRequirements::default()
+        };
+
+        let stack =
+            ConfigLayerStack::new(Vec::new(), requirements, ConfigRequirementsToml::default())
+                .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(rendered.contains(
+            "experimental_network: unix_sockets={/tmp/blocked.sock=none, /tmp/codex.sock=allow} (source: cloud requirements)"
+        ));
+    }
+
     #[test]
     fn debug_config_output_lists_session_flag_key_value_pairs() {
         let session_flags = toml::from_str::<TomlValue>(
@@ -650,8 +808,10 @@ approval_policy = "never"
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: None,
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            guardian_policy_config: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,
@@ -672,7 +832,11 @@ approval_policy = "never"
     #[test]
     fn session_all_proxy_url_uses_socks_when_enabled() {
         assert_eq!(
-            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", true),
+            session_all_proxy_url(
+                "127.0.0.1:3128",
+                "127.0.0.1:8081",
+                /*socks_enabled*/ true
+            ),
             "socks5h://127.0.0.1:8081".to_string()
         );
     }
@@ -680,7 +844,11 @@ approval_policy = "never"
     #[test]
     fn session_all_proxy_url_uses_http_when_socks_disabled() {
         assert_eq!(
-            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", false),
+            session_all_proxy_url(
+                "127.0.0.1:3128",
+                "127.0.0.1:8081",
+                /*socks_enabled*/ false
+            ),
             "http://127.0.0.1:3128".to_string()
         );
     }

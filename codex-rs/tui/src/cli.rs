@@ -32,6 +32,10 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_show_all: bool,
 
+    /// Internal: include non-interactive sessions in resume listings.
+    #[clap(skip)]
+    pub resume_include_non_interactive: bool,
+
     // Internal controls set by the top-level `codex fork` subcommand.
     // These are not exposed as user flags on the base `codex` command.
     #[clap(skip)]
@@ -91,6 +95,7 @@ pub struct Cli {
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
     /// Tell the agent to use the specified directory as its working root.
+    /// In remote mode, the path is forwarded to the server and resolved there.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 

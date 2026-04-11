@@ -1,12 +1,8 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::event_mapping::has_non_contextual_dev_message_content;
+use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::approx_bytes_for_tokens;
-use crate::truncate::approx_token_count;
-use crate::truncate::approx_tokens_from_byte_count_i64;
-use crate::truncate::truncate_function_output_items_with_policy;
-use crate::truncate::truncate_text;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
@@ -17,11 +13,18 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_bytes_for_tokens;
+use codex_utils_output_truncation::approx_token_count;
+use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
+use codex_utils_output_truncation::truncate_function_output_items_with_policy;
+use codex_utils_output_truncation::truncate_text;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -31,6 +34,8 @@ use std::sync::LazyLock;
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
+    /// Bumped whenever history is rewritten, such as compaction or rollback.
+    history_version: u64,
     token_info: Option<TokenUsageInfo>,
     /// Reference context snapshot used for diffing and producing model-visible
     /// settings update items.
@@ -39,7 +44,9 @@ pub(crate) struct ContextManager {
     /// match the current turn after context updates are persisted.
     ///
     /// When this is `None`, settings diffing treats the next turn as having no
-    /// baseline and emits a full reinjection of context state.
+    /// baseline and emits a full reinjection of context state. Rollback may
+    /// also clear this when it trims a mixed initial-context developer bundle
+    /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
 }
 
@@ -55,7 +62,10 @@ impl ContextManager {
     pub(crate) fn new() -> Self {
         Self {
             items: Vec::new(),
-            token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            history_version: 0,
+            token_info: TokenUsageInfo::new_or_append(
+                &None, &None, /*model_context_window*/ None,
+            ),
             reference_context_item: None,
         }
     }
@@ -119,6 +129,10 @@ impl ContextManager {
         &self.items
     }
 
+    pub(crate) fn history_version(&self) -> u64 {
+        self.history_version
+    }
+
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
@@ -161,6 +175,7 @@ impl ContextManager {
     pub(crate) fn remove_last_item(&mut self) -> bool {
         if let Some(removed) = self.items.pop() {
             normalize::remove_corresponding_for(&mut self.items, &removed);
+            self.history_version = self.history_version.saturating_add(1);
             true
         } else {
             false
@@ -169,14 +184,14 @@ impl ContextManager {
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
+        self.history_version = self.history_version.saturating_add(1);
     }
 
     /// Replace image content in the last turn if it originated from a tool output.
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
         let Some(index) = self.items.iter().rposition(|item| {
-            matches!(item, ResponseItem::FunctionCallOutput { .. })
-                || matches!(item, ResponseItem::Message { role, .. } if role == "user")
+            matches!(item, ResponseItem::FunctionCallOutput { .. }) || is_user_turn_boundary(item)
         }) else {
             return false;
         };
@@ -196,22 +211,32 @@ impl ContextManager {
                         replaced = true;
                     }
                 }
+                if replaced {
+                    self.history_version = self.history_version.saturating_add(1);
+                }
                 replaced
             }
-            ResponseItem::Message { role, .. } if role == "user" => false,
+            ResponseItem::Message { .. } => false,
             _ => false,
         }
     }
 
-    /// Drop the last `num_turns` user turns from this history.
+    /// Drop the last `num_turns` instruction turns from this history.
     ///
-    /// "User turns" are identified as `ResponseItem::Message` entries whose role is `"user"`.
+    /// Instruction turns are history messages that should behave like a new prompt boundary:
+    /// ordinary user messages and structured assistant inter-agent instructions.
     ///
     /// This mirrors thread-rollback semantics:
     /// - `num_turns == 0` is a no-op
     /// - if there are no user turns, this is a no-op
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
     ///   preserving any items that occurred before the first user message.
+    ///
+    /// If rollback trims a pre-turn developer message that mixes contextual fragments with
+    /// persistent developer text from `build_initial_context`, this also clears
+    /// `reference_context_item`. The surviving history no longer contains the full bundle that
+    /// established the prior baseline, so future turns must fall back to full reinjection instead
+    /// of diffing against stale state.
     pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
         if num_turns == 0 {
             return;
@@ -219,17 +244,20 @@ impl ContextManager {
 
         let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
-        let Some(&first_user_idx) = user_positions.first() else {
+        let Some(&first_instruction_turn_idx) = user_positions.first() else {
             self.replace(snapshot);
             return;
         };
 
         let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-        let cut_idx = if n_from_end >= user_positions.len() {
-            first_user_idx
+        let mut cut_idx = if n_from_end >= user_positions.len() {
+            first_instruction_turn_idx
         } else {
             user_positions[user_positions.len() - n_from_end]
         };
+
+        cut_idx =
+            self.trim_pre_turn_context_updates(&snapshot, first_instruction_turn_idx, cut_idx);
 
         self.replace(snapshot[..cut_idx].to_vec());
     }
@@ -247,12 +275,8 @@ impl ContextManager {
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
-        // Get reasoning items excluding all the ones after the last user message.
-        let Some(last_user_index) = self
-            .items
-            .iter()
-            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
-        else {
+        // Get reasoning items excluding all the ones after the last instruction boundary.
+        let Some(last_user_index) = self.items.iter().rposition(is_user_turn_boundary) else {
             return 0;
         };
 
@@ -360,15 +384,15 @@ impl ContextManager {
                     ),
                 }
             }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
-                ResponseItem::CustomToolCallOutput {
-                    call_id: call_id.clone(),
-                    output: truncate_function_output_payload(
-                        output,
-                        policy_with_serialization_budget,
-                    ),
-                }
-            }
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => ResponseItem::CustomToolCallOutput {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+            },
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -382,6 +406,53 @@ impl ContextManager {
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
+    }
+
+    /// Walk backward from a rollback cut and trim contiguous pre-turn context-update items.
+    ///
+    /// Returns the adjusted cut index after removing contextual developer/user items immediately
+    /// above the rolled-back turn boundary.
+    ///
+    /// `first_instruction_turn_idx` is the earliest rollback-eligible instruction-turn boundary
+    /// in `snapshot`; the trim walk never crosses it so any session-prefix items that predate the
+    /// first real turn survive rollback.
+    ///
+    /// `cut_idx` is the tentative slice boundary after dropping the requested number of
+    /// instruction turns, before stripping contextual pre-turn items that sit immediately above
+    /// that boundary.
+    ///
+    /// If any trimmed developer message was a mixed `build_initial_context` bundle containing both
+    /// rollback-trimmable contextual fragments and persistent developer text, this also clears the
+    /// stored `reference_context_item` baseline so the next real turn falls back to full
+    /// reinjection.
+    fn trim_pre_turn_context_updates(
+        &mut self,
+        snapshot: &[ResponseItem],
+        first_instruction_turn_idx: usize,
+        mut cut_idx: usize,
+    ) -> usize {
+        while cut_idx > first_instruction_turn_idx {
+            match &snapshot[cut_idx - 1] {
+                ResponseItem::Message { role, content, .. }
+                    if role == "developer" && is_contextual_dev_message_content(content) =>
+                {
+                    if has_non_contextual_dev_message_content(content) {
+                        // Mixed `build_initial_context` bundles are not reconstructible from
+                        // steady-state diffs once trimmed, so the next real turn must fully
+                        // reinject context instead of diffing against a stale baseline.
+                        self.reference_context_item = None;
+                    }
+                    cut_idx -= 1;
+                }
+                ResponseItem::Message { role, content, .. }
+                    if role == "user" && is_contextual_user_message_content(content) =>
+                {
+                    cut_idx -= 1;
+                }
+                _ => break,
+            }
+        }
+        cut_idx
     }
 }
 
@@ -634,7 +705,12 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         return false;
     };
 
-    role == "user" && !is_contextual_user_message_content(content)
+    (role == "user" && !is_contextual_user_message_content(content))
+        || (role == "assistant" && is_inter_agent_instruction_content(content))
+}
+
+fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
+    InterAgentCommunication::is_message_content(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {

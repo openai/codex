@@ -8,13 +8,14 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 
-use crate::config::ConfigToml;
-use crate::config::profile::ConfigProfile;
-use crate::features::Feature;
-use crate::features::FeatureOverrides;
-use crate::features::Features;
-use crate::features::canonical_feature_for_key;
-use crate::features::feature_for_key;
+use codex_config::config_toml::ConfigToml;
+use codex_config::profile_toml::ConfigProfile;
+use codex_features::Feature;
+use codex_features::FeatureConfigSource;
+use codex_features::FeatureOverrides;
+use codex_features::Features;
+use codex_features::canonical_feature_for_key;
+use codex_features::feature_for_key;
 
 /// Wrapper around [`Features`] which enforces constraints defined in
 /// `FeatureRequirementsToml` and provides normalization to ensure constraints
@@ -81,11 +82,11 @@ impl ManagedFeatures {
     }
 
     pub fn enable(&mut self, feature: Feature) -> ConstraintResult<()> {
-        self.set_enabled(feature, true)
+        self.set_enabled(feature, /*enabled*/ true)
     }
 
     pub fn disable(&mut self, feature: Feature) -> ConstraintResult<()> {
-        self.set_enabled(feature, false)
+        self.set_enabled(feature, /*enabled*/ false)
     }
 }
 
@@ -95,7 +96,10 @@ impl ManagedFeatures {
 impl From<Features> for ManagedFeatures {
     fn from(features: Features) -> Self {
         Self {
-            value: ConstrainedWithSource::new(Constrained::allow_any(features), None),
+            value: ConstrainedWithSource::new(
+                Constrained::allow_any(features),
+                /*source*/ None,
+            ),
             pinned_features: BTreeMap::new(),
         }
     }
@@ -198,9 +202,9 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     let mut explicit_settings = Vec::new();
 
     if let Some(features) = cfg.features.as_ref() {
-        for (key, enabled) in &features.entries {
-            if let Some(feature) = feature_for_key(key) {
-                explicit_settings.push((format!("features.{key}"), feature, *enabled));
+        for (key, enabled) in features.entries() {
+            if let Some(feature) = feature_for_key(&key) {
+                explicit_settings.push((format!("features.{key}"), feature, enabled));
             }
         }
     }
@@ -220,12 +224,12 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     }
     for (profile_name, profile) in &cfg.profiles {
         if let Some(features) = profile.features.as_ref() {
-            for (key, enabled) in &features.entries {
-                if let Some(feature) = feature_for_key(key) {
+            for (key, enabled) in features.entries() {
+                if let Some(feature) = feature_for_key(&key) {
                     explicit_settings.push((
                         format!("profiles.{profile_name}.features.{key}"),
                         feature,
-                        *enabled,
+                        enabled,
                     ));
                 }
             }
@@ -304,7 +308,22 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
         profile: &ConfigProfile,
         feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
     ) -> std::io::Result<()> {
-        let configured_features = Features::from_config(cfg, profile, FeatureOverrides::default());
+        let configured_features = Features::from_sources(
+            FeatureConfigSource {
+                features: cfg.features.as_ref(),
+                include_apply_patch_tool: None,
+                experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+            },
+            FeatureConfigSource {
+                features: profile.features.as_ref(),
+                include_apply_patch_tool: profile.include_apply_patch_tool,
+                experimental_use_freeform_apply_patch: profile
+                    .experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: profile.experimental_use_unified_exec_tool,
+            },
+            FeatureOverrides::default(),
+        );
         ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())
             .map(|_| ())
             .map_err(|err| {
@@ -321,7 +340,12 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
             })
     }
 
-    validate_profile(cfg, None, &ConfigProfile::default(), feature_requirements)?;
+    validate_profile(
+        cfg,
+        /*profile_name*/ None,
+        &ConfigProfile::default(),
+        feature_requirements,
+    )?;
     for (profile_name, profile) in &cfg.profiles {
         validate_profile(cfg, Some(profile_name), profile, feature_requirements)?;
     }

@@ -19,7 +19,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 
-use codex_core::features::Feature;
+use codex_features::Feature;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -243,7 +243,7 @@ impl Renderable for ExperimentalFeaturesView {
             Constraint::Max(1),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(1, 2)));
+        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
 
         self.header.render(header_area, buf);
 

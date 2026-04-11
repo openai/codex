@@ -1,0 +1,74 @@
+# What: make `rusty_v8` accept Bazel-provided archives and bindings for the
+# windows-gnullvm experiment.
+# Scope: `rusty_v8` build.rs only; no V8 source or Bazel rule changes.
+
+--- a/build.rs
++++ b/build.rs
+@@ -543,10 +543,15 @@
+ }
+ 
+ fn static_lib_name(suffix: &str) -> String {
+-  let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+-  if target_os == "windows" {
++  let target = env::var("TARGET").unwrap();
++  let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
++  if target.contains("windows-gnullvm") {
++    // rustc looks for GNU-style archive names when bundling `-lstatic` on the
++    // gnullvm targets, even though the prebuilt release is a COFF `.lib`.
++    format!("librusty_v8{suffix}.a")
++  } else if target_os == "windows" {
+     format!("rusty_v8{suffix}.lib")
+   } else {
+     format!("librusty_v8{suffix}.a")
+   }
+ }
+@@ -577,7 +577,23 @@
+   path
+ }
+ 
++fn out_dir_abs() -> PathBuf {
++  let cwd = env::current_dir().unwrap();
++
++  // target/debug/build/rusty_v8-d9e5a424d4f96994/out/
++  let out_dir = env::var_os("OUT_DIR").expect(
++    "The 'OUT_DIR' environment is not set (it should be something like \
++     'target/debug/rusty_v8-{hash}').",
++  );
++
++  cwd.join(out_dir)
++}
++
+ fn static_lib_dir() -> PathBuf {
++  if env::var_os("RUSTY_V8_ARCHIVE").is_some() {
++    return out_dir_abs().join("gn_out").join("obj");
++  }
++
+   build_dir().join("gn_out").join("obj")
+ }
+ 
+@@ -794,22 +810,23 @@
+ }
+ 
+ fn print_link_flags() {
++  let target = env::var("TARGET").unwrap();
+   println!("cargo:rustc-link-lib=static=rusty_v8");
+   let should_dyn_link_libcxx = env::var("CARGO_FEATURE_USE_CUSTOM_LIBCXX")
+     .is_err()
++    || (target.contains("apple") && env::var("RUSTY_V8_ARCHIVE").is_ok())
+     || env::var("GN_ARGS").is_ok_and(|gn_args| {
+       gn_args
+         .split_whitespace()
+         .any(|ba| ba == "use_custom_libcxx=false")
+     });
+ 
+   if should_dyn_link_libcxx {
+     // Based on https://github.com/alexcrichton/cc-rs/blob/fba7feded71ee4f63cfe885673ead6d7b4f2f454/src/lib.rs#L2462
+     if let Ok(stdlib) = env::var("CXXSTDLIB") {
+       if !stdlib.is_empty() {
+         println!("cargo:rustc-link-lib=dylib={stdlib}");
+       }
+     } else {
+-      let target = env::var("TARGET").unwrap();
+       if target.contains("msvc") {
+         // nothing to link to
+       } else if target.contains("apple")

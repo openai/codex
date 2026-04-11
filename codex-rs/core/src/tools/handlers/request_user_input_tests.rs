@@ -1,46 +1,66 @@
 use super::*;
+use crate::codex::make_session_and_context;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
+use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-#[test]
-fn request_user_input_mode_availability_defaults_to_plan_only() {
-    assert!(ModeKind::Plan.allows_request_user_input());
-    assert!(!ModeKind::Default.allows_request_user_input());
-    assert!(!ModeKind::Execute.allows_request_user_input());
-    assert!(!ModeKind::PairProgramming.allows_request_user_input());
-}
+#[tokio::test]
+async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
+    let (session, mut turn) = make_session_and_context().await;
+    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
 
-#[test]
-fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
-    assert_eq!(
-        request_user_input_unavailable_message(ModeKind::Plan, false),
-        None
-    );
-    assert_eq!(
-        request_user_input_unavailable_message(ModeKind::Default, false),
-        Some("request_user_input is unavailable in Default mode".to_string())
-    );
-    assert_eq!(
-        request_user_input_unavailable_message(ModeKind::Default, true),
-        None
-    );
-    assert_eq!(
-        request_user_input_unavailable_message(ModeKind::Execute, false),
-        Some("request_user_input is unavailable in Execute mode".to_string())
-    );
-    assert_eq!(
-        request_user_input_unavailable_message(ModeKind::PairProgramming, false),
-        Some("request_user_input is unavailable in Pair Programming mode".to_string())
-    );
-}
+    let result = RequestUserInputHandler {
+        default_mode_request_user_input: true,
+    }
+    .handle(ToolInvocation {
+        session: Arc::new(session),
+        turn: Arc::new(turn),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
+        call_id: "call-1".to_string(),
+        tool_name: REQUEST_USER_INPUT_TOOL_NAME.to_string(),
+        tool_namespace: None,
+        payload: ToolPayload::Function {
+            arguments: json!({
+                "questions": [{
+                    "header": "Hdr",
+                    "question": "Pick one",
+                    "id": "pick_one",
+                    "options": [
+                        {
+                            "label": "A",
+                            "description": "A"
+                        },
+                        {
+                            "label": "B",
+                            "description": "B"
+                        }
+                    ]
+                }]
+            })
+            .to_string(),
+        },
+    })
+    .await;
 
-#[test]
-fn request_user_input_tool_description_mentions_available_modes() {
+    let Err(err) = result else {
+        panic!("sub-agent request_user_input should fail");
+    };
     assert_eq!(
-            request_user_input_tool_description(false),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
-        );
-    assert_eq!(
-            request_user_input_tool_description(true),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
-        );
+        err,
+        FunctionCallError::RespondToModel(
+            "request_user_input can only be used by the root thread".to_string(),
+        )
+    );
 }

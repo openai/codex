@@ -1,0 +1,7 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "exec-server",
+    crate_name = "codex_exec_server",
+    test_tags = ["no-sandbox"],
+)

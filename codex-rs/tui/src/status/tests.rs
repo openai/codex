@@ -1,10 +1,12 @@
 use super::new_status_output;
+use super::new_status_output_with_rate_limits;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
+use crate::status::StatusAccountDisplay;
+use crate::test_support::PathBufExt;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_protocol::ThreadId;
@@ -31,12 +33,8 @@ async fn test_config(temp_home: &TempDir) -> Config {
         .expect("load config")
 }
 
-fn test_auth_manager(config: &Config) -> AuthManager {
-    AuthManager::new(
-        config.codex_home.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    )
+fn test_status_account_display() -> Option<StatusAccountDisplay> {
+    None
 }
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
@@ -109,9 +107,9 @@ async fn status_snapshot_includes_reasoning_details() {
         })
         .expect("set sandbox policy");
 
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -130,12 +128,12 @@ async fn status_snapshot_includes_reasoning_details() {
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
-            resets_at: Some(reset_at_from(&captured_at, 600)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 600)),
         }),
         secondary: Some(RateLimitWindow {
             used_percent: 45.0,
             window_minutes: Some(10080),
-            resets_at: Some(reset_at_from(&captured_at, 1_200)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_200)),
         }),
         credits: None,
         plan_type: None,
@@ -148,20 +146,20 @@ async fn status_snapshot_includes_reasoning_details() {
     let reasoning_effort_override = Some(Some(ReasoningEffort::High));
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
+        /*collaboration_mode*/ None,
         reasoning_effort_override,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -193,9 +191,9 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
             exclude_slash_tmp: false,
         })
         .expect("set sandbox policy");
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
@@ -205,20 +203,20 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
 
     let composite = new_status_output(
         &config,
-        &auth_manager,
-        None,
+        account_display.as_ref(),
+        /*token_info*/ None,
         &usage,
         &None,
-        None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let rendered_lines = render_lines(&composite.display_lines(80));
+    let rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     let permissions_line = rendered_lines
         .iter()
         .find(|line| line.contains("Permissions:"))
@@ -242,9 +240,9 @@ async fn status_snapshot_includes_forked_from() {
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 800,
         cached_input_tokens: 0,
@@ -267,20 +265,20 @@ async fn status_snapshot_includes_forked_from() {
 
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &Some(session_id),
-        None,
+        /*thread_name*/ None,
         Some(forked_from),
-        None,
+        /*rate_limits*/ None,
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -296,9 +294,9 @@ async fn status_snapshot_includes_monthly_limit() {
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 800,
         cached_input_tokens: 0,
@@ -317,7 +315,7 @@ async fn status_snapshot_includes_monthly_limit() {
         primary: Some(RateLimitWindow {
             used_percent: 12.0,
             window_minutes: Some(43_200),
-            resets_at: Some(reset_at_from(&captured_at, 86_400)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 86_400)),
         }),
         secondary: None,
         credits: None,
@@ -329,20 +327,20 @@ async fn status_snapshot_includes_monthly_limit() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -356,7 +354,7 @@ async fn status_snapshot_includes_monthly_limit() {
 async fn status_snapshot_shows_unlimited_credits() {
     let temp_home = TempDir::new().expect("temp home");
     let config = test_config(&temp_home).await;
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 2, 3, 4, 5, 6)
@@ -379,20 +377,20 @@ async fn status_snapshot_shows_unlimited_credits() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let rendered = render_lines(&composite.display_lines(120));
+    let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
         rendered
             .iter()
@@ -405,7 +403,7 @@ async fn status_snapshot_shows_unlimited_credits() {
 async fn status_snapshot_shows_positive_credits() {
     let temp_home = TempDir::new().expect("temp home");
     let config = test_config(&temp_home).await;
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 3, 4, 5, 6, 7)
@@ -428,20 +426,20 @@ async fn status_snapshot_shows_positive_credits() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let rendered = render_lines(&composite.display_lines(120));
+    let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
         rendered
             .iter()
@@ -454,7 +452,7 @@ async fn status_snapshot_shows_positive_credits() {
 async fn status_snapshot_hides_zero_credits() {
     let temp_home = TempDir::new().expect("temp home");
     let config = test_config(&temp_home).await;
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 4, 5, 6, 7, 8)
@@ -477,20 +475,20 @@ async fn status_snapshot_hides_zero_credits() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let rendered = render_lines(&composite.display_lines(120));
+    let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
         rendered.iter().all(|line| !line.contains("Credits:")),
         "expected no Credits line, got {rendered:?}"
@@ -501,7 +499,7 @@ async fn status_snapshot_hides_zero_credits() {
 async fn status_snapshot_hides_when_has_no_credits_flag() {
     let temp_home = TempDir::new().expect("temp home");
     let config = test_config(&temp_home).await;
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
@@ -524,20 +522,20 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let rendered = render_lines(&composite.display_lines(120));
+    let rendered = render_lines(&composite.display_lines(/*width*/ 120));
     assert!(
         rendered.iter().all(|line| !line.contains("Credits:")),
         "expected no Credits line when has_credits is false, got {rendered:?}"
@@ -549,9 +547,9 @@ async fn status_card_token_usage_excludes_cached_tokens() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -569,20 +567,20 @@ async fn status_card_token_usage_excludes_cached_tokens() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
         None,
         now,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let rendered = render_lines(&composite.display_lines(120));
+    let rendered = render_lines(&composite.display_lines(/*width*/ 120));
 
     assert!(
         rendered.iter().all(|line| !line.contains("cached")),
@@ -597,9 +595,9 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -618,7 +616,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
-            resets_at: Some(reset_at_from(&captured_at, 600)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 600)),
         }),
         secondary: None,
         credits: None,
@@ -631,20 +629,20 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     let reasoning_effort_override = Some(Some(ReasoningEffort::High));
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
+        /*collaboration_mode*/ None,
         reasoning_effort_override,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(70));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 70));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -660,9 +658,9 @@ async fn status_snapshot_shows_missing_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
@@ -680,20 +678,84 @@ async fn status_snapshot_shows_missing_limits_message() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
         None,
         now,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_snapshot_shows_refreshing_limits_notice() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.cwd = PathBuf::from("/workspace/tests").abs();
+
+    let usage = TokenUsage {
+        input_tokens: 500,
+        cached_input_tokens: 0,
+        output_tokens: 250,
+        reasoning_output_tokens: 0,
+        total_tokens: 750,
+    };
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 45.0,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 900)),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 30.0,
+            window_minutes: Some(10_080),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 2_700)),
+        }),
+        credits: None,
+        plan_type: None,
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let composite = new_status_output_with_rate_limits(
+        &config,
+        /*account_display*/ None,
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        std::slice::from_ref(&rate_display),
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        /*refreshing_rate_limits*/ true,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -708,9 +770,9 @@ async fn status_snapshot_includes_credits_and_limits() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex".to_string());
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 1_500,
         cached_input_tokens: 100,
@@ -729,12 +791,12 @@ async fn status_snapshot_includes_credits_and_limits() {
         primary: Some(RateLimitWindow {
             used_percent: 45.0,
             window_minutes: Some(300),
-            resets_at: Some(reset_at_from(&captured_at, 900)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 900)),
         }),
         secondary: Some(RateLimitWindow {
             used_percent: 30.0,
             window_minutes: Some(10_080),
-            resets_at: Some(reset_at_from(&captured_at, 2_700)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 2_700)),
         }),
         credits: Some(CreditsSnapshot {
             has_credits: true,
@@ -749,20 +811,20 @@ async fn status_snapshot_includes_credits_and_limits() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -773,13 +835,13 @@ async fn status_snapshot_includes_credits_and_limits() {
 }
 
 #[tokio::test]
-async fn status_snapshot_shows_empty_limits_message() {
+async fn status_snapshot_shows_unavailable_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
@@ -806,20 +868,77 @@ async fn status_snapshot_shows_empty_limits_message() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         captured_at,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_snapshot_treats_refreshing_empty_limits_as_unavailable() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.cwd = PathBuf::from("/workspace/tests").abs();
+
+    let usage = TokenUsage {
+        input_tokens: 500,
+        cached_input_tokens: 0,
+        output_tokens: 250,
+        reasoning_output_tokens: 0,
+        total_tokens: 750,
+    };
+
+    let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        plan_type: None,
+    };
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
+        .single()
+        .expect("timestamp");
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let composite = new_status_output_with_rate_limits(
+        &config,
+        /*account_display*/ None,
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        std::slice::from_ref(&rate_display),
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        /*refreshing_rate_limits*/ true,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -834,9 +953,9 @@ async fn status_snapshot_shows_stale_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -855,12 +974,12 @@ async fn status_snapshot_shows_stale_limits_message() {
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
-            resets_at: Some(reset_at_from(&captured_at, 600)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 600)),
         }),
         secondary: Some(RateLimitWindow {
             used_percent: 40.0,
             window_minutes: Some(10_080),
-            resets_at: Some(reset_at_from(&captured_at, 1_800)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_800)),
         }),
         credits: None,
         plan_type: None,
@@ -872,20 +991,20 @@ async fn status_snapshot_shows_stale_limits_message() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         now,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -900,9 +1019,9 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex".to_string());
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 900,
         cached_input_tokens: 200,
@@ -921,12 +1040,12 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         primary: Some(RateLimitWindow {
             used_percent: 60.0,
             window_minutes: Some(300),
-            resets_at: Some(reset_at_from(&captured_at, 1_200)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_200)),
         }),
         secondary: Some(RateLimitWindow {
             used_percent: 35.0,
             window_minutes: Some(10_080),
-            resets_at: Some(reset_at_from(&captured_at, 2_400)),
+            resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 2_400)),
         }),
         credits: Some(CreditsSnapshot {
             has_credits: false,
@@ -942,20 +1061,20 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
         Some(&rate_display),
         None,
         now,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -971,7 +1090,7 @@ async fn status_context_window_uses_last_usage() {
     let mut config = test_config(&temp_home).await;
     config.model_context_window = Some(272_000);
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let total_usage = TokenUsage {
         input_tokens: 12_800,
         cached_input_tokens: 0,
@@ -1000,20 +1119,20 @@ async fn status_context_window_uses_last_usage() {
     };
     let composite = new_status_output(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &total_usage,
         &None,
-        None,
-        None,
-        None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
         None,
         now,
         &model_slug,
-        None,
-        None,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
     );
-    let rendered_lines = render_lines(&composite.display_lines(80));
+    let rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     let context_line = rendered_lines
         .into_iter()
         .find(|line| line.contains("Context window"))

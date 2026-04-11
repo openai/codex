@@ -1,0 +1,24 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-features"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_features"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

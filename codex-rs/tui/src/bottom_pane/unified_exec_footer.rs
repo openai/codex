@@ -50,7 +50,7 @@ impl UnifiedExecFooter {
         let count = self.processes.len();
         let plural = if count == 1 { "" } else { "s" };
         Some(format!(
-            "{count} background terminal{plural} running · /ps to view · /clean to close"
+            "{count} background terminal{plural} running · /ps to view · /stop to close"
         ))
     }
 
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn desired_height_empty() {
         let footer = UnifiedExecFooter::new();
-        assert_eq!(footer.desired_height(40), 0);
+        assert_eq!(footer.desired_height(/*width*/ 40), 0);
     }
 
     #[test]

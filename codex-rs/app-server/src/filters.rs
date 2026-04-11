@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn compute_source_filters_defaults_to_interactive_sources() {
-        let (allowed_sources, filter) = compute_source_filters(None);
+        let (allowed_sources, filter) = compute_source_filters(/*source_kinds*/ None);
 
         assert_eq!(allowed_sources, INTERACTIVE_SESSION_SOURCES.to_vec());
         assert_eq!(filter, None);
@@ -133,6 +133,7 @@ mod tests {
         let spawn = CoreSessionSource::SubAgent(CoreSubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
+            agent_path: None,
             agent_nickname: None,
             agent_role: None,
         });

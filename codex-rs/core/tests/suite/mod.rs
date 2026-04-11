@@ -1,8 +1,11 @@
 // Aggregates all former standalone integration tests as modules.
 use std::ffi::OsString;
+use std::path::Path;
 
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_arg0::Arg0PathEntryGuard;
 use codex_arg0::arg0_dispatch;
+use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use ctor::ctor;
 use tempfile::TempDir;
 
@@ -19,7 +22,20 @@ const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 // based on the arg0.
 // NOTE: this doesn't work on ARM
 #[ctor]
-pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
+pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = {
+    let mut args = std::env::args_os();
+    let argv0 = args.next().unwrap_or_default();
+    let exe_name = Path::new(&argv0)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let argv1 = args.next().unwrap_or_default();
+    // Helper re-execs inherit this ctor too, but they may run inside a sandbox
+    // where creating another CODEX_HOME tempdir under /tmp is not allowed.
+    if exe_name == CODEX_LINUX_SANDBOX_ARG0 || argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
+        return None;
+    }
+
     #[allow(clippy::unwrap_used)]
     let codex_home = tempfile::Builder::new()
         .prefix("codex-core-tests")
@@ -47,21 +63,21 @@ pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
         },
     }
 
-    TestCodexAliasesGuard {
+    Some(TestCodexAliasesGuard {
         _codex_home: codex_home,
         _arg0: arg0,
         _previous_codex_home: previous_codex_home,
-    }
+    })
 };
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod agent_jobs;
 mod agent_websocket;
+mod agents_md;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
-mod auth_refresh;
 mod cli_stream;
 mod client;
 mod client_websockets;
@@ -75,7 +91,6 @@ mod deprecation_notice;
 mod exec;
 mod exec_policy;
 mod fork_thread;
-mod grep_files;
 mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
@@ -83,16 +98,15 @@ mod image_rollout;
 mod items;
 mod js_repl;
 mod json_result;
-mod list_dir;
 mod live_cli;
 mod live_reload;
 mod memories;
-mod model_info_overrides;
 mod model_overrides;
 mod model_switching;
 mod model_visible_layout;
 mod models_cache_ttl;
 mod models_etag_responses;
+mod openai_file_mcp;
 mod otel;
 mod pending_input;
 mod permissions_messages;
@@ -101,8 +115,8 @@ mod personality_migration;
 mod plugins;
 mod prompt_caching;
 mod quota_exceeded;
-mod read_file;
 mod realtime_conversation;
+mod remote_env;
 mod remote_models;
 mod request_compression;
 #[cfg(not(target_os = "windows"))]
@@ -110,6 +124,7 @@ mod request_permissions;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions_tool;
 mod request_user_input;
+mod responses_api_proxy_headers;
 mod resume;
 mod resume_warning;
 mod review;
@@ -128,9 +143,9 @@ mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
-mod text_encoding_fix;
 mod tool_harness;
 mod tool_parallelism;
+mod tool_suggest;
 mod tools;
 mod truncation;
 mod turn_state;
@@ -142,3 +157,4 @@ mod user_shell_cmd;
 mod view_image;
 mod web_search;
 mod websocket_fallback;
+mod window_headers;

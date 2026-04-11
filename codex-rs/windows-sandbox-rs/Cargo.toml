@@ -1,6 +1,6 @@
 [package]
 build = "build.rs"
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 name = "codex-windows-sandbox"
 version.workspace = true
@@ -17,6 +17,9 @@ path = "src/bin/setup_main.rs"
 name = "codex-command-runner"
 path = "src/bin/command_runner.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0"
 base64 = { workspace = true }
@@ -24,12 +27,14 @@ chrono = { version = "0.4.42", default-features = false, features = [
     "clock",
     "std",
 ] }
+codex-utils-pty = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
 dunce = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3"
+tokio = { workspace = true, features = ["sync", "rt"] }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",
@@ -86,3 +91,6 @@ pretty_assertions = { workspace = true }
 
 [build-dependencies]
 winres = "0.1"
+
+[package.metadata.cargo-shear]
+ignored = ["codex-utils-pty", "tokio"]

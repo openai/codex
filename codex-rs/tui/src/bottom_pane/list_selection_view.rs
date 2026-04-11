@@ -371,11 +371,14 @@ impl ListSelectionView {
                         ""
                     };
                     let name_with_marker = format!("{name}{marker}");
+                    let is_disabled = item.is_disabled || item.disabled_reason.is_some();
                     let n = visible_idx + 1;
                     let wrap_prefix = if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
                         // numbers be used for the search query).
                         format!("{prefix} ")
+                    } else if is_disabled {
+                        format!("{prefix} {}", " ".repeat(n.to_string().len() + 2))
                     } else {
                         format!("{prefix} {n}. ")
                     };
@@ -388,7 +391,6 @@ impl ListSelectionView {
                         .flatten()
                         .or_else(|| item.description.clone());
                     let wrap_indent = description.is_none().then_some(wrap_prefix_width);
-                    let is_disabled = item.is_disabled || item.disabled_reason.is_some();
                     GenericDisplayRow {
                         name: name_with_marker,
                         name_prefix_spans,
@@ -1071,7 +1073,7 @@ mod tests {
     }
 
     fn render_lines(view: &ListSelectionView) -> String {
-        render_lines_with_width(view, 48)
+        render_lines_with_width(view, /*width*/ 48)
     }
 
     fn render_lines_with_width(view: &ListSelectionView, width: u16) -> String {
@@ -1151,7 +1153,7 @@ mod tests {
 
     #[test]
     fn renders_blank_line_between_title_and_items_without_subtitle() {
-        let view = make_selection_view(None);
+        let view = make_selection_view(/*subtitle*/ None);
         assert_snapshot!(
             "list_selection_spacing_without_subtitle",
             render_lines(&view)
@@ -1170,17 +1172,24 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let home = dirs::home_dir().expect("home directory should be available");
         let codex_home = home.join(".codex");
-        let params =
-            crate::theme_picker::build_theme_picker_params(None, Some(&codex_home), Some(94));
+        let params = crate::theme_picker::build_theme_picker_params(
+            /*current_name*/ None,
+            Some(&codex_home),
+            Some(94),
+        );
         let view = ListSelectionView::new(params, tx);
 
-        let rendered = render_lines_in_area(&view, 94, 35);
+        let rendered = render_lines_in_area(&view, /*width*/ 94, /*height*/ 35);
         assert!(rendered.contains("Move up/down to live preview themes"));
     }
 
     #[test]
     fn theme_picker_enables_side_content_background_preservation() {
-        let params = crate::theme_picker::build_theme_picker_params(None, None, Some(120));
+        let params = crate::theme_picker::build_theme_picker_params(
+            /*current_name*/ None,
+            /*codex_home*/ None,
+            Some(120),
+        );
         assert!(
             params.preserve_side_content_bg,
             "theme picker should preserve side-content backgrounds to keep diff preview styling",
@@ -1258,7 +1267,7 @@ mod tests {
         );
         assert_snapshot!(
             "list_selection_footer_note_wraps",
-            render_lines_with_width(&view, 40)
+            render_lines_with_width(&view, /*width*/ 40)
         );
     }
 
@@ -1378,7 +1387,7 @@ mod tests {
             tx,
         );
 
-        let rendered = render_lines_with_width(&view, 60);
+        let rendered = render_lines_with_width(&view, /*width*/ 60);
         let command_line = rendered
             .lines()
             .find(|line| line.contains("python -mpre_commit run"))
@@ -1469,7 +1478,7 @@ mod tests {
             },
             tx,
         );
-        let rendered = render_lines_with_width(&view, 24);
+        let rendered = render_lines_with_width(&view, /*width*/ 24);
         assert!(
             rendered.contains("3."),
             "third option missing for width 24:\n{rendered}"
@@ -1519,7 +1528,7 @@ mod tests {
         );
         assert_snapshot!(
             "list_selection_model_picker_width_80",
-            render_lines_with_width(&view, 80)
+            render_lines_with_width(&view, /*width*/ 80)
         );
     }
 
@@ -1546,7 +1555,7 @@ mod tests {
         );
         assert_snapshot!(
             "list_selection_narrow_width_preserves_rows",
-            render_lines_with_width(&view, 24)
+            render_lines_with_width(&view, /*width*/ 24)
         );
     }
 
@@ -1554,7 +1563,7 @@ mod tests {
     fn snapshot_auto_visible_col_width_mode_scroll_behavior() {
         assert_snapshot!(
             "list_selection_col_width_mode_auto_visible_scroll",
-            render_before_after_scroll_snapshot(ColumnWidthMode::AutoVisible, 96)
+            render_before_after_scroll_snapshot(ColumnWidthMode::AutoVisible, /*width*/ 96)
         );
     }
 
@@ -1562,7 +1571,7 @@ mod tests {
     fn snapshot_auto_all_rows_col_width_mode_scroll_behavior() {
         assert_snapshot!(
             "list_selection_col_width_mode_auto_all_rows_scroll",
-            render_before_after_scroll_snapshot(ColumnWidthMode::AutoAllRows, 96)
+            render_before_after_scroll_snapshot(ColumnWidthMode::AutoAllRows, /*width*/ 96)
         );
     }
 
@@ -1570,7 +1579,7 @@ mod tests {
     fn snapshot_fixed_col_width_mode_scroll_behavior() {
         assert_snapshot!(
             "list_selection_col_width_mode_fixed_scroll",
-            render_before_after_scroll_snapshot(ColumnWidthMode::Fixed, 96)
+            render_before_after_scroll_snapshot(ColumnWidthMode::Fixed, /*width*/ 96)
         );
     }
 
@@ -1589,11 +1598,11 @@ mod tests {
             tx,
         );
 
-        let before_scroll = render_lines_with_width(&view, 96);
+        let before_scroll = render_lines_with_width(&view, /*width*/ 96);
         for _ in 0..8 {
             view.handle_key_event(KeyEvent::from(KeyCode::Down));
         }
-        let after_scroll = render_lines_with_width(&view, 96);
+        let after_scroll = render_lines_with_width(&view, /*width*/ 96);
 
         assert!(
             after_scroll.contains("9. Item 9 with an intentionally much longer name"),
@@ -1691,7 +1700,7 @@ mod tests {
             tx,
         );
 
-        assert_eq!(view.side_layout_width(80), None);
+        assert_eq!(view.side_layout_width(/*content_width*/ 80), None);
     }
 
     #[test]
@@ -1721,7 +1730,7 @@ mod tests {
             tx,
         );
 
-        let rendered = render_lines_with_width(&view, 70);
+        let rendered = render_lines_with_width(&view, /*width*/ 70);
         assert!(
             rendered.contains('N'),
             "expected stacked marker to be rendered:\n{rendered}"

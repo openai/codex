@@ -16,17 +16,15 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use codex_core::features::Features;
+use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::RequestId;
-use codex_protocol::models::MacOsAutomationPermission;
-use codex_protocol::models::MacOsContactsPermission;
-use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
+#[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -264,14 +262,8 @@ impl ApprovalOverlay {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id,
-            op: Op::ExecApproval {
-                id: id.to_string(),
-                turn_id: None,
-                decision,
-            },
-        });
+        self.app_event_tx
+            .exec_approval(thread_id, id.to_string(), decision);
     }
 
     fn handle_permissions_decision(
@@ -307,16 +299,14 @@ impl ApprovalOverlay {
             )));
         }
         let thread_id = request.thread_id();
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+        self.app_event_tx.request_permissions_response(
             thread_id,
-            op: Op::RequestPermissionsResponse {
-                id: call_id.to_string(),
-                response: codex_protocol::request_permissions::RequestPermissionsResponse {
-                    permissions: granted_permissions,
-                    scope,
-                },
+            call_id.to_string(),
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: granted_permissions,
+                scope,
             },
-        });
+        );
     }
 
     fn handle_patch_decision(&self, id: &str, decision: ReviewDecision) {
@@ -327,13 +317,8 @@ impl ApprovalOverlay {
         else {
             return;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id,
-            op: Op::PatchApproval {
-                id: id.to_string(),
-                decision,
-            },
-        });
+        self.app_event_tx
+            .patch_approval(thread_id, id.to_string(), decision);
     }
 
     fn handle_elicitation_decision(
@@ -349,16 +334,14 @@ impl ApprovalOverlay {
         else {
             return;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+        self.app_event_tx.resolve_elicitation(
             thread_id,
-            op: Op::ResolveElicitation {
-                server_name: server_name.to_string(),
-                request_id: request_id.clone(),
-                decision,
-                content: None,
-                meta: None,
-            },
-        });
+            server_name.to_string(),
+            request_id.clone(),
+            decision,
+            /*content*/ None,
+            /*meta*/ None,
+        );
     }
 
     fn advance_queue(&mut self) {
@@ -777,48 +760,6 @@ pub(crate) fn format_additional_permissions_rule(
             parts.push(format!("write {writes}"));
         }
     }
-    if let Some(macos) = additional_permissions.macos.as_ref() {
-        if !matches!(
-            macos.macos_preferences,
-            MacOsPreferencesPermission::ReadOnly
-        ) {
-            let value = match macos.macos_preferences {
-                MacOsPreferencesPermission::ReadOnly => "readonly",
-                MacOsPreferencesPermission::ReadWrite => "readwrite",
-                MacOsPreferencesPermission::None => "none",
-            };
-            parts.push(format!("macOS preferences {value}"));
-        }
-        match &macos.macos_automation {
-            MacOsAutomationPermission::All => {
-                parts.push("macOS automation all".to_string());
-            }
-            MacOsAutomationPermission::BundleIds(bundle_ids) => {
-                if !bundle_ids.is_empty() {
-                    parts.push(format!("macOS automation {}", bundle_ids.join(", ")));
-                }
-            }
-            MacOsAutomationPermission::None => {}
-        }
-        if macos.macos_accessibility {
-            parts.push("macOS accessibility".to_string());
-        }
-        if macos.macos_calendar {
-            parts.push("macOS calendar".to_string());
-        }
-        if macos.macos_reminders {
-            parts.push("macOS reminders".to_string());
-        }
-        if !matches!(macos.macos_contacts, MacOsContactsPermission::None) {
-            let value = match macos.macos_contacts {
-                MacOsContactsPermission::None => "none",
-                MacOsContactsPermission::ReadOnly => "readonly",
-                MacOsContactsPermission::ReadWrite => "readwrite",
-            };
-            parts.push(format!("macOS contacts {value}"));
-        }
-    }
-
     if parts.is_empty() {
         None
     } else {
@@ -906,9 +847,6 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_protocol::models::FileSystemPermissions;
-    use codex_protocol::models::MacOsAutomationPermission;
-    use codex_protocol::models::MacOsPreferencesPermission;
-    use codex_protocol::models::MacOsSeatbeltProfileExtensions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::protocol::ExecPolicyAmendment;
     use codex_protocol::protocol::NetworkApprovalProtocol;
@@ -1059,7 +997,7 @@ mod tests {
 
         assert_snapshot!(
             "approval_overlay_cross_thread_prompt",
-            render_overlay_lines(&view, 80)
+            render_overlay_lines(&view, /*width*/ 80)
         );
     }
 
@@ -1171,8 +1109,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(80)));
-        view.render(Rect::new(0, 0, 80, view.desired_height(80)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)));
+        view.render(
+            Rect::new(0, 0, 80, view.desired_height(/*width*/ 80)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -1208,7 +1149,7 @@ mod tests {
                 ReviewDecision::Abort,
             ],
             Some(&network_context),
-            None,
+            /*additional_permissions*/ None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1231,8 +1172,8 @@ mod tests {
                 ReviewDecision::ApprovedForSession,
                 ReviewDecision::Abort,
             ],
-            None,
-            None,
+            /*network_approval_context*/ None,
+            /*additional_permissions*/ None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1257,7 +1198,7 @@ mod tests {
         };
         let options = exec_options(
             &[ReviewDecision::Approved, ReviewDecision::Abort],
-            None,
+            /*network_approval_context*/ None,
             Some(&additional_permissions),
         );
 
@@ -1334,13 +1275,15 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/readme.txt")]),
                     write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
-                ..Default::default()
             }),
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(120)));
-        view.render(Rect::new(0, 0, 120, view.desired_height(120)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(/*width*/ 120)));
+        view.render(
+            Rect::new(0, 0, 120, view.desired_height(/*width*/ 120)),
+            &mut buf,
+        );
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -1382,14 +1325,13 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/readme.txt")]),
                     write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
-                ..Default::default()
             }),
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_additional_permissions_prompt",
-            normalize_snapshot_paths(render_overlay_lines(&view, 120))
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
         );
     }
 
@@ -1400,43 +1342,7 @@ mod tests {
         let view = ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_permissions_prompt",
-            normalize_snapshot_paths(render_overlay_lines(&view, 120))
-        );
-    }
-
-    #[test]
-    fn additional_permissions_macos_prompt_snapshot() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let exec_request = ApprovalRequest::Exec {
-            thread_id: ThreadId::new(),
-            thread_label: None,
-            id: "test".into(),
-            command: vec!["osascript".into(), "-e".into(), "tell application".into()],
-            reason: Some("need macOS automation".into()),
-            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
-            network_approval_context: None,
-            additional_permissions: Some(PermissionProfile {
-                macos: Some(MacOsSeatbeltProfileExtensions {
-                    macos_preferences: MacOsPreferencesPermission::ReadWrite,
-                    macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                        "com.apple.Calendar".to_string(),
-                        "com.apple.Notes".to_string(),
-                    ]),
-                    macos_launch_services: false,
-                    macos_accessibility: true,
-                    macos_calendar: true,
-                    macos_reminders: true,
-                    macos_contacts: MacOsContactsPermission::None,
-                }),
-                ..Default::default()
-            }),
-        };
-
-        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        assert_snapshot!(
-            "approval_overlay_additional_permissions_macos_prompt",
-            render_overlay_lines(&view, 120)
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
         );
     }
 
@@ -1469,8 +1375,11 @@ mod tests {
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
-        view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)));
+        view.render(
+            Rect::new(0, 0, 100, view.desired_height(/*width*/ 100)),
+            &mut buf,
+        );
         assert_snapshot!("network_exec_prompt", format!("{buf:?}"));
 
         let rendered: Vec<String> = (0..buf.area.height)
@@ -1509,7 +1418,7 @@ mod tests {
             ReviewDecision::Approved,
             history_cell::ApprovalDecisionActor::User,
         );
-        let lines = cell.display_lines(28);
+        let lines = cell.display_lines(/*width*/ 28);
         let rendered: Vec<String> = lines
             .iter()
             .map(|line| {

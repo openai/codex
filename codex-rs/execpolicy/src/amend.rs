@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use crate::decision::Decision;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::normalize_network_rule_host;
-use serde_json;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -327,7 +326,7 @@ network_rule(host="api.github.com", protocol="https", decision="allow", justific
             "*.example.com",
             NetworkRuleProtocol::Https,
             Decision::Allow,
-            None,
+            /*justification*/ None,
         )
         .expect_err("wildcards should be rejected");
         assert_eq!(

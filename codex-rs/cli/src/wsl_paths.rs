@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 
 /// Returns true if the current process is running under WSL.
-pub use codex_core::env::is_wsl;
+pub use codex_utils_path::is_wsl;
 
 /// Convert a Windows absolute path (`C:\foo\bar` or `C:/foo/bar`) to a WSL mount path (`/mnt/c/foo/bar`).
 /// Returns `None` if the input does not look like a Windows drive path.

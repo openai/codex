@@ -1,10 +1,9 @@
-use crate::config::types::McpServerConfig;
-use crate::config::types::Notice;
-use crate::features::FEATURES;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::types::McpServerConfig;
+use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
@@ -19,6 +18,8 @@ use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
 use toml_edit::value;
+
+const NOTICE_TABLE_KEY: &str = "notice";
 
 /// Discrete config mutations supported by the persistence engine.
 #[derive(Clone, Debug)]
@@ -46,8 +47,10 @@ pub enum ConfigEdit {
     RecordModelMigrationSeen { from: String, to: String },
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
-    /// Set or clear a skill config entry under `[[skills.config]]`.
+    /// Set or clear a skill config entry under `[[skills.config]]` by path.
     SetSkillConfig { path: PathBuf, enabled: bool },
+    /// Set or clear a skill config entry under `[[skills.config]]` by name.
+    SetSkillConfigByName { name: String, enabled: bool },
     /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
     SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
@@ -60,7 +63,13 @@ pub enum ConfigEdit {
     ClearPath { segments: Vec<String> },
 }
 
-/// Produces a config edit that sets `[tui] theme = "<name>"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SkillConfigSelector {
+    Name(String),
+    Path(PathBuf),
+}
+
+/// Produces a config edit that sets `[tui].theme = "<name>"`.
 pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "theme".to_string()],
@@ -68,14 +77,28 @@ pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     }
 }
 
+/// Produces a config edit that sets `[tui].status_line` to an explicit ordered list.
+///
+/// The array is written even when it is empty so "hide the status line" stays
+/// distinct from "unset, so use defaults".
 pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
-    let mut array = toml_edit::Array::new();
-    for item in items {
-        array.push(item.clone());
-    }
+    let array = items.iter().cloned().collect::<toml_edit::Array>();
 
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "status_line".to_string()],
+        value: TomlItem::Value(array.into()),
+    }
+}
+
+/// Produces a config edit that sets `[tui].terminal_title` to an explicit ordered list.
+///
+/// The array is written even when it is empty so "disabled title updates" stays
+/// distinct from "unset, so use defaults".
+pub fn terminal_title_items_edit(items: &[String]) -> ConfigEdit {
+    let array = items.iter().cloned().collect::<toml_edit::Array>();
+
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "terminal_title".to_string()],
         value: TomlItem::Value(array.into()),
     }
 }
@@ -103,8 +126,10 @@ pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) ->
 
 // TODO(jif) move to a dedicated file
 mod document_helpers {
-    use crate::config::types::McpServerConfig;
-    use crate::config::types::McpServerTransportConfig;
+    use codex_config::types::AppToolApproval;
+    use codex_config::types::McpServerConfig;
+    use codex_config::types::McpServerToolConfig;
+    use codex_config::types::McpServerTransportConfig;
     use toml_edit::Array as TomlArray;
     use toml_edit::InlineTable;
     use toml_edit::Item as TomlItem;
@@ -226,8 +251,30 @@ mod document_helpers {
         {
             entry["oauth_resource"] = value(resource.clone());
         }
+        if !config.tools.is_empty() {
+            let mut tools = new_implicit_table();
+            let mut tool_entries: Vec<_> = config.tools.iter().collect();
+            tool_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            for (name, tool_config) in tool_entries {
+                tools.insert(name, serialize_mcp_server_tool(tool_config));
+            }
+            entry.insert("tools", TomlItem::Table(tools));
+        }
 
         entry
+    }
+
+    fn serialize_mcp_server_tool(config: &McpServerToolConfig) -> TomlItem {
+        let mut entry = TomlTable::new();
+        entry.set_implicit(false);
+        if let Some(approval_mode) = config.approval_mode {
+            entry["approval_mode"] = value(match approval_mode {
+                AppToolApproval::Auto => "auto",
+                AppToolApproval::Prompt => "prompt",
+                AppToolApproval::Approve => "approve",
+            });
+        }
+        TomlItem::Table(entry)
     }
 
     pub(super) fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
@@ -341,29 +388,29 @@ impl ConfigDocument {
             )),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
                 Scope::Global,
-                &[Notice::TABLE_KEY, "hide_full_access_warning"],
+                &[NOTICE_TABLE_KEY, "hide_full_access_warning"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideWorldWritableWarning(acknowledged) => Ok(self.write_value(
                 Scope::Global,
-                &[Notice::TABLE_KEY, "hide_world_writable_warning"],
+                &[NOTICE_TABLE_KEY, "hide_world_writable_warning"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged) => Ok(self.write_value(
                 Scope::Global,
-                &[Notice::TABLE_KEY, "hide_rate_limit_model_nudge"],
+                &[NOTICE_TABLE_KEY, "hide_rate_limit_model_nudge"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideModelMigrationPrompt(migration_config, acknowledged) => {
                 Ok(self.write_value(
                     Scope::Global,
-                    &[Notice::TABLE_KEY, migration_config.as_str()],
+                    &[NOTICE_TABLE_KEY, migration_config.as_str()],
                     value(*acknowledged),
                 ))
             }
             ConfigEdit::RecordModelMigrationSeen { from, to } => Ok(self.write_value(
                 Scope::Global,
-                &[Notice::TABLE_KEY, "model_migrations", from.as_str()],
+                &[NOTICE_TABLE_KEY, "model_migrations", from.as_str()],
                 value(to.clone()),
             )),
             ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
@@ -373,7 +420,10 @@ impl ConfigDocument {
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
             ConfigEdit::SetSkillConfig { path, enabled } => {
-                Ok(self.set_skill_config(path.as_path(), *enabled))
+                Ok(self.set_skill_config(SkillConfigSelector::Path(path.clone()), *enabled))
+            }
+            ConfigEdit::SetSkillConfigByName { name, enabled } => {
+                Ok(self.set_skill_config(SkillConfigSelector::Name(name.clone()), *enabled))
             }
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
@@ -464,8 +514,16 @@ impl ConfigDocument {
         true
     }
 
-    fn set_skill_config(&mut self, path: &Path, enabled: bool) -> bool {
-        let normalized_path = normalize_skill_config_path(path);
+    fn set_skill_config(&mut self, selector: SkillConfigSelector, enabled: bool) -> bool {
+        let selector = match selector {
+            SkillConfigSelector::Name(name) => SkillConfigSelector::Name(name.trim().to_string()),
+            SkillConfigSelector::Path(path) => {
+                SkillConfigSelector::Path(PathBuf::from(normalize_skill_config_path(&path)))
+            }
+        };
+        if matches!(&selector, SkillConfigSelector::Name(name) if name.is_empty()) {
+            return false;
+        }
         let mut remove_skills_table = false;
         let mut mutated = false;
 
@@ -524,12 +582,8 @@ impl ConfigDocument {
             };
 
             let existing_index = overrides.iter().enumerate().find_map(|(idx, table)| {
-                table
-                    .get("path")
-                    .and_then(|item| item.as_str())
-                    .map(Path::new)
-                    .map(normalize_skill_config_path)
-                    .filter(|value| *value == normalized_path)
+                skill_config_selector_from_table(table)
+                    .filter(|value| value == &selector)
                     .map(|_| idx)
             });
 
@@ -547,7 +601,7 @@ impl ConfigDocument {
             } else if let Some(index) = existing_index {
                 for (idx, table) in overrides.iter_mut().enumerate() {
                     if idx == index {
-                        table["path"] = value(normalized_path);
+                        write_skill_config_selector(table, &selector);
                         table["enabled"] = value(false);
                         mutated = true;
                         break;
@@ -556,7 +610,7 @@ impl ConfigDocument {
             } else {
                 let mut entry = TomlTable::new();
                 entry.set_implicit(false);
-                entry["path"] = value(normalized_path);
+                write_skill_config_selector(&mut entry, &selector);
                 entry["enabled"] = value(false);
                 overrides.push(entry);
                 mutated = true;
@@ -683,6 +737,38 @@ fn normalize_skill_config_path(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .to_string()
+}
+
+fn skill_config_selector_from_table(table: &TomlTable) -> Option<SkillConfigSelector> {
+    let path = table
+        .get("path")
+        .and_then(|item| item.as_str())
+        .map(Path::new)
+        .map(|path| SkillConfigSelector::Path(PathBuf::from(normalize_skill_config_path(path))));
+    let name = table
+        .get("name")
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| SkillConfigSelector::Name(name.to_string()));
+
+    match (path, name) {
+        (Some(selector), None) | (None, Some(selector)) => Some(selector),
+        _ => None,
+    }
+}
+
+fn write_skill_config_selector(table: &mut TomlTable, selector: &SkillConfigSelector) {
+    match selector {
+        SkillConfigSelector::Name(name) => {
+            table.remove("path");
+            table["name"] = value(name.clone());
+        }
+        SkillConfigSelector::Path(path) => {
+            table.remove("name");
+            table["path"] = value(path.to_string_lossy().to_string());
+        }
+    }
 }
 
 /// Persist edits using a blocking strategy.
@@ -927,6 +1013,18 @@ impl ConfigEditsBuilder {
             Some(speaker) => self.edits.push(ConfigEdit::SetPath {
                 segments,
                 value: value(speaker),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
+    pub fn set_realtime_voice(mut self, voice: Option<&str>) -> Self {
+        let segments = vec!["realtime".to_string(), "voice".to_string()];
+        match voice {
+            Some(voice) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(voice),
             }),
             None => self.edits.push(ConfigEdit::ClearPath { segments }),
         }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use codex_core::config::set_project_trust_level;
-use codex_core::git_info::resolve_root_git_project_for_trust;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -56,7 +56,7 @@ impl WidgetRef for &TrustDirectoryWidget {
                 "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
             )
                 .wrap(Wrap { trim: true })
-                .inset(Insets::tlbr(0, 2, 0, 0)),
+                .inset(Insets::tlbr(/*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0)),
         );
         column.push("");
 
@@ -80,7 +80,9 @@ impl WidgetRef for &TrustDirectoryWidget {
                 Paragraph::new(error.to_string())
                     .red()
                     .wrap(Wrap { trim: true })
-                    .inset(Insets::tlbr(0, 2, 0, 0)),
+                    .inset(Insets::tlbr(
+                        /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+                    )),
             );
             column.push("");
         }
@@ -95,7 +97,9 @@ impl WidgetRef for &TrustDirectoryWidget {
                     " to continue".dim()
                 },
             ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
 
         column.render(area, buf);
@@ -210,7 +214,8 @@ mod tests {
             error: None,
         };
 
-        let mut terminal = Terminal::new(VT100Backend::new(70, 14)).expect("terminal");
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 14)).expect("terminal");
         terminal
             .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
             .expect("draw");

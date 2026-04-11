@@ -1,9 +1,9 @@
 use super::AgentRoleConfig;
-use super::AgentRoleToml;
-use super::AgentsToml;
-use super::ConfigToml;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use codex_config::config_toml::AgentRoleToml;
+use codex_config::config_toml::AgentsToml;
+use codex_config::config_toml::ConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
@@ -19,8 +19,10 @@ pub(crate) fn load_agent_roles(
     config_layer_stack: &ConfigLayerStack,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
-    let layers =
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false);
+    let layers = config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
     if layers.is_empty() {
         return load_agent_roles_without_layers(cfg);
     }
@@ -450,13 +452,14 @@ fn discover_agent_roles_in_dir(
         if declared_role_files.contains(&agent_file) {
             continue;
         }
-        let parsed_file = match read_resolved_agent_role_file(&agent_file, None) {
-            Ok(parsed_file) => parsed_file,
-            Err(err) => {
-                push_agent_role_warning(startup_warnings, err);
-                continue;
-            }
-        };
+        let parsed_file =
+            match read_resolved_agent_role_file(&agent_file, /*role_name_hint*/ None) {
+                Ok(parsed_file) => parsed_file,
+                Err(err) => {
+                    push_agent_role_warning(startup_warnings, err);
+                    continue;
+                }
+            };
         let role_name = parsed_file.role_name;
         if roles.contains_key(&role_name) {
             push_agent_role_warning(

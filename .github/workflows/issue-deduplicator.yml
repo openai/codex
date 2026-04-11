@@ -19,7 +19,7 @@ jobs:
       reason: ${{ steps.normalize-all.outputs.reason }}
       has_matches: ${{ steps.normalize-all.outputs.has_matches }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Prepare Codex inputs
         env:
@@ -61,7 +61,7 @@ jobs:
       # .github/prompts/issue-deduplicator.txt file is obsolete and removed.
       - id: codex-all
         name: Find duplicates (pass 1, all issues)
-        uses: openai/codex-action@main
+        uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
@@ -155,7 +155,7 @@ jobs:
       reason: ${{ steps.normalize-open.outputs.reason }}
       has_matches: ${{ steps.normalize-open.outputs.has_matches }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Prepare Codex inputs
         env:
@@ -195,7 +195,7 @@ jobs:
 
       - id: codex-open
         name: Find duplicates (pass 2, open issues)
-        uses: openai/codex-action@main
+        uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
@@ -342,7 +342,7 @@ jobs:
       issues: write
     steps:
       - name: Comment on issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           CODEX_OUTPUT: ${{ needs.select-final.outputs.codex_output }}
         with:
@@ -396,6 +396,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          gh issue edit "${{ github.event.issue.number }}" --remove-label codex-deduplicate || true
+          gh issue edit "$ISSUE_NUMBER" --remove-label codex-deduplicate || true
           echo "Attempted to remove label: codex-deduplicate"

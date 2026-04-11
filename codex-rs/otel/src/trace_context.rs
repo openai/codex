@@ -141,7 +141,9 @@ mod tests {
 
     #[test]
     fn invalid_traceparent_returns_none() {
-        assert!(context_from_trace_headers(Some("not-a-traceparent"), None).is_none());
+        assert!(
+            context_from_trace_headers(Some("not-a-traceparent"), /*tracestate*/ None).is_none()
+        );
     }
 
     #[test]

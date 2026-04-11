@@ -1,21 +1,22 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
-
-pub(crate) const PLUGIN_MANIFEST_PATH: &str = ".codex-plugin/plugin.json";
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PluginManifest {
+struct RawPluginManifest {
     #[serde(default)]
-    pub(crate) name: String,
+    name: String,
     #[serde(default)]
-    pub(crate) description: Option<String>,
+    version: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
     #[serde(default)]
@@ -25,7 +26,16 @@ pub(crate) struct PluginManifest {
     #[serde(default)]
     apps: Option<String>,
     #[serde(default)]
-    interface: Option<PluginManifestInterface>,
+    interface: Option<RawPluginManifestInterface>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginManifest {
+    pub(crate) name: String,
+    pub(crate) version: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) paths: PluginManifestPaths,
+    pub(crate) interface: Option<PluginManifestInterface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +46,7 @@ pub struct PluginManifestPaths {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PluginManifestInterfaceSummary {
+pub struct PluginManifestInterface {
     pub display_name: Option<String>,
     pub short_description: Option<String>,
     pub long_description: Option<String>,
@@ -55,7 +65,7 @@ pub struct PluginManifestInterfaceSummary {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PluginManifestInterface {
+struct RawPluginManifestInterface {
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -78,7 +88,7 @@ struct PluginManifestInterface {
     #[serde(alias = "termsOfServiceURL")]
     terms_of_service_url: Option<String>,
     #[serde(default)]
-    default_prompt: Option<PluginManifestDefaultPrompt>,
+    default_prompt: Option<RawPluginManifestDefaultPrompt>,
     #[serde(default)]
     brand_color: Option<String>,
     #[serde(default)]
@@ -91,15 +101,15 @@ struct PluginManifestInterface {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum PluginManifestDefaultPrompt {
+enum RawPluginManifestDefaultPrompt {
     String(String),
-    List(Vec<PluginManifestDefaultPromptEntry>),
+    List(Vec<RawPluginManifestDefaultPromptEntry>),
     Invalid(JsonValue),
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum PluginManifestDefaultPromptEntry {
+enum RawPluginManifestDefaultPromptEntry {
     String(String),
     Invalid(JsonValue),
 }
@@ -110,8 +120,112 @@ pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest>
         return None;
     }
     let contents = fs::read_to_string(&manifest_path).ok()?;
-    match serde_json::from_str(&contents) {
-        Ok(manifest) => Some(manifest),
+    match serde_json::from_str::<RawPluginManifest>(&contents) {
+        Ok(manifest) => {
+            let RawPluginManifest {
+                name: raw_name,
+                version,
+                description,
+                skills,
+                mcp_servers,
+                apps,
+                interface,
+            } = manifest;
+            let name = plugin_root
+                .file_name()
+                .and_then(|entry| entry.to_str())
+                .filter(|_| raw_name.trim().is_empty())
+                .unwrap_or(&raw_name)
+                .to_string();
+            let version = version.and_then(|version| {
+                let version = version.trim();
+                (!version.is_empty()).then(|| version.to_string())
+            });
+            let interface = interface.and_then(|interface| {
+                let RawPluginManifestInterface {
+                    display_name,
+                    short_description,
+                    long_description,
+                    developer_name,
+                    category,
+                    capabilities,
+                    website_url,
+                    privacy_policy_url,
+                    terms_of_service_url,
+                    default_prompt,
+                    brand_color,
+                    composer_icon,
+                    logo,
+                    screenshots,
+                } = interface;
+
+                let interface = PluginManifestInterface {
+                    display_name,
+                    short_description,
+                    long_description,
+                    developer_name,
+                    category,
+                    capabilities,
+                    website_url,
+                    privacy_policy_url,
+                    terms_of_service_url,
+                    default_prompt: resolve_default_prompts(plugin_root, default_prompt.as_ref()),
+                    brand_color,
+                    composer_icon: resolve_interface_asset_path(
+                        plugin_root,
+                        "interface.composerIcon",
+                        composer_icon.as_deref(),
+                    ),
+                    logo: resolve_interface_asset_path(
+                        plugin_root,
+                        "interface.logo",
+                        logo.as_deref(),
+                    ),
+                    screenshots: screenshots
+                        .iter()
+                        .filter_map(|screenshot| {
+                            resolve_interface_asset_path(
+                                plugin_root,
+                                "interface.screenshots",
+                                Some(screenshot),
+                            )
+                        })
+                        .collect(),
+                };
+
+                let has_fields = interface.display_name.is_some()
+                    || interface.short_description.is_some()
+                    || interface.long_description.is_some()
+                    || interface.developer_name.is_some()
+                    || interface.category.is_some()
+                    || !interface.capabilities.is_empty()
+                    || interface.website_url.is_some()
+                    || interface.privacy_policy_url.is_some()
+                    || interface.terms_of_service_url.is_some()
+                    || interface.default_prompt.is_some()
+                    || interface.brand_color.is_some()
+                    || interface.composer_icon.is_some()
+                    || interface.logo.is_some()
+                    || !interface.screenshots.is_empty();
+
+                has_fields.then_some(interface)
+            });
+            Some(PluginManifest {
+                name,
+                version,
+                description,
+                paths: PluginManifestPaths {
+                    skills: resolve_manifest_path(plugin_root, "skills", skills.as_deref()),
+                    mcp_servers: resolve_manifest_path(
+                        plugin_root,
+                        "mcpServers",
+                        mcp_servers.as_deref(),
+                    ),
+                    apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
+                },
+                interface,
+            })
+        }
         Err(err) => {
             tracing::warn!(
                 path = %manifest_path.display(),
@@ -119,84 +233,6 @@ pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest>
             );
             None
         }
-    }
-}
-
-pub(crate) fn plugin_manifest_name(manifest: &PluginManifest, plugin_root: &Path) -> String {
-    plugin_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|_| manifest.name.trim().is_empty())
-        .unwrap_or(&manifest.name)
-        .to_string()
-}
-
-pub(crate) fn plugin_manifest_interface(
-    manifest: &PluginManifest,
-    plugin_root: &Path,
-) -> Option<PluginManifestInterfaceSummary> {
-    let interface = manifest.interface.as_ref()?;
-    let interface = PluginManifestInterfaceSummary {
-        display_name: interface.display_name.clone(),
-        short_description: interface.short_description.clone(),
-        long_description: interface.long_description.clone(),
-        developer_name: interface.developer_name.clone(),
-        category: interface.category.clone(),
-        capabilities: interface.capabilities.clone(),
-        website_url: interface.website_url.clone(),
-        privacy_policy_url: interface.privacy_policy_url.clone(),
-        terms_of_service_url: interface.terms_of_service_url.clone(),
-        default_prompt: resolve_default_prompts(plugin_root, interface.default_prompt.as_ref()),
-        brand_color: interface.brand_color.clone(),
-        composer_icon: resolve_interface_asset_path(
-            plugin_root,
-            "interface.composerIcon",
-            interface.composer_icon.as_deref(),
-        ),
-        logo: resolve_interface_asset_path(
-            plugin_root,
-            "interface.logo",
-            interface.logo.as_deref(),
-        ),
-        screenshots: interface
-            .screenshots
-            .iter()
-            .filter_map(|screenshot| {
-                resolve_interface_asset_path(plugin_root, "interface.screenshots", Some(screenshot))
-            })
-            .collect(),
-    };
-
-    let has_fields = interface.display_name.is_some()
-        || interface.short_description.is_some()
-        || interface.long_description.is_some()
-        || interface.developer_name.is_some()
-        || interface.category.is_some()
-        || !interface.capabilities.is_empty()
-        || interface.website_url.is_some()
-        || interface.privacy_policy_url.is_some()
-        || interface.terms_of_service_url.is_some()
-        || interface.default_prompt.is_some()
-        || interface.brand_color.is_some()
-        || interface.composer_icon.is_some()
-        || interface.logo.is_some()
-        || !interface.screenshots.is_empty();
-
-    has_fields.then_some(interface)
-}
-
-pub(crate) fn plugin_manifest_paths(
-    manifest: &PluginManifest,
-    plugin_root: &Path,
-) -> PluginManifestPaths {
-    PluginManifestPaths {
-        skills: resolve_manifest_path(plugin_root, "skills", manifest.skills.as_deref()),
-        mcp_servers: resolve_manifest_path(
-            plugin_root,
-            "mcpServers",
-            manifest.mcp_servers.as_deref(),
-        ),
-        apps: resolve_manifest_path(plugin_root, "apps", manifest.apps.as_deref()),
     }
 }
 
@@ -210,14 +246,14 @@ fn resolve_interface_asset_path(
 
 fn resolve_default_prompts(
     plugin_root: &Path,
-    value: Option<&PluginManifestDefaultPrompt>,
+    value: Option<&RawPluginManifestDefaultPrompt>,
 ) -> Option<Vec<String>> {
     match value? {
-        PluginManifestDefaultPrompt::String(prompt) => {
+        RawPluginManifestDefaultPrompt::String(prompt) => {
             resolve_default_prompt_str(plugin_root, "interface.defaultPrompt", prompt)
                 .map(|prompt| vec![prompt])
         }
-        PluginManifestDefaultPrompt::List(values) => {
+        RawPluginManifestDefaultPrompt::List(values) => {
             let mut prompts = Vec::new();
             for (index, item) in values.iter().enumerate() {
                 if prompts.len() >= MAX_DEFAULT_PROMPT_COUNT {
@@ -230,7 +266,7 @@ fn resolve_default_prompts(
                 }
 
                 match item {
-                    PluginManifestDefaultPromptEntry::String(prompt) => {
+                    RawPluginManifestDefaultPromptEntry::String(prompt) => {
                         let field = format!("interface.defaultPrompt[{index}]");
                         if let Some(prompt) =
                             resolve_default_prompt_str(plugin_root, &field, prompt)
@@ -238,7 +274,7 @@ fn resolve_default_prompts(
                             prompts.push(prompt);
                         }
                     }
-                    PluginManifestDefaultPromptEntry::Invalid(value) => {
+                    RawPluginManifestDefaultPromptEntry::Invalid(value) => {
                         let field = format!("interface.defaultPrompt[{index}]");
                         warn_invalid_default_prompt(
                             plugin_root,
@@ -251,7 +287,7 @@ fn resolve_default_prompts(
 
             (!prompts.is_empty()).then_some(prompts)
         }
-        PluginManifestDefaultPrompt::Invalid(value) => {
+        RawPluginManifestDefaultPrompt::Invalid(value) => {
             warn_invalid_default_prompt(
                 plugin_root,
                 "interface.defaultPrompt",
@@ -348,19 +384,23 @@ fn resolve_manifest_path(
 mod tests {
     use super::MAX_DEFAULT_PROMPT_LEN;
     use super::PluginManifest;
-    use super::plugin_manifest_interface;
+    use super::load_plugin_manifest;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
 
-    fn write_manifest(plugin_root: &Path, interface: &str) {
+    fn write_manifest(plugin_root: &Path, version: Option<&str>, interface: &str) {
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        let version = version
+            .map(|version| format!("  \"version\": \"{version}\",\n"))
+            .unwrap_or_default();
         fs::write(
             plugin_root.join(".codex-plugin/plugin.json"),
             format!(
                 r#"{{
   "name": "demo-plugin",
+{version}
   "interface": {interface}
 }}"#
             ),
@@ -369,17 +409,16 @@ mod tests {
     }
 
     fn load_manifest(plugin_root: &Path) -> PluginManifest {
-        let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
-        let contents = fs::read_to_string(manifest_path).expect("read manifest");
-        serde_json::from_str(&contents).expect("parse manifest")
+        load_plugin_manifest(plugin_root).expect("load plugin manifest")
     }
 
     #[test]
-    fn plugin_manifest_interface_accepts_legacy_default_prompt_string() {
+    fn plugin_interface_accepts_legacy_default_prompt_string() {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("demo-plugin");
         write_manifest(
             &plugin_root,
+            /*version*/ None,
             r#"{
     "displayName": "Demo Plugin",
     "defaultPrompt": "  Summarize   my inbox  "
@@ -387,8 +426,7 @@ mod tests {
         );
 
         let manifest = load_manifest(&plugin_root);
-        let interface =
-            plugin_manifest_interface(&manifest, &plugin_root).expect("plugin interface");
+        let interface = manifest.interface.expect("plugin interface");
 
         assert_eq!(
             interface.default_prompt,
@@ -397,12 +435,13 @@ mod tests {
     }
 
     #[test]
-    fn plugin_manifest_interface_normalizes_default_prompt_array() {
+    fn plugin_interface_normalizes_default_prompt_array() {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("demo-plugin");
         let too_long = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
         write_manifest(
             &plugin_root,
+            /*version*/ None,
             &format!(
                 r#"{{
     "displayName": "Demo Plugin",
@@ -420,8 +459,7 @@ mod tests {
         );
 
         let manifest = load_manifest(&plugin_root);
-        let interface =
-            plugin_manifest_interface(&manifest, &plugin_root).expect("plugin interface");
+        let interface = manifest.interface.expect("plugin interface");
 
         assert_eq!(
             interface.default_prompt,
@@ -434,11 +472,12 @@ mod tests {
     }
 
     #[test]
-    fn plugin_manifest_interface_ignores_invalid_default_prompt_shape() {
+    fn plugin_interface_ignores_invalid_default_prompt_shape() {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("demo-plugin");
         write_manifest(
             &plugin_root,
+            /*version*/ None,
             r#"{
     "displayName": "Demo Plugin",
     "defaultPrompt": { "text": "Summarize my inbox" }
@@ -446,9 +485,25 @@ mod tests {
         );
 
         let manifest = load_manifest(&plugin_root);
-        let interface =
-            plugin_manifest_interface(&manifest, &plugin_root).expect("plugin interface");
+        let interface = manifest.interface.expect("plugin interface");
 
         assert_eq!(interface.default_prompt, None);
+    }
+
+    #[test]
+    fn plugin_manifest_reads_trimmed_version() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_manifest(
+            &plugin_root,
+            Some(" 1.2.3-beta+7 "),
+            r#"{
+    "displayName": "Demo Plugin"
+  }"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+
+        assert_eq!(manifest.version, Some("1.2.3-beta+7".to_string()));
     }
 }

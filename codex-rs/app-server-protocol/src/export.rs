@@ -17,6 +17,7 @@ use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_protocol::protocol::RolloutLine;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
@@ -182,7 +183,13 @@ pub fn generate_ts_with_options(
 }
 
 pub fn generate_json(out_dir: &Path) -> Result<()> {
-    generate_json_with_experimental(out_dir, false)
+    generate_json_with_experimental(out_dir, /*experimental_api*/ false)
+}
+
+pub fn generate_internal_json_schema(out_dir: &Path) -> Result<()> {
+    ensure_dir(out_dir)?;
+    write_json_schema::<RolloutLine>(out_dir, "RolloutLine")?;
+    Ok(())
 }
 
 pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
@@ -1984,7 +1991,7 @@ pub(crate) fn generate_index_ts_tree(tree: &mut BTreeMap<PathBuf, String>) {
     if !v2_entries.is_empty() {
         tree.insert(
             PathBuf::from("v2").join("index.ts"),
-            index_ts_entries(&v2_entries, false),
+            index_ts_entries(&v2_entries, /*has_v2_ts*/ false),
         );
     }
 }
@@ -2289,10 +2296,6 @@ mod tests {
             v2::CommandExecutionRequestApprovalParams::export_to_string()?;
         assert_eq!(
             command_execution_request_approval_ts.contains("additionalPermissions"),
-            true
-        );
-        assert_eq!(
-            command_execution_request_approval_ts.contains("skillMetadata"),
             true
         );
 
@@ -2687,7 +2690,7 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
     fn generate_json_filters_experimental_fields_and_methods() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
-        generate_json_with_experimental(&output_dir, false)?;
+        generate_json_with_experimental(&output_dir, /*experimental_api*/ false)?;
 
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
@@ -2696,10 +2699,6 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
             fs::read_to_string(output_dir.join("CommandExecutionRequestApprovalParams.json"))?;
         assert_eq!(
             command_execution_request_approval_json.contains("additionalPermissions"),
-            false
-        );
-        assert_eq!(
-            command_execution_request_approval_json.contains("skillMetadata"),
             false
         );
 
@@ -2714,7 +2713,6 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
             fs::read_to_string(output_dir.join("codex_app_server_protocol.schemas.json"))?;
         assert_eq!(bundle_json.contains("mockExperimentalField"), false);
         assert_eq!(bundle_json.contains("additionalPermissions"), false);
-        assert_eq!(bundle_json.contains("skillMetadata"), false);
         assert_eq!(bundle_json.contains("MockExperimentalMethodParams"), false);
         assert_eq!(
             bundle_json.contains("MockExperimentalMethodResponse"),
@@ -2724,7 +2722,6 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
             fs::read_to_string(output_dir.join("codex_app_server_protocol.v2.schemas.json"))?;
         assert_eq!(flat_v2_bundle_json.contains("mockExperimentalField"), false);
         assert_eq!(flat_v2_bundle_json.contains("additionalPermissions"), false);
-        assert_eq!(flat_v2_bundle_json.contains("skillMetadata"), false);
         assert_eq!(
             flat_v2_bundle_json.contains("MockExperimentalMethodParams"),
             false

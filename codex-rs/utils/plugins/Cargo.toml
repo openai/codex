@@ -1,0 +1,22 @@
+
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-utils-plugins"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_utils_plugins"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-login = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

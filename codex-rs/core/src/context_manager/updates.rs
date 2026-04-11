@@ -1,9 +1,9 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
-use crate::features::Feature;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
+use codex_features::Feature;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
@@ -16,6 +16,10 @@ fn build_environment_update_item(
     next: &TurnContext,
     shell: &Shell,
 ) -> Option<ResponseItem> {
+    if !next.config.include_environment_context {
+        return None;
+    }
+
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
     let next_context = EnvironmentContext::from_turn_context(next, shell);
@@ -33,6 +37,10 @@ fn build_permissions_update_item(
     next: &TurnContext,
     exec_policy: &Policy,
 ) -> Option<DeveloperInstructions> {
+    if !next.config.include_permissions_instructions {
+        return None;
+    }
+
     let prev = previous?;
     if prev.sandbox_policy == *next.sandbox_policy.get()
         && prev.approval_policy == next.approval_policy.value()
@@ -43,6 +51,7 @@ fn build_permissions_update_item(
     Some(DeveloperInstructions::from_policy(
         next.sandbox_policy.get(),
         next.approval_policy.value(),
+        next.config.approvals_reviewer,
         exec_policy,
         &next.cwd,
         next.features.enabled(Feature::ExecPermissionApprovals),
@@ -192,6 +201,10 @@ pub(crate) fn build_settings_update_items(
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
+    // TODO(ccunningham): build_settings_update_items still does not cover every
+    // model-visible item emitted by build_initial_context. Persist the remaining
+    // inputs or add explicit replay events so fork/resume can diff everything
+    // deterministically.
     let contextual_user_message = build_environment_update_item(previous, next, shell);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before

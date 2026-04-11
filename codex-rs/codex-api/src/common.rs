@@ -5,6 +5,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
@@ -15,11 +16,15 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
+pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
+pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
+
 /// Canonical input payload for the compaction endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompactionInput<'a> {
     pub model: &'a str,
     pub input: &'a [ResponseItem],
+    #[serde(skip_serializing_if = "str::is_empty")]
     pub instructions: &'a str,
     pub tools: Vec<Value>,
     pub parallel_tool_calls: bool,
@@ -149,6 +154,7 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     pub model: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<serde_json::Value>,
@@ -164,6 +170,8 @@ pub struct ResponsesApiRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata: Option<HashMap<String, String>>,
 }
 
 impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
@@ -184,7 +192,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
             generate: None,
-            client_metadata: None,
+            client_metadata: request.client_metadata.clone(),
         }
     }
 }
@@ -192,6 +200,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
 #[derive(Debug, Serialize)]
 pub struct ResponseCreateWsRequest {
     pub model: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
@@ -213,6 +222,28 @@ pub struct ResponseCreateWsRequest {
     pub generate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<HashMap<String, String>>,
+}
+
+pub fn response_create_client_metadata(
+    client_metadata: Option<HashMap<String, String>>,
+    trace: Option<&W3cTraceContext>,
+) -> Option<HashMap<String, String>> {
+    let mut client_metadata = client_metadata.unwrap_or_default();
+
+    if let Some(traceparent) = trace.and_then(|trace| trace.traceparent.as_deref()) {
+        client_metadata.insert(
+            WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY.to_string(),
+            traceparent.to_string(),
+        );
+    }
+    if let Some(tracestate) = trace.and_then(|trace| trace.tracestate.as_deref()) {
+        client_metadata.insert(
+            WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY.to_string(),
+            tracestate.to_string(),
+        );
+    }
+
+    (!client_metadata.is_empty()).then_some(client_metadata)
 }
 
 #[derive(Debug, Serialize)]

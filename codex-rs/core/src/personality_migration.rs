@@ -1,4 +1,3 @@
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::rollout::ARCHIVED_SESSIONS_SUBDIR;
 use crate::rollout::SESSIONS_SUBDIR;
@@ -6,9 +5,10 @@ use crate::rollout::list::ThreadListConfig;
 use crate::rollout::list::ThreadListLayout;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::get_threads_in_root;
-use crate::state_db;
+use codex_config::config_toml::ConfigToml;
 use codex_protocol::config_types::Personality;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::state_db;
 use std::io;
 use std::path::Path;
 use tokio::fs::OpenOptions;
@@ -34,7 +34,7 @@ pub async fn maybe_migrate_personality(
     }
 
     let config_profile = config_toml
-        .get_config_profile(None)
+        .get_config_profile(/*override_profile*/ None)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     if config_toml.personality.is_some() || config_profile.personality.is_some() {
         create_marker(&marker_path).await?;
@@ -70,12 +70,12 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
         && let Some(ids) = state_db::list_thread_ids_db(
             Some(state_db_ctx.as_ref()),
             codex_home,
-            1,
-            None,
+            /*page_size*/ 1,
+            /*cursor*/ None,
             ThreadSortKey::CreatedAt,
             allowed_sources,
-            None,
-            false,
+            /*model_providers*/ None,
+            /*archived_only*/ false,
             "personality_migration",
         )
         .await
@@ -86,8 +86,8 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
 
     let sessions = get_threads_in_root(
         codex_home.join(SESSIONS_SUBDIR),
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         ThreadListConfig {
             allowed_sources,
@@ -103,8 +103,8 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
 
     let archived_sessions = get_threads_in_root(
         codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
-        1,
-        None,
+        /*page_size*/ 1,
+        /*cursor*/ None,
         ThreadSortKey::CreatedAt,
         ThreadListConfig {
             allowed_sources,

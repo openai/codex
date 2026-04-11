@@ -1,12 +1,12 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use codex_core::CodexAuth;
 use codex_core::ModelClient;
-use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::WireApi;
+use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -22,6 +22,16 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::matchers::header;
+
+fn normalize_git_remote_url(url: &str) -> String {
+    let normalized = url.trim().trim_end_matches('/');
+    normalized
+        .strip_suffix(".git")
+        .unwrap_or(normalized)
+        .to_string()
+}
+
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 #[tokio::test]
 async fn responses_stream_includes_subagent_header_on_review() {
@@ -46,6 +56,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -53,6 +64,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -76,25 +88,25 @@ async fn responses_stream_includes_subagent_header_on_review() {
         conversation_id,
         model.as_str(),
         model_info.slug.as_str(),
-        None,
+        /*account_id*/ None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test".to_string(),
         session_source.clone(),
     );
 
     let client = ModelClient::new(
-        None,
+        /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
-        false,
-        false,
-        None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
     );
     let mut client_session = client.new_session();
 
@@ -116,8 +128,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
             &session_telemetry,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("stream failed");
@@ -128,9 +140,19 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }
 
     let request = request_recorder.single_request();
+    let expected_window_id = format!("{conversation_id}:0");
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("review")
+    );
+    assert_eq!(
+        request.header("x-codex-window-id").as_deref(),
+        Some(expected_window_id.as_str())
+    );
+    assert_eq!(request.header("x-codex-parent-thread-id"), None);
+    assert_eq!(
+        request.body_json()["client_metadata"]["x-codex-installation-id"].as_str(),
+        Some(TEST_INSTALLATION_ID)
     );
     assert_eq!(request.header("x-codex-sandbox"), None);
 }
@@ -158,6 +180,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -165,6 +188,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -189,25 +213,25 @@ async fn responses_stream_includes_subagent_header_on_other() {
         conversation_id,
         model.as_str(),
         model_info.slug.as_str(),
-        None,
+        /*account_id*/ None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test".to_string(),
         session_source.clone(),
     );
 
     let client = ModelClient::new(
-        None,
+        /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
-        false,
-        false,
-        None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
     );
     let mut client_session = client.new_session();
 
@@ -229,8 +253,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
             &session_telemetry,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("stream failed");
@@ -265,6 +289,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -272,6 +297,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -301,25 +327,25 @@ async fn responses_respects_model_info_overrides_from_config() {
         conversation_id,
         model.as_str(),
         model_info.slug.as_str(),
-        None,
+        /*account_id*/ None,
         Some("test@test.com".to_string()),
         auth_mode,
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test".to_string(),
         session_source.clone(),
     );
 
     let client = ModelClient::new(
-        None,
+        /*auth_manager*/ None,
         conversation_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
-        false,
-        false,
-        None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
     );
     let mut client_session = client.new_session();
 
@@ -341,8 +367,8 @@ async fn responses_respects_model_info_overrides_from_config() {
             &session_telemetry,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("stream failed");
@@ -531,13 +557,15 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .and_then(serde_json::Value::as_str),
         Some(expected_head.as_str())
     );
+    let actual_origin = workspace
+        .get("associated_remote_urls")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|remotes| remotes.get("origin"))
+        .and_then(serde_json::Value::as_str)
+        .expect("origin remote should be present");
     assert_eq!(
-        workspace
-            .get("associated_remote_urls")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|remotes| remotes.get("origin"))
-            .and_then(serde_json::Value::as_str),
-        Some(expected_origin.as_str())
+        normalize_git_remote_url(actual_origin),
+        normalize_git_remote_url(&expected_origin)
     );
     assert_eq!(
         workspace

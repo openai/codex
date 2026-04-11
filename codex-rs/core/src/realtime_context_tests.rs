@@ -1,5 +1,4 @@
 use super::build_recent_work_section;
-use super::build_workspace_section;
 use super::build_workspace_section_with_user_root;
 use chrono::TimeZone;
 use chrono::Utc;
@@ -24,9 +23,12 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
             .single()
             .expect("valid timestamp"),
         source: "cli".to_string(),
+        agent_path: None,
         agent_nickname: None,
         agent_role: None,
         model_provider: "test-provider".to_string(),
+        model: Some("gpt-5".to_string()),
+        reasoning_effort: None,
         cwd: PathBuf::from(cwd),
         cli_version: "test".to_string(),
         title: title.to_string(),
@@ -45,7 +47,7 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
 fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
     assert_eq!(
-        build_workspace_section_with_user_root(cwd.path(), None),
+        build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None),
         None
     );
 }
@@ -56,7 +58,8 @@ fn workspace_section_includes_tree_when_entries_exist() {
     fs::create_dir(cwd.path().join("docs")).expect("create docs dir");
     fs::write(cwd.path().join("README.md"), "hello").expect("write readme");
 
-    let section = build_workspace_section(cwd.path()).expect("workspace section");
+    let section = build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None)
+        .expect("workspace section");
     assert!(section.contains("Working directory tree:"));
     assert!(section.contains("- docs/"));
     assert!(section.contains("- README.md"));

@@ -1,5 +1,5 @@
 [package]
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 name = "codex-utils-pty"
 version.workspace = true
