@@ -11,8 +11,10 @@ use thiserror::Error;
 pub struct TokenData {
     /// Flat info parsed from the JWT in auth.json.
     #[serde(
+        default,
         deserialize_with = "deserialize_id_token",
-        serialize_with = "serialize_id_token"
+        serialize_with = "serialize_id_token",
+        skip_serializing_if = "IdTokenInfo::is_empty"
     )]
     pub id_token: IdTokenInfo,
 
@@ -40,6 +42,10 @@ pub struct IdTokenInfo {
 }
 
 impl IdTokenInfo {
+    fn is_empty(&self) -> bool {
+        self.raw_jwt.is_empty()
+    }
+
     pub fn get_chatgpt_plan_type(&self) -> Option<String> {
         self.chatgpt_plan_type.as_ref().map(|t| match t {
             PlanType::Known(plan) => plan.display_name().to_string(),
@@ -154,7 +160,10 @@ fn deserialize_id_token<'de, D>(deserializer: D) -> Result<IdTokenInfo, D::Error
 where
     D: serde::Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
+    let s = Option::<String>::deserialize(deserializer)?;
+    let Some(s) = s.filter(|s| !s.is_empty()) else {
+        return Ok(IdTokenInfo::default());
+    };
     parse_chatgpt_jwt_claims(&s).map_err(serde::de::Error::custom)
 }
 
