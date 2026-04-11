@@ -20,8 +20,8 @@ use crate::pending_input::GeneratedMessageInput;
 use crate::pending_input::PendingInputItem;
 use crate::timers::ClaimedTimer;
 use crate::timers::CreateTimer;
-use crate::timers::IdleRecurringTimerPolicy;
 use crate::timers::PersistedTimer;
+use crate::timers::RecurringTimerPolicy;
 use crate::timers::RestoredTimerTask;
 use crate::timers::TIMER_FIRED_BACKGROUND_EVENT_PREFIX;
 use crate::timers::TIMER_UPDATED_BACKGROUND_EVENT_PREFIX;
@@ -208,7 +208,7 @@ impl Session {
 
     pub(crate) async fn maybe_start_pending_timer(self: &Arc<Self>) {
         if self
-            .try_start_pending_timer(IdleRecurringTimerPolicy::IncludeOnlyNeverRun)
+            .try_start_pending_timer(RecurringTimerPolicy::IncludeOnlyNeverRun)
             .await
         {
             return;
@@ -217,13 +217,13 @@ impl Session {
             PendingMessageStart::Started | PendingMessageStart::NotReady => return,
             PendingMessageStart::None => {}
         }
-        self.try_start_pending_timer(IdleRecurringTimerPolicy::IncludeAll)
+        self.try_start_pending_timer(RecurringTimerPolicy::IncludeAll)
             .await;
     }
 
     async fn try_start_pending_timer(
         self: &Arc<Self>,
-        idle_recurring_timer_policy: IdleRecurringTimerPolicy,
+        recurring_timer_policy: RecurringTimerPolicy,
     ) -> bool {
         let Some(ClaimedTimer {
             timer,
@@ -231,7 +231,7 @@ impl Session {
             deleted_one_shot_timer,
             ..
         }) = self
-            .claim_next_timer_for_delivery(idle_recurring_timer_policy)
+            .claim_next_timer_for_delivery(recurring_timer_policy)
             .await
         else {
             return false;
@@ -381,7 +381,7 @@ impl Session {
 
     async fn claim_next_timer_for_delivery(
         self: &Arc<Self>,
-        idle_recurring_timer_policy: IdleRecurringTimerPolicy,
+        recurring_timer_policy: RecurringTimerPolicy,
     ) -> Option<ClaimedTimer> {
         if !self.timers_feature_enabled() {
             return None;
@@ -410,7 +410,7 @@ impl Session {
             Utc::now(),
             can_after_turn,
             active_turn_is_regular,
-            idle_recurring_timer_policy,
+            recurring_timer_policy,
         );
         let Some(claimed) = claimed else {
             *self.timer_start_in_progress.lock().await = false;

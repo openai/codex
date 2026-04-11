@@ -84,7 +84,7 @@ pub(crate) struct ClaimedTimer {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IdleRecurringTimerPolicy {
+pub(crate) enum RecurringTimerPolicy {
     IncludeOnlyNeverRun,
     IncludeAll,
 }
@@ -363,19 +363,20 @@ impl TimersState {
         now: chrono::DateTime<Utc>,
         can_after_turn: bool,
         can_steer_current_turn: bool,
-        idle_recurring_timer_policy: IdleRecurringTimerPolicy,
+        recurring_timer_policy: RecurringTimerPolicy,
     ) -> Option<ClaimedTimer> {
         let (next_timer_id, actual_delivery) = self
             .timers
             .values()
             .filter(|runtime| runtime.pending_run)
             .filter_map(|runtime| {
+                if runtime.timer.trigger.is_recurring()
+                    && recurring_timer_policy == RecurringTimerPolicy::IncludeOnlyNeverRun
+                    && runtime.timer.last_run_at.is_some()
+                {
+                    return None;
+                }
                 if runtime.timer.trigger.is_idle_recurring() {
-                    if idle_recurring_timer_policy == IdleRecurringTimerPolicy::IncludeOnlyNeverRun
-                        && runtime.timer.last_run_at.is_some()
-                    {
-                        return None;
-                    }
                     if can_after_turn {
                         return Some((runtime, TimerDelivery::AfterTurn));
                     }
@@ -545,9 +546,9 @@ fn timer_message_instructions(timer: &TimerInvocationContext) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::CreateTimer;
-    use super::IdleRecurringTimerPolicy;
     use super::MAX_ACTIVE_TIMERS_PER_THREAD;
     use super::PersistedTimer;
+    use super::RecurringTimerPolicy;
     use super::ThreadTimer;
     use super::TimerDelivery;
     use super::TimerInvocationContext;
@@ -598,7 +599,7 @@ mod tests {
                 now,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeAll,
+                RecurringTimerPolicy::IncludeAll,
             )
             .expect("timer should be claimed");
         assert_eq!(claimed.context.current_timer_id, "timer-1");
@@ -646,7 +647,7 @@ mod tests {
                 now,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeAll,
+                RecurringTimerPolicy::IncludeAll,
             )
             .expect("timer should be claimed");
         assert!(claimed.deleted_one_shot_timer);
@@ -701,7 +702,7 @@ mod tests {
                 first_claimed_at,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeAll,
+                RecurringTimerPolicy::IncludeAll,
             )
             .expect("first timer should be claimed");
         assert_eq!(first.context.current_timer_id, "timer-1");
@@ -711,7 +712,7 @@ mod tests {
                 second_claimed_at,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeAll,
+                RecurringTimerPolicy::IncludeAll,
             )
             .expect("second timer should be claimed");
         assert_eq!(second.context.current_timer_id, "timer-2");
@@ -744,7 +745,7 @@ mod tests {
                 now,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeAll,
+                RecurringTimerPolicy::IncludeAll,
             )
             .expect("timer should be claimed");
         assert!(!claimed.deleted_one_shot_timer);
@@ -786,7 +787,7 @@ mod tests {
                 now,
                 /*can_after_turn*/ false,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeAll,
+                RecurringTimerPolicy::IncludeAll,
             ),
             None
         );
@@ -795,7 +796,7 @@ mod tests {
                 now,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ false,
-                IdleRecurringTimerPolicy::IncludeAll,
+                RecurringTimerPolicy::IncludeAll,
             )
             .expect("timer should be claimed when idle");
         assert_eq!(claimed.context.delivery, TimerDelivery::AfterTurn);
@@ -827,7 +828,7 @@ mod tests {
                 now,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeOnlyNeverRun,
+                RecurringTimerPolicy::IncludeOnlyNeverRun,
             )
             .expect("never-run idle timer should be claimed");
         assert_eq!(claimed.context.current_timer_id, "timer-1");
@@ -837,7 +838,52 @@ mod tests {
                 now,
                 /*can_after_turn*/ true,
                 /*can_steer_current_turn*/ true,
-                IdleRecurringTimerPolicy::IncludeOnlyNeverRun,
+                RecurringTimerPolicy::IncludeOnlyNeverRun,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn recurring_policy_can_exclude_timer_that_already_ran() {
+        let now = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
+        let next_due = Utc.timestamp_opt(110, 0).single().expect("valid timestamp");
+        let mut timers = TimersState::default();
+        timers
+            .create_timer(
+                CreateTimer {
+                    id: "timer-1".to_string(),
+                    trigger: delay(TEN_SECONDS, Some(true)),
+                    payload: MessagePayload {
+                        content: "run again".to_string(),
+                        instructions: None,
+                        meta: BTreeMap::new(),
+                    },
+                    delivery: TimerDelivery::AfterTurn,
+                    now,
+                },
+                /*timer_cancel*/ None,
+            )
+            .expect("timer should be created");
+        timers.mark_timer_due("timer-1", next_due);
+
+        let claimed = timers
+            .claim_next_timer(
+                next_due,
+                /*can_after_turn*/ true,
+                /*can_steer_current_turn*/ true,
+                RecurringTimerPolicy::IncludeOnlyNeverRun,
+            )
+            .expect("never-run recurring timer should be claimed");
+        assert_eq!(claimed.context.current_timer_id, "timer-1");
+        timers.mark_timer_due("timer-1", next_due);
+
+        assert_eq!(
+            timers.claim_next_timer(
+                next_due,
+                /*can_after_turn*/ true,
+                /*can_steer_current_turn*/ true,
+                RecurringTimerPolicy::IncludeOnlyNeverRun,
             ),
             None
         );
