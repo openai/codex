@@ -3862,13 +3862,7 @@ impl App {
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
-                Self::spawn_world_writable_scan(
-                    cwd.to_path_buf(),
-                    env_map,
-                    logs_base_dir,
-                    sandbox_policy,
-                    tx,
-                );
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
 
@@ -5217,7 +5211,7 @@ impl App {
                         let logs_base_dir = self.config.codex_home.clone();
                         let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
-                            cwd.to_path_buf(),
+                            cwd,
                             env_map,
                             logs_base_dir,
                             sandbox_policy,
@@ -6097,19 +6091,20 @@ impl App {
 
     #[cfg(target_os = "windows")]
     fn spawn_world_writable_scan(
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         env_map: std::collections::HashMap<String, String>,
-        logs_base_dir: PathBuf,
+        logs_base_dir: AbsolutePathBuf,
         sandbox_policy: codex_protocol::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
+            let logs_base_dir_path = logs_base_dir.as_path();
             let result = codex_windows_sandbox::apply_world_writable_scan_and_denies(
-                &logs_base_dir,
-                &cwd,
+                logs_base_dir_path,
+                cwd.as_path(),
                 &env_map,
                 &sandbox_policy,
-                Some(logs_base_dir.as_path()),
+                Some(logs_base_dir_path),
             );
             if result.is_err() {
                 // Scan failed: warn without examples.
