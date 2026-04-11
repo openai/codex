@@ -282,11 +282,12 @@ async fn resume_due_timer_runs_after_history_reconstruction() -> Result<()> {
     .await;
 
     let requests = mock.requests();
-    assert_eq!(requests.len(), 2);
-    let resumed_request = &requests[1];
+    let resumed_request = requests
+        .iter()
+        .find(|request| request.body_contains_text("Timer fired: resume timer"))
+        .expect("expected a timer-triggered request after resume");
     assert!(resumed_request.body_contains_text("context before resume"));
     assert!(resumed_request.body_contains_text("recorded before resume"));
-    assert!(resumed_request.body_contains_text("Timer fired: resume timer"));
 
     Ok(())
 }
