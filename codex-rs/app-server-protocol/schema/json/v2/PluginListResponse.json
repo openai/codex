@@ -74,6 +74,14 @@
             {
               "type": "null"
             }
+          ],
+          "description": "Local composer icon path, resolved from the installed plugin package."
+        },
+        "composerIconUrl": {
+          "description": "Remote composer icon URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "defaultPrompt": {
@@ -106,6 +114,14 @@
             {
               "type": "null"
             }
+          ],
+          "description": "Local logo path, resolved from the installed plugin package."
+        },
+        "logoUrl": {
+          "description": "Remote logo URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "longDescription": {
@@ -120,7 +136,15 @@
             "null"
           ]
         },
+        "screenshotUrls": {
+          "description": "Remote screenshot URLs from the plugin catalog.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "screenshots": {
+          "description": "Local screenshot paths, resolved from the installed plugin package.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -147,6 +171,7 @@
       },
       "required": [
         "capabilities",
+        "screenshotUrls",
         "screenshots"
       ],
       "type": "object"
@@ -167,7 +192,15 @@
           "type": "string"
         },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local marketplace file path when the marketplace is backed by a local file. Remote-only catalog marketplaces do not have a local path."
         },
         "plugins": {
           "items": {
@@ -178,7 +211,6 @@
       },
       "required": [
         "name",
-        "path",
         "plugins"
       ],
       "type": "object"
@@ -203,6 +235,23 @@
             "type"
           ],
           "title": "LocalPluginSource",
+          "type": "object"
+        },
+        {
+          "description": "The plugin is available in the remote catalog. Download metadata is kept server-side and is not exposed through the app-server API.",
+          "properties": {
+            "type": {
+              "enum": [
+                "remote"
+              ],
+              "title": "RemotePluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RemotePluginSource",
           "type": "object"
         }
       ]
@@ -273,12 +322,6 @@
         "$ref": "#/definitions/PluginMarketplaceEntry"
       },
       "type": "array"
-    },
-    "remoteSyncError": {
-      "type": [
-        "string",
-        "null"
-      ]
     }
   },
   "required": [

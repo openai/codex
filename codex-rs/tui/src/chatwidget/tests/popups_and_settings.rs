@@ -104,7 +104,7 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
-    let mut response = plugins_test_response(vec![
+    let response = plugins_test_response(vec![
         plugins_test_curated_marketplace(vec![
             plugins_test_summary(
                 "plugin-bravo",
@@ -144,8 +144,6 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
             PluginInstallPolicy::Available,
         )]),
     ]);
-    response.remote_sync_error = Some("remote sync timed out".to_string());
-
     let popup = render_loaded_plugins_popup(&mut chat, response);
     assert_chatwidget_snapshot!("plugins_popup_curated_marketplace", popup);
     assert!(

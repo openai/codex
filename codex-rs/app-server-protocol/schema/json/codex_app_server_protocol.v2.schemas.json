@@ -6707,19 +6707,27 @@
     "PluginInstallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "forceRemoteSync": {
-          "description": "When true, apply the remote plugin change before the local install flow.",
-          "type": "boolean"
-        },
         "marketplacePath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pluginName": {
           "type": "string"
+        },
+        "remoteMarketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "marketplacePath",
         "pluginName"
       ],
       "title": "PluginInstallParams",
@@ -6781,6 +6789,14 @@
             {
               "type": "null"
             }
+          ],
+          "description": "Local composer icon path, resolved from the installed plugin package."
+        },
+        "composerIconUrl": {
+          "description": "Remote composer icon URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "defaultPrompt": {
@@ -6813,6 +6829,14 @@
             {
               "type": "null"
             }
+          ],
+          "description": "Local logo path, resolved from the installed plugin package."
+        },
+        "logoUrl": {
+          "description": "Remote logo URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "longDescription": {
@@ -6827,7 +6851,15 @@
             "null"
           ]
         },
+        "screenshotUrls": {
+          "description": "Remote screenshot URLs from the plugin catalog.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "screenshots": {
+          "description": "Local screenshot paths, resolved from the installed plugin package.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -6854,6 +6886,7 @@
       },
       "required": [
         "capabilities",
+        "screenshotUrls",
         "screenshots"
       ],
       "type": "object"
@@ -6870,10 +6903,6 @@
             "array",
             "null"
           ]
-        },
-        "forceRemoteSync": {
-          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
-          "type": "boolean"
         }
       },
       "title": "PluginListParams",
@@ -6901,12 +6930,6 @@
             "$ref": "#/definitions/PluginMarketplaceEntry"
           },
           "type": "array"
-        },
-        "remoteSyncError": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
@@ -6931,7 +6954,15 @@
           "type": "string"
         },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local marketplace file path when the marketplace is backed by a local file. Remote-only catalog marketplaces do not have a local path."
         },
         "plugins": {
           "items": {
@@ -6942,7 +6973,6 @@
       },
       "required": [
         "name",
-        "path",
         "plugins"
       ],
       "type": "object"
@@ -6951,14 +6981,26 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "marketplacePath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pluginName": {
           "type": "string"
+        },
+        "remoteMarketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "marketplacePath",
         "pluginName"
       ],
       "title": "PluginReadParams",
@@ -6997,6 +7039,23 @@
             "type"
           ],
           "title": "LocalPluginSource",
+          "type": "object"
+        },
+        {
+          "description": "The plugin is available in the remote catalog. Download metadata is kept server-side and is not exposed through the app-server API.",
+          "properties": {
+            "type": {
+              "enum": [
+                "remote"
+              ],
+              "title": "RemotePluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RemotePluginSource",
           "type": "object"
         }
       ]
@@ -7049,10 +7108,6 @@
     "PluginUninstallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "forceRemoteSync": {
-          "description": "When true, apply the remote plugin change before the local uninstall flow.",
-          "type": "boolean"
-        },
         "pluginId": {
           "type": "string"
         }

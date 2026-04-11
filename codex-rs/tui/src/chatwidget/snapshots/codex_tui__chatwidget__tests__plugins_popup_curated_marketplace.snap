@@ -1,11 +1,10 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   Plugins
   Browse plugins from available marketplaces.
   Installed 1 of 4 available plugins.
-  Using cached marketplace data: remote sync timed out
 
   Type to search plugins
 › Alpha Sync          Installed · Disabled   Press Enter to view plugin details.

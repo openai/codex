@@ -5,6 +5,7 @@ use std::time::Instant;
 use super::ChatWidget;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::ColumnWidthMode;
+use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::history_cell;
@@ -721,11 +722,6 @@ impl ChatWidget {
         header.push(Line::from(
             format!("Installed {installed} of {total} available plugins.").dim(),
         ));
-        if let Some(remote_sync_error) = response.remote_sync_error.as_deref() {
-            header.push(Line::from(
-                format!("Using cached marketplace data: {remote_sync_error}").dim(),
-            ));
-        }
 
         let mut plugin_entries: Vec<(&PluginMarketplaceEntry, &PluginSummary, String)> =
             marketplaces
@@ -774,24 +770,35 @@ impl ChatWidget {
             let plugin_display_name = display_name.clone();
             let marketplace_path = marketplace.path.clone();
             let plugin_name = plugin.name.clone();
-
-            items.push(SelectionItem {
-                name: display_name,
-                description: Some(description),
-                selected_description: Some(selected_description),
-                search_value: Some(search_value),
-                actions: vec![Box::new(move |tx| {
+            let is_disabled = marketplace_path.is_none();
+            let actions: Vec<SelectionAction> = if let Some(marketplace_path) = marketplace_path {
+                vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenPluginDetailLoading {
                         plugin_display_name: plugin_display_name.clone(),
                     });
                     tx.send(AppEvent::FetchPluginDetail {
                         cwd: cwd.clone(),
                         params: codex_app_server_protocol::PluginReadParams {
-                            marketplace_path: marketplace_path.clone(),
+                            marketplace_path: Some(marketplace_path.clone()),
+                            remote_marketplace_name: None,
                             plugin_name: plugin_name.clone(),
                         },
                     });
-                })],
+                })]
+            } else {
+                Vec::new()
+            };
+            let disabled_reason =
+                is_disabled.then(|| "remote plugin details are not available yet".to_string());
+
+            items.push(SelectionItem {
+                name: display_name,
+                description: Some(description),
+                selected_description: Some(selected_description),
+                search_value: Some(search_value),
+                actions,
+                is_disabled,
+                disabled_reason,
                 ..Default::default()
             });
         }
