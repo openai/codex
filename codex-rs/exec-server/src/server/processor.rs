@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
 
+use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
@@ -19,28 +20,43 @@ use crate::server::session_registry::SessionRegistry;
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
+    runtime_paths: ExecServerRuntimePaths,
 }
 
 impl ConnectionProcessor {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             session_registry: SessionRegistry::new(),
+            runtime_paths,
         }
     }
 
     pub(crate) async fn run_connection(&self, connection: JsonRpcConnection) {
-        run_connection(connection, Arc::clone(&self.session_registry)).await;
+        run_connection(
+            connection,
+            Arc::clone(&self.session_registry),
+            self.runtime_paths.clone(),
+        )
+        .await;
     }
 }
 
-async fn run_connection(connection: JsonRpcConnection, session_registry: Arc<SessionRegistry>) {
+async fn run_connection(
+    connection: JsonRpcConnection,
+    session_registry: Arc<SessionRegistry>,
+    runtime_paths: ExecServerRuntimePaths,
+) {
     let router = Arc::new(build_router());
     let (json_outgoing_tx, mut incoming_rx, mut disconnected_rx, connection_tasks) =
         connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
-    let handler = Arc::new(ExecServerHandler::new(session_registry, notifications));
+    let handler = Arc::new(ExecServerHandler::new(
+        session_registry,
+        notifications,
+        runtime_paths,
+    ));
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
@@ -184,6 +200,7 @@ mod tests {
     use tokio::time::timeout;
 
     use super::run_connection;
+    use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
     use crate::protocol::EXEC_METHOD;
@@ -298,8 +315,16 @@ mod tests {
         let (server_writer, client_reader) = duplex(1 << 20);
         let connection =
             JsonRpcConnection::from_stdio(server_reader, server_writer, label.to_string());
-        let task = tokio::spawn(run_connection(connection, registry));
+        let task = tokio::spawn(run_connection(connection, registry, test_runtime_paths()));
         (client_writer, BufReader::new(client_reader).lines(), task)
+    }
+
+    fn test_runtime_paths() -> ExecServerRuntimePaths {
+        ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths")
     }
 
     async fn send_request<P: Serialize>(
