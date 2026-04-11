@@ -492,7 +492,7 @@ impl CloudRequirementsService {
                         return Err(CloudRequirementsLoadError::new(
                             CloudRequirementsLoadErrorCode::Parse,
                             /*status_code*/ None,
-                            CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE,
+                            format_cloud_requirements_parse_failed_message(contents, &err),
                         ));
                     }
                 },
@@ -748,6 +748,13 @@ fn parse_cloud_requirements(
     } else {
         Ok(Some(requirements))
     }
+}
+
+fn format_cloud_requirements_parse_failed_message(
+    _contents: &str,
+    err: &toml::de::Error,
+) -> String {
+    format!("{CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE}\n\nDetails:\n{err}")
 }
 
 fn emit_fetch_attempt_metric(
@@ -1622,9 +1629,37 @@ enabled = false
             .fetch()
             .await
             .expect_err("parse error should fail closed");
-        assert_eq!(err.to_string(), CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE);
+        let err_text = err.to_string();
+        assert!(err_text.contains(CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE));
+        assert!(err_text.contains("Details:"));
+        assert!(err_text.contains("not = ["));
         assert_eq!(err.code(), CloudRequirementsLoadErrorCode::Parse);
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_invalid_enum_value_surfaces_field_name() {
+        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(Some(
+            "allowed_approval_policies = [\"definitely-not-valid\"]".to_string(),
+        ))]));
+        let codex_home = tempdir().expect("tempdir");
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("business"),
+            fetcher,
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+
+        let err = service
+            .fetch()
+            .await
+            .expect_err("invalid enum value should fail closed");
+        let err_text = err.to_string();
+        assert!(err_text.contains(CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE));
+        assert!(err_text.contains("allowed_approval_policies"));
+        assert!(err_text.contains("definitely-not-valid"));
+        assert!(err_text.contains("unknown variant"));
+        assert_eq!(err.code(), CloudRequirementsLoadErrorCode::Parse);
     }
 
     #[tokio::test]
