@@ -455,6 +455,18 @@ async fn ingest_turn_prerequisites(
 ) {
     if include_initialize {
         ingest_initialize(reducer, out).await;
+        reducer
+            .ingest(
+                AnalyticsFact::Response {
+                    connection_id: 7,
+                    response: Box::new(sample_thread_start_response(
+                        "thread-2", /*ephemeral*/ false, "gpt-5",
+                    )),
+                },
+                out,
+            )
+            .await;
+        out.clear();
     }
 
     reducer
@@ -1610,6 +1622,10 @@ async fn accepted_turn_steer_emits_expected_event() {
         payload["event_params"]["runtime"]["codex_rs_version"],
         json!("0.1.0")
     );
+    assert_eq!(payload["event_params"]["thread_source"], json!("user"));
+    assert_eq!(payload["event_params"]["initialization_mode"], json!("new"));
+    assert_eq!(payload["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
     assert!(payload["event_params"].get("product_client_id").is_none());
 }
 
@@ -1638,6 +1654,10 @@ async fn rejected_turn_steer_uses_request_connection_metadata() {
         payload["event_params"]["runtime"]["codex_rs_version"],
         json!("0.1.0")
     );
+    assert_eq!(payload["event_params"]["thread_source"], json!("user"));
+    assert_eq!(payload["event_params"]["initialization_mode"], json!("new"));
+    assert_eq!(payload["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
     assert_eq!(payload["event_params"]["result"], json!("rejected"));
     assert_eq!(
         payload["event_params"]["rejection_reason"],
