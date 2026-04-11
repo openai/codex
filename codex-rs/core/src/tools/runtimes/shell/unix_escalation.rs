@@ -4,6 +4,7 @@ use crate::exec::ExecExpiration;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -485,7 +486,7 @@ impl CoreShellActionProvider {
                                 EscalationDecision::deny(Some("User denied execution".to_string()))
                             }
                         },
-                        ReviewDecision::Denied | ReviewDecision::TimedOut => {
+                        ReviewDecision::Denied => {
                             let message = if let Some(review_id) =
                                 prompt_decision.guardian_review_id.as_deref()
                             {
@@ -494,6 +495,9 @@ impl CoreShellActionProvider {
                                 "User denied execution".to_string()
                             };
                             EscalationDecision::deny(Some(message))
+                        }
+                        ReviewDecision::TimedOut => {
+                            EscalationDecision::deny(Some(guardian_timeout_message()))
                         }
                         ReviewDecision::Abort => {
                             EscalationDecision::deny(Some("User cancelled execution".to_string()))
