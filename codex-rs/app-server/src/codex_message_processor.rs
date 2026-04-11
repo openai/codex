@@ -220,6 +220,7 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::parse_cursor;
+use codex_core::path_utils;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSource;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
@@ -4762,9 +4763,9 @@ impl CodexMessageProcessor {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                    && cwd
-                        .as_ref()
-                        .is_none_or(|expected_cwd| &summary.cwd == expected_cwd)
+                    && cwd.as_ref().is_none_or(|expected_cwd| {
+                        thread_list_cwd_matches(&summary.cwd, expected_cwd)
+                    })
                 {
                     filtered.push(summary);
                     if filtered.len() >= remaining {
@@ -7957,9 +7958,21 @@ fn normalize_thread_list_cwd_filter(
         })
 }
 
+fn thread_list_cwd_matches(summary_cwd: &Path, expected_cwd: &Path) -> bool {
+    if let (Ok(summary), Ok(expected)) = (
+        path_utils::normalize_for_path_comparison(summary_cwd),
+        path_utils::normalize_for_path_comparison(expected_cwd),
+    ) {
+        return summary == expected;
+    }
+    summary_cwd == expected_cwd
+}
+
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
     use super::normalize_thread_list_cwd_filter;
+    #[cfg(windows)]
+    use super::thread_list_cwd_matches;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -7988,6 +8001,17 @@ mod thread_list_cwd_filter_tests {
                 .expect("cwd filter should parse"),
             Some(expected)
         );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn thread_list_cwd_matches_windows_verbatim_paths() -> std::io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cwd = temp_dir.path();
+        let verbatim_cwd = PathBuf::from(format!(r"\\?\{}", cwd.display()));
+
+        assert!(thread_list_cwd_matches(&verbatim_cwd, cwd));
         Ok(())
     }
 }
