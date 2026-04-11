@@ -8,11 +8,17 @@ pub fn auth_provider_from_auth(
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<CoreAuthProvider> {
     if let Some(api_key) = provider.api_key()? {
-        return Ok(CoreAuthProvider::from_bearer_token(Some(api_key), None));
+        return Ok(CoreAuthProvider::from_bearer_token(
+            Some(api_key),
+            /*account_id*/ None,
+        ));
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(CoreAuthProvider::from_bearer_token(Some(token), None));
+        return Ok(CoreAuthProvider::from_bearer_token(
+            Some(token),
+            /*account_id*/ None,
+        ));
     }
 
     if let Some(auth) = auth {
@@ -22,6 +28,8 @@ pub fn auth_provider_from_auth(
             auth.get_account_id(),
         ))
     } else {
-        Ok(CoreAuthProvider::from_bearer_token(None, None))
+        Ok(CoreAuthProvider::from_bearer_token(
+            /*token*/ None, /*account_id*/ None,
+        ))
     }
 }

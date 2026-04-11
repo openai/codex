@@ -133,7 +133,10 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
 
 #[test]
 fn core_auth_provider_reports_when_auth_header_will_attach() {
-    let auth = CoreAuthProvider::from_bearer_token(Some("access-token".to_string()), None);
+    let auth = CoreAuthProvider::from_bearer_token(
+        Some("access-token".to_string()),
+        /*account_id*/ None,
+    );
 
     assert!(auth.auth_header_attached());
     assert_eq!(auth.auth_header_name(), Some("authorization"));
