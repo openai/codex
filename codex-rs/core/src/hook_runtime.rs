@@ -93,6 +93,16 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
     }
 }
 
+pub(crate) struct PermissionRequestHookRequestParams {
+    pub run_id_suffix: String,
+    pub tool_name: String,
+    pub command: String,
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub justification: Option<String>,
+    pub guardian_review: Option<PermissionRequestGuardianReview>,
+}
+
 pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -152,42 +162,37 @@ pub(crate) async fn run_pre_tool_use_hooks(
     if should_block { block_reason } else { None }
 }
 
-pub(crate) async fn run_permission_request_hooks(
+pub(crate) async fn permission_request_hook_request(
     sess: &Session,
     turn_context: &TurnContext,
-    run_id_suffix: String,
-    tool_name: String,
-    command: String,
-    sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<PermissionProfile>,
-    justification: Option<String>,
-    guardian_review: Option<PermissionRequestGuardianReview>,
-) -> Option<PermissionRequestDecision> {
-    let request = PermissionRequestRequest {
+    params: PermissionRequestHookRequestParams,
+) -> PermissionRequestRequest {
+    PermissionRequestRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
         cwd: turn_context.cwd.to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name,
-        run_id_suffix,
-        tool_input: codex_hooks::PermissionRequestToolInput::Bash { command },
-        sandbox_permissions,
-        additional_permissions,
-        justification,
-        guardian_review,
-    };
-    run_permission_request_hook_request(sess, turn_context, request).await
+        tool_name: params.tool_name,
+        run_id_suffix: params.run_id_suffix,
+        tool_input: codex_hooks::PermissionRequestToolInput::Bash {
+            command: params.command,
+        },
+        sandbox_permissions: params.sandbox_permissions,
+        additional_permissions: params.additional_permissions,
+        justification: params.justification,
+        guardian_review: params.guardian_review,
+    }
 }
 
-pub(crate) async fn run_request_permissions_hooks(
+pub(crate) async fn request_permissions_hook_request(
     sess: &Session,
     turn_context: &TurnContext,
     run_id_suffix: String,
     args: &RequestPermissionsArgs,
-) -> Option<PermissionRequestDecision> {
-    let request = PermissionRequestRequest {
+) -> PermissionRequestRequest {
+    PermissionRequestRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
         cwd: turn_context.cwd.to_path_buf(),
@@ -204,11 +209,10 @@ pub(crate) async fn run_request_permissions_hooks(
         additional_permissions: Some(args.permissions.clone().into()),
         justification: args.reason.clone(),
         guardian_review: None,
-    };
-    run_permission_request_hook_request(sess, turn_context, request).await
+    }
 }
 
-async fn run_permission_request_hook_request(
+pub(crate) async fn run_permission_request_hook_request(
     sess: &Session,
     turn_context: &TurnContext,
     request: PermissionRequestRequest,

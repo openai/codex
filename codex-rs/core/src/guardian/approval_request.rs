@@ -5,6 +5,7 @@ use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use serde_json::Value;
@@ -53,6 +54,11 @@ pub(crate) enum GuardianApprovalRequest {
         host: String,
         protocol: NetworkApprovalProtocol,
         port: u16,
+    },
+    RequestPermissions {
+        id: String,
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
     },
     McpToolCall {
         id: String,
@@ -271,6 +277,15 @@ pub(crate) fn guardian_approval_request_to_json(
             "protocol": protocol,
             "port": port,
         })),
+        GuardianApprovalRequest::RequestPermissions {
+            id: _,
+            reason,
+            permissions,
+        } => Ok(serde_json::json!({
+            "tool": "request_permissions",
+            "reason": reason,
+            "permissions": permissions,
+        })),
         GuardianApprovalRequest::McpToolCall {
             id: _,
             server,
@@ -342,6 +357,14 @@ pub(crate) fn guardian_assessment_action(
             protocol: *protocol,
             port: *port,
         },
+        GuardianApprovalRequest::RequestPermissions {
+            reason,
+            permissions,
+            ..
+        } => GuardianAssessmentAction::RequestPermissions {
+            reason: reason.clone(),
+            permissions: permissions.clone(),
+        },
         GuardianApprovalRequest::McpToolCall {
             server,
             tool_name,
@@ -364,6 +387,7 @@ pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest)
         GuardianApprovalRequest::Shell { id, .. }
         | GuardianApprovalRequest::ExecCommand { id, .. }
         | GuardianApprovalRequest::ApplyPatch { id, .. }
+        | GuardianApprovalRequest::RequestPermissions { id, .. }
         | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
         GuardianApprovalRequest::NetworkAccess { .. } => None,
         #[cfg(unix)]
@@ -380,6 +404,7 @@ pub(crate) fn guardian_request_turn_id<'a>(
         GuardianApprovalRequest::Shell { .. }
         | GuardianApprovalRequest::ExecCommand { .. }
         | GuardianApprovalRequest::ApplyPatch { .. }
+        | GuardianApprovalRequest::RequestPermissions { .. }
         | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { .. } => default_turn_id,

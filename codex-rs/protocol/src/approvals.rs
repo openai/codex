@@ -6,6 +6,7 @@ use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use crate::request_permissions::RequestPermissionProfile;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -145,6 +146,10 @@ pub enum GuardianAssessmentAction {
         host: String,
         protocol: NetworkApprovalProtocol,
         port: u16,
+    },
+    RequestPermissions {
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
     },
     McpToolCall {
         server: String,
