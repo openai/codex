@@ -679,7 +679,7 @@ fn format_context_used_meter(used_percent: i64) -> String {
     let occupied_cells = filled_cells + usize::from(partial_eighths > 0);
     meter.push_str(&" ".repeat(METER_WIDTH.saturating_sub(occupied_cells)));
 
-    format!("Context [{meter}]")
+    format!("Context {used_percent}% used [{meter}]")
 }
 
 #[cfg(test)]
@@ -691,19 +691,19 @@ mod tests {
     fn context_meter_uses_five_cells_with_partial_blocks() {
         assert_eq!(
             format_context_used_meter(/*used_percent*/ 100),
-            "Context [█████]"
+            "Context 100% used [█████]"
         );
         assert_eq!(
             format_context_used_meter(/*used_percent*/ 50),
-            "Context [██▌  ]"
+            "Context 50% used [██▌  ]"
         );
         assert_eq!(
             format_context_used_meter(/*used_percent*/ 10),
-            "Context [▌    ]"
+            "Context 10% used [▌    ]"
         );
         assert_eq!(
             format_context_used_meter(/*used_percent*/ 0),
-            "Context [     ]"
+            "Context 0% used [     ]"
         );
     }
 
@@ -711,11 +711,11 @@ mod tests {
     fn context_meter_clamps_out_of_range_values() {
         assert_eq!(
             format_context_used_meter(/*used_percent*/ 125),
-            "Context [█████]"
+            "Context 100% used [█████]"
         );
         assert_eq!(
             format_context_used_meter(/*used_percent*/ -1),
-            "Context [     ]"
+            "Context 0% used [     ]"
         );
     }
 }

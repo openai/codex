@@ -874,7 +874,10 @@ async fn status_line_legacy_context_used_renders_context_meter() {
 
     chat.refresh_status_line();
 
-    assert_eq!(status_line_text(&chat), Some("Context [     ]".to_string()));
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Context 0% used [     ]".to_string())
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "legacy context-used should remain a valid status line item"
@@ -889,7 +892,10 @@ async fn status_line_legacy_context_remaining_renders_context_meter() {
 
     chat.refresh_status_line();
 
-    assert_eq!(status_line_text(&chat), Some("Context [     ]".to_string()));
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Context 0% used [     ]".to_string())
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "legacy context-remaining should remain a valid status line item"
@@ -1008,7 +1014,9 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.4 xhigh fast · Context [     ] · {test_cwd}"))
+        Some(format!(
+            "gpt-5.4 xhigh fast · Context 0% used [     ] · {test_cwd}"
+        ))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -1017,7 +1025,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
     assert_eq!(
         status_line_text(&chat),
         Some(format!(
-            "gpt-5.3-codex xhigh · Context [     ] · {test_cwd}"
+            "gpt-5.3-codex xhigh · Context 0% used [     ] · {test_cwd}"
         ))
     );
 }

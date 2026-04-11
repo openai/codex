@@ -62,7 +62,7 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
-    /// Visual meter of context window usage.
+    /// Percentage and visual meter of context window usage.
     ///
     /// Also accepts legacy `context-remaining` and `context-used` config values.
     #[strum(
@@ -113,7 +113,7 @@ impl StatusLineItem {
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
             StatusLineItem::ContextUsage => {
-                "Visual meter of context window usage (omitted when unknown)"
+                "Context window usage percent and visual meter (omitted when unknown)"
             }
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on 5-hour usage limit (omitted when unavailable)"
