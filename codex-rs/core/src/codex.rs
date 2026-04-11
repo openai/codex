@@ -2136,8 +2136,6 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
-        sess.restore_timers_from_db().await;
-
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
         // Construct sandbox_state before MCP startup so it can be sent to each
@@ -2232,6 +2230,7 @@ impl Session {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));
         }
+        sess.restore_timers_from_db().await;
 
         memories::start_memories_startup_task(
             &sess,
