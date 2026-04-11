@@ -367,13 +367,15 @@ FROM threads
         );
         push_thread_filters(
             &mut builder,
-            archived_only,
-            allowed_sources,
-            model_providers,
-            /*anchor*/ None,
-            crate::SortKey::UpdatedAt,
-            crate::SortDirection::Desc,
-            /*search_term*/ None,
+            ThreadFilterOptions {
+                archived_only,
+                allowed_sources,
+                model_providers,
+                anchor: None,
+                sort_key: crate::SortKey::UpdatedAt,
+                sort_direction: crate::SortDirection::Desc,
+                search_term: None,
+            },
         );
         builder.push(" AND title = ");
         builder.push_bind(title);
@@ -394,19 +396,14 @@ FROM threads
     }
 
     /// List threads using the underlying database.
-    #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
         &self,
         page_size: usize,
-        anchor: Option<&crate::Anchor>,
-        sort_key: crate::SortKey,
-        sort_direction: crate::SortDirection,
-        allowed_sources: &[String],
-        model_providers: Option<&[String]>,
-        archived_only: bool,
-        search_term: Option<&str>,
+        filters: ThreadFilterOptions<'_>,
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
+        let sort_key = filters.sort_key;
+        let sort_direction = filters.sort_direction;
 
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
@@ -436,16 +433,7 @@ SELECT
 FROM threads
             "#,
         );
-        push_thread_filters(
-            &mut builder,
-            archived_only,
-            allowed_sources,
-            model_providers,
-            anchor,
-            sort_key,
-            sort_direction,
-            search_term,
-        );
+        push_thread_filters(&mut builder, filters);
         push_thread_order_and_limit(&mut builder, sort_key, sort_direction, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
@@ -482,13 +470,15 @@ FROM threads
         let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads");
         push_thread_filters(
             &mut builder,
-            archived_only,
-            allowed_sources,
-            model_providers,
-            anchor,
-            sort_key,
-            SortDirection::Desc,
-            /*search_term*/ None,
+            ThreadFilterOptions {
+                archived_only,
+                allowed_sources,
+                model_providers,
+                anchor,
+                sort_key,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
         );
         push_thread_order_and_limit(&mut builder, sort_key, SortDirection::Desc, limit);
 
@@ -951,32 +941,37 @@ fn thread_spawn_parent_thread_id_from_source_str(source: &str) -> Option<ThreadI
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ThreadFilterOptions<'a> {
+    pub archived_only: bool,
+    pub allowed_sources: &'a [String],
+    pub model_providers: Option<&'a [String]>,
+    pub anchor: Option<&'a crate::Anchor>,
+    pub sort_key: SortKey,
+    pub sort_direction: SortDirection,
+    pub search_term: Option<&'a str>,
+}
+
 pub(super) fn push_thread_filters<'a>(
     builder: &mut QueryBuilder<'a, Sqlite>,
-    archived_only: bool,
-    allowed_sources: &'a [String],
-    model_providers: Option<&'a [String]>,
-    anchor: Option<&crate::Anchor>,
-    sort_key: SortKey,
-    sort_direction: SortDirection,
-    search_term: Option<&'a str>,
+    filters: ThreadFilterOptions<'a>,
 ) {
     builder.push(" WHERE 1 = 1");
-    if archived_only {
+    if filters.archived_only {
         builder.push(" AND archived = 1");
     } else {
         builder.push(" AND archived = 0");
     }
     builder.push(" AND first_user_message <> ''");
-    if !allowed_sources.is_empty() {
+    if !filters.allowed_sources.is_empty() {
         builder.push(" AND source IN (");
         let mut separated = builder.separated(", ");
-        for source in allowed_sources {
+        for source in filters.allowed_sources {
             separated.push_bind(source);
         }
         separated.push_unseparated(")");
     }
-    if let Some(model_providers) = model_providers
+    if let Some(model_providers) = filters.model_providers
         && !model_providers.is_empty()
     {
         builder.push(" AND model_provider IN (");
@@ -986,18 +981,18 @@ pub(super) fn push_thread_filters<'a>(
         }
         separated.push_unseparated(")");
     }
-    if let Some(search_term) = search_term {
+    if let Some(search_term) = filters.search_term {
         builder.push(" AND instr(title, ");
         builder.push_bind(search_term);
         builder.push(") > 0");
     }
-    if let Some(anchor) = anchor {
+    if let Some(anchor) = filters.anchor {
         let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
-        let column = match sort_key {
+        let column = match filters.sort_key {
             SortKey::CreatedAt => "created_at",
             SortKey::UpdatedAt => "updated_at",
         };
-        let operator = match sort_direction {
+        let operator = match filters.sort_direction {
             SortDirection::Asc => ">",
             SortDirection::Desc => "<",
         };
@@ -1132,16 +1127,19 @@ mod tests {
             ts: older_updated_at,
             id: Uuid::parse_str(&older_id.to_string()).expect("valid uuid"),
         };
+        let model_providers = ["test-provider".to_string()];
         let page = runtime
             .list_threads(
-                1,
-                Some(&anchor),
-                SortKey::UpdatedAt,
-                SortDirection::Asc,
-                &[],
-                Some(&["test-provider".to_string()]),
-                false,
-                None,
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: Some(&model_providers),
+                    anchor: Some(&anchor),
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Asc,
+                    search_term: None,
+                },
             )
             .await
             .expect("list should succeed");
@@ -1158,14 +1156,16 @@ mod tests {
 
         let page = runtime
             .list_threads(
-                1,
-                page.next_anchor.as_ref(),
-                SortKey::UpdatedAt,
-                SortDirection::Asc,
-                &[],
-                Some(&["test-provider".to_string()]),
-                false,
-                None,
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: Some(&model_providers),
+                    anchor: page.next_anchor.as_ref(),
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Asc,
+                    search_term: None,
+                },
             )
             .await
             .expect("second page should succeed");

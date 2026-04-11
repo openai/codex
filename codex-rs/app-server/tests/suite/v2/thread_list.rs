@@ -1300,6 +1300,10 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids_page1, vec![id_watermark.as_str()]);
     let backwards_cursor = backwards_cursor.expect("expected backwardsCursor on first page");
+    assert!(
+        backwards_cursor.contains(&id_watermark),
+        "backwardsCursor should preserve the actual first thread id"
+    );
 
     let id_new = create_fake_rollout(
         codex_home.path(),
@@ -1338,7 +1342,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
         to_response::<ThreadListResponse>(resp)?
     };
     let ids_delta: Vec<_> = delta_page.iter().map(|thread| thread.id.as_str()).collect();
-    assert_eq!(ids_delta, vec![id_new.as_str()]);
+    assert_eq!(ids_delta, vec![id_watermark.as_str(), id_new.as_str()]);
 
     Ok(())
 }

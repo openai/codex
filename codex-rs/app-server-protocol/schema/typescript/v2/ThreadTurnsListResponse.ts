@@ -11,6 +11,8 @@ export type ThreadTurnsListResponse = { data: Array<Turn>,
 nextCursor: string | null,
 /**
  * Opaque cursor to pass as `cursor` when reversing `sortDirection`.
- * if None, the page contained no turns.
+ * This is only populated when the page contains at least one turn.
+ * Use it with the opposite `sortDirection` to include the anchor turn again
+ * and catch updates to that turn.
  */
 backwardsCursor: string | null, };

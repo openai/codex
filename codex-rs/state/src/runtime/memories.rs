@@ -1,3 +1,4 @@
+use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
 use super::threads::push_thread_order_and_limit;
 use super::*;
@@ -199,13 +200,15 @@ LEFT JOIN jobs
         );
         push_thread_filters(
             &mut builder,
-            /*archived_only*/ false,
-            allowed_sources,
-            /*model_providers*/ None,
-            /*anchor*/ None,
-            SortKey::UpdatedAt,
-            SortDirection::Desc,
-            /*search_term*/ None,
+            ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources,
+                model_providers: None,
+                anchor: None,
+                sort_key: SortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder

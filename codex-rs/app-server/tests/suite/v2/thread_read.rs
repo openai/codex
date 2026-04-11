@@ -237,7 +237,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
     )
     .await??;
     let ThreadTurnsListResponse { data, .. } = to_response::<ThreadTurnsListResponse>(read_resp)?;
-    assert_eq!(turn_user_texts(&data), vec!["fourth"]);
+    assert_eq!(turn_user_texts(&data), vec!["third", "fourth"]);
 
     Ok(())
 }

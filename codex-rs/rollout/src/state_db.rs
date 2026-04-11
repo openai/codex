@@ -231,19 +231,21 @@ pub async fn list_threads_db(
     match ctx
         .list_threads(
             page_size,
-            anchor.as_ref(),
-            match sort_key {
-                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+            codex_state::ThreadFilterOptions {
+                archived_only: archived,
+                allowed_sources: allowed_sources.as_slice(),
+                model_providers: model_providers.as_deref(),
+                anchor: anchor.as_ref(),
+                sort_key: match sort_key {
+                    ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+                    ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+                },
+                sort_direction: match sort_direction {
+                    SortDirection::Asc => codex_state::SortDirection::Asc,
+                    SortDirection::Desc => codex_state::SortDirection::Desc,
+                },
+                search_term,
             },
-            match sort_direction {
-                SortDirection::Asc => codex_state::SortDirection::Asc,
-                SortDirection::Desc => codex_state::SortDirection::Desc,
-            },
-            allowed_sources.as_slice(),
-            model_providers.as_deref(),
-            archived,
-            search_term,
         )
         .await
     {

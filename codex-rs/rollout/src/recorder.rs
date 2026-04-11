@@ -839,16 +839,17 @@ async fn list_threads_from_files_asc(
     model_providers: Option<&[String]>,
     default_provider: &str,
     archived: bool,
-    search_term: Option<&str>,
+    _search_term: Option<&str>,
 ) -> std::io::Result<ThreadsPage> {
     let mut all_items = Vec::new();
     let mut scanned_files = 0usize;
     let mut reached_scan_cap = false;
     let mut page_cursor = None;
+    let scan_page_size = page_size.saturating_mul(8).clamp(256, 2048);
     loop {
         let page = list_threads_from_files_desc(
             codex_home,
-            /*page_size*/ 256,
+            scan_page_size,
             page_cursor.as_ref(),
             sort_key,
             allowed_sources,
@@ -861,17 +862,9 @@ async fn list_threads_from_files_asc(
         reached_scan_cap |= page.reached_scan_cap;
         all_items.extend(page.items);
         page_cursor = page.next_cursor;
-        if page_cursor.is_none() || reached_scan_cap {
+        if page_cursor.is_none() {
             break;
         }
-    }
-
-    if let Some(search_term) = search_term {
-        all_items.retain(|item| {
-            item.first_user_message
-                .as_deref()
-                .is_some_and(|preview| preview.contains(search_term))
-        });
     }
 
     all_items.sort_by_key(|item| thread_item_sort_key(item, sort_key));
@@ -881,7 +874,7 @@ async fn list_threads_from_files_asc(
             .retain(|item| thread_item_sort_key(item, sort_key).is_some_and(|key| key > anchor));
     }
 
-    let more_matches_available = all_items.len() > page_size;
+    let more_matches_available = all_items.len() > page_size || reached_scan_cap;
     all_items.truncate(page_size);
     let next_cursor = if more_matches_available {
         all_items
@@ -908,7 +901,7 @@ fn thread_item_sort_key(
     let timestamp = match sort_key {
         ThreadSortKey::CreatedAt => created_at,
         ThreadSortKey::UpdatedAt => {
-            let updated_at = item.updated_at.as_deref()?;
+            let updated_at = item.updated_at.as_deref().or(item.created_at.as_deref())?;
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
         }
     };

@@ -3192,7 +3192,9 @@ pub struct ThreadListResponse {
     /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
     /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
-    /// if None, the page was empty.
+    /// This is only populated when the page contains at least one thread.
+    /// Use it with the opposite `sortDirection`; for timestamp sorts it anchors
+    /// at the start of the page timestamp so same-second updates are not skipped.
     pub backwards_cursor: Option<String>,
 }
 
@@ -3284,7 +3286,9 @@ pub struct ThreadTurnsListResponse {
     /// if None, there are no more turns to return.
     pub next_cursor: Option<String>,
     /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
-    /// if None, the page contained no turns.
+    /// This is only populated when the page contains at least one turn.
+    /// Use it with the opposite `sortDirection` to include the anchor turn again
+    /// and catch updates to that turn.
     pub backwards_cursor: Option<String>,
 }
 
