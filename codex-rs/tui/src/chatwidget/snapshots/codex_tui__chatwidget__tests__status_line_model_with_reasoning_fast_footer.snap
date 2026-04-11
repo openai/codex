@@ -6,4 +6,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.4 xhigh fast · Context 0% used [     ] · /tmp/project                   "
+"  gpt-5.4 xhigh fast · Context 0% used · /tmp/project                           "
