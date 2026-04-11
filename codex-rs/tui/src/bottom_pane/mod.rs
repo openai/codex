@@ -280,6 +280,14 @@ impl BottomPane {
         self.composer.take_recent_submission_mention_bindings()
     }
 
+    /// Add a staged slash-command draft to the composer's local recall list.
+    ///
+    /// This should be called exactly once after `ChatWidget` dispatches a recognized command.
+    /// Slash recall records the submitted command text regardless of whether the command succeeds.
+    pub(crate) fn record_pending_slash_command_history(&mut self) {
+        self.composer.record_pending_slash_command_history();
+    }
+
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();

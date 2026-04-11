@@ -7479,6 +7479,15 @@
               "null"
             ]
           },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "threadId": {
             "type": [
               "string",
@@ -9915,6 +9924,7 @@
           "go",
           "plus",
           "pro",
+          "prolite",
           "team",
           "self_serve_business_usage_based",
           "business",
