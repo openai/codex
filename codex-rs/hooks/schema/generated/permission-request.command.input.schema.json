@@ -84,6 +84,18 @@
       ],
       "type": "object"
     },
+    "PermissionRequestBashToolInputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
     "PermissionRequestGuardianReview": {
       "additionalProperties": false,
       "properties": {
@@ -153,16 +165,41 @@
       ],
       "type": "string"
     },
-    "PermissionRequestToolInput": {
+    "PermissionRequestPermissionsToolInputWire": {
       "additionalProperties": false,
       "properties": {
-        "command": {
+        "permissions": {
+          "$ref": "#/definitions/RequestPermissionProfile"
+        },
+        "reason": {
           "type": "string"
         }
       },
       "required": [
-        "command"
+        "permissions"
       ],
+      "type": "object"
+    },
+    "PermissionRequestToolInputWire": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PermissionRequestBashToolInputWire"
+        },
+        {
+          "$ref": "#/definitions/PermissionRequestPermissionsToolInputWire"
+        }
+      ]
+    },
+    "RequestPermissionProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "file_system": {
+          "$ref": "#/definitions/FileSystemPermissions"
+        },
+        "network": {
+          "$ref": "#/definitions/NetworkPermissions"
+        }
+      },
       "type": "object"
     },
     "SandboxPermissions": {
@@ -230,10 +267,13 @@
       "type": "string"
     },
     "tool_input": {
-      "$ref": "#/definitions/PermissionRequestToolInput"
+      "$ref": "#/definitions/PermissionRequestToolInputWire"
     },
     "tool_name": {
-      "const": "Bash",
+      "enum": [
+        "Bash",
+        "request_permissions"
+      ],
       "type": "string"
     },
     "transcript_path": {

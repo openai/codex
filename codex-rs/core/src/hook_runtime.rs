@@ -23,6 +23,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
@@ -152,8 +153,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
 }
 
 pub(crate) async fn run_permission_request_hooks(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    sess: &Session,
+    turn_context: &TurnContext,
     run_id_suffix: String,
     tool_name: String,
     command: String,
@@ -171,12 +172,47 @@ pub(crate) async fn run_permission_request_hooks(
         permission_mode: hook_permission_mode(turn_context),
         tool_name,
         run_id_suffix,
-        command,
+        tool_input: codex_hooks::PermissionRequestToolInput::Bash { command },
         sandbox_permissions,
         additional_permissions,
         justification,
         guardian_review,
     };
+    run_permission_request_hook_request(sess, turn_context, request).await
+}
+
+pub(crate) async fn run_request_permissions_hooks(
+    sess: &Session,
+    turn_context: &TurnContext,
+    run_id_suffix: String,
+    args: &RequestPermissionsArgs,
+) -> Option<PermissionRequestDecision> {
+    let request = PermissionRequestRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name: "request_permissions".to_string(),
+        run_id_suffix,
+        tool_input: codex_hooks::PermissionRequestToolInput::RequestPermissions {
+            reason: args.reason.clone(),
+            permissions: args.permissions.clone(),
+        },
+        sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+        additional_permissions: Some(args.permissions.clone().into()),
+        justification: args.reason.clone(),
+        guardian_review: None,
+    };
+    run_permission_request_hook_request(sess, turn_context, request).await
+}
+
+async fn run_permission_request_hook_request(
+    sess: &Session,
+    turn_context: &TurnContext,
+    request: PermissionRequestRequest,
+) -> Option<PermissionRequestDecision> {
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -344,8 +380,8 @@ fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<Response
 }
 
 async fn emit_hook_started_events(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    sess: &Session,
+    turn_context: &TurnContext,
     preview_runs: Vec<HookRunSummary>,
 ) {
     for run in preview_runs {
@@ -361,8 +397,8 @@ async fn emit_hook_started_events(
 }
 
 async fn emit_hook_completed_events(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    sess: &Session,
+    turn_context: &TurnContext,
     completed_events: Vec<HookCompletedEvent>,
 ) {
     for completed in completed_events {

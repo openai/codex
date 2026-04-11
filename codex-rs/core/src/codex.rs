@@ -268,6 +268,7 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_request_permissions_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
@@ -3272,6 +3273,23 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
+        if let Some(decision) =
+            run_request_permissions_hooks(self, turn_context, call_id.clone(), &args).await
+        {
+            let response = match decision {
+                codex_hooks::PermissionRequestDecision::Allow => RequestPermissionsResponse {
+                    permissions: args.permissions,
+                    scope: PermissionGrantScope::Turn,
+                },
+                codex_hooks::PermissionRequestDecision::Deny { .. } => RequestPermissionsResponse {
+                    permissions: RequestPermissionProfile::default(),
+                    scope: PermissionGrantScope::Turn,
+                },
+            };
+            self.record_request_permissions_grant(&response).await;
+            return Some(response);
+        }
+
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
@@ -3287,9 +3305,6 @@ impl Session {
             warn!("Overwriting existing pending request_permissions for call_id: {call_id}");
         }
 
-        // TODO(ccunningham): Support auto-review for request_permissions /
-        // with_additional_permissions. V0 still routes this surface through
-        // the existing manual RequestPermissions event flow.
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
             call_id,
             turn_id: turn_context.sub_id.clone(),
@@ -3298,6 +3313,26 @@ impl Session {
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
+    }
+
+    async fn record_request_permissions_grant(&self, response: &RequestPermissionsResponse) {
+        if response.permissions.is_empty() {
+            return;
+        }
+
+        match response.scope {
+            PermissionGrantScope::Turn => {
+                let mut active = self.active_turn.lock().await;
+                if let Some(at) = active.as_mut() {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.record_granted_permissions(response.permissions.clone().into());
+                }
+            }
+            PermissionGrantScope::Session => {
+                let mut state = self.state.lock().await;
+                state.record_granted_permissions(response.permissions.clone().into());
+            }
+        }
     }
 
     pub async fn request_user_input(
@@ -3441,34 +3476,19 @@ impl Session {
         call_id: &str,
         response: RequestPermissionsResponse,
     ) {
-        let mut granted_for_session = None;
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    let entry = ts.remove_pending_request_permissions(call_id);
-                    if entry.is_some() && !response.permissions.is_empty() {
-                        match response.scope {
-                            PermissionGrantScope::Turn => {
-                                ts.record_granted_permissions(response.permissions.clone().into());
-                            }
-                            PermissionGrantScope::Session => {
-                                granted_for_session = Some(response.permissions.clone());
-                            }
-                        }
-                    }
-                    entry
+                    ts.remove_pending_request_permissions(call_id)
                 }
                 None => None,
             }
         };
-        if let Some(permissions) = granted_for_session {
-            let mut state = self.state.lock().await;
-            state.record_granted_permissions(permissions.into());
-        }
         match entry {
             Some(tx_response) => {
+                self.record_request_permissions_grant(&response).await;
                 tx_response.send(response).ok();
             }
             None => {
