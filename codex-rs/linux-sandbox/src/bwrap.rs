@@ -313,6 +313,7 @@ fn create_filesystem_args(
         .iter()
         .map(|path| path.as_path().to_path_buf())
         .collect();
+    let mut emitted_logical_aliases = BTreeSet::new();
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
     // Mask only the unreadable ancestors that sit outside every writable root.
@@ -339,28 +340,35 @@ fn create_filesystem_args(
             &mut preserved_files,
             unreadable_root,
             &allowed_write_paths,
+            &mut emitted_logical_aliases,
         )?;
     }
 
     for writable_root in &sorted_writable_roots {
         let root = writable_root.root.as_path();
         let symlink_target = canonical_target_if_symlinked_path(root);
+        let mount_root = symlink_target.as_deref().unwrap_or(root);
         // If a denied ancestor was already masked, recreate any missing mount
-        // target parents before binding the narrower writable descendant.
+        // target parents before binding the narrower writable descendant. Use
+        // the actual bwrap destination, not a logical symlink alias path.
         if let Some(masking_root) = unreadable_roots
             .iter()
             .map(AbsolutePathBuf::as_path)
-            .filter(|unreadable_root| root.starts_with(unreadable_root))
+            .filter(|unreadable_root| mount_root.starts_with(unreadable_root))
             .max_by_key(|unreadable_root| path_depth(unreadable_root))
         {
-            append_mount_target_parent_dir_args(&mut args, root, masking_root);
+            append_mount_target_parent_dir_args(&mut args, mount_root, masking_root);
         }
 
-        let mount_root = symlink_target.as_deref().unwrap_or(root);
         args.push("--bind".to_string());
         args.push(path_to_string(mount_root));
         args.push(path_to_string(mount_root));
-        append_logical_symlink_alias_args(&mut args, root, &logical_readable_roots);
+        append_logical_symlink_alias_args(
+            &mut args,
+            root,
+            &logical_readable_roots,
+            &mut emitted_logical_aliases,
+        );
 
         let mut read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
@@ -391,6 +399,7 @@ fn create_filesystem_args(
                 &mut preserved_files,
                 &unreadable_root,
                 &allowed_write_paths,
+                &mut emitted_logical_aliases,
             )?;
         }
     }
@@ -412,6 +421,7 @@ fn create_filesystem_args(
             &mut preserved_files,
             &unreadable_root,
             &allowed_write_paths,
+            &mut emitted_logical_aliases,
         )?;
     }
 
@@ -495,6 +505,7 @@ fn append_logical_symlink_alias_args(
     args: &mut Vec<String>,
     writable_root: &Path,
     logical_readable_roots: &[PathBuf],
+    emitted_logical_aliases: &mut BTreeSet<PathBuf>,
 ) {
     let Some((alias_path, target)) = first_symlink_alias_in_path(writable_root) else {
         return;
@@ -506,7 +517,27 @@ fn append_logical_symlink_alias_args(
         return;
     }
 
-    append_parent_dir_args_for_path(args, &alias_path, Path::new("/"));
+    append_symlink_alias_args(
+        args,
+        alias_path,
+        target,
+        Path::new("/"),
+        emitted_logical_aliases,
+    );
+}
+
+fn append_symlink_alias_args(
+    args: &mut Vec<String>,
+    alias_path: PathBuf,
+    target: PathBuf,
+    parent_anchor: &Path,
+    emitted_logical_aliases: &mut BTreeSet<PathBuf>,
+) {
+    if !emitted_logical_aliases.insert(alias_path.clone()) {
+        return;
+    }
+
+    append_parent_dir_args_for_path(args, &alias_path, parent_anchor);
     args.push("--symlink".to_string());
     args.push(path_to_string(&target));
     args.push(path_to_string(&alias_path));
@@ -588,6 +619,7 @@ fn append_unreadable_root_args(
     preserved_files: &mut Vec<File>,
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
+    emitted_logical_aliases: &mut BTreeSet<PathBuf>,
 ) -> Result<()> {
     if let Some(target) = canonical_target_for_symlink_in_path(unreadable_root, allowed_write_paths)
     {
@@ -598,6 +630,7 @@ fn append_unreadable_root_args(
             preserved_files,
             &target,
             allowed_write_paths,
+            emitted_logical_aliases,
         );
     }
 
@@ -617,6 +650,7 @@ fn append_unreadable_root_args(
         preserved_files,
         unreadable_root,
         allowed_write_paths,
+        emitted_logical_aliases,
     )
 }
 
@@ -625,6 +659,7 @@ fn append_existing_unreadable_path_args(
     preserved_files: &mut Vec<File>,
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
+    emitted_logical_aliases: &mut BTreeSet<PathBuf>,
 ) -> Result<()> {
     if unreadable_root.is_dir() {
         let mut writable_descendants: Vec<&Path> = allowed_write_paths
@@ -649,6 +684,17 @@ fn append_existing_unreadable_path_args(
         // nested mount targets after the parent has been frozen.
         writable_descendants.sort_by_key(|path| path_depth(path));
         for writable_descendant in writable_descendants {
+            // If the writable descendant is addressed through a symlink inside
+            // this tmpfs, create the symlink now. Creating directories on the
+            // logical path would block the later symlink alias with EEXIST.
+            if append_symlink_alias_for_masked_writable_descendant(
+                args,
+                writable_descendant,
+                unreadable_root,
+                emitted_logical_aliases,
+            ) {
+                continue;
+            }
             append_mount_target_parent_dir_args(args, writable_descendant, unreadable_root);
         }
         args.push("--remount-ro".to_string());
@@ -666,6 +712,30 @@ fn append_existing_unreadable_path_args(
     args.push(null_fd);
     args.push(path_to_string(unreadable_root));
     Ok(())
+}
+
+fn append_symlink_alias_for_masked_writable_descendant(
+    args: &mut Vec<String>,
+    writable_descendant: &Path,
+    unreadable_root: &Path,
+    emitted_logical_aliases: &mut BTreeSet<PathBuf>,
+) -> bool {
+    let Some((alias_path, target)) = first_symlink_alias_in_path(writable_descendant) else {
+        return false;
+    };
+    // Only this unreadable tmpfs can safely create aliases it contains.
+    if !alias_path.starts_with(unreadable_root) {
+        return false;
+    }
+
+    append_symlink_alias_args(
+        args,
+        alias_path,
+        target,
+        unreadable_root,
+        emitted_logical_aliases,
+    );
+    true
 }
 
 /// Returns true when `path` is under any allowed writable root.
@@ -1020,6 +1090,147 @@ mod tests {
         assert!(
             bind_index < symlink_index,
             "logical alias must point at the mounted writable target: {:#?}",
+            args.args
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_writable_roots_deduplicate_shared_logical_alias() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let real_root = temp_root.join("real");
+        let real_a = real_root.join("a");
+        let real_b = real_root.join("b");
+        let link_root = temp_root.join("link");
+        let link_a = link_root.join("a");
+        let link_b = link_root.join("b");
+        std::fs::create_dir_all(&real_a).expect("create real a");
+        std::fs::create_dir_all(&real_b).expect("create real b");
+        std::os::unix::fs::symlink(&real_root, &link_root).expect("create symlinked root");
+
+        let link_a = AbsolutePathBuf::from_absolute_path(&link_a).expect("absolute link a");
+        let link_b = AbsolutePathBuf::from_absolute_path(&link_b).expect("absolute link b");
+        let real_root_str = path_to_string(&real_root);
+        let link_root_str = path_to_string(&link_root);
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_a },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_b },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let symlink_count = args
+            .args
+            .windows(3)
+            .filter(|window| {
+                *window == ["--symlink", real_root_str.as_str(), link_root_str.as_str()]
+            })
+            .count();
+
+        assert_eq!(
+            symlink_count, 1,
+            "logical symlink aliases should be emitted once: {:#?}",
+            args.args
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_writable_root_under_unreadable_parent_recreates_alias_before_remount() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let blocked = temp_root.join("blocked");
+        let real_root = temp_root.join("real");
+        let real_allowed = real_root.join("allowed");
+        let link_root = blocked.join("link");
+        let link_allowed = link_root.join("allowed");
+        std::fs::create_dir_all(&blocked).expect("create blocked dir");
+        std::fs::create_dir_all(&real_allowed).expect("create real allowed dir");
+        std::os::unix::fs::symlink(&real_root, &link_root).expect("create symlinked root");
+
+        let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked");
+        let link_allowed =
+            AbsolutePathBuf::from_absolute_path(&link_allowed).expect("absolute link allowed");
+        let blocked_str = path_to_string(blocked.as_path());
+        let real_root_str = path_to_string(&real_root);
+        let real_allowed_str = path_to_string(&real_allowed);
+        let link_root_str = path_to_string(&link_root);
+        let link_allowed_str = path_to_string(link_allowed.as_path());
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: blocked },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_allowed },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let tmpfs_index = args
+            .args
+            .windows(4)
+            .position(|window| window == ["--perms", "111", "--tmpfs", blocked_str.as_str()])
+            .expect("unreadable parent should become an executable tmpfs");
+        let symlink_index = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window == ["--symlink", real_root_str.as_str(), link_root_str.as_str()]
+            })
+            .expect("logical symlink alias should be created inside tmpfs");
+        let remount_index = args
+            .args
+            .windows(2)
+            .position(|window| window == ["--remount-ro", blocked_str.as_str()])
+            .expect("unreadable parent should be remounted read-only");
+
+        assert!(
+            tmpfs_index < symlink_index && symlink_index < remount_index,
+            "logical alias must be created before freezing the unreadable parent: {:#?}",
+            args.args
+        );
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--bind",
+                    real_allowed_str.as_str(),
+                    real_allowed_str.as_str(),
+                ]
+        }));
+        assert!(
+            !args
+                .args
+                .windows(2)
+                .any(|window| window == ["--dir", link_root_str.as_str()]),
+            "logical alias path must not be pre-created as a directory: {:#?}",
+            args.args
+        );
+        assert!(
+            !args
+                .args
+                .windows(2)
+                .any(|window| window == ["--dir", link_allowed_str.as_str()]),
+            "writable child under the alias must not be pre-created as a directory: {:#?}",
             args.args
         );
     }
