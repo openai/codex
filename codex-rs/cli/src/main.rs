@@ -36,6 +36,7 @@ use supports_color::Stream;
 
 #[cfg(target_os = "macos")]
 mod app_cmd;
+mod bundles_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod marketplace_cmd;
@@ -45,6 +46,7 @@ mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use bundles_cmd::BundlesCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -109,6 +111,9 @@ enum Subcommand {
 
     /// Manage plugin marketplaces for Codex.
     Marketplace(MarketplaceCli),
+
+    /// Install and inspect Codex runtime bundles.
+    Bundles(BundlesCli),
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
@@ -720,6 +725,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_config_overrides.clone(),
             );
             marketplace_cli.run().await?;
+        }
+        Some(Subcommand::Bundles(bundles_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "bundles",
+            )?;
+            bundles_cli.run().await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {

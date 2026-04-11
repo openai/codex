@@ -2,6 +2,7 @@
 members = [
     "analytics",
     "backend-client",
+    "bundles",
     "ansi-escape",
     "async-utils",
     "app-server",
@@ -114,6 +115,7 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-bundles = { path = "bundles" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }

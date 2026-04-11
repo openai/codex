@@ -1641,6 +1641,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-bundles"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-client",
+ "codex-config",
+ "codex-utils-home-dir",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml_edit 0.24.0+spec-1.1.0",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-chatgpt"
 version = "0.0.0"
 dependencies = [
@@ -1673,6 +1692,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-test-client",
  "codex-arg0",
+ "codex-bundles",
  "codex-chatgpt",
  "codex-cloud-tasks",
  "codex-config",
