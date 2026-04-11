@@ -695,14 +695,12 @@ mod tests {
             include_only: Vec::new(),
         });
 
-        let mut expected = HashMap::from([
-            ("OVERLAY".to_string(), "overlay".to_string()),
-            ("POLICY_SET".to_string(), "overlay-wins".to_string()),
-        ]);
-        if cfg!(target_os = "windows") {
-            expected.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
-        }
-
-        assert_eq!(child_env(&params), expected);
+        assert_eq!(
+            child_env(&params),
+            HashMap::from([
+                ("OVERLAY".to_string(), "overlay".to_string()),
+                ("POLICY_SET".to_string(), "overlay-wins".to_string()),
+            ])
+        );
     }
 }

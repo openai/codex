@@ -655,13 +655,7 @@ impl UnifiedExecProcessManager {
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
-        if environment.is_remote() {
-            if !inherited_fds.is_empty() {
-                return Err(UnifiedExecError::create_process(
-                    "remote exec-server does not support inherited file descriptors".to_string(),
-                ));
-            }
-
+        if inherited_fds.is_empty() {
             let started = environment
                 .get_exec_backend()
                 .start(exec_server_params_for_request(process_id, request, tty))
@@ -669,6 +663,12 @@ impl UnifiedExecProcessManager {
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
             return UnifiedExecProcess::from_exec_server_started(started, request.sandbox).await;
+        }
+
+        if environment.is_remote() {
+            return Err(UnifiedExecError::create_process(
+                "remote exec-server does not support inherited file descriptors".to_string(),
+            ));
         }
 
         let (program, args) = request
