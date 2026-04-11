@@ -4716,12 +4716,6 @@ pub enum GuardianApprovalReviewAction {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    RequestPermissions {
-        reason: Option<String>,
-        permissions: CoreRequestPermissionProfile,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
     McpToolCall {
         server: String,
         tool_name: String,
@@ -4767,13 +4761,6 @@ impl From<CoreGuardianAssessmentAction> for GuardianApprovalReviewAction {
                 host,
                 protocol: protocol.into(),
                 port,
-            },
-            CoreGuardianAssessmentAction::RequestPermissions {
-                reason,
-                permissions,
-            } => Self::RequestPermissions {
-                reason,
-                permissions,
             },
             CoreGuardianAssessmentAction::McpToolCall {
                 server,
@@ -4828,13 +4815,6 @@ impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
                 host,
                 protocol: protocol.to_core(),
                 port,
-            },
-            GuardianApprovalReviewAction::RequestPermissions {
-                reason,
-                permissions,
-            } => Self::RequestPermissions {
-                reason,
-                permissions,
             },
             GuardianApprovalReviewAction::McpToolCall {
                 server,

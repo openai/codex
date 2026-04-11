@@ -48,7 +48,7 @@ impl ToolHandler for RequestPermissionsHandler {
         }
 
         let response = session
-            .request_permissions(&turn, call_id, args)
+            .request_permissions(turn.as_ref(), call_id, args)
             .await
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(

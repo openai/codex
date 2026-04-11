@@ -342,59 +342,6 @@ pub(crate) async fn review_approval_request_with_review(
     .await
 }
 
-/// Runs guardian review on a dedicated current-thread runtime.
-///
-/// Some callers must remain `Send` because they run inside `tokio::spawn`, while
-/// the guardian review session itself currently contains non-`Send` futures.
-/// This wrapper keeps those approval callers composable without changing the
-/// guardian execution model.
-pub(crate) async fn review_approval_request_with_review_detached(
-    session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
-    review_id: String,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
-) -> GuardianApprovalReviewResult {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let session = Arc::clone(session);
-    let turn = Arc::clone(turn);
-    std::thread::spawn(move || {
-        let result = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime.block_on(review_approval_request_with_review(
-                &session,
-                &turn,
-                review_id,
-                request,
-                retry_reason,
-            )),
-            Err(err) => GuardianApprovalReviewResult {
-                decision: ReviewDecision::Denied,
-                review: GuardianApprovalReview {
-                    status: GuardianApprovalReviewStatus::Failed,
-                    decision: Some(GuardianAssessmentOutcome::Deny),
-                    risk_level: None,
-                    user_authorization: None,
-                    rationale: Some(format!("Automatic approval review failed: {err}")),
-                },
-            },
-        };
-        let _ = tx.send(result);
-    });
-    rx.await.unwrap_or(GuardianApprovalReviewResult {
-        decision: ReviewDecision::Denied,
-        review: GuardianApprovalReview {
-            status: GuardianApprovalReviewStatus::Failed,
-            decision: Some(GuardianAssessmentOutcome::Deny),
-            risk_level: None,
-            user_authorization: None,
-            rationale: Some("Automatic approval review worker exited early.".to_string()),
-        },
-    })
-}
-
 /// Public entrypoint for approval requests that should be reviewed by guardian.
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,

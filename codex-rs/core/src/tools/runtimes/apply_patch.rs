@@ -206,14 +206,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     ) -> Option<ExecApprovalRequirement> {
         Some(req.exec_approval_requirement.clone())
     }
-
-    fn guardian_approval_request(
-        &self,
-        req: &ApplyPatchRequest,
-        ctx: &ApprovalCtx<'_>,
-    ) -> Option<GuardianApprovalRequest> {
-        Some(Self::build_guardian_review_request(req, ctx.call_id))
-    }
 }
 
 impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {

@@ -262,15 +262,13 @@ use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
-use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianReviewSessionManager;
-use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
-use crate::hook_runtime::request_permissions_hook_request;
 use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_request_permissions_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
@@ -309,8 +307,6 @@ use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
-use crate::tools::approval_flow::PermissionApprovalOutcome;
-use crate::tools::approval_flow::run_permission_approval_flow;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::js_repl::resolve_compatible_node;
@@ -3251,8 +3247,8 @@ impl Session {
     }
 
     pub async fn request_permissions(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        &self,
+        turn_context: &TurnContext,
         call_id: String,
         args: RequestPermissionsArgs,
     ) -> Option<RequestPermissionsResponse> {
@@ -3277,43 +3273,15 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
-        let guardian_request = routes_approval_to_guardian(turn_context).then(|| {
-            GuardianApprovalRequest::RequestPermissions {
-                id: call_id.clone(),
-                reason: args.reason.clone(),
-                permissions: args.permissions.clone(),
-            }
-        });
-        let hook_request =
-            request_permissions_hook_request(self, turn_context, call_id.clone(), &args).await;
-        if let Some(outcome) = run_permission_approval_flow(
-            self,
-            turn_context,
-            guardian_request,
-            Some(hook_request),
-            args.reason.clone(),
-        )
-        .await
+        if let Some(decision) =
+            run_request_permissions_hooks(self, turn_context, call_id.clone(), &args).await
         {
-            let response = match outcome {
-                PermissionApprovalOutcome::Decision {
-                    decision,
-                    source: _,
-                    guardian_review_id: _,
-                } => match decision {
-                    ReviewDecision::Approved
-                    | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                    | ReviewDecision::ApprovedForSession
-                    | ReviewDecision::NetworkPolicyAmendment { .. } => RequestPermissionsResponse {
-                        permissions: args.permissions,
-                        scope: PermissionGrantScope::Turn,
-                    },
-                    ReviewDecision::Denied | ReviewDecision::Abort => RequestPermissionsResponse {
-                        permissions: RequestPermissionProfile::default(),
-                        scope: PermissionGrantScope::Turn,
-                    },
+            let response = match decision {
+                codex_hooks::PermissionRequestDecision::Allow => RequestPermissionsResponse {
+                    permissions: args.permissions,
+                    scope: PermissionGrantScope::Turn,
                 },
-                PermissionApprovalOutcome::HookDenied { .. } => RequestPermissionsResponse {
+                codex_hooks::PermissionRequestDecision::Deny { .. } => RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
                 },
@@ -3337,6 +3305,10 @@ impl Session {
             warn!("Overwriting existing pending request_permissions for call_id: {call_id}");
         }
 
+        // TODO(ccunningham): Route request_permissions through the shared
+        // Guardian/manual approval flow so Guardian can review the requested
+        // permission profile and pass advisory context to PermissionRequest
+        // hooks before falling back to this manual RequestPermissions event.
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
             call_id,
             turn_id: turn_context.sub_id.clone(),
