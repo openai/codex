@@ -201,6 +201,10 @@ fn restore_hidden_status_line_items(
     mut items: Vec<StatusLineItem>,
     hidden_items: &[(usize, StatusLineItem)],
 ) -> Vec<StatusLineItem> {
+    if items.is_empty() {
+        return items;
+    }
+
     for (index, item) in hidden_items {
         if items.contains(item) {
             continue;
@@ -546,6 +550,28 @@ mod tests {
                 StatusLineItem::CurrentDir,
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn confirm_empty_selection_does_not_restore_hidden_github_pr() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let mut view = StatusLineSetupView::new(
+            Some(&[
+                StatusLineItem::ModelName.to_string(),
+                StatusLineItem::GithubPr.to_string(),
+            ]),
+            StatusLinePreviewData::default(),
+            /*github_pr_available*/ false,
+            AppEventSender::new(tx_raw),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let Some(AppEvent::StatusLineSetup { items }) = rx.recv().await else {
+            panic!("expected status line setup event");
+        };
+        assert_eq!(items, Vec::<StatusLineItem>::new());
     }
 
     fn render_lines(view: &StatusLineSetupView, width: u16) -> String {
