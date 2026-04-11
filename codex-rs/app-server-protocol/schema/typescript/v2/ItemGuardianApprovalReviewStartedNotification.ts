@@ -8,11 +8,11 @@ import type { GuardianApprovalReviewAction } from "./GuardianApprovalReviewActio
  * [UNSTABLE] Temporary notification payload for guardian automatic approval
  * review. This shape is expected to change soon.
  */
-export type ItemGuardianApprovalReviewStartedNotification = { threadId: string, turnId: string, 
+export type ItemGuardianApprovalReviewStartedNotification = { threadId: string, turnId: string,
 /**
  * Stable identifier for this review.
  */
-reviewId: string, 
+reviewId: string,
 /**
  * Identifier for the reviewed item or tool call when one exists.
  *

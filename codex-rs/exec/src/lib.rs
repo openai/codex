@@ -1205,13 +1205,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
 }
 
 fn cwds_match(current_cwd: &Path, session_cwd: &Path) -> bool {
-    match (
-        path_utils::normalize_for_path_comparison(current_cwd),
-        path_utils::normalize_for_path_comparison(session_cwd),
-    ) {
-        (Ok(current), Ok(session)) => current == session,
-        _ => current_cwd == session_cwd,
-    }
+    path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 async fn resolve_resume_thread_id(
