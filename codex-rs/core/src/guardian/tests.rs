@@ -45,6 +45,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_path_buf;
 use insta::Settings;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
@@ -621,13 +622,8 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
 
 #[test]
 fn guardian_assessment_action_redacts_apply_patch_patch_text() {
-    let (cwd, file) = if cfg!(windows) {
-        (r"C:\tmp", r"C:\tmp\guardian.txt")
-    } else {
-        ("/tmp", "/tmp/guardian.txt")
-    };
-    let cwd = PathBuf::from(cwd);
-    let file = PathBuf::from(file).abs();
+    let cwd = test_path_buf("/tmp");
+    let file = test_path_buf("/tmp/guardian.txt").abs();
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd: cwd.clone(),
@@ -658,8 +654,8 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
     };
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
-        cwd: PathBuf::from("/tmp"),
-        files: vec![PathBuf::from("/tmp/guardian.txt").abs()],
+        cwd: test_path_buf("/tmp"),
+        files: vec![test_path_buf("/tmp/guardian.txt").abs()],
         patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
             .to_string(),
     };
@@ -686,8 +682,8 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
         "review-cancelled-guardian".to_string(),
         GuardianApprovalRequest::ApplyPatch {
             id: "patch-1".to_string(),
-            cwd: PathBuf::from("/tmp"),
-            files: vec![PathBuf::from("/tmp/guardian.txt").abs()],
+            cwd: test_path_buf("/tmp"),
+            files: vec![test_path_buf("/tmp/guardian.txt").abs()],
             patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
                 .to_string(),
         },

@@ -381,9 +381,9 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
-    use std::path::PathBuf;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn render_lines(view: &SkillsToggleView, width: u16) -> String {
@@ -419,14 +419,14 @@ mod tests {
                 skill_name: "repo_scout".to_string(),
                 description: "Summarize the repo layout".to_string(),
                 enabled: true,
-                path: PathBuf::from("/tmp/skills/repo_scout.toml").abs(),
+                path: test_path_buf("/tmp/skills/repo_scout.toml").abs(),
             },
             SkillsToggleItem {
                 name: "Changelog Writer".to_string(),
                 skill_name: "changelog_writer".to_string(),
                 description: "Draft release notes".to_string(),
                 enabled: false,
-                path: PathBuf::from("/tmp/skills/changelog_writer.toml").abs(),
+                path: test_path_buf("/tmp/skills/changelog_writer.toml").abs(),
             },
         ];
         let view = SkillsToggleView::new(items, tx);

@@ -50,6 +50,8 @@ use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
+#[cfg(test)]
+use crate::test_support::test_path_buf;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -9061,7 +9063,7 @@ guardian_approval = true
 
     async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project").abs();
+        app.config.cwd = test_path_buf("/tmp/project").abs();
         app.chat_widget.set_model("gpt-test");
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
@@ -9114,7 +9116,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
+                cwd: test_path_buf("/tmp/project"),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -9198,7 +9200,7 @@ guardian_approval = true
     )]
     async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project").abs();
+        app.config.cwd = test_path_buf("/tmp/project").abs();
         app.chat_widget.set_model("gpt-5.4");
         set_fast_mode_test_catalog(&mut app.chat_widget);
         app.chat_widget

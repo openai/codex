@@ -51,12 +51,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .into_iter()
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
-    let extra_root = if cfg!(target_os = "windows") {
-        PathBuf::from(r"C:\extra")
-    } else {
-        PathBuf::from("/tmp/extra")
-    }
-    .abs();
+    let extra_root = test_path_buf("/tmp/extra").abs();
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![extra_root],
         read_only_access: Default::default(),
@@ -502,7 +497,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         .features
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true);
 
-    let extra_root = PathBuf::from("/tmp/guardian-approvals-extra").abs();
+    let extra_root = test_path_buf("/tmp/guardian-approvals-extra").abs();
 
     chat.handle_codex_event(Event {
         id: "session-configured-custom-workspace".to_string(),

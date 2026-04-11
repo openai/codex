@@ -10,10 +10,10 @@ use codex_config::ConfigRequirementsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -432,8 +432,8 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
 
 #[test]
 fn normalize_extra_user_roots_is_stable_for_equivalent_inputs() {
-    let a = Path::new("/tmp/a").abs();
-    let b = Path::new("/tmp/b").abs();
+    let a = test_path_buf("/tmp/a").abs();
+    let b = test_path_buf("/tmp/b").abs();
 
     let first = normalize_extra_user_roots(&[a.clone(), b.clone(), a.clone()]);
     let second = normalize_extra_user_roots(&[b, a]);

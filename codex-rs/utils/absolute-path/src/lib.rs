@@ -197,43 +197,37 @@ impl From<AbsolutePathBuf> for PathBuf {
 /// Helpers for constructing absolute paths in tests.
 pub mod test_support {
     use super::AbsolutePathBuf;
-    #[cfg(windows)]
-    use std::path::Component;
     use std::path::Path;
     use std::path::PathBuf;
+
+    /// Creates a platform-absolute [`PathBuf`] from a Unix-style absolute test path.
+    ///
+    /// On Windows, `/tmp/example` maps to `C:\tmp\example`.
+    pub fn test_path_buf(unix_path: &str) -> PathBuf {
+        if cfg!(windows) {
+            let mut path = PathBuf::from(r"C:\");
+            path.extend(
+                unix_path
+                    .trim_start_matches('/')
+                    .split('/')
+                    .filter(|segment| !segment.is_empty()),
+            );
+            path
+        } else {
+            PathBuf::from(unix_path)
+        }
+    }
 
     /// Extension methods for converting paths into [`AbsolutePathBuf`] values in tests.
     pub trait PathExt {
         /// Converts an already absolute path into an [`AbsolutePathBuf`].
-        ///
-        /// On Windows, Unix-rooted fixture paths such as `/tmp/example` are
-        /// treated as rooted at `C:\` so cross-platform tests can share compact
-        /// absolute-looking paths without weakening production path checks.
         fn abs(&self) -> AbsolutePathBuf;
     }
 
     impl PathExt for Path {
         #[expect(clippy::expect_used)]
         fn abs(&self) -> AbsolutePathBuf {
-            #[cfg(windows)]
-            let path = {
-                if self.is_absolute() {
-                    self.to_path_buf()
-                } else {
-                    let mut components = self.components();
-                    if matches!(components.next(), Some(Component::RootDir)) {
-                        let mut absolute = PathBuf::from(r"C:\");
-                        absolute.extend(components);
-                        absolute
-                    } else {
-                        self.to_path_buf()
-                    }
-                }
-            };
-            #[cfg(not(windows))]
-            let path = self;
-
-            AbsolutePathBuf::from_absolute_path_checked(path)
+            AbsolutePathBuf::from_absolute_path_checked(self)
                 .expect("path should already be absolute")
         }
     }
@@ -331,6 +325,7 @@ impl<'de> Deserialize<'de> for AbsolutePathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::tempdir;
@@ -402,32 +397,20 @@ mod tests {
 
     #[test]
     fn ancestors_returns_absolute_path_bufs() {
-        #[cfg(windows)]
-        let path = PathBuf::from(r"C:\tmp\one\two");
-        #[cfg(not(windows))]
-        let path = PathBuf::from("/tmp/one/two");
-
         let abs_path_buf =
-            AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute path");
+            AbsolutePathBuf::from_absolute_path_checked(test_path_buf("/tmp/one/two"))
+                .expect("absolute path");
 
         let ancestors = abs_path_buf
             .ancestors()
             .map(|path| path.to_path_buf())
             .collect::<Vec<_>>();
 
-        #[cfg(windows)]
         let expected = vec![
-            PathBuf::from(r"C:\tmp\one\two"),
-            PathBuf::from(r"C:\tmp\one"),
-            PathBuf::from(r"C:\tmp"),
-            PathBuf::from(r"C:\"),
-        ];
-        #[cfg(not(windows))]
-        let expected = vec![
-            PathBuf::from("/tmp/one/two"),
-            PathBuf::from("/tmp/one"),
-            PathBuf::from("/tmp"),
-            PathBuf::from("/"),
+            test_path_buf("/tmp/one/two"),
+            test_path_buf("/tmp/one"),
+            test_path_buf("/tmp"),
+            test_path_buf("/"),
         ];
 
         assert_eq!(ancestors, expected);
