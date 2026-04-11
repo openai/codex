@@ -37,10 +37,10 @@ use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::declared_openai_file_input_param_names;
-use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -721,10 +721,7 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
-    if mcp_permission_prompt_is_auto_approved(
-        turn_context.approval_policy.value(),
-        turn_context.sandbox_policy.get(),
-    ) {
+    if turn_context.approval_policy.value() == AskForApproval::Never {
         return None;
     }
 
