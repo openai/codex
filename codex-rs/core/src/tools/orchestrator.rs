@@ -421,6 +421,9 @@ impl ToolOrchestrator {
                 approval_ctx.call_id.to_string(),
                 permission_request.tool_name,
                 permission_request.command,
+                permission_request.sandbox_permissions,
+                permission_request.additional_permissions,
+                permission_request.justification,
                 guardian_review
                     .as_ref()
                     .map(|review| permission_request_guardian_review(review.review.clone())),

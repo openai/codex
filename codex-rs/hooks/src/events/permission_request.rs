@@ -8,6 +8,8 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
@@ -22,6 +24,7 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::permission_review::PermissionRequestGuardianReview;
+use crate::schema::PermissionRequestApprovalContext;
 use crate::schema::PermissionRequestCommandInput;
 use crate::schema::PermissionRequestToolInput;
 
@@ -40,6 +43,9 @@ pub struct PermissionRequestRequest {
     /// still needs stable begin/end ids for hook UI and transcript bookkeeping.
     pub run_id_suffix: String,
     pub command: String,
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub justification: Option<String>,
     /// Advisory approval context from Codex's automated reviewer, when one ran.
     ///
     /// A hook can use this as another signal, but it is not bound by the
@@ -105,20 +111,7 @@ pub(crate) async fn run(
     // `Bash` shape even though the request carries `tool_name`, so later
     // tool support has to choose its own explicit schema instead of
     // accidentally inheriting Bash fields.
-    let input_json = match serde_json::to_string(&PermissionRequestCommandInput {
-        session_id: request.session_id.to_string(),
-        turn_id: request.turn_id.clone(),
-        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.cwd.display().to_string(),
-        hook_event_name: "PermissionRequest".to_string(),
-        model: request.model.clone(),
-        permission_mode: request.permission_mode.clone(),
-        tool_name: "Bash".to_string(),
-        tool_input: PermissionRequestToolInput {
-            command: request.command.clone(),
-        },
-        guardian_review: request.guardian_review,
-    }) {
+    let input_json = match serde_json::to_string(&build_command_input(&request)) {
         Ok(input_json) => input_json,
         Err(error) => {
             let hook_events = common::serialization_failure_hook_events_for_tool_use(
@@ -159,6 +152,28 @@ pub(crate) async fn run(
             })
             .collect(),
         decision,
+    }
+}
+
+fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestCommandInput {
+    PermissionRequestCommandInput {
+        session_id: request.session_id.to_string(),
+        turn_id: request.turn_id.clone(),
+        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
+        cwd: request.cwd.display().to_string(),
+        hook_event_name: "PermissionRequest".to_string(),
+        model: request.model.clone(),
+        permission_mode: request.permission_mode.clone(),
+        tool_name: "Bash".to_string(),
+        tool_input: PermissionRequestToolInput {
+            command: request.command.clone(),
+        },
+        approval_context: PermissionRequestApprovalContext {
+            sandbox_permissions: request.sandbox_permissions,
+            additional_permissions: request.additional_permissions.clone(),
+            justification: request.justification.clone(),
+        },
+        guardian_review: request.guardian_review.clone(),
     }
 }
 
@@ -267,5 +282,89 @@ fn parse_completed(
     dispatcher::ParsedHandler {
         completed,
         data: PermissionRequestHandlerData { decision },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use codex_protocol::ThreadId;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::models::SandboxPermissions;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::PermissionRequestRequest;
+    use super::build_command_input;
+
+    #[test]
+    fn command_input_includes_approval_context_alongside_guardian_review() {
+        let request = PermissionRequestRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-123".to_string(),
+            cwd: PathBuf::from("/repo"),
+            transcript_path: Some(PathBuf::from("/tmp/transcript.jsonl")),
+            model: "gpt-5".to_string(),
+            permission_mode: "on-request".to_string(),
+            tool_name: "Bash".to_string(),
+            run_id_suffix: "call-123".to_string(),
+            command: "cargo test -p codex-core".to_string(),
+            sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+            additional_permissions: Some(PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: None,
+            }),
+            justification: Some("Need network and target writes".to_string()),
+            guardian_review: Some(crate::permission_review::PermissionRequestGuardianReview {
+                status: crate::permission_review::PermissionRequestGuardianReviewStatus::Approved,
+                decision: Some(
+                    crate::permission_review::PermissionRequestGuardianReviewDecision::Allow,
+                ),
+                risk_level: None,
+                user_authorization: None,
+                rationale: Some("Scoped escalation looks reasonable".to_string()),
+            }),
+        };
+
+        let actual = serde_json::to_value(build_command_input(&request))
+            .expect("serialize permission request input");
+
+        assert_eq!(
+            actual,
+            json!({
+                "session_id": request.session_id.to_string(),
+                "turn_id": "turn-123",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/repo",
+                "hook_event_name": "PermissionRequest",
+                "model": "gpt-5",
+                "permission_mode": "on-request",
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cargo test -p codex-core",
+                },
+                "approval_context": {
+                    "sandbox_permissions": "with_additional_permissions",
+                    "additional_permissions": {
+                        "file_system": null,
+                        "network": {
+                            "enabled": true,
+                        },
+                    },
+                    "justification": "Need network and target writes",
+                },
+                "guardian_review": {
+                    "status": "approved",
+                    "decision": "allow",
+                    "risk_level": null,
+                    "user_authorization": null,
+                    "rationale": "Scoped escalation looks reasonable",
+                },
+            })
+        );
     }
 }

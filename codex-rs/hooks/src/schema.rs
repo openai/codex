@@ -12,6 +12,9 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxPermissions;
+
 use crate::permission_review::PermissionRequestGuardianReview;
 
 const GENERATED_DIR: &str = "generated";
@@ -239,6 +242,14 @@ pub(crate) struct PermissionRequestToolInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestApprovalContext {
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub justification: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "permission-request.command.input")]
 pub(crate) struct PermissionRequestCommandInput {
     pub session_id: String,
@@ -254,6 +265,7 @@ pub(crate) struct PermissionRequestCommandInput {
     #[schemars(schema_with = "permission_request_tool_name_schema")]
     pub tool_name: String,
     pub tool_input: PermissionRequestToolInput,
+    pub approval_context: PermissionRequestApprovalContext,
     #[schemars(
         schema_with = "crate::permission_review::nullable_permission_request_guardian_review_schema"
     )]

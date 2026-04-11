@@ -15,6 +15,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -129,13 +130,24 @@ pub(crate) struct ApprovalCtx<'a> {
 pub(crate) struct PermissionRequestPayload {
     pub tool_name: String,
     pub command: String,
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub justification: Option<String>,
 }
 
 impl PermissionRequestPayload {
-    pub(crate) fn bash(command: String) -> Self {
+    pub(crate) fn bash(
+        command: String,
+        sandbox_permissions: SandboxPermissions,
+        additional_permissions: Option<PermissionProfile>,
+        justification: Option<String>,
+    ) -> Self {
         Self {
             tool_name: "Bash".to_string(),
             command,
+            sandbox_permissions,
+            additional_permissions,
+            justification,
         }
     }
 }

@@ -2,6 +2,27 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "FileSystemPermissions": {
+      "properties": {
+        "read": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "write": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "GuardianRiskLevel": {
       "enum": [
         "low",
@@ -20,11 +41,48 @@
       ],
       "type": "string"
     },
+    "NetworkPermissions": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "NullableString": {
       "type": [
         "string",
         "null"
       ]
+    },
+    "PermissionProfile": {
+      "properties": {
+        "file_system": {
+          "$ref": "#/definitions/FileSystemPermissions"
+        },
+        "network": {
+          "$ref": "#/definitions/NetworkPermissions"
+        }
+      },
+      "type": "object"
+    },
+    "PermissionRequestApprovalContext": {
+      "additionalProperties": false,
+      "properties": {
+        "additional_permissions": {
+          "$ref": "#/definitions/PermissionProfile"
+        },
+        "justification": {
+          "type": "string"
+        },
+        "sandbox_permissions": {
+          "$ref": "#/definitions/SandboxPermissions"
+        }
+      },
+      "required": [
+        "sandbox_permissions"
+      ],
+      "type": "object"
     },
     "PermissionRequestGuardianReview": {
       "additionalProperties": false,
@@ -106,9 +164,38 @@
         "command"
       ],
       "type": "object"
+    },
+    "SandboxPermissions": {
+      "description": "Controls the per-command sandbox override requested by a shell-like tool call.",
+      "oneOf": [
+        {
+          "description": "Run with the turn's configured sandbox policy unchanged.",
+          "enum": [
+            "use_default"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Request to run outside the sandbox.",
+          "enum": [
+            "require_escalated"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Request to stay in the sandbox while widening permissions for this command only.",
+          "enum": [
+            "with_additional_permissions"
+          ],
+          "type": "string"
+        }
+      ]
     }
   },
   "properties": {
+    "approval_context": {
+      "$ref": "#/definitions/PermissionRequestApprovalContext"
+    },
     "cwd": {
       "type": "string"
     },
@@ -158,6 +245,7 @@
     }
   },
   "required": [
+    "approval_context",
     "cwd",
     "guardian_review",
     "hook_event_name",

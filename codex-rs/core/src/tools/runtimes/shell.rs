@@ -199,7 +199,12 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn permission_request_payload(&self, req: &ShellRequest) -> Option<PermissionRequestPayload> {
-        Some(PermissionRequestPayload::bash(req.hook_command.clone()))
+        Some(PermissionRequestPayload::bash(
+            req.hook_command.clone(),
+            req.sandbox_permissions,
+            req.additional_permissions.clone(),
+            req.justification.clone(),
+        ))
     }
 
     fn guardian_approval_request(

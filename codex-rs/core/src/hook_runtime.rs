@@ -14,8 +14,10 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
@@ -155,6 +157,9 @@ pub(crate) async fn run_permission_request_hooks(
     run_id_suffix: String,
     tool_name: String,
     command: String,
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<PermissionProfile>,
+    justification: Option<String>,
     guardian_review: Option<PermissionRequestGuardianReview>,
 ) -> Option<PermissionRequestDecision> {
     let request = PermissionRequestRequest {
@@ -167,6 +172,9 @@ pub(crate) async fn run_permission_request_hooks(
         tool_name,
         run_id_suffix,
         command,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
         guardian_review,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
