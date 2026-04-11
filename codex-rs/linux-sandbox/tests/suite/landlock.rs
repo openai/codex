@@ -174,7 +174,7 @@ async fn run_cmd_result_with_policies_in_cwd(
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
-    let cwd = AbsolutePathBuf::from_absolute_path(cwd).expect("cwd should be absolute");
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd)?;
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
