@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 
 use crate::permission_review::PermissionRequestGuardianReview;
 
@@ -234,10 +235,25 @@ pub(crate) struct PreToolUseCommandInput {
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum PermissionRequestToolInputWire {
+    Bash(PermissionRequestBashToolInputWire),
+    RequestPermissions(PermissionRequestPermissionsToolInputWire),
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestToolInput {
+pub(crate) struct PermissionRequestBashToolInputWire {
     pub command: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestPermissionsToolInputWire {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub permissions: RequestPermissionProfile,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -264,7 +280,7 @@ pub(crate) struct PermissionRequestCommandInput {
     pub permission_mode: String,
     #[schemars(schema_with = "permission_request_tool_name_schema")]
     pub tool_name: String,
-    pub tool_input: PermissionRequestToolInput,
+    pub tool_input: PermissionRequestToolInputWire,
     pub approval_context: PermissionRequestApprovalContext,
     #[schemars(
         schema_with = "crate::permission_review::nullable_permission_request_guardian_review_schema"
@@ -569,7 +585,7 @@ fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 }
 
 fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
+    string_enum_schema(&["Bash", "request_permissions"])
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

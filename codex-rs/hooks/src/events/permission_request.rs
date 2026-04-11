@@ -16,6 +16,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 
 use super::common;
 use crate::engine::CommandShell;
@@ -25,8 +26,10 @@ use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::permission_review::PermissionRequestGuardianReview;
 use crate::schema::PermissionRequestApprovalContext;
+use crate::schema::PermissionRequestBashToolInputWire;
 use crate::schema::PermissionRequestCommandInput;
-use crate::schema::PermissionRequestToolInput;
+use crate::schema::PermissionRequestPermissionsToolInputWire;
+use crate::schema::PermissionRequestToolInputWire;
 
 #[derive(Debug, Clone)]
 pub struct PermissionRequestRequest {
@@ -42,7 +45,7 @@ pub struct PermissionRequestRequest {
     /// Claude's PermissionRequest input does not include `tool_use_id`, but Codex
     /// still needs stable begin/end ids for hook UI and transcript bookkeeping.
     pub run_id_suffix: String,
-    pub command: String,
+    pub tool_input: PermissionRequestToolInput,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
@@ -52,6 +55,17 @@ pub struct PermissionRequestRequest {
     /// guardian's decision. The hook may allow, deny, or stay quiet; if it stays
     /// quiet, the orchestrator falls back to the guardian's original decision.
     pub guardian_review: Option<PermissionRequestGuardianReview>,
+}
+
+#[derive(Debug, Clone)]
+pub enum PermissionRequestToolInput {
+    Bash {
+        command: String,
+    },
+    RequestPermissions {
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,10 +121,9 @@ pub(crate) async fn run(
         };
     }
 
-    // This first pass is Bash-only. Keep the wire input fixed to Claude's
-    // `Bash` shape even though the request carries `tool_name`, so later
-    // tool support has to choose its own explicit schema instead of
-    // accidentally inheriting Bash fields.
+    // Keep each tool's wire shape explicit so new PermissionRequest surfaces
+    // choose their own input schema instead of accidentally inheriting Bash
+    // fields.
     let input_json = match serde_json::to_string(&build_command_input(&request)) {
         Ok(input_json) => input_json,
         Err(error) => {
@@ -164,9 +177,22 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
         hook_event_name: "PermissionRequest".to_string(),
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),
-        tool_name: "Bash".to_string(),
-        tool_input: PermissionRequestToolInput {
-            command: request.command.clone(),
+        tool_name: request.tool_name.clone(),
+        tool_input: match &request.tool_input {
+            PermissionRequestToolInput::Bash { command } => {
+                PermissionRequestToolInputWire::Bash(PermissionRequestBashToolInputWire {
+                    command: command.clone(),
+                })
+            }
+            PermissionRequestToolInput::RequestPermissions {
+                reason,
+                permissions,
+            } => PermissionRequestToolInputWire::RequestPermissions(
+                PermissionRequestPermissionsToolInputWire {
+                    reason: reason.clone(),
+                    permissions: permissions.clone(),
+                },
+            ),
         },
         approval_context: PermissionRequestApprovalContext {
             sandbox_permissions: request.sandbox_permissions,
@@ -297,6 +323,7 @@ mod tests {
     use serde_json::json;
 
     use super::PermissionRequestRequest;
+    use super::PermissionRequestToolInput;
     use super::build_command_input;
 
     #[test]
@@ -310,7 +337,9 @@ mod tests {
             permission_mode: "on-request".to_string(),
             tool_name: "Bash".to_string(),
             run_id_suffix: "call-123".to_string(),
-            command: "cargo test -p codex-core".to_string(),
+            tool_input: PermissionRequestToolInput::Bash {
+                command: "cargo test -p codex-core".to_string(),
+            },
             sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
             additional_permissions: Some(PermissionProfile {
                 network: Some(NetworkPermissions {

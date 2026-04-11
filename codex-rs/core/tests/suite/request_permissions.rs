@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
@@ -38,6 +39,56 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+
+fn write_permission_request_hook(home: &Path, matcher: &str) -> Result<()> {
+    let script_path = home.join("permission_request_hook.py");
+    let log_path = home.join("permission_request_hook_log.jsonl");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{log_path}")
+payload = json.load(sys.stdin)
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "PermissionRequest",
+        "decision": {{"behavior": "allow"}}
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PermissionRequest": [{
+                "matcher": matcher,
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running permission request hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write permission request hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("permission_request_hook_log.jsonl"))
+        .context("read permission request hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse permission request hook log line"))
+        .collect()
+}
 
 fn absolute_path(path: &Path) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(path).expect("absolute path")
@@ -1455,6 +1506,114 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls_without_i
         fs::read_to_string(&outside_write)?,
         "sticky-shell-feature-independent-ok"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn permission_request_hook_can_approve_request_permissions_tool_call() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(home, "request_permissions") {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    let outside_dir = tempfile::tempdir()?;
+    let outside_write = outside_dir.path().join("hook-sticky-shell-write.txt");
+    let command = format!(
+        "printf {:?} > {:?} && cat {:?}",
+        "hook-sticky-shell-ok", outside_write, outside_write
+    );
+    let requested_permissions = requested_directory_write_permissions(outside_dir.path());
+    let normalized_requested_permissions =
+        normalized_directory_write_permissions(outside_dir.path())?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-hook-permissions-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow writing outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-hook-permissions-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-hook-permissions-2"),
+                shell_command_event("shell-call", &command)?,
+                ev_completed("resp-hook-permissions-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-hook-permissions-3"),
+                ev_assistant_message("msg-hook-permissions-1", "done"),
+                ev_completed("resp-hook-permissions-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "write outside the workspace after hook approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_or_completion(&test).await;
+    assert!(
+        approval.is_none(),
+        "request_permissions hook approval should not require a later exec approval"
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_name"], "request_permissions");
+    assert_eq!(
+        hook_inputs[0]["tool_input"],
+        json!({
+            "reason": "Allow writing outside the workspace",
+            "permissions": normalized_requested_permissions,
+        })
+    );
+    assert_eq!(hook_inputs[0]["guardian_review"], Value::Null);
+
+    let shell_output = responses
+        .function_call_output_text("shell-call")
+        .map(|output| json!({ "output": output }))
+        .unwrap_or_else(|| panic!("expected shell-call output"));
+    let result = parse_result(&shell_output);
+    assert!(
+        result.exit_code.is_none_or(|exit_code| exit_code == 0),
+        "expected success output, got exit_code={:?}, stdout={:?}",
+        result.exit_code,
+        result.stdout
+    );
+    assert_eq!(result.stdout.trim(), "hook-sticky-shell-ok");
+    assert_eq!(fs::read_to_string(&outside_write)?, "hook-sticky-shell-ok");
 
     Ok(())
 }
