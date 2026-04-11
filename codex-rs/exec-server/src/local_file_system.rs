@@ -541,7 +541,6 @@ mod tests {
 }
 
 #[cfg(all(test, windows))]
-
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;

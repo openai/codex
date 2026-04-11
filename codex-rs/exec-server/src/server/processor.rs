@@ -315,12 +315,16 @@ mod tests {
         let (server_writer, client_reader) = duplex(1 << 20);
         let connection =
             JsonRpcConnection::from_stdio(server_reader, server_writer, label.to_string());
-        let task = tokio::spawn(run_connection(
-            connection,
-            registry,
-            ExecServerRuntimePaths::default(),
-        ));
+        let task = tokio::spawn(run_connection(connection, registry, test_runtime_paths()));
         (client_writer, BufReader::new(client_reader).lines(), task)
+    }
+
+    fn test_runtime_paths() -> ExecServerRuntimePaths {
+        ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths")
     }
 
     async fn send_request<P: Serialize>(

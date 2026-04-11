@@ -330,13 +330,13 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         #[cfg(windows)]
         {
             let batch_script = path.join(format!("{filename}.bat"));
+            let exe = exe.display();
             std::fs::write(
                 &batch_script,
                 format!(
                     r#"@echo off
-"{}" {CODEX_CORE_APPLY_PATCH_ARG1} %*
+"{exe}" {CODEX_CORE_APPLY_PATCH_ARG1} %*
 "#,
-                    exe.display()
                 ),
             )?;
         }

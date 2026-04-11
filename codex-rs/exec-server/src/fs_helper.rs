@@ -182,8 +182,7 @@ pub(crate) async fn run_direct_request(
         FsHelperRequest::WriteFile(params) => {
             let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
                 invalid_request(format!(
-                    "{} requires valid base64 dataBase64: {err}",
-                    FS_WRITE_FILE_METHOD
+                    "{FS_WRITE_FILE_METHOD} requires valid base64 dataBase64: {err}"
                 ))
             })?;
             file_system

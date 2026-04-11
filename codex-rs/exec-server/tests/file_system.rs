@@ -42,8 +42,12 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
         })
     } else {
         let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
-        let runtime_paths =
-            ExecServerRuntimePaths::new(codex, /*codex_linux_sandbox_exe*/ None)?;
+        #[cfg(target_os = "linux")]
+        let codex_linux_sandbox_exe =
+            Some(codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")?);
+        #[cfg(not(target_os = "linux"))]
+        let codex_linux_sandbox_exe = None;
+        let runtime_paths = ExecServerRuntimePaths::new(codex, codex_linux_sandbox_exe)?;
         Ok(FileSystemContext {
             file_system: Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths)),
             _server: None,

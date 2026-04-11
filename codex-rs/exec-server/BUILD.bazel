@@ -5,6 +5,7 @@ codex_rust_crate(
     crate_name = "codex_exec_server",
     extra_binaries = [
         "//codex-rs/cli:codex",
+        "//codex-rs/linux-sandbox:codex-linux-sandbox",
     ],
     test_tags = ["no-sandbox"],
 )
