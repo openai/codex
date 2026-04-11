@@ -24,6 +24,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::ThreadAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -103,6 +105,8 @@ pub(crate) struct AppServerBootstrap {
     pub(crate) account_email: Option<String>,
     pub(crate) auth_mode: Option<TelemetryAuthMode>,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) workspace_role: Option<codex_app_server_protocol::WorkspaceRole>,
+    pub(crate) is_workspace_owner: Option<bool>,
     pub(crate) plan_type: Option<codex_protocol::account::PlanType>,
     /// Whether the configured model provider needs OpenAI-style auth. Combined
     /// with `has_chatgpt_account` to decide if a startup rate-limit prefetch
@@ -217,6 +221,8 @@ impl AppServerSession {
             account_email,
             auth_mode,
             status_account_display,
+            workspace_role,
+            is_workspace_owner,
             plan_type,
             feedback_audience,
             has_chatgpt_account,
@@ -225,6 +231,8 @@ impl AppServerSession {
                 None,
                 Some(TelemetryAuthMode::ApiKey),
                 Some(StatusAccountDisplay::ApiKey),
+                None,
+                None,
                 None,
                 FeedbackAudience::External,
                 false,
@@ -242,17 +250,30 @@ impl AppServerSession {
                         email: Some(email),
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
+                    account.workspace_role,
+                    account.is_workspace_owner,
                     Some(plan_type),
                     feedback_audience,
                     true,
                 )
             }
-            None => (None, None, None, None, FeedbackAudience::External, false),
+            None => (
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                FeedbackAudience::External,
+                false,
+            ),
         };
         Ok(AppServerBootstrap {
             account_email,
             auth_mode,
             status_account_display,
+            workspace_role,
+            is_workspace_owner,
             plan_type,
             requires_openai_auth: account.requires_openai_auth,
             default_model,
@@ -557,6 +578,24 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_add_credits_nudge_email(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadAddCreditsNudgeEmailResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAddCreditsNudgeEmail {
+                request_id,
+                params: ThreadAddCreditsNudgeEmailParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/addCreditsNudgeEmail failed in TUI")?;
         Ok(())
     }
 
@@ -1134,6 +1173,9 @@ pub(crate) fn app_server_rate_limit_snapshot_to_core(
         primary: snapshot.primary.map(app_server_rate_limit_window_to_core),
         secondary: snapshot.secondary.map(app_server_rate_limit_window_to_core),
         credits: snapshot.credits.map(app_server_credits_snapshot_to_core),
+        spend_control: snapshot
+            .spend_control
+            .map(app_server_spend_control_snapshot_to_core),
         plan_type: snapshot.plan_type,
     }
 }
@@ -1155,6 +1197,14 @@ fn app_server_credits_snapshot_to_core(
         has_credits: snapshot.has_credits,
         unlimited: snapshot.unlimited,
         balance: snapshot.balance,
+    }
+}
+
+fn app_server_spend_control_snapshot_to_core(
+    snapshot: codex_app_server_protocol::SpendControlSnapshot,
+) -> codex_protocol::protocol::SpendControlSnapshot {
+    codex_protocol::protocol::SpendControlSnapshot {
+        reached: snapshot.reached,
     }
 }
 

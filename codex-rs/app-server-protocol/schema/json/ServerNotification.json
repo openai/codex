@@ -51,6 +51,12 @@
             }
           ]
         },
+        "isWorkspaceOwner": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "planType": {
           "anyOf": [
             {
@@ -60,9 +66,88 @@
               "type": "null"
             }
           ]
+        },
+        "workspaceRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
+    },
+    "AddCreditsNudgeEmailNotification": {
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailResult"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "AddCreditsNudgeEmailResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "sent"
+              ],
+              "title": "SentAddCreditsNudgeEmailResultStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "SentAddCreditsNudgeEmailResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "cooldownActive"
+              ],
+              "title": "CooldownActiveAddCreditsNudgeEmailResultStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "CooldownActiveAddCreditsNudgeEmailResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "AgentMessageDeltaNotification": {
       "properties": {
@@ -2072,6 +2157,16 @@
               "type": "null"
             }
           ]
+        },
+        "spendControl": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -2269,6 +2364,17 @@
     },
     "SkillsChangedNotification": {
       "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "type": "object"
+    },
+    "SpendControlSnapshot": {
+      "properties": {
+        "reached": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reached"
+      ],
       "type": "object"
     },
     "SubAgentSource": {
@@ -4055,6 +4161,14 @@
         "samplePaths"
       ],
       "type": "object"
+    },
+    "WorkspaceRole": {
+      "enum": [
+        "account-owner",
+        "account-admin",
+        "standard-user"
+      ],
+      "type": "string"
     }
   },
   "description": "Notification sent from the server to the client.",
@@ -4680,6 +4794,26 @@
         "params"
       ],
       "title": "Account/rateLimits/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "account/addCreditsNudgeEmail/completed"
+          ],
+          "title": "Account/addCreditsNudgeEmail/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Account/addCreditsNudgeEmail/completedNotification",
       "type": "object"
     },
     {

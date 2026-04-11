@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 608
+expression: rendered
+---
+■ Your workspace is out of credits. Request more from your workspace owner? [y/N]
