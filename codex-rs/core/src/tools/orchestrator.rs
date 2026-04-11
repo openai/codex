@@ -152,7 +152,7 @@ impl ToolOrchestrator {
                 otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                 match decision {
-                    ReviewDecision::Denied => {
+                    ReviewDecision::Denied | ReviewDecision::Abort => {
                         let reason = if let Some(review_id) = guardian_review_id.as_deref() {
                             guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
                         } else {
@@ -162,9 +162,6 @@ impl ToolOrchestrator {
                     }
                     ReviewDecision::TimedOut => {
                         return Err(ToolError::Rejected(guardian_timeout_message()));
-                    }
-                    ReviewDecision::Abort => {
-                        return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -313,7 +310,7 @@ impl ToolOrchestrator {
                     otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                     match decision {
-                        ReviewDecision::Denied => {
+                        ReviewDecision::Denied | ReviewDecision::Abort => {
                             let reason = if let Some(review_id) = guardian_review_id.as_deref() {
                                 guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
                                     .await
@@ -324,9 +321,6 @@ impl ToolOrchestrator {
                         }
                         ReviewDecision::TimedOut => {
                             return Err(ToolError::Rejected(guardian_timeout_message()));
-                        }
-                        ReviewDecision::Abort => {
-                            return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
