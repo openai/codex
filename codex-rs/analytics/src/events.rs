@@ -6,6 +6,9 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
@@ -36,6 +39,7 @@ pub(crate) struct TrackEventsRequest {
 pub(crate) enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     ThreadInitialized(ThreadInitializedEvent),
+    GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
@@ -99,6 +103,179 @@ pub(crate) struct ThreadInitializedEventParams {
 pub(crate) struct ThreadInitializedEvent {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: ThreadInitializedEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct GuardianReviewEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: GuardianReviewEventPayload,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianReviewDecision {
+    Approved,
+    Denied,
+    Aborted,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianReviewTerminalStatus {
+    Approved,
+    Denied,
+    Aborted,
+    TimedOut,
+    FailedClosed,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianReviewFailureReason {
+    Timeout,
+    Cancelled,
+    PromptBuildError,
+    SessionError,
+    ParseError,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianReviewSessionKind {
+    TrunkNew,
+    TrunkReused,
+    EphemeralForked,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianReviewRiskLevel {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianReviewUserAuthorization {
+    Unknown,
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianReviewOutcome {
+    Allow,
+    Deny,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianApprovalRequestSource {
+    /// Approval requested directly by the main Codex turn.
+    MainTurn,
+    /// Approval requested by a delegated subagent and routed through the parent
+    /// session for guardian review.
+    DelegatedSubagent,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GuardianReviewedAction {
+    Shell {
+        command: Vec<String>,
+        command_display: String,
+        cwd: String,
+        sandbox_permissions: SandboxPermissions,
+        additional_permissions: Option<PermissionProfile>,
+        justification: Option<String>,
+    },
+    UnifiedExec {
+        command: Vec<String>,
+        command_display: String,
+        cwd: String,
+        sandbox_permissions: SandboxPermissions,
+        additional_permissions: Option<PermissionProfile>,
+        justification: Option<String>,
+        tty: bool,
+    },
+    Execve {
+        source: GuardianCommandSource,
+        program: String,
+        argv: Vec<String>,
+        cwd: String,
+        additional_permissions: Option<PermissionProfile>,
+    },
+    ApplyPatch {
+        cwd: String,
+        files: Vec<String>,
+    },
+    NetworkAccess {
+        target: String,
+        host: String,
+        protocol: NetworkApprovalProtocol,
+        port: u16,
+    },
+    McpToolCall {
+        server: String,
+        tool_name: String,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+        tool_title: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianCommandSource {
+    Shell,
+    UnifiedExec,
+}
+
+#[derive(Clone, Serialize)]
+pub struct GuardianReviewEventParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub review_id: String,
+    pub target_item_id: String,
+    pub retry_reason: Option<String>,
+    pub approval_request_source: GuardianApprovalRequestSource,
+    pub reviewed_action: GuardianReviewedAction,
+    pub reviewed_action_truncated: bool,
+    pub decision: GuardianReviewDecision,
+    pub terminal_status: GuardianReviewTerminalStatus,
+    pub failure_reason: Option<GuardianReviewFailureReason>,
+    pub risk_level: Option<GuardianReviewRiskLevel>,
+    pub user_authorization: Option<GuardianReviewUserAuthorization>,
+    pub outcome: Option<GuardianReviewOutcome>,
+    pub rationale: Option<String>,
+    pub guardian_thread_id: Option<String>,
+    pub guardian_session_kind: Option<GuardianReviewSessionKind>,
+    pub guardian_model: Option<String>,
+    pub guardian_reasoning_effort: Option<String>,
+    pub had_prior_review_context: Option<bool>,
+    pub review_timeout_ms: u64,
+    pub tool_call_count: u64,
+    pub time_to_first_token_ms: Option<u64>,
+    pub completion_latency_ms: Option<u64>,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub input_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub reasoning_output_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct GuardianReviewEventPayload {
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    #[serde(flatten)]
+    pub(crate) guardian_review: GuardianReviewEventParams,
 }
 
 #[derive(Serialize)]

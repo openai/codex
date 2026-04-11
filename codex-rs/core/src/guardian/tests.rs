@@ -683,6 +683,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     let decision = review_approval_request_with_cancel(
         &session,
         &turn,
+        "review-cancelled-guardian".to_string(),
         GuardianApprovalRequest::ApplyPatch {
             id: "patch-1".to_string(),
             cwd: PathBuf::from("/tmp"),
@@ -1248,6 +1249,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let decision = review_approval_request(
         &session,
         &turn,
+        "review-shell-guardian-error".to_string(),
         GuardianApprovalRequest::Shell {
             id: "shell-guardian-error".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -1295,8 +1297,13 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         }),
         "denial rationale should not fall back to the generic missing payload error"
     );
+    {
+        let rationales = session.services.guardian_rejections.lock().await;
+        assert!(rationales.contains_key("review-shell-guardian-error"));
+        assert!(!rationales.contains_key("shell-guardian-error"));
+    }
     let rejection_message =
-        guardian_rejection_message(session.as_ref(), "shell-guardian-error").await;
+        guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
     assert!(
         rejection_message.contains("Reason: Automatic approval review failed:")
             && rejection_message.contains(error_message),
@@ -1375,7 +1382,14 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         justification: Some("Inspect repo state before proceeding.".to_string()),
     };
     assert_eq!(
-        review_approval_request(&session, &turn, initial_request, /*retry_reason*/ None).await,
+        review_approval_request(
+            &session,
+            &turn,
+            "review-shell-guardian-1".to_string(),
+            initial_request,
+            /*retry_reason*/ None
+        )
+        .await,
         ReviewDecision::Approved
     );
     session
@@ -1427,6 +1441,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         review_approval_request(
             &session_for_second,
             &turn_for_second,
+            "review-shell-guardian-2".to_string(),
             second_request,
             Some("trunk follow-up".to_string()),
         )
@@ -1475,6 +1490,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     let third_decision = review_approval_request(
         &session,
         &turn,
+        "review-shell-guardian-3".to_string(),
         third_request,
         Some("parallel follow-up".to_string()),
     )

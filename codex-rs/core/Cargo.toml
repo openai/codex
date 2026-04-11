@@ -27,7 +27,6 @@ chrono = { workspace = true, features = ["serde"] }
 chrono-tz = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-analytics = { workspace = true }
-codex-account = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }

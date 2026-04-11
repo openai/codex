@@ -8,7 +8,6 @@
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
@@ -147,13 +146,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let retry_reason = ctx.retry_reason.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
+        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if req.permissions_preapproved && retry_reason.is_none() {
                 return ReviewDecision::Approved;
             }
-            if routes_approval_to_guardian(turn) {
+            if let Some(review_id) = guardian_review_id {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                return review_approval_request(session, turn, action, retry_reason).await;
+                return review_approval_request(session, turn, review_id, action, retry_reason)
+                    .await;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
