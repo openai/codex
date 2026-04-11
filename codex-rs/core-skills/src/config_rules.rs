@@ -104,16 +104,9 @@ pub fn resolve_disabled_skill_paths(
 
 fn skill_config_rule_selector(entry: &SkillConfig) -> Option<SkillConfigRuleSelector> {
     match (entry.path.as_ref(), entry.name.as_deref()) {
-        (Some(path), None) => match path.canonicalize() {
-            Ok(path) => Some(SkillConfigRuleSelector::Path(path)),
-            Err(err) => {
-                warn!(
-                    "ignoring skills.config path override that could not be canonicalized: {}: {err}",
-                    path.display()
-                );
-                None
-            }
-        },
+        (Some(path), None) => Some(SkillConfigRuleSelector::Path(
+            path.canonicalize().unwrap_or_else(|_| path.clone()),
+        )),
         (None, Some(name)) => {
             let name = name.trim();
             if name.is_empty() {
