@@ -144,8 +144,10 @@ fn core_auth_provider_reports_when_auth_header_will_attach() {
 
 #[test]
 fn core_auth_provider_supports_non_bearer_authorization_headers() {
-    let auth =
-        CoreAuthProvider::for_test_authorization_header(Some("AgentAssertion opaque-token"), None);
+    let auth = CoreAuthProvider::for_test_authorization_header(
+        Some("AgentAssertion opaque-token"),
+        /*account_id*/ None,
+    );
 
     assert!(auth.auth_header_attached());
     assert_eq!(auth.auth_header_name(), Some("authorization"));
