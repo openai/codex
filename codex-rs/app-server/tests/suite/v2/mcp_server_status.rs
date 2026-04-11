@@ -38,9 +38,9 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn mcp_server_status_list_returns_tools_for_hyphenated_server_names() -> Result<()> {
+async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_mcp_server("lookup").await?;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server("look-up.raw").await?;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
         codex_home.path(),
@@ -85,7 +85,14 @@ url = "{mcp_server_url}/mcp"
     assert_eq!(status.name, "some-server");
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
-        BTreeSet::from(["lookup".to_string()])
+        BTreeSet::from(["look-up.raw".to_string()])
+    );
+    assert_eq!(
+        status
+            .tools
+            .get("look-up.raw")
+            .map(|tool| tool.name.as_str()),
+        Some("look-up.raw")
     );
 
     mcp_server_handle.abort();
@@ -261,8 +268,7 @@ url = "{mcp_server_url}/mcp"
 }
 
 #[tokio::test]
-async fn mcp_server_status_list_does_not_duplicate_tools_for_sanitized_name_collisions()
--> Result<()> {
+async fn mcp_server_status_list_keeps_tools_for_sanitized_name_collisions() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (dash_server_url, dash_server_handle) = start_mcp_server("dash_lookup").await?;
     let (underscore_server_url, underscore_server_handle) =
@@ -313,11 +319,22 @@ url = "{underscore_server_url}/mcp"
     let status_tools = response
         .data
         .iter()
-        .map(|status| (status.name.as_str(), status.tools.keys().count()))
+        .map(|status| {
+            (
+                status.name.as_str(),
+                status.tools.keys().cloned().collect::<BTreeSet<_>>(),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
         status_tools,
-        BTreeMap::from([("some-server", 0), ("some_server", 0)])
+        BTreeMap::from([
+            ("some-server", BTreeSet::from(["dash_lookup".to_string()])),
+            (
+                "some_server",
+                BTreeSet::from(["underscore_lookup".to_string()])
+            )
+        ])
     );
 
     dash_server_handle.abort();

@@ -10,6 +10,7 @@ use crate::shell::Shell;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -21,7 +22,7 @@ pub(crate) mod unified_exec;
 /// Validates that at least a program is present.
 pub(crate) fn build_sandbox_command(
     command: &[String],
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
     env: &HashMap<String, String>,
     additional_permissions: Option<PermissionProfile>,
 ) -> Result<SandboxCommand, ToolError> {
@@ -31,7 +32,7 @@ pub(crate) fn build_sandbox_command(
     Ok(SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
-        cwd: cwd.to_path_buf(),
+        cwd: cwd.clone(),
         env: env.clone(),
         additional_permissions,
     })

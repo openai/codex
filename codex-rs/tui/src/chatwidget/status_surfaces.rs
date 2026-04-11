@@ -450,12 +450,9 @@ impl ChatWidget {
                     Some(format!("{} used", format_tokens_compact(total)))
                 }
             }
-            StatusLineItem::ContextRemaining => self
-                .status_line_context_remaining_percent()
-                .map(|remaining| format!("{remaining}% left")),
-            StatusLineItem::ContextUsed => self
+            StatusLineItem::ContextUsage => self
                 .status_line_context_used_percent()
-                .map(|used| format!("{used}% used")),
+                .map(format_context_used_meter),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id
@@ -498,6 +495,10 @@ impl ChatWidget {
                     "Fast off".to_string()
                 },
             ),
+            StatusLineItem::ThreadTitle => self.thread_name.as_ref().and_then(|name| {
+                let trimmed = name.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }),
         }
     }
 
@@ -659,4 +660,62 @@ where
         }
     }
     (items, invalid)
+}
+
+fn format_context_used_meter(used_percent: i64) -> String {
+    const METER_WIDTH: usize = 5;
+    const EIGHTHS_PER_CELL: i64 = 8;
+    const PARTIAL_BLOCKS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+
+    let used_percent = used_percent.clamp(0, 100);
+    let total_eighths = (used_percent * METER_WIDTH as i64 * EIGHTHS_PER_CELL + 50) / 100;
+    let filled_cells = (total_eighths / EIGHTHS_PER_CELL) as usize;
+    let partial_eighths = (total_eighths % EIGHTHS_PER_CELL) as usize;
+
+    let mut meter = String::with_capacity(METER_WIDTH);
+    meter.push_str(&"█".repeat(filled_cells));
+    meter.push_str(PARTIAL_BLOCKS[partial_eighths]);
+
+    let occupied_cells = filled_cells + usize::from(partial_eighths > 0);
+    meter.push_str(&" ".repeat(METER_WIDTH.saturating_sub(occupied_cells)));
+
+    format!("Context [{meter}]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_context_used_meter;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn context_meter_uses_five_cells_with_partial_blocks() {
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 100),
+            "Context [█████]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 50),
+            "Context [██▌  ]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 10),
+            "Context [▌    ]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 0),
+            "Context [     ]"
+        );
+    }
+
+    #[test]
+    fn context_meter_clamps_out_of_range_values() {
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ 125),
+            "Context [█████]"
+        );
+        assert_eq!(
+            format_context_used_meter(/*used_percent*/ -1),
+            "Context [     ]"
+        );
+    }
 }

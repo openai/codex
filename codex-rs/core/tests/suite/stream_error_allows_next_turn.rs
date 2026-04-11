@@ -84,7 +84,7 @@ async fn continue_after_stream_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.base_instructions = Some(Some("You are a helpful assistant".to_string()));
+            config.base_instructions = Some("You are a helpful assistant".to_string());
             config.model_provider = provider;
         })
         .build(&server)
@@ -98,6 +98,7 @@ async fn continue_after_stream_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();
@@ -117,6 +118,7 @@ async fn continue_after_stream_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();

@@ -278,46 +278,48 @@ impl McpServerElicitationFormRequest {
                     .and_then(Value::as_object)
                     .is_some_and(serde_json::Map::is_empty)
         });
-        let is_tool_approval_action =
-            is_tool_approval && (requested_schema.is_null() || is_empty_object_schema);
+        let is_message_only_schema = requested_schema.is_null() || is_empty_object_schema;
+        let is_tool_approval_action = is_tool_approval && is_message_only_schema;
         let approval_display_params = if is_tool_approval_action {
             parse_tool_approval_display_params(meta.as_ref())
         } else {
             Vec::new()
         };
 
-        let (response_mode, fields) = if tool_suggestion.is_some()
-            && (requested_schema.is_null() || is_empty_object_schema)
-        {
+        let (response_mode, fields) = if tool_suggestion.is_some() && is_message_only_schema {
             (McpServerElicitationResponseMode::FormContent, Vec::new())
-        } else if requested_schema.is_null() || (is_tool_approval && is_empty_object_schema) {
+        } else if is_message_only_schema {
+            let allow_description = if is_tool_approval_action {
+                "Run the tool and continue."
+            } else {
+                "Allow this request and continue."
+            };
             let mut options = vec![McpServerElicitationOption {
                 label: "Allow".to_string(),
-                description: Some("Run the tool and continue.".to_string()),
+                description: Some(allow_description.to_string()),
                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
             }];
-            if is_tool_approval_action
-                && tool_approval_supports_persist_mode(
-                    meta.as_ref(),
-                    APPROVAL_PERSIST_SESSION_VALUE,
-                )
-            {
+            if approval_supports_persist_mode(meta.as_ref(), APPROVAL_PERSIST_SESSION_VALUE) {
+                let description = if is_tool_approval_action {
+                    "Run the tool and remember this choice for this session."
+                } else {
+                    "Allow this request and remember this choice for this session."
+                };
                 options.push(McpServerElicitationOption {
                     label: "Allow for this session".to_string(),
-                    description: Some(
-                        "Run the tool and remember this choice for this session.".to_string(),
-                    ),
+                    description: Some(description.to_string()),
                     value: Value::String(APPROVAL_ACCEPT_SESSION_VALUE.to_string()),
                 });
             }
-            if is_tool_approval_action
-                && tool_approval_supports_persist_mode(meta.as_ref(), APPROVAL_PERSIST_ALWAYS_VALUE)
-            {
+            if approval_supports_persist_mode(meta.as_ref(), APPROVAL_PERSIST_ALWAYS_VALUE) {
+                let description = if is_tool_approval_action {
+                    "Run the tool and remember this choice for future tool calls."
+                } else {
+                    "Allow this request and remember this choice for future requests."
+                };
                 options.push(McpServerElicitationOption {
                     label: "Always allow".to_string(),
-                    description: Some(
-                        "Run the tool and remember this choice for future tool calls.".to_string(),
-                    ),
+                    description: Some(description.to_string()),
                     value: Value::String(APPROVAL_ACCEPT_ALWAYS_VALUE.to_string()),
                 });
             }
@@ -331,12 +333,12 @@ impl McpServerElicitationFormRequest {
                 options.extend([
                     McpServerElicitationOption {
                         label: "Deny".to_string(),
-                        description: Some("Decline this tool call and continue.".to_string()),
+                        description: Some("Decline this request and continue.".to_string()),
                         value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                     },
                     McpServerElicitationOption {
                         label: "Cancel".to_string(),
-                        description: Some("Cancel this tool call".to_string()),
+                        description: Some("Cancel this request".to_string()),
                         value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
                     },
                 ]);
@@ -428,7 +430,7 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
     })
 }
 
-fn tool_approval_supports_persist_mode(meta: Option<&Value>, expected_mode: &str) -> bool {
+fn approval_supports_persist_mode(meta: Option<&Value>, expected_mode: &str) -> bool {
     let Some(persist) = meta
         .and_then(Value::as_object)
         .and_then(|meta| meta.get(APPROVAL_PERSIST_KEY))
@@ -1889,19 +1891,17 @@ mod tests {
                         options: vec![
                             McpServerElicitationOption {
                                 label: "Allow".to_string(),
-                                description: Some("Run the tool and continue.".to_string()),
+                                description: Some("Allow this request and continue.".to_string()),
                                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {
                                 label: "Deny".to_string(),
-                                description: Some(
-                                    "Decline this tool call and continue.".to_string(),
-                                ),
+                                description: Some("Decline this request and continue.".to_string()),
                                 value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {
                                 label: "Cancel".to_string(),
-                                description: Some("Cancel this tool call".to_string()),
+                                description: Some("Cancel this request".to_string()),
                                 value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
                             },
                         ],
@@ -2028,16 +2028,6 @@ mod tests {
                 install_url: None,
             })
         );
-    }
-
-    #[test]
-    fn empty_unmarked_schema_falls_back() {
-        let request = McpServerElicitationFormRequest::from_event(
-            ThreadId::default(),
-            form_request("Empty form", empty_object_schema(), /*meta*/ None),
-        );
-
-        assert_eq!(request, None);
     }
 
     #[test]
@@ -2428,6 +2418,57 @@ mod tests {
 
         insta::assert_snapshot!(
             "mcp_server_elicitation_approval_form_without_schema",
+            render_snapshot(&overlay, Rect::new(0, 0, 120, 16))
+        );
+    }
+
+    #[test]
+    fn message_only_form_snapshot() {
+        let (tx, _rx) = test_sender();
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request(
+                "Boolean elicit MCP example: do you confirm?",
+                empty_object_schema(),
+                /*meta*/ None,
+            ),
+        )
+        .expect("expected message-only form");
+        let overlay = McpServerElicitationOverlay::new(
+            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+
+        insta::assert_snapshot!(
+            "mcp_server_elicitation_message_only_form",
+            render_snapshot(&overlay, Rect::new(0, 0, 120, 16))
+        );
+    }
+
+    #[test]
+    fn message_only_form_with_persist_options_snapshot() {
+        let (tx, _rx) = test_sender();
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request(
+                "Boolean elicit MCP example: do you confirm?",
+                empty_object_schema(),
+                Some(serde_json::json!({
+                    APPROVAL_PERSIST_KEY: [
+                        APPROVAL_PERSIST_SESSION_VALUE,
+                        APPROVAL_PERSIST_ALWAYS_VALUE,
+                    ],
+                })),
+            ),
+        )
+        .expect("expected message-only form");
+        let overlay = McpServerElicitationOverlay::new(
+            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+
+        insta::assert_snapshot!(
+            "mcp_server_elicitation_message_only_form_with_persist_options",
             render_snapshot(&overlay, Rect::new(0, 0, 120, 16))
         );
     }

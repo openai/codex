@@ -4,6 +4,7 @@ pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
 pub use codex_protocol::protocol::RealtimeTranscriptDelta;
 pub use codex_protocol::protocol::RealtimeTranscriptEntry;
+pub use codex_protocol::protocol::RealtimeVoice;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -26,6 +27,7 @@ pub struct RealtimeSessionConfig {
     pub session_id: Option<String>,
     pub event_parser: RealtimeEventParser,
     pub session_mode: RealtimeSessionMode,
+    pub voice: RealtimeVoice,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,8 +50,12 @@ pub(super) enum RealtimeOutboundMessage {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionUpdateSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) id: Option<String>,
     #[serde(rename = "type")]
     pub(super) r#type: SessionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,15 +108,7 @@ pub(super) enum AudioFormatType {
 pub(super) struct SessionAudioOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) format: Option<SessionAudioOutputFormat>,
-    pub(super) voice: SessionAudioVoice,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-pub(super) enum SessionAudioVoice {
-    #[serde(rename = "fathom")]
-    Fathom,
-    #[serde(rename = "marin")]
-    Marin,
+    pub(super) voice: RealtimeVoice,
 }
 
 #[derive(Debug, Clone, Serialize)]

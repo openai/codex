@@ -11,9 +11,11 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
+use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use codex_client::backoff;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
@@ -28,6 +30,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::sleep;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
@@ -37,6 +40,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
+use tracing::warn;
 use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
@@ -303,9 +307,10 @@ impl RealtimeWebsocketWriter {
         &self,
         instructions: String,
         session_mode: RealtimeSessionMode,
+        voice: RealtimeVoice,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
-        let session = session_update_session(self.event_parser, instructions, session_mode);
+        let session = session_update_session(self.event_parser, instructions, session_mode, voice);
         self.send_json(&RealtimeOutboundMessage::SessionUpdate { session })
             .await
     }
@@ -414,7 +419,9 @@ impl RealtimeWebsocketEvents {
             }
             RealtimeEvent::SessionUpdated { .. }
             | RealtimeEvent::AudioOut(_)
+            | RealtimeEvent::ResponseCreated(_)
             | RealtimeEvent::ResponseCancelled(_)
+            | RealtimeEvent::ResponseDone(_)
             | RealtimeEvent::ConversationItemAdded(_)
             | RealtimeEvent::ConversationItemDone { .. }
             | RealtimeEvent::Error(_) => {}
@@ -455,7 +462,6 @@ impl RealtimeWebsocketClient {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
-        ensure_rustls_crypto_provider();
         let ws_url = websocket_url_from_api_url(
             self.provider.base_url.as_str(),
             self.provider.query_params.as_ref(),
@@ -463,6 +469,78 @@ impl RealtimeWebsocketClient {
             config.event_parser,
             config.session_mode,
         )?;
+        self.connect_realtime_websocket_url(ws_url, config, extra_headers, default_headers)
+            .await
+    }
+
+    pub async fn connect_webrtc_sideband(
+        &self,
+        config: RealtimeSessionConfig,
+        call_id: &str,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        // The WebRTC call already exists; this loop only retries joining its sideband control
+        // socket. Once joined, the returned connection is the same reader/writer state that the
+        // ordinary websocket start path uses.
+        for attempt in 0..=self.provider.retry.max_attempts {
+            let result = self
+                .connect_webrtc_sideband_once(
+                    config.clone(),
+                    call_id,
+                    extra_headers.clone(),
+                    default_headers.clone(),
+                )
+                .await;
+            match result {
+                Ok(connection) => return Ok(connection),
+                Err(err) if attempt < self.provider.retry.max_attempts => {
+                    let delay = backoff(self.provider.retry.base_delay, attempt + 1);
+                    warn!(
+                        attempt = attempt + 1,
+                        call_id,
+                        delay_ms = delay.as_millis(),
+                        "realtime sideband websocket connect failed; retrying: {err}"
+                    );
+                    sleep(delay).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(ApiError::Stream(
+            "realtime sideband websocket retry loop exhausted".to_string(),
+        ))
+    }
+
+    async fn connect_webrtc_sideband_once(
+        &self,
+        config: RealtimeSessionConfig,
+        call_id: &str,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        // Keep the parser/session query shaping from standalone realtime while replacing the model
+        // query with a call_id join onto an existing WebRTC session.
+        let ws_url = websocket_url_from_api_url_for_call(
+            self.provider.base_url.as_str(),
+            self.provider.query_params.as_ref(),
+            config.event_parser,
+            config.session_mode,
+            call_id,
+        )?;
+        self.connect_realtime_websocket_url(ws_url, config, extra_headers, default_headers)
+            .await
+    }
+
+    async fn connect_realtime_websocket_url(
+        &self,
+        ws_url: Url,
+        config: RealtimeSessionConfig,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        ensure_rustls_crypto_provider();
 
         let mut request = ws_url
             .as_str()
@@ -503,7 +581,7 @@ impl RealtimeWebsocketClient {
         );
         connection
             .writer
-            .send_session_update(config.instructions, config.session_mode)
+            .send_session_update(config.instructions, config.session_mode, config.voice)
             .await?;
         Ok(connection)
     }
@@ -596,6 +674,24 @@ fn websocket_url_from_api_url(
     Ok(url)
 }
 
+fn websocket_url_from_api_url_for_call(
+    api_url: &str,
+    query_params: Option<&HashMap<String, String>>,
+    event_parser: RealtimeEventParser,
+    session_mode: RealtimeSessionMode,
+    call_id: &str,
+) -> Result<Url, ApiError> {
+    let mut url = websocket_url_from_api_url(
+        api_url,
+        query_params,
+        /*model*/ None,
+        event_parser,
+        session_mode,
+    )?;
+    url.query_pairs_mut().append_pair("call_id", call_id);
+    Ok(url)
+}
+
 fn normalize_realtime_path(url: &mut Url) {
     let path = url.path().to_string();
     if path.is_empty() || path == "/" {
@@ -630,6 +726,9 @@ mod tests {
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
     use codex_protocol::protocol::RealtimeResponseCancelled;
+    use codex_protocol::protocol::RealtimeResponseCreated;
+    use codex_protocol::protocol::RealtimeResponseDone;
+    use codex_protocol::protocol::RealtimeVoice;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
@@ -773,7 +872,7 @@ mod tests {
             "item": {
                 "id": "item_123",
                 "type": "function_call",
-                "name": "codex",
+                "name": "background_agent",
                 "call_id": "call_123",
                 "arguments": "{\"prompt\":\"delegate this\"}"
             }
@@ -887,14 +986,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_realtime_v2_response_done_handoff_event() {
+    fn parse_realtime_v2_response_done_event() {
         let payload = json!({
             "type": "response.done",
             "response": {
                 "output": [{
                     "id": "item_123",
                     "type": "function_call",
-                    "name": "codex",
+                    "name": "background_agent",
                     "call_id": "call_123",
                     "arguments": "{\"prompt\":\"delegate from done\"}"
                 }]
@@ -904,11 +1003,8 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
-                handoff_id: "call_123".to_string(),
-                item_id: "item_123".to_string(),
-                input_transcript: "delegate from done".to_string(),
-                active_transcript: Vec::new(),
+            Some(RealtimeEvent::ResponseDone(RealtimeResponseDone {
+                response_id: None
             }))
         );
     }
@@ -923,10 +1019,9 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::ConversationItemAdded(json!({
-                "type": "response.created",
-                "response": {"id": "resp_created_1"}
-            })))
+            Some(RealtimeEvent::ResponseCreated(RealtimeResponseCreated {
+                response_id: Some("resp_created_1".to_string())
+            }))
         );
     }
 
@@ -1094,6 +1189,22 @@ mod tests {
         assert_eq!(url.as_str(), "wss://example.com/v1/realtime");
     }
 
+    #[test]
+    fn websocket_url_for_call_id_joins_existing_realtime_session() {
+        let url = websocket_url_from_api_url_for_call(
+            "https://api.openai.com/v1",
+            /*query_params*/ None,
+            RealtimeEventParser::RealtimeV2,
+            RealtimeSessionMode::Conversational,
+            "rtc_test",
+        )
+        .expect("build ws url");
+        assert_eq!(
+            url.as_str(),
+            "wss://api.openai.com/v1/realtime?call_id=rtc_test"
+        );
+    }
+
     #[tokio::test]
     async fn e2e_connect_and_exchange_events_against_mock_ws_server() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -1130,7 +1241,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("fathom".to_string())
+                Value::String("breeze".to_string())
             );
 
             ws.send(Message::Text(
@@ -1177,7 +1288,7 @@ mod tests {
             assert_eq!(fourth_json["handoff_id"], "handoff_1");
             assert_eq!(
                 fourth_json["output_text"],
-                "\"Agent Final Message\":\n\nhello from codex"
+                "\"Agent Final Message\":\n\nhello from background agent"
             );
 
             ws.send(Message::Text(
@@ -1263,6 +1374,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                    voice: RealtimeVoice::Breeze,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1300,7 +1412,7 @@ mod tests {
         connection
             .send_conversation_handoff_append(
                 "handoff_1".to_string(),
-                "hello from codex".to_string(),
+                "hello from background agent".to_string(),
             )
             .await
             .expect("send handoff");
@@ -1386,7 +1498,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn realtime_v2_session_update_includes_codex_tool_and_handoff_output_item() {
+    async fn realtime_v2_session_update_includes_background_agent_tool_and_handoff_output_item() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("local addr");
 
@@ -1438,7 +1550,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("marin".to_string())
+                Value::String("cedar".to_string())
             );
             assert_eq!(
                 first_json["session"]["tools"][0]["type"],
@@ -1446,7 +1558,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["tools"][0]["name"],
-                Value::String("codex".to_string())
+                Value::String("background_agent".to_string())
             );
             assert_eq!(
                 first_json["session"]["tools"][0]["parameters"]["required"],
@@ -1536,6 +1648,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Conversational,
+                    voice: RealtimeVoice::Cedar,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1640,6 +1753,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Transcription,
+                    voice: RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1703,7 +1817,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("fathom".to_string())
+                Value::String("cove".to_string())
             );
             assert!(first_json["session"].get("tools").is_none());
 
@@ -1742,6 +1856,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Transcription,
+                    voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1830,6 +1945,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                    voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),

@@ -23,6 +23,9 @@
 //! The parser below is a little more lenient than the explicit spec and allows for
 //! leading/trailing whitespace around patch markers.
 use crate::ApplyPatchArgs;
+use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(test)]
+use codex_utils_absolute_path::test_support::PathBufExt;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -76,11 +79,28 @@ pub enum Hunk {
 }
 
 impl Hunk {
-    pub fn resolve_path(&self, cwd: &Path) -> PathBuf {
+    pub fn resolve_path(&self, cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
+        let path = match self {
+            Hunk::UpdateFile { path, .. } => path,
+            Hunk::AddFile { .. } | Hunk::DeleteFile { .. } => self.path(),
+        };
+        AbsolutePathBuf::resolve_path_against_base(path, cwd)
+    }
+
+    /// Returns the path affected by this hunk, using the move destination for rename hunks.
+    pub fn path(&self) -> &Path {
         match self {
-            Hunk::AddFile { path, .. } => cwd.join(path),
-            Hunk::DeleteFile { path } => cwd.join(path),
-            Hunk::UpdateFile { path, .. } => cwd.join(path),
+            Hunk::AddFile { path, .. } => path,
+            Hunk::DeleteFile { path } => path,
+            Hunk::UpdateFile {
+                move_path: Some(path),
+                ..
+            } => path,
+            Hunk::UpdateFile {
+                path,
+                move_path: None,
+                ..
+            } => path,
         }
     }
 }
@@ -581,6 +601,108 @@ fn test_parse_patch() {
             }],
         }]
     );
+}
+
+#[test]
+fn test_parse_patch_accepts_relative_and_absolute_hunk_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let absolute_delete = dir.path().join("absolute-delete.py").abs();
+    let absolute_update = dir.path().join("absolute-update.py").abs();
+    let patch_text = format!(
+        r#"*** Begin Patch
+*** Add File: relative-add.py
++content
+*** Delete File: {}
+*** Update File: {}
+@@
+-old
++new
+*** End Patch"#,
+        absolute_delete.display(),
+        absolute_update.display()
+    );
+
+    assert_eq!(
+        parse_patch_text(&patch_text, ParseMode::Strict)
+            .unwrap()
+            .hunks,
+        vec![
+            AddFile {
+                path: PathBuf::from("relative-add.py"),
+                contents: "content\n".to_string()
+            },
+            DeleteFile {
+                path: absolute_delete.to_path_buf()
+            },
+            UpdateFile {
+                path: absolute_update.to_path_buf(),
+                move_path: None,
+                chunks: vec![UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["old".to_string()],
+                    new_lines: vec!["new".to_string()],
+                    is_end_of_file: false
+                }]
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_hunk_resolve_path_accepts_relative_and_absolute_paths() {
+    let cwd_dir = tempfile::tempdir().unwrap();
+    let cwd = cwd_dir.path().to_path_buf().abs();
+    let absolute_dir = tempfile::tempdir().unwrap();
+    let absolute_add = absolute_dir.path().join("absolute-add.py").abs();
+    let absolute_delete = absolute_dir.path().join("absolute-delete.py").abs();
+    let absolute_update = absolute_dir.path().join("absolute-update.py").abs();
+
+    for (hunk, expected_path) in [
+        (
+            AddFile {
+                path: PathBuf::from("relative-add.py"),
+                contents: String::new(),
+            },
+            cwd.join("relative-add.py"),
+        ),
+        (
+            DeleteFile {
+                path: PathBuf::from("relative-delete.py"),
+            },
+            cwd.join("relative-delete.py"),
+        ),
+        (
+            UpdateFile {
+                path: PathBuf::from("relative-update.py"),
+                move_path: None,
+                chunks: Vec::new(),
+            },
+            cwd.join("relative-update.py"),
+        ),
+        (
+            AddFile {
+                path: absolute_add.to_path_buf(),
+                contents: String::new(),
+            },
+            absolute_add,
+        ),
+        (
+            DeleteFile {
+                path: absolute_delete.to_path_buf(),
+            },
+            absolute_delete,
+        ),
+        (
+            UpdateFile {
+                path: absolute_update.to_path_buf(),
+                move_path: None,
+                chunks: Vec::new(),
+            },
+            absolute_update,
+        ),
+    ] {
+        assert_eq!(hunk.resolve_path(&cwd), expected_path);
+    }
 }
 
 #[test]

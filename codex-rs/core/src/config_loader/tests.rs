@@ -636,7 +636,7 @@ allowed_approval_policies = ["on-request"]
                 rules: None,
                 enforce_residency: None,
                 network: None,
-                guardian_developer_instructions: None,
+                guardian_policy_config: None,
             }))
         }),
     )
@@ -688,7 +688,7 @@ allowed_approval_policies = ["on-request"]
             rules: None,
             enforce_residency: None,
             network: None,
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -729,7 +729,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         rules: None,
         enforce_residency: None,
         network: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
@@ -904,7 +904,7 @@ model_instructions_file = "child.txt"
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_ref().and_then(Option::as_deref),
+        config.base_instructions.as_deref(),
         Some("child instructions")
     );
 
@@ -940,7 +940,7 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_ref().and_then(Option::as_deref),
+        config.base_instructions.as_deref(),
         Some("cli override instructions")
     );
 

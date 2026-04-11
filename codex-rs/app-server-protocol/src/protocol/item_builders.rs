@@ -11,6 +11,7 @@
 //! - The projection is presentation-specific. Core protocol events stay generic, while the
 //!   app-server protocol decides how to surface those events as `ThreadItem`s for clients.
 use crate::protocol::common::ServerNotification;
+use crate::protocol::v2::AutoReviewDecisionSource;
 use crate::protocol::v2::CommandAction;
 use crate::protocol::v2::CommandExecutionSource;
 use crate::protocol::v2::CommandExecutionStatus;
@@ -142,12 +143,13 @@ pub fn build_item_from_guardian_event(
 ) -> Option<ThreadItem> {
     match &assessment.action {
         GuardianAssessmentAction::Command { command, cwd, .. } => {
+            let id = assessment.target_item_id.as_ref()?;
             let command = command.clone();
             let command_actions = vec![CommandAction::Unknown {
                 command: command.clone(),
             }];
             Some(ThreadItem::CommandExecution {
-                id: assessment.id.clone(),
+                id: id.clone(),
                 command,
                 cwd: cwd.clone(),
                 process_id: None,
@@ -162,6 +164,7 @@ pub fn build_item_from_guardian_event(
         GuardianAssessmentAction::Execve {
             program, argv, cwd, ..
         } => {
+            let id = assessment.target_item_id.as_ref()?;
             let argv = if argv.is_empty() {
                 vec![program.clone()]
             } else {
@@ -179,7 +182,7 @@ pub fn build_item_from_guardian_event(
                 parsed_cmd.into_iter().map(CommandAction::from).collect()
             };
             Some(ThreadItem::CommandExecution {
-                id: assessment.id.clone(),
+                id: id.clone(),
                 command,
                 cwd: cwd.clone(),
                 process_id: None,
@@ -202,9 +205,6 @@ pub fn guardian_auto_approval_review_notification(
     event_turn_id: &str,
     assessment: &GuardianAssessmentEvent,
 ) -> ServerNotification {
-    // TODO(ccunningham): Attach guardian review state to the reviewed tool
-    // item's lifecycle instead of sending standalone review notifications so
-    // the app-server API can persist and replay review state via `thread/read`.
     let turn_id = if assessment.turn_id.is_empty() {
         event_turn_id.to_string()
     } else {
@@ -225,8 +225,8 @@ pub fn guardian_auto_approval_review_notification(
                 GuardianApprovalReviewStatus::Aborted
             }
         },
-        risk_score: assessment.risk_score,
         risk_level: assessment.risk_level.map(Into::into),
+        user_authorization: assessment.user_authorization.map(Into::into),
         rationale: assessment.rationale.clone(),
     };
     let action = assessment.action.clone().into();
@@ -236,7 +236,8 @@ pub fn guardian_auto_approval_review_notification(
                 ItemGuardianApprovalReviewStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
-                    target_item_id: assessment.id.clone(),
+                    review_id: assessment.id.clone(),
+                    target_item_id: assessment.target_item_id.clone(),
                     review,
                     action,
                 },
@@ -249,7 +250,12 @@ pub fn guardian_auto_approval_review_notification(
                 ItemGuardianApprovalReviewCompletedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
-                    target_item_id: assessment.id.clone(),
+                    review_id: assessment.id.clone(),
+                    target_item_id: assessment.target_item_id.clone(),
+                    decision_source: assessment
+                        .decision_source
+                        .map(AutoReviewDecisionSource::from)
+                        .unwrap_or(AutoReviewDecisionSource::Agent),
                     review,
                     action,
                 },

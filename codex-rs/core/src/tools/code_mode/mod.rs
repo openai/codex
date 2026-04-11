@@ -257,16 +257,13 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         .read()
         .await
         .list_all_tools()
-        .await
-        .into_iter()
-        .map(|(name, tool_info)| (name, tool_info.tool))
-        .collect();
+        .await;
 
     ToolRouter::from_config(
         &nested_tools_config,
         ToolRouterParams {
+            deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
-            app_tools: None,
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
         },

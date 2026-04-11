@@ -6,6 +6,7 @@ use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
+use crate::reasons::REASON_PROXY_DISABLED;
 use rama_http::Body;
 use rama_http::Response;
 use rama_http::StatusCode;
@@ -59,18 +60,13 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
 
 pub fn blocked_message(reason: &str) -> &'static str {
     match reason {
-        REASON_NOT_ALLOWED => {
-            "Codex blocked this request: domain not in allowlist (this is not a denylist block)."
-        }
-        REASON_NOT_ALLOWED_LOCAL => {
-            "Codex blocked this request: local/private addresses not allowed."
-        }
-        REASON_DENIED => "Codex blocked this request: domain denied by policy.",
-        REASON_METHOD_NOT_ALLOWED => {
-            "Codex blocked this request: method not allowed in limited mode."
-        }
-        REASON_MITM_REQUIRED => "Codex blocked this request: MITM required for limited HTTPS.",
-        _ => "Codex blocked this request by network policy.",
+        REASON_NOT_ALLOWED => "Domain not in allowlist.",
+        REASON_NOT_ALLOWED_LOCAL => "Sandbox policy blocks local/private network addresses.",
+        REASON_DENIED => "Domain denied by the sandbox policy.",
+        REASON_METHOD_NOT_ALLOWED => "Method not allowed in limited mode.",
+        REASON_MITM_REQUIRED => "MITM required for limited HTTPS.",
+        REASON_PROXY_DISABLED => "network proxy is disabled",
+        _ => "Request blocked by network policy.",
     }
 }
 
@@ -117,9 +113,6 @@ mod tests {
         };
 
         let message = blocked_message_with_policy(REASON_NOT_ALLOWED, &details);
-        assert_eq!(
-            message,
-            "Codex blocked this request: domain not in allowlist (this is not a denylist block)."
-        );
+        assert_eq!(message, "Domain not in allowlist.");
     }
 }
