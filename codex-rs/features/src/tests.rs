@@ -146,9 +146,9 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 }
 
 #[test]
-fn image_generation_is_under_development() {
-    assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::ImageGeneration.default_enabled(), false);
+fn image_generation_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
+    assert_eq!(Feature::ImageGeneration.default_enabled(), true);
 }
 
 #[test]
