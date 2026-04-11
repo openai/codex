@@ -1594,8 +1594,7 @@ impl JsReplManager {
 
         let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
-            tool_name: tool_name.clone(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain(tool_name.clone()),
             call_id: req.id.clone(),
             payload,
         };

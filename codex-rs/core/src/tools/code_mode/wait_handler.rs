@@ -55,7 +55,7 @@ impl ToolHandler for CodeModeWaitHandler {
         } = invocation;
 
         match payload {
-            ToolPayload::Function { arguments } if tool_name == WAIT_TOOL_NAME => {
+            ToolPayload::Function { arguments } if tool_name.name() == WAIT_TOOL_NAME => {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();

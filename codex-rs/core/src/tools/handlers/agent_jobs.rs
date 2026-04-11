@@ -206,7 +206,7 @@ impl ToolHandler for BatchJobHandler {
             }
         };
 
-        match tool_name.as_str() {
+        match tool_name.name() {
             "spawn_agents_on_csv" => spawn_agents_on_csv::handle(session, turn, arguments).await,
             "report_agent_job_result" => report_agent_job_result::handle(session, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(

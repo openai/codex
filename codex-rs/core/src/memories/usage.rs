@@ -44,7 +44,7 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
             /*inc*/ 1,
             &[
                 ("kind", kind.as_tag()),
-                ("tool", invocation.tool_name.as_str()),
+                ("tool", invocation.tool_name.name()),
                 ("success", success),
             ],
         );
@@ -77,7 +77,7 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
         return None;
     };
 
-    match invocation.tool_name.as_str() {
+    match invocation.tool_name.name() {
         "shell" => serde_json::from_str::<ShellToolCallParams>(arguments)
             .ok()
             .map(|params| {

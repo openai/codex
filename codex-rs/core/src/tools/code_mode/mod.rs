@@ -27,6 +27,7 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouterParams;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -301,9 +302,8 @@ async fn call_nested_tool(
         };
 
     let call = ToolCall {
-        tool_name: tool_name.clone(),
+        tool_name: ToolName::plain(tool_name.clone()),
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
-        tool_namespace: None,
         payload,
     };
     let result = tool_runtime

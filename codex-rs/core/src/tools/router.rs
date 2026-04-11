@@ -16,6 +16,7 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use std::collections::HashMap;
@@ -26,8 +27,7 @@ pub use crate::tools::context::ToolCallSource;
 
 #[derive(Clone, Debug)]
 pub struct ToolCall {
-    pub tool_name: String,
-    pub tool_namespace: Option<String>,
+    pub tool_name: ToolName,
     pub call_id: String,
     pub payload: ToolPayload,
 }
@@ -124,10 +124,14 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                if let Some((server, tool)) = session.parse_mcp_tool_name(&name, &namespace).await {
+                let mcp_tool = session.parse_mcp_tool_name(&name, &namespace).await;
+                let tool_name = match namespace {
+                    Some(namespace) => ToolName::namespaced(namespace, name),
+                    None => ToolName::plain(name),
+                };
+                if let Some((server, tool)) = mcp_tool {
                     Ok(Some(ToolCall {
-                        tool_name: name,
-                        tool_namespace: namespace,
+                        tool_name,
                         call_id,
                         payload: ToolPayload::Mcp {
                             server,
@@ -137,8 +141,7 @@ impl ToolRouter {
                     }))
                 } else {
                     Ok(Some(ToolCall {
-                        tool_name: name,
-                        tool_namespace: namespace,
+                        tool_name,
                         call_id,
                         payload: ToolPayload::Function { arguments },
                     }))
@@ -157,8 +160,7 @@ impl ToolRouter {
                         ))
                     })?;
                 Ok(Some(ToolCall {
-                    tool_name: "tool_search".to_string(),
-                    tool_namespace: None,
+                    tool_name: ToolName::plain("tool_search"),
                     call_id,
                     payload: ToolPayload::ToolSearch { arguments },
                 }))
@@ -170,8 +172,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => Ok(Some(ToolCall {
-                tool_name: name,
-                tool_namespace: None,
+                tool_name: ToolName::plain(name),
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
@@ -197,8 +198,7 @@ impl ToolRouter {
                             justification: None,
                         };
                         Ok(Some(ToolCall {
-                            tool_name: "local_shell".to_string(),
-                            tool_namespace: None,
+                            tool_name: ToolName::plain("local_shell"),
                             call_id,
                             payload: ToolPayload::LocalShell { params },
                         }))
@@ -220,14 +220,14 @@ impl ToolRouter {
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
-            tool_namespace,
             call_id,
             payload,
         } = call;
 
+        let direct_js_repl_call = matches!(tool_name.name(), "js_repl" | "js_repl_reset");
         if source == ToolCallSource::Direct
             && turn.tools_config.js_repl_tools_only
-            && !matches!(tool_name.as_str(), "js_repl" | "js_repl_reset")
+            && !direct_js_repl_call
         {
             return Err(FunctionCallError::RespondToModel(
                 "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
@@ -241,7 +241,6 @@ impl ToolRouter {
             tracker,
             call_id,
             tool_name,
-            tool_namespace,
             payload,
         };
 

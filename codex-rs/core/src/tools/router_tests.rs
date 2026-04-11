@@ -5,6 +5,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::models::ResponseItem;
+use codex_tools::ToolName;
 
 use super::ToolCall;
 use super::ToolCallSource;
@@ -37,8 +38,7 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
     );
 
     let call = ToolCall {
-        tool_name: "shell".to_string(),
-        tool_namespace: None,
+        tool_name: ToolName::plain("shell"),
         call_id: "call-1".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
@@ -90,8 +90,7 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
     );
 
     let call = ToolCall {
-        tool_name: "shell".to_string(),
-        tool_namespace: None,
+        tool_name: ToolName::plain("shell"),
         call_id: "call-2".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
@@ -137,10 +136,9 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     .await?
     .expect("function_call should produce a tool call");
 
-    assert_eq!(call.tool_name, tool_name);
     assert_eq!(
-        call.tool_namespace,
-        Some("mcp__codex_apps__calendar".to_string())
+        call.tool_name,
+        ToolName::namespaced("mcp__codex_apps__calendar", tool_name)
     );
     assert_eq!(call.call_id, "call-namespace");
     match call.payload {

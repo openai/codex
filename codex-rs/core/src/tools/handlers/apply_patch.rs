@@ -218,7 +218,7 @@ impl ToolHandler for ApplyPatchHandler {
                             session: session.clone(),
                             turn: turn.clone(),
                             call_id: call_id.clone(),
-                            tool_name: tool_name.to_string(),
+                            tool_name: tool_name.name().to_string(),
                         };
                         let out = orchestrator
                             .run(
