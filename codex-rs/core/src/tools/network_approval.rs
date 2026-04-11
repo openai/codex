@@ -488,7 +488,7 @@ impl NetworkApprovalService {
                     PendingApprovalDecision::Deny
                 }
             },
-            ReviewDecision::Denied | ReviewDecision::Abort => {
+            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
                 if let Some(review_id) = guardian_review_id.as_deref() {
                     if let Some(owner_call) = owner_call.as_ref() {
                         let message = guardian_rejection_message(session.as_ref(), review_id).await;

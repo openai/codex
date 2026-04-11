@@ -1,10 +1,10 @@
 use crate::exec_command::relativize_to_home;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::discover_project_doc_paths;
 use crate::status::StatusAccountDisplay;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::config::Config;
-use codex_core::discover_project_doc_paths;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::account::PlanType;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -195,9 +195,9 @@ fn title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
-    use codex_core::LOCAL_PROJECT_DOC_FILENAME;
-    use codex_core::config::ConfigBuilder;
+    use crate::legacy_core::DEFAULT_PROJECT_DOC_FILENAME;
+    use crate::legacy_core::LOCAL_PROJECT_DOC_FILENAME;
+    use crate::legacy_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::TempDir;
