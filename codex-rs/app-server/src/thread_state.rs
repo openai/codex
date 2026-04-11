@@ -13,9 +13,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 use tracing::error;
 
 type PendingInterruptQueue = Vec<(
@@ -34,6 +36,11 @@ pub(crate) struct PendingThreadResumeRequest {
 pub(crate) enum ThreadListenerCommand {
     // SendThreadResumeResponse is used to resume an already running thread by sending the thread's history to the client and atomically subscribing for new updates.
     SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
+    // CheckIdleUnload is used to serialize delayed idle-unload checks with
+    // thread event handling.
+    CheckIdleUnload {
+        idle_timeout: Duration,
+    },
     // ResolveServerRequest is used to notify the client that the request has been resolved.
     // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.
     ResolveServerRequest {
@@ -158,15 +165,33 @@ pub(crate) async fn resolve_server_request_on_thread_listener(
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
+    last_activity_at: Instant,
+    no_subscribers_since: Option<Instant>,
 }
 
 impl Default for ThreadEntry {
     fn default() -> Self {
+        let now = Instant::now();
         Self {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
+            last_activity_at: now,
+            no_subscribers_since: Some(now),
         }
     }
+}
+
+pub(crate) enum ThreadSubscriptionRemoval {
+    NotSubscribed,
+    RemovedStillHasSubscribers,
+    RemovedLastSubscriber,
+}
+
+pub(crate) enum ThreadIdleUnloadWait {
+    Ready,
+    Wait(Duration),
+    HasSubscribers,
+    Missing,
 }
 
 #[derive(Default)]
@@ -206,6 +231,43 @@ impl ThreadStateManager {
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
         let mut state = self.state.lock().await;
         state.threads.entry(thread_id).or_default().state.clone()
+    }
+
+    pub(crate) async fn listener_command_tx(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<mpsc::UnboundedSender<ThreadListenerCommand>> {
+        let thread_state = {
+            let state = self.state.lock().await;
+            state
+                .threads
+                .get(&thread_id)
+                .map(|thread_entry| thread_entry.state.clone())
+        }?;
+        let thread_state = thread_state.lock().await;
+        thread_state.listener_command_tx()
+    }
+
+    pub(crate) async fn note_thread_activity(&self, thread_id: ThreadId) {
+        let mut state = self.state.lock().await;
+        if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
+            thread_entry.last_activity_at = Instant::now();
+        }
+    }
+
+    pub(crate) async fn has_active_turn_snapshot(&self, thread_id: ThreadId) -> bool {
+        let thread_state = {
+            let state = self.state.lock().await;
+            state
+                .threads
+                .get(&thread_id)
+                .map(|thread_entry| thread_entry.state.clone())
+        };
+        let Some(thread_state) = thread_state else {
+            return false;
+        };
+        let thread_state = thread_state.lock().await;
+        thread_state.active_turn_snapshot().is_some()
     }
 
     pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {
@@ -262,11 +324,11 @@ impl ThreadStateManager {
         &self,
         thread_id: ThreadId,
         connection_id: ConnectionId,
-    ) -> bool {
+    ) -> ThreadSubscriptionRemoval {
         {
             let mut state = self.state.lock().await;
             if !state.threads.contains_key(&thread_id) {
-                return false;
+                return ThreadSubscriptionRemoval::NotSubscribed;
             }
 
             if !state
@@ -274,7 +336,7 @@ impl ThreadStateManager {
                 .get(&connection_id)
                 .is_some_and(|thread_ids| thread_ids.contains(&thread_id))
             {
-                return false;
+                return ThreadSubscriptionRemoval::NotSubscribed;
             }
 
             if let Some(thread_ids) = state.thread_ids_by_connection.get_mut(&connection_id) {
@@ -285,12 +347,19 @@ impl ThreadStateManager {
             }
             if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
                 thread_entry.connection_ids.remove(&connection_id);
+                if thread_entry.connection_ids.is_empty() {
+                    thread_entry
+                        .no_subscribers_since
+                        .get_or_insert_with(Instant::now);
+                    return ThreadSubscriptionRemoval::RemovedLastSubscriber;
+                }
             }
         };
 
-        true
+        ThreadSubscriptionRemoval::RemovedStillHasSubscribers
     }
 
+    #[cfg(test)]
     pub(crate) async fn has_subscribers(&self, thread_id: ThreadId) -> bool {
         self.state
             .lock()
@@ -318,6 +387,7 @@ impl ThreadStateManager {
                 .insert(thread_id);
             let thread_entry = state.threads.entry(thread_id).or_default();
             thread_entry.connection_ids.insert(connection_id);
+            thread_entry.no_subscribers_since = None;
             thread_entry.state.clone()
         };
         {
@@ -343,12 +413,9 @@ impl ThreadStateManager {
             .entry(connection_id)
             .or_default()
             .insert(thread_id);
-        state
-            .threads
-            .entry(thread_id)
-            .or_default()
-            .connection_ids
-            .insert(connection_id);
+        let thread_entry = state.threads.entry(thread_id).or_default();
+        thread_entry.connection_ids.insert(connection_id);
+        thread_entry.no_subscribers_since = None;
         true
     }
 
@@ -363,6 +430,11 @@ impl ThreadStateManager {
             for thread_id in &thread_ids {
                 if let Some(thread_entry) = state.threads.get_mut(thread_id) {
                     thread_entry.connection_ids.remove(&connection_id);
+                    if thread_entry.connection_ids.is_empty() {
+                        thread_entry
+                            .no_subscribers_since
+                            .get_or_insert_with(Instant::now);
+                    }
                 }
             }
             thread_ids
@@ -374,6 +446,34 @@ impl ThreadStateManager {
                         .is_some_and(|thread_entry| thread_entry.connection_ids.is_empty())
                 })
                 .collect::<Vec<_>>()
+        }
+    }
+
+    pub(crate) async fn thread_idle_unload_wait(
+        &self,
+        thread_id: ThreadId,
+        idle_timeout: Duration,
+    ) -> ThreadIdleUnloadWait {
+        let state = self.state.lock().await;
+        let Some(thread_entry) = state.threads.get(&thread_id) else {
+            return ThreadIdleUnloadWait::Missing;
+        };
+        if !thread_entry.connection_ids.is_empty() {
+            return ThreadIdleUnloadWait::HasSubscribers;
+        }
+        let Some(no_subscribers_since) = thread_entry.no_subscribers_since else {
+            return ThreadIdleUnloadWait::HasSubscribers;
+        };
+        let idle_since = if thread_entry.last_activity_at > no_subscribers_since {
+            thread_entry.last_activity_at
+        } else {
+            no_subscribers_since
+        };
+        let idle_duration = idle_since.elapsed();
+        if idle_duration >= idle_timeout {
+            ThreadIdleUnloadWait::Ready
+        } else {
+            ThreadIdleUnloadWait::Wait(idle_timeout.saturating_sub(idle_duration))
         }
     }
 }
