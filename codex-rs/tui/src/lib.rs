@@ -1524,13 +1524,7 @@ async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
-    match (
-        path_utils::normalize_for_path_comparison(current_cwd),
-        path_utils::normalize_for_path_comparison(session_cwd),
-    ) {
-        (Ok(current), Ok(session)) => current != session,
-        _ => current_cwd != session_cwd,
-    }
+    !path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 pub(crate) enum ResolveCwdOutcome {
