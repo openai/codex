@@ -39,6 +39,7 @@ use crate::codex::TurnContext;
 use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
@@ -459,6 +460,7 @@ async fn handle_exec_approval(
         let review_rx = spawn_guardian_review(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
+            new_guardian_review_id(),
             GuardianApprovalRequest::Shell {
                 id: call_id.clone(),
                 command,
@@ -566,6 +568,7 @@ async fn handle_patch_approval(
         let review_rx = spawn_guardian_review(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
+            new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
                 cwd: parent_ctx.cwd.to_path_buf(),
@@ -686,6 +689,7 @@ async fn maybe_auto_review_mcp_request_user_input(
     let review_rx = spawn_guardian_review(
         Arc::clone(parent_session),
         Arc::clone(parent_ctx),
+        new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
         review_cancel.clone(),
@@ -729,6 +733,7 @@ async fn maybe_auto_review_mcp_request_user_input(
 fn spawn_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
@@ -745,6 +750,7 @@ fn spawn_guardian_review(
         let decision = runtime.block_on(review_approval_request_with_cancel(
             &session,
             &turn,
+            review_id,
             request,
             retry_reason,
             cancel_token,

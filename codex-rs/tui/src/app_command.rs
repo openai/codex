@@ -98,7 +98,6 @@ pub(crate) enum AppCommandView<'a> {
     SetThreadName {
         name: &'a str,
     },
-    SendAddCreditsNudgeEmail,
     Shutdown,
     ThreadRollback {
         num_turns: u32,
@@ -392,7 +391,6 @@ impl AppCommand {
                 num_turns: *num_turns,
             },
             Op::Review { review_request } => AppCommandView::Review { review_request },
-            Op::SendAddCreditsNudgeEmail => AppCommandView::SendAddCreditsNudgeEmail,
             op => AppCommandView::Other(op),
         }
     }

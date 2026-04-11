@@ -1,5 +1,6 @@
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::GuardianReviewEventParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
@@ -154,6 +155,7 @@ pub(crate) enum AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
+    GuardianReview(Box<GuardianReviewEventParams>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

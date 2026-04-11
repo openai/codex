@@ -2012,7 +2012,6 @@ async fn set_rate_limits_retains_previous_credits() {
             unlimited: false,
             balance: Some("10.00".to_string()),
         }),
-        spend_control: None,
         plan_type: Some(codex_protocol::account::PlanType::Plus),
     };
     state.set_rate_limits(initial.clone());
@@ -2031,7 +2030,6 @@ async fn set_rate_limits_retains_previous_credits() {
             resets_at: Some(1_900),
         }),
         credits: None,
-        spend_control: None,
         plan_type: None,
     };
     state.set_rate_limits(update.clone());
@@ -2044,7 +2042,6 @@ async fn set_rate_limits_retains_previous_credits() {
             primary: update.primary.clone(),
             secondary: update.secondary,
             credits: initial.credits,
-            spend_control: None,
             plan_type: initial.plan_type,
         })
     );
@@ -2121,7 +2118,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             unlimited: false,
             balance: Some("15.00".to_string()),
         }),
-        spend_control: None,
         plan_type: Some(codex_protocol::account::PlanType::Plus),
     };
     state.set_rate_limits(initial.clone());
@@ -2136,7 +2132,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         }),
         secondary: None,
         credits: None,
-        spend_control: None,
         plan_type: Some(codex_protocol::account::PlanType::Pro),
     };
     state.set_rate_limits(update.clone());
@@ -2149,7 +2144,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             primary: update.primary,
             secondary: update.secondary,
             credits: initial.credits,
-            spend_control: None,
             plan_type: update.plan_type,
         })
     );
@@ -2879,7 +2873,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
-        guardian_rejection_rationales: Mutex::new(std::collections::HashMap::new()),
+        guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -3724,7 +3718,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
-        guardian_rejection_rationales: Mutex::new(std::collections::HashMap::new()),
+        guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,

@@ -11,6 +11,7 @@ use crate::guardian::GuardianApprovalReviewResult;
 use crate::guardian::GuardianApprovalReviewStatus;
 use crate::guardian::GuardianAssessmentOutcome;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request_with_review;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
@@ -123,6 +124,7 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
+        let use_guardian = routes_approval_to_guardian(turn_ctx);
         // 1) Approval
         let mut already_approved = false;
 
@@ -142,10 +144,12 @@ impl ToolOrchestrator {
                 return Err(ToolError::Rejected(reason));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+                let guardian_review_id = use_guardian.then(new_guardian_review_id);
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
+                    guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason,
                     network_approval_context: None,
                 };
@@ -162,9 +166,8 @@ impl ToolOrchestrator {
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if routes_approval_to_guardian(turn_ctx) {
-                            guardian_rejection_message(tool_ctx.session.as_ref(), &tool_ctx.call_id)
-                                .await
+                        let reason = if let Some(review_id) = guardian_review_id.as_deref() {
+                            guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
                         } else {
                             "rejected by user".to_string()
                         };
@@ -298,14 +301,15 @@ impl ToolOrchestrator {
                     .should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
+                    let guardian_review_id = use_guardian.then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
-
                     let decision = Self::request_approval(
                         tool,
                         req,
@@ -319,12 +323,9 @@ impl ToolOrchestrator {
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if routes_approval_to_guardian(turn_ctx) {
-                                guardian_rejection_message(
-                                    tool_ctx.session.as_ref(),
-                                    &tool_ctx.call_id,
-                                )
-                                .await
+                            let reason = if let Some(review_id) = guardian_review_id.as_deref() {
+                                guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
+                                    .await
                             } else {
                                 "rejected by user".to_string()
                             };
@@ -403,6 +404,10 @@ impl ToolOrchestrator {
                     review_approval_request_with_review(
                         approval_ctx.session,
                         approval_ctx.turn,
+                        approval_ctx
+                            .guardian_review_id
+                            .clone()
+                            .expect("guardian review id should be present for guardian approvals"),
                         request,
                         approval_ctx.retry_reason.clone(),
                     )

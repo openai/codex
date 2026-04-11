@@ -12,7 +12,6 @@ use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -166,10 +165,17 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
+        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
-            if routes_approval_to_guardian(turn) {
-                return review_approval_request(session, turn, guardian_request, retry_reason)
-                    .await;
+            if let Some(review_id) = guardian_review_id {
+                return review_approval_request(
+                    session,
+                    turn,
+                    review_id,
+                    guardian_request,
+                    retry_reason,
+                )
+                .await;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;
