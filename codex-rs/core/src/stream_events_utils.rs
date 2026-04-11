@@ -221,7 +221,7 @@ pub(crate) async fn handle_output_item_done(
             tracing::info!(
                 thread_id = %ctx.sess.conversation_id,
                 "ToolCall: {} {}",
-                call.tool_name.name(),
+                call.tool_name.display(),
                 payload_preview
             );
 

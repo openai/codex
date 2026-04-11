@@ -284,22 +284,25 @@ async fn call_nested_tool(
         )));
     }
 
-    let payload =
-        if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name, &None).await {
-            match serialize_function_tool_arguments(&tool_name, input) {
-                Ok(raw_arguments) => ToolPayload::Mcp {
-                    server,
-                    tool,
-                    raw_arguments,
-                },
-                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-            }
-        } else {
-            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-                Ok(payload) => payload,
-                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-            }
-        };
+    let payload = if let Some(tool_info) = exec
+        .session
+        .resolve_mcp_tool_info(&tool_name, /*namespace*/ None)
+        .await
+    {
+        match serialize_function_tool_arguments(&tool_name, input) {
+            Ok(raw_arguments) => ToolPayload::Mcp {
+                server: tool_info.server_name,
+                tool: tool_info.tool.name.to_string(),
+                raw_arguments,
+            },
+            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+        }
+    } else {
+        match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
+            Ok(payload) => payload,
+            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+        }
+    };
 
     let call = ToolCall {
         tool_name: ToolName::plain(tool_name.clone()),

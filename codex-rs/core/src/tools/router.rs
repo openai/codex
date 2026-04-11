@@ -104,11 +104,13 @@ impl ToolRouter {
             .map(|config| config.spec.clone())
     }
 
-    pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {
-        self.specs
-            .iter()
-            .filter(|config| config.supports_parallel_tool_calls)
-            .any(|config| config.name() == tool_name)
+    pub fn tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
+        tool_name.namespace.is_none()
+            && self
+                .specs
+                .iter()
+                .filter(|config| config.supports_parallel_tool_calls)
+                .any(|config| config.name() == tool_name.name.as_str())
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -124,18 +126,20 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let mcp_tool = session.parse_mcp_tool_name(&name, &namespace).await;
+                let mcp_tool = session
+                    .resolve_mcp_tool_info(&name, namespace.as_deref())
+                    .await;
                 let tool_name = match namespace {
                     Some(namespace) => ToolName::namespaced(namespace, name),
                     None => ToolName::plain(name),
                 };
-                if let Some((server, tool)) = mcp_tool {
+                if let Some(tool_info) = mcp_tool {
                     Ok(Some(ToolCall {
                         tool_name,
                         call_id,
                         payload: ToolPayload::Mcp {
-                            server,
-                            tool,
+                            server: tool_info.server_name,
+                            tool: tool_info.tool.name.to_string(),
                             raw_arguments: arguments,
                         },
                     }))
@@ -224,7 +228,8 @@ impl ToolRouter {
             payload,
         } = call;
 
-        let direct_js_repl_call = matches!(tool_name.name(), "js_repl" | "js_repl_reset");
+        let direct_js_repl_call = tool_name.namespace.is_none()
+            && matches!(tool_name.name.as_str(), "js_repl" | "js_repl_reset");
         if source == ToolCallSource::Direct
             && turn.tools_config.js_repl_tools_only
             && !direct_js_repl_call

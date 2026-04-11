@@ -180,25 +180,17 @@ where
     }
 }
 
-fn tool_handler_key(tool_name: &ToolName) -> String {
-    if let Some(namespace) = tool_name.namespace() {
-        format!("{namespace}:{}", tool_name.name())
-    } else {
-        tool_name.name().to_string()
-    }
-}
-
 pub struct ToolRegistry {
-    handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
 }
 
 impl ToolRegistry {
-    fn new(handlers: HashMap<String, Arc<dyn AnyToolHandler>>) -> Self {
+    fn new(handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>) -> Self {
         Self { handlers }
     }
 
     fn handler(&self, name: &ToolName) -> Option<Arc<dyn AnyToolHandler>> {
-        self.handlers.get(&tool_handler_key(name)).map(Arc::clone)
+        self.handlers.get(name).map(Arc::clone)
     }
 
     #[cfg(test)]
@@ -219,6 +211,7 @@ impl ToolRegistry {
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
+        let display_name = tool_name.display();
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.session_telemetry.clone();
         let payload_for_response = invocation.payload.clone();
@@ -265,7 +258,7 @@ impl ToolRegistry {
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
                 otel.tool_result_with_tags(
-                    tool_name.name(),
+                    &display_name,
                     &call_id_owned,
                     log_payload.as_ref(),
                     Duration::ZERO,
@@ -280,10 +273,9 @@ impl ToolRegistry {
         };
 
         if !handler.matches_kind(&invocation.payload) {
-            let key = tool_handler_key(&tool_name);
-            let message = format!("tool {key} invoked with incompatible payload");
+            let message = format!("tool {display_name} invoked with incompatible payload");
             otel.tool_result_with_tags(
-                tool_name.name(),
+                &display_name,
                 &call_id_owned,
                 log_payload.as_ref(),
                 Duration::ZERO,
@@ -318,7 +310,7 @@ impl ToolRegistry {
         let started = Instant::now();
         let result = otel
             .log_tool_result_with_tags(
-                tool_name.name(),
+                &display_name,
                 &call_id_owned,
                 log_payload.as_ref(),
                 &metric_tags,
@@ -438,7 +430,7 @@ impl ToolRegistry {
 }
 
 pub struct ToolRegistryBuilder {
-    handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
     specs: Vec<ConfiguredToolSpec>,
 }
 
@@ -468,10 +460,10 @@ impl ToolRegistryBuilder {
         H: ToolHandler + 'static,
     {
         let name = name.into();
-        let key = tool_handler_key(&name);
+        let display_name = name.display();
         let handler: Arc<dyn AnyToolHandler> = handler;
-        if self.handlers.insert(key.clone(), handler.clone()).is_some() {
-            warn!("overwriting handler for tool {key}");
+        if self.handlers.insert(name, handler).is_some() {
+            warn!("overwriting handler for tool {display_name}");
         }
     }
 
@@ -500,7 +492,7 @@ impl ToolRegistryBuilder {
 }
 
 fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) -> String {
-    let tool_name = tool_handler_key(tool_name);
+    let tool_name = tool_name.display();
     match payload {
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
@@ -593,7 +585,7 @@ async fn dispatch_after_tool_use_hook(
                 event: HookEventAfterToolUse {
                     turn_id: turn.sub_id.clone(),
                     call_id: invocation.call_id.clone(),
-                    tool_name: invocation.tool_name.name().to_string(),
+                    tool_name: invocation.tool_name.display(),
                     tool_kind: hook_tool_kind(&tool_input),
                     tool_input,
                     executed: dispatch.executed,
@@ -616,7 +608,7 @@ async fn dispatch_after_tool_use_hook(
             HookResult::FailedContinue(error) => {
                 warn!(
                     call_id = %invocation.call_id,
-                    tool_name = invocation.tool_name.name(),
+                    tool_name = %invocation.tool_name.display(),
                     hook_name = %hook_name,
                     error = %error,
                     "after_tool_use hook failed; continuing"
@@ -625,7 +617,7 @@ async fn dispatch_after_tool_use_hook(
             HookResult::FailedAbort(error) => {
                 warn!(
                     call_id = %invocation.call_id,
-                    tool_name = invocation.tool_name.name(),
+                    tool_name = %invocation.tool_name.display(),
                     hook_name = %hook_name,
                     error = %error,
                     "after_tool_use hook failed; aborting operation"

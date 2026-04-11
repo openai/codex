@@ -24,11 +24,8 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let plain_name = codex_tools::ToolName::plain(tool_name);
     let namespaced_name = codex_tools::ToolName::namespaced(namespace, tool_name);
     let registry = ToolRegistry::new(HashMap::from([
-        (tool_handler_key(&plain_name), Arc::clone(&plain_handler)),
-        (
-            tool_handler_key(&namespaced_name),
-            Arc::clone(&namespaced_handler),
-        ),
+        (plain_name.clone(), Arc::clone(&plain_handler)),
+        (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
     ]));
 
     let plain = registry.handler(&plain_name);

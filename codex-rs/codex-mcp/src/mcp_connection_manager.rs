@@ -1191,11 +1191,14 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.list_all_tools()
-            .await
-            .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool.name.to_string()))
+    pub async fn resolve_tool_info(&self, name: &str, namespace: Option<&str>) -> Option<ToolInfo> {
+        let qualified_name = match namespace {
+            Some(namespace) if name.starts_with(namespace) => name.to_string(),
+            Some(namespace) => format!("{namespace}{name}"),
+            None => name.to_string(),
+        };
+
+        self.list_all_tools().await.get(&qualified_name).cloned()
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {

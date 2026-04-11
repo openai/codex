@@ -2,8 +2,8 @@
 /// provides one.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ToolName {
-    name: String,
-    namespace: Option<String>,
+    pub name: String,
+    pub namespace: Option<String>,
 }
 
 impl ToolName {
@@ -21,12 +21,11 @@ impl ToolName {
         }
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn namespace(&self) -> Option<&str> {
-        self.namespace.as_deref()
+    pub fn display(&self) -> String {
+        match &self.namespace {
+            Some(namespace) => format!("{namespace}{}", self.name),
+            None => self.name.clone(),
+        }
     }
 }
 

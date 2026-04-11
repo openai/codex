@@ -1572,14 +1572,14 @@ impl JsReplManager {
             },
         );
 
-        let payload = if let Some((server, tool)) = exec
+        let payload = if let Some(tool_info) = exec
             .session
-            .parse_mcp_tool_name(&req.tool_name, &None)
+            .resolve_mcp_tool_info(&req.tool_name, /*namespace*/ None)
             .await
         {
             crate::tools::context::ToolPayload::Mcp {
-                server,
-                tool,
+                server: tool_info.server_name,
+                tool: tool_info.tool.name.to_string(),
                 raw_arguments: req.arguments.clone(),
             }
         } else if is_freeform_tool(&router.specs(), &req.tool_name) {
