@@ -6,6 +6,7 @@ mod installed_marketplaces;
 mod manager;
 mod manifest;
 mod marketplace;
+mod marketplace_upgrade;
 mod mentions;
 mod remote;
 mod render;

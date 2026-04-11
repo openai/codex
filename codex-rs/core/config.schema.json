@@ -770,6 +770,11 @@
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
+        "last_revision": {
+          "default": null,
+          "description": "Git revision Codex last successfully activated for this marketplace.",
+          "type": "string"
+        },
         "last_updated": {
           "default": null,
           "description": "Last time Codex successfully added or refreshed this marketplace.",
