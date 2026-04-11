@@ -1684,6 +1684,21 @@
       ],
       "type": "string"
     },
+    "SessionTitlesToml": {
+      "additionalProperties": false,
+      "description": "Session title settings loaded from config.toml.",
+      "properties": {
+        "enabled": {
+          "description": "When `false`, skip generating a default `/rename` title for new interactive sessions.",
+          "type": "boolean"
+        },
+        "model": {
+          "description": "Model used for default session title generation.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -2696,6 +2711,14 @@
         }
       ],
       "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
+    },
+    "session_titles": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SessionTitlesToml"
+        }
+      ],
+      "description": "Default generated names for interactive sessions."
     },
     "shell_environment_policy": {
       "allOf": [

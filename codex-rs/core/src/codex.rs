@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -78,6 +80,7 @@ use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
 use codex_mcp::codex_apps_tools_cache_key;
+use codex_models_manager::ModelsManagerConfig;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
@@ -152,6 +155,7 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -375,6 +379,7 @@ use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_protocol::protocol::SkillToolDependency as ProtocolSkillToolDependency;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -443,6 +448,44 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+const DEFAULT_THREAD_TITLE_MODEL: &str = "gpt-5.4-mini";
+const THREAD_TITLE_INPUT_CHAR_LIMIT: usize = 2_000;
+const THREAD_TITLE_MIN_CHARS: usize = 18;
+const THREAD_TITLE_MAX_CHARS: usize = 36;
+const THREAD_TITLE_PROMPT: &str = r#"You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task that will be created from that prompt.
+The tasks typically have to do with coding-related tasks, for example requests for bug fixes or questions about a codebase. The title you generate will be shown in the UI to represent the prompt.
+Generate a concise UI title (18-36 characters) for this task.
+Return JSON with exactly one field: {"title": "..."}.
+The title value must be plain text. No quotes or trailing punctuation.
+Do not use markdown or formatting characters.
+If the task includes a ticket reference (e.g. ABC-123), include it verbatim.
+
+Generate a clear, informative task title based solely on the prompt provided. Follow the rules below to ensure consistency, readability, and usefulness.
+
+How to write a good title:
+Generate a single-line title that captures the question or core change requested. The title should be easy to scan and useful in changelogs or review queues.
+- Use an imperative verb first: "Add", "Fix", "Update", "Refactor", "Remove", "Locate", "Find", etc.
+- Aim for 18-36 characters; keep under 5 words where possible.
+- Capitalize only the first word unless locale requires otherwise.
+- Write the title in the user's locale.
+- Do not use punctuation at the end.
+- Output the title as plain text with no surrounding quotes or backticks.
+- Use precise, non-redundant language.
+- Translate fixed phrases into the user's locale (e.g., "Fix bug" -> "Corrige el error" in Spanish-ES), but leave code terms in English unless a widely adopted translation exists.
+- If the user provides a title explicitly, reuse it (translated if needed) and skip generation logic.
+- Make it clear when the user is requesting changes (use verbs like "Fix", "Add", etc) vs asking a question (use verbs like "Find", "Locate", "Count").
+- Do NOT respond to the user, answer questions, or attempt to solve the problem; just write a title that can represent the user's query.
+
+Examples:
+- User: "Can we add dark-mode support to the settings page?" -> Add dark-mode support
+- User: "Fehlerbehebung: Beim Anmelden erscheint 500." (de-DE) -> Login-Fehler 500 beheben
+- User: "Refactoriser le composant sidebar pour reduire le code duplique." (fr-FR) -> Refactoriser composant sidebar
+- User: "How do I fix our login bug?" -> Troubleshoot login bug
+- User: "Where in the codebase is foo_bar created" -> Locate foo_bar
+- User: "what's 2+2" -> Calculate 2+2
+
+By following these conventions, your titles will be readable, changelog-friendly, and helpful to both users and downstream tools."#;
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -843,6 +886,10 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    /// One-shot guard that prevents later user turns from spawning duplicate title requests.
+    thread_name_generation_started: AtomicBool,
+    /// Serializes manual and generated thread-name writes through the shared session-index path.
+    thread_name_write_lock: Mutex<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -2080,6 +2127,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            thread_name_generation_started: AtomicBool::new(false),
+            thread_name_write_lock: Mutex::new(()),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -4084,6 +4133,73 @@ impl Session {
         self.ensure_rollout_materialized().await;
     }
 
+    async fn maybe_start_thread_name_generation(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: &[UserInput],
+    ) {
+        let initial_user_message = UserMessageItem::new(input).message();
+        if initial_user_message.trim().is_empty() {
+            return;
+        }
+        if !self.should_start_thread_name_generation().await {
+            return;
+        }
+
+        let sess = Arc::clone(self);
+        let title_request = ThreadNameGenerationRequest {
+            sub_id: turn_context.sub_id.clone(),
+            user_message: truncate_string_chars(
+                &initial_user_message,
+                THREAD_TITLE_INPUT_CHAR_LIMIT,
+            ),
+            model_name: turn_context
+                .config
+                .session_titles
+                .model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_THREAD_TITLE_MODEL.to_string()),
+            model_reasoning_summary: turn_context.reasoning_summary,
+            service_tier: turn_context.config.service_tier,
+            session_telemetry: turn_context.session_telemetry.clone(),
+            turn_metadata_header: turn_context.turn_metadata_state.current_header_value(),
+            models_manager_config: turn_context.config.to_models_manager_config(),
+        };
+        tokio::spawn(async move {
+            if let Err(err) = generate_and_set_thread_name(sess, title_request).await {
+                debug!("auto thread name generation skipped or failed: {err:#}");
+            }
+        });
+    }
+
+    /// Claims the one allowed background-title attempt for this session.
+    ///
+    /// A generated name is only useful for persisted, interactive sessions that still
+    /// do not have a name. The name is checked again while committing it, so callers
+    /// may rely on this method only as the spawn gate; it is not the authority that
+    /// decides whether the generated value ultimately wins over `/rename`.
+    async fn should_start_thread_name_generation(&self) -> bool {
+        let (enabled, source_allows_generation, has_thread_name) = {
+            let state = self.state.lock().await;
+            let config = &state.session_configuration.original_config_do_not_use;
+            (
+                config.session_titles.enabled,
+                session_source_allows_thread_name_generation(
+                    &state.session_configuration.session_source,
+                ),
+                state.session_configuration.thread_name.is_some(),
+            )
+        };
+        let persistence_enabled = self.services.rollout.lock().await.is_some();
+        if !enabled || !source_allows_generation || has_thread_name || !persistence_enabled {
+            return false;
+        }
+
+        !self
+            .thread_name_generation_started
+            .swap(true, Ordering::AcqRel)
+    }
+
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
@@ -4838,6 +4954,316 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     debug!("Agent loop exited");
 }
 
+#[derive(Debug)]
+enum SetThreadNameError {
+    Empty,
+    PersistenceDisabled,
+    Persist(anyhow::Error),
+}
+
+impl SetThreadNameError {
+    fn to_error_event(&self) -> ErrorEvent {
+        match self {
+            Self::Empty => ErrorEvent {
+                message: "Thread name cannot be empty.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::PersistenceDisabled => ErrorEvent {
+                message: "Session persistence is disabled; cannot rename thread.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            },
+            Self::Persist(err) => ErrorEvent {
+                message: format!("Failed to set thread name: {err}"),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SetThreadNameMode {
+    Always,
+    IfUnset,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SetThreadNameOutcome {
+    Updated,
+    SkippedExisting,
+}
+
+async fn persist_thread_name_update(
+    sess: &Arc<Session>,
+    event: ThreadNameUpdatedEvent,
+) -> std::result::Result<EventMsg, SetThreadNameError> {
+    let msg = EventMsg::ThreadNameUpdated(event);
+    let item = RolloutItem::EventMsg(msg.clone());
+    let recorder = {
+        let guard = sess.services.rollout.lock().await;
+        guard.clone()
+    }
+    .ok_or(SetThreadNameError::PersistenceDisabled)?;
+    recorder
+        .persist()
+        .await
+        .map_err(|err| SetThreadNameError::Persist(err.into()))?;
+    recorder
+        .record_items(std::slice::from_ref(&item))
+        .await
+        .map_err(|err| SetThreadNameError::Persist(err.into()))?;
+    recorder
+        .flush()
+        .await
+        .map_err(|err| SetThreadNameError::Persist(err.into()))?;
+    Ok(msg)
+}
+
+/// Persists a thread name, updates session state, and notifies listeners as one ordered write.
+///
+/// Manual `/rename` passes [`SetThreadNameMode::Always`]. Generated titles pass
+/// [`SetThreadNameMode::IfUnset`] so the state under the write lock can veto a
+/// stale model result after the user has already named the thread.
+async fn commit_thread_name(
+    sess: &Arc<Session>,
+    sub_id: String,
+    name: String,
+    mode: SetThreadNameMode,
+) -> std::result::Result<SetThreadNameOutcome, SetThreadNameError> {
+    let Some(name) = crate::util::normalize_thread_name(&name) else {
+        return Err(SetThreadNameError::Empty);
+    };
+
+    let _guard = sess.thread_name_write_lock.lock().await;
+
+    if matches!(mode, SetThreadNameMode::IfUnset) {
+        let state = sess.state.lock().await;
+        if state.session_configuration.thread_name.is_some() {
+            return Ok(SetThreadNameOutcome::SkippedExisting);
+        }
+    }
+
+    let msg = persist_thread_name_update(
+        sess,
+        ThreadNameUpdatedEvent {
+            thread_id: sess.conversation_id,
+            thread_name: Some(name.clone()),
+        },
+    )
+    .await?;
+
+    if let Some(state_db) = sess.services.state_db.as_deref()
+        && let Err(err) = state_db
+            .update_thread_title(sess.conversation_id, &name)
+            .await
+    {
+        warn!("Failed to update thread title in state db: {err}");
+    }
+
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.thread_name = Some(name.clone());
+    }
+
+    let codex_home = sess.codex_home().await;
+    if let Err(err) =
+        crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
+    {
+        warn!("Failed to update legacy thread name index: {err}");
+    }
+
+    sess.deliver_event_raw(Event { id: sub_id, msg }).await;
+
+    Ok(SetThreadNameOutcome::Updated)
+}
+
+/// Returns whether sessions from this entry point should be auto-titled from the first prompt.
+///
+/// Exec sessions and sub-agents usually have an enclosing task that names their
+/// purpose, and generating extra names for them would spend a model request
+/// without improving the interactive session list.
+fn session_source_allows_thread_name_generation(session_source: &SessionSource) -> bool {
+    !matches!(
+        session_source,
+        SessionSource::Exec | SessionSource::SubAgent(_)
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThreadNameOutput {
+    title: String,
+}
+
+struct ThreadNameGenerationRequest {
+    sub_id: String,
+    user_message: String,
+    model_name: String,
+    model_reasoning_summary: ReasoningSummaryConfig,
+    service_tier: Option<ServiceTier>,
+    session_telemetry: SessionTelemetry,
+    turn_metadata_header: Option<String>,
+    models_manager_config: ModelsManagerConfig,
+}
+
+async fn generate_and_set_thread_name(
+    sess: Arc<Session>,
+    request: ThreadNameGenerationRequest,
+) -> anyhow::Result<SetThreadNameOutcome> {
+    let model_info = sess
+        .services
+        .models_manager
+        .get_model_info(&request.model_name, &request.models_manager_config)
+        .await;
+    let generated_name = generate_thread_name(sess.as_ref(), &request, &model_info).await?;
+    let Some(generated_name) = sanitize_generated_thread_name(&generated_name) else {
+        anyhow::bail!("generated thread name was empty after normalization");
+    };
+
+    commit_thread_name(
+        &sess,
+        request.sub_id,
+        generated_name,
+        SetThreadNameMode::IfUnset,
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("{err:?}"))
+}
+
+/// Runs the title-only model request and returns the raw title candidate.
+///
+/// The response is requested as JSON, but older or non-conforming providers can
+/// still return text. Callers must sanitize the returned string before storing
+/// it; persisting this raw value could leak quotes, markdown, or an overlong
+/// summary into terminal titles and session pickers.
+async fn generate_thread_name(
+    sess: &Session,
+    request: &ThreadNameGenerationRequest,
+    model_info: &ModelInfo,
+) -> anyhow::Result<String> {
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("User prompt:\n{}\n", request.user_message.trim()),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions {
+            text: THREAD_TITLE_PROMPT.to_string(),
+        },
+        personality: None,
+        output_schema: Some(thread_name_output_schema()),
+    };
+
+    let mut client_session = sess.services.model_client.new_session();
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            model_info,
+            &request.session_telemetry,
+            Some(ReasoningEffortConfig::Low),
+            request.model_reasoning_summary,
+            request.service_tier,
+            request.turn_metadata_header.as_deref(),
+        )
+        .await?;
+
+    let mut result = String::new();
+    while let Some(event) = stream.next().await.transpose()? {
+        match event {
+            ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
+            ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
+                if result.is_empty()
+                    && let Some(text) = compact::content_items_to_text(&content)
+                {
+                    result.push_str(&text);
+                }
+            }
+            ResponseEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
+
+    let output = serde_json::from_str::<ThreadNameOutput>(&result)
+        .map(|output| output.title)
+        .unwrap_or(result);
+    Ok(output)
+}
+
+fn thread_name_output_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "minLength": THREAD_TITLE_MIN_CHARS,
+                "maxLength": THREAD_TITLE_MAX_CHARS,
+            }
+        },
+        "required": ["title"],
+        "additionalProperties": false
+    })
+}
+
+fn sanitize_generated_thread_name(name: &str) -> Option<String> {
+    let first_line = name
+        .replace("\r\n", "\n")
+        .lines()
+        .find(|line| !line.trim().is_empty())?
+        .trim()
+        .to_string();
+    let prefixed = first_line.trim();
+    let stripped_title = if prefixed
+        .get(.."title".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("title"))
+        && prefixed["title".len()..]
+            .chars()
+            .next()
+            .is_some_and(|separator| separator == ':' || separator.is_whitespace())
+    {
+        prefixed["title".len()..].trim_start_matches(|ch: char| ch == ':' || ch.is_whitespace())
+    } else {
+        prefixed
+    };
+    let stripped = stripped_title
+        .trim_matches(['"', '\'', '`', '“', '”', '‘', '’'])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(['.', '?', '!'])
+        .trim()
+        .to_string();
+    let stripped = stripped.as_str();
+    let char_count = stripped.chars().count();
+    if char_count < THREAD_TITLE_MIN_CHARS {
+        return None;
+    }
+    if char_count > THREAD_TITLE_MAX_CHARS {
+        let truncated = stripped
+            .chars()
+            .take(THREAD_TITLE_MAX_CHARS - 1)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        return Some(format!("{truncated}…"));
+    }
+    Some(stripped.to_string())
+}
+
+fn truncate_string_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        truncated.trim_end().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     let op_name = sub.op.kind();
     let span_name = format!("op.dispatch.{op_name}");
@@ -4906,7 +5332,6 @@ mod handlers {
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SkillsListEntry;
-    use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
@@ -5587,80 +6012,19 @@ mod handlers {
         .await;
     }
 
-    async fn persist_thread_name_update(
-        sess: &Arc<Session>,
-        event: ThreadNameUpdatedEvent,
-    ) -> anyhow::Result<EventMsg> {
-        let msg = EventMsg::ThreadNameUpdated(event);
-        let item = RolloutItem::EventMsg(msg.clone());
-        let recorder = {
-            let guard = sess.services.rollout.lock().await;
-            guard.clone()
-        }
-        .ok_or_else(|| anyhow::anyhow!("Session persistence is disabled; cannot rename thread."))?;
-        recorder.persist().await?;
-        recorder.record_items(std::slice::from_ref(&item)).await?;
-        recorder.flush().await?;
-        Ok(msg)
-    }
-
     /// Persists the thread name in the rollout and state database, updates in-memory state, and
     /// emits a `ThreadNameUpdated` event on success.
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
-        let Some(name) = crate::util::normalize_thread_name(&name) else {
+        let result =
+            super::commit_thread_name(sess, sub_id.clone(), name, super::SetThreadNameMode::Always)
+                .await;
+        if let Err(err) = result {
             let event = Event {
                 id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "Thread name cannot be empty.".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::BadRequest),
-                }),
+                msg: EventMsg::Error(err.to_error_event()),
             };
             sess.send_event_raw(event).await;
-            return;
         };
-
-        let updated = ThreadNameUpdatedEvent {
-            thread_id: sess.conversation_id,
-            thread_name: Some(name.clone()),
-        };
-
-        let msg = match persist_thread_name_update(sess, updated).await {
-            Ok(msg) => msg,
-            Err(err) => {
-                warn!("Failed to persist thread name update to rollout: {err}");
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: err.to_string(),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
-                };
-                sess.send_event_raw(event).await;
-                return;
-            }
-        };
-
-        if let Some(state_db) = sess.services.state_db.as_deref()
-            && let Err(err) = state_db
-                .update_thread_title(sess.conversation_id, &name)
-                .await
-        {
-            warn!("Failed to update thread title in state db: {err}");
-        }
-
-        {
-            let mut state = sess.state.lock().await;
-            state.session_configuration.thread_name = Some(name.clone());
-        }
-
-        let codex_home = sess.codex_home().await;
-        if let Err(err) =
-            crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
-        {
-            warn!("Failed to update legacy thread name index: {err}");
-        }
-
-        sess.deliver_event_raw(Event { id: sub_id, msg }).await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -6153,6 +6517,8 @@ pub(crate) async fn run_turn(
             return None;
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+        sess.maybe_start_thread_name_generation(Arc::clone(&turn_context), &input)
             .await;
         user_prompt_submit_outcome.additional_contexts
     };

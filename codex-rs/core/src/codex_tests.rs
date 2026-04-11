@@ -154,6 +154,48 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+#[test]
+fn generated_thread_names_are_sanitized_for_display() {
+    assert_eq!(
+        sanitize_generated_thread_name("  \"Investigate flaky test.\"  ").as_deref(),
+        Some("Investigate flaky test")
+    );
+    assert_eq!(
+        sanitize_generated_thread_name("Fix   TypeScript\nschema\tgeneration").as_deref(),
+        None
+    );
+    assert_eq!(
+        sanitize_generated_thread_name("TITLE  Locate foo_bar creation?").as_deref(),
+        Some("Locate foo_bar creation")
+    );
+    assert_eq!(
+        sanitize_generated_thread_name("Title: Locate foo_bar creation?").as_deref(),
+        Some("Locate foo_bar creation")
+    );
+    assert_eq!(
+        sanitize_generated_thread_name("Refactor an especially noisy sidebar component").as_deref(),
+        Some("Refactor an especially noisy sideba…")
+    );
+    assert_eq!(sanitize_generated_thread_name("Fix bug"), None);
+    assert_eq!(sanitize_generated_thread_name(" \n\t "), None);
+}
+
+#[test]
+fn thread_name_generation_skips_exec_and_subagents() {
+    assert!(!session_source_allows_thread_name_generation(
+        &SessionSource::Exec
+    ));
+    assert!(!session_source_allows_thread_name_generation(
+        &SessionSource::SubAgent(SubAgentSource::Review)
+    ));
+    assert!(session_source_allows_thread_name_generation(
+        &SessionSource::Cli
+    ));
+    assert!(session_source_allows_thread_name_generation(
+        &SessionSource::Mcp
+    ));
+}
+
 fn skill_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -2944,6 +2986,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        thread_name_generation_started: AtomicBool::new(false),
+        thread_name_write_lock: Mutex::new(()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3789,6 +3833,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        thread_name_generation_started: AtomicBool::new(false),
+        thread_name_write_lock: Mutex::new(()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,

@@ -6,8 +6,8 @@
 use super::*;
 
 /// Items shown in the terminal title when the user has not configured a
-/// custom selection. Intentionally minimal: spinner + project name.
-pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["spinner", "project"];
+/// custom selection. Intentionally minimal: spinner + thread name + project name.
+pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 3] = ["spinner", "thread", "project"];
 
 /// Braille-pattern dot-spinner frames for the terminal title animation.
 pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =

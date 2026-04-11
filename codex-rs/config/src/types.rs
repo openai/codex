@@ -200,6 +200,44 @@ pub struct MemoriesToml {
     pub consolidation_model: Option<String>,
 }
 
+/// Session title settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SessionTitlesToml {
+    /// When `false`, skip generating a default `/rename` title for new interactive sessions.
+    pub enabled: Option<bool>,
+    /// Model used for default session title generation.
+    pub model: Option<String>,
+}
+
+/// Effective session title settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTitlesConfig {
+    /// Whether interactive sessions should ask an auxiliary model for a default title.
+    pub enabled: bool,
+    /// Optional model override for the title-only background request.
+    pub model: Option<String>,
+}
+
+impl Default for SessionTitlesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: None,
+        }
+    }
+}
+
+impl From<SessionTitlesToml> for SessionTitlesConfig {
+    fn from(toml: SessionTitlesToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            model: toml.model,
+        }
+    }
+}
+
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {

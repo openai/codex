@@ -72,6 +72,24 @@ back to these environment variables.
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
 
+## Session titles
+
+Interactive sessions generate a short default thread name after the first user prompt. The generated name uses the same storage and update event as `/rename`, and `/rename` still wins if the user names the thread before the background title request commits.
+
+Disable default title generation with:
+
+```toml
+[session_titles]
+enabled = false
+```
+
+Select the auxiliary model used for generated titles with:
+
+```toml
+[session_titles]
+model = "gpt-5.4-mini"
+```
+
 ## Plan mode defaults
 
 `plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
