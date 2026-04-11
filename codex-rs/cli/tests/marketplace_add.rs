@@ -41,9 +41,12 @@ async fn marketplace_add_rejects_local_directory_source() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
     write_marketplace_source(source.path(), "local ref")?;
+    let source_parent = source.path().parent().unwrap();
+    let source_arg = format!("./{}", source.path().file_name().unwrap().to_string_lossy());
 
     codex_command(codex_home.path())?
-        .args(["marketplace", "add", source.path().to_str().unwrap()])
+        .current_dir(source_parent)
+        .args(["marketplace", "add", source_arg.as_str()])
         .assert()
         .failure()
         .stderr(contains(
