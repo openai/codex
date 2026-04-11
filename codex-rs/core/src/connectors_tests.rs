@@ -49,6 +49,7 @@ fn app(id: &str) -> AppInfo {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }
 }
 
@@ -79,6 +80,14 @@ fn test_tool_definition(tool_name: &str) -> Tool {
     }
 }
 
+fn app_tool_info(tool_name: &str, description: Option<&str>) -> AppToolInfo {
+    AppToolInfo {
+        name: tool_name.to_string(),
+        description: description.map(ToOwned::to_owned),
+        input_schema: serde_json::Value::Object(JsonObject::default()),
+    }
+}
+
 fn google_calendar_accessible_connector(plugin_display_names: &[&str]) -> AppInfo {
     AppInfo {
         id: "calendar".to_string(),
@@ -94,6 +103,7 @@ fn google_calendar_accessible_connector(plugin_display_names: &[&str]) -> AppInf
         is_accessible: true,
         is_enabled: true,
         plugin_display_names: plugin_names(plugin_display_names),
+        tools: Vec::new(),
     }
 }
 
@@ -159,6 +169,7 @@ fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         }]
     );
     assert_eq!(connector_mention_slug(&merged[0]), "google-calendar");
@@ -219,6 +230,10 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: plugin_names(&["beta", "sample"]),
+            tools: vec![
+                app_tool_info("calendar_create_event", None),
+                app_tool_info("calendar_list_events", None),
+            ],
         }]
     );
 }
@@ -275,6 +290,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: plugin_names(&["calendar-plugin"]),
+            tools: vec![app_tool_info("calendar_list_events", None)],
         }]
     );
 }
@@ -304,6 +320,7 @@ fn merge_connectors_unions_and_dedupes_plugin_display_names() {
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: plugin_names(&["alpha", "beta", "sample"]),
+            tools: Vec::new(),
         }]
     );
 }
@@ -351,6 +368,10 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: vec![app_tool_info(
+                "calendar_create_event",
+                Some("Create a calendar event"),
+            )],
         }]
     );
 }

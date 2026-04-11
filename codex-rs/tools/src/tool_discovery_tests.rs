@@ -337,6 +337,7 @@ fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         })),
         DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
             id: "slack@openai-curated".to_string(),
@@ -364,6 +365,7 @@ fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         }))]
     );
 }

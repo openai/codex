@@ -335,6 +335,7 @@ fn make_connector(id: &str, name: &str) -> AppInfo {
         is_accessible: true,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }
 }
 

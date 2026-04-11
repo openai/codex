@@ -38,6 +38,7 @@ mod tests {
             is_accessible,
             is_enabled,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         }
     }
 

@@ -215,6 +215,13 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/AppToolInfo"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -359,6 +366,26 @@
       },
       "required": [
         "userPrompt"
+      ],
+      "type": "object"
+    },
+    "AppToolInfo": {
+      "description": "EXPERIMENTAL - app tool metadata returned by app-list APIs.\n\n`input_schema` is the effective JSON Schema Codex will use for this tool's parameters, including any connector link parameter constraints.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputSchema": true,
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputSchema",
+        "name"
       ],
       "type": "object"
     },

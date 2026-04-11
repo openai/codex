@@ -364,6 +364,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -379,6 +380,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
     ];
     let tools = vec![connector_tool("beta", "Beta App")?];
@@ -461,6 +463,7 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let (server_url, server_handle) = start_apps_server(connectors, Vec::new()).await?;
 

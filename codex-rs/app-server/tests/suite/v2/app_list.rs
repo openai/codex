@@ -25,6 +25,7 @@ use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::AppMetadata;
 use codex_app_server_protocol::AppReview;
 use codex_app_server_protocol::AppScreenshot;
+use codex_app_server_protocol::AppToolInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AuthMode;
@@ -103,6 +104,7 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -164,6 +166,7 @@ async fn list_apps_uses_thread_feature_flag_when_thread_id_is_provided() -> Resu
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -267,6 +270,7 @@ async fn list_apps_reports_is_enabled_from_config() -> Result<()> {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -377,6 +381,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -392,6 +397,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
     ];
 
@@ -441,6 +447,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         is_accessible: true,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: expected_connector_tools("beta"),
     }];
 
     let first_update = read_app_list_updated_notification(&mut mcp).await?;
@@ -461,6 +468,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: expected_connector_tools("beta"),
         },
         AppInfo {
             id: "alpha".to_string(),
@@ -476,6 +484,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
     ];
 
@@ -517,6 +526,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -532,6 +542,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
     ];
 
@@ -582,6 +593,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: expected_connector_tools("beta"),
         },
         AppInfo {
             id: "alpha".to_string(),
@@ -597,6 +609,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
     ];
 
@@ -641,6 +654,7 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let (server_url, server_handle) = start_apps_server_with_delays(
         connectors.clone(),
@@ -697,6 +711,7 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
 
     let update = read_app_list_updated_notification(&mut mcp).await?;
@@ -732,6 +747,7 @@ async fn list_apps_paginates_results() -> Result<()> {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -747,6 +763,7 @@ async fn list_apps_paginates_results() -> Result<()> {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
     ];
 
@@ -805,6 +822,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         is_accessible: true,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: expected_connector_tools("beta"),
     }];
 
     assert_eq!(first_page, expected_first);
@@ -849,6 +867,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
 
     assert_eq!(second_page, expected_second);
@@ -874,6 +893,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -979,6 +999,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -994,6 +1015,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: Vec::new(),
         },
     ];
     let initial_tools = vec![connector_tool("beta", "Beta App")?];
@@ -1044,6 +1066,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: expected_connector_tools("beta"),
         }]
     );
 
@@ -1065,6 +1088,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: Vec::new(),
+                tools: expected_connector_tools("beta"),
             },
             AppInfo {
                 id: "alpha".to_string(),
@@ -1080,6 +1104,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 is_accessible: false,
                 is_enabled: true,
                 plugin_display_names: Vec::new(),
+                tools: Vec::new(),
             },
         ]
     );
@@ -1110,6 +1135,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }]);
     server_control.set_tools(Vec::new());
 
@@ -1140,6 +1166,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: Vec::new(),
+                tools: expected_connector_tools("beta"),
             },
             AppInfo {
                 id: "alpha".to_string(),
@@ -1155,6 +1182,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 is_accessible: false,
                 is_enabled: true,
                 plugin_display_names: Vec::new(),
+                tools: Vec::new(),
             },
         ]
     );
@@ -1183,6 +1211,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let second_update = read_app_list_updated_notification(&mut mcp).await?;
     assert_eq!(second_update.data, expected_final);
@@ -1219,6 +1248,7 @@ async fn experimental_feature_enablement_set_refreshes_apps_list_when_apps_turn_
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }];
     let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
         initial_connectors,
@@ -1267,6 +1297,7 @@ async fn experimental_feature_enablement_set_refreshes_apps_list_when_apps_turn_
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+        tools: Vec::new(),
     }]);
     server_control.set_tools(vec![connector_tool("alpha", "Alpha App")?]);
 
@@ -1298,6 +1329,7 @@ async fn experimental_feature_enablement_set_refreshes_apps_list_when_apps_turn_
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+            tools: expected_connector_tools("alpha"),
         }]
     );
 
@@ -1513,6 +1545,17 @@ fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
         .insert("connector_name".to_string(), json!(connector_name));
     tool.meta = Some(meta);
     Ok(tool)
+}
+
+fn expected_connector_tools(connector_id: &str) -> Vec<AppToolInfo> {
+    vec![AppToolInfo {
+        name: format!("connector_{connector_id}"),
+        description: Some("Connector test tool".to_string()),
+        input_schema: json!({
+            "additionalProperties": false,
+            "type": "object"
+        }),
+    }]
 }
 
 fn write_connectors_config(codex_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {
