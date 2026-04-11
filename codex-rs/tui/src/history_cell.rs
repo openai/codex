@@ -19,6 +19,12 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+#[cfg(test)]
+use crate::legacy_core::McpManager;
+use crate::legacy_core::config::Config;
+#[cfg(test)]
+use crate::legacy_core::plugins::PluginsManager;
+use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -42,12 +48,6 @@ use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_config::types::McpServerTransportConfig;
-#[cfg(test)]
-use codex_core::McpManager;
-use codex_core::config::Config;
-#[cfg(test)]
-use codex_core::plugins::PluginsManager;
-use codex_core::web_search_detail;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
@@ -897,6 +897,18 @@ pub fn new_approval_decision_cell(
                 ],
             };
             ("✗ ".red(), summary)
+        }
+        TimedOut => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "Review ".into(),
+                    "timed out".bold(),
+                    " before codex could run ".into(),
+                    snippet,
+                ],
+            )
         }
         Abort => {
             let snippet = Span::from(exec_snippet(&command)).dim();
@@ -2779,10 +2791,10 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::legacy_core::config::Config;
+    use crate::legacy_core::config::ConfigBuilder;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigBuilder;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;

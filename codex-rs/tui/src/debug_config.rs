@@ -1,16 +1,16 @@
 use crate::history_cell::PlainHistoryCell;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config_loader::ConfigLayerEntry;
+use crate::legacy_core::config_loader::ConfigLayerStack;
+use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
+use crate::legacy_core::config_loader::NetworkConstraints;
+use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
+use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
+use crate::legacy_core::config_loader::RequirementSource;
+use crate::legacy_core::config_loader::ResidencyRequirement;
+use crate::legacy_core::config_loader::SandboxModeRequirement;
+use crate::legacy_core::config_loader::WebSearchModeRequirement;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_core::config::Config;
-use codex_core::config_loader::ConfigLayerEntry;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::NetworkConstraints;
-use codex_core::config_loader::NetworkDomainPermissionToml;
-use codex_core::config_loader::NetworkUnixSocketPermissionToml;
-use codex_core::config_loader::RequirementSource;
-use codex_core::config_loader::ResidencyRequirement;
-use codex_core::config_loader::SandboxModeRequirement;
-use codex_core::config_loader::WebSearchModeRequirement;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -37,7 +37,7 @@ pub(crate) fn new_debug_config_output(
                 .permissions
                 .network
                 .as_ref()
-                .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),
+                .is_some_and(crate::legacy_core::config::NetworkProxySpec::socks_enabled),
         );
         lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
         lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
@@ -457,26 +457,26 @@ fn format_network_unix_socket_permission(
 mod tests {
     use super::render_debug_config_lines;
     use super::session_all_proxy_url;
+    use crate::legacy_core::config::Constrained;
+    use crate::legacy_core::config_loader::ConfigLayerEntry;
+    use crate::legacy_core::config_loader::ConfigLayerStack;
+    use crate::legacy_core::config_loader::ConfigRequirements;
+    use crate::legacy_core::config_loader::ConfigRequirementsToml;
+    use crate::legacy_core::config_loader::ConstrainedWithSource;
+    use crate::legacy_core::config_loader::FeatureRequirementsToml;
+    use crate::legacy_core::config_loader::McpServerIdentity;
+    use crate::legacy_core::config_loader::McpServerRequirement;
+    use crate::legacy_core::config_loader::NetworkConstraints;
+    use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
+    use crate::legacy_core::config_loader::NetworkDomainPermissionsToml;
+    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
+    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionsToml;
+    use crate::legacy_core::config_loader::RequirementSource;
+    use crate::legacy_core::config_loader::ResidencyRequirement;
+    use crate::legacy_core::config_loader::SandboxModeRequirement;
+    use crate::legacy_core::config_loader::Sourced;
+    use crate::legacy_core::config_loader::WebSearchModeRequirement;
     use codex_app_server_protocol::ConfigLayerSource;
-    use codex_core::config::Constrained;
-    use codex_core::config_loader::ConfigLayerEntry;
-    use codex_core::config_loader::ConfigLayerStack;
-    use codex_core::config_loader::ConfigRequirements;
-    use codex_core::config_loader::ConfigRequirementsToml;
-    use codex_core::config_loader::ConstrainedWithSource;
-    use codex_core::config_loader::FeatureRequirementsToml;
-    use codex_core::config_loader::McpServerIdentity;
-    use codex_core::config_loader::McpServerRequirement;
-    use codex_core::config_loader::NetworkConstraints;
-    use codex_core::config_loader::NetworkDomainPermissionToml;
-    use codex_core::config_loader::NetworkDomainPermissionsToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionsToml;
-    use codex_core::config_loader::RequirementSource;
-    use codex_core::config_loader::ResidencyRequirement;
-    use codex_core::config_loader::SandboxModeRequirement;
-    use codex_core::config_loader::Sourced;
-    use codex_core::config_loader::WebSearchModeRequirement;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::protocol::AskForApproval;

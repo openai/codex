@@ -3503,6 +3503,9 @@ pub enum ReviewDecision {
     #[default]
     Denied,
 
+    /// Automatic approval review timed out before reaching a decision.
+    TimedOut,
+
     /// User has denied this command and the agent should not do anything until
     /// the user's next command.
     Abort,
@@ -3523,6 +3526,7 @@ impl ReviewDecision {
                 NetworkPolicyRuleAction::Deny => "denied_with_network_policy_deny",
             },
             ReviewDecision::Denied => "denied",
+            ReviewDecision::TimedOut => "timed_out",
             ReviewDecision::Abort => "abort",
         }
     }
