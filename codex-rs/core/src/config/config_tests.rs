@@ -5136,6 +5136,30 @@ trust_level = "trusted"
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn active_project_does_not_match_configured_alias_for_canonical_cwd() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let alias_root = tmp.path().join("project_alias");
+    std::fs::create_dir_all(&project_root)?;
+    std::os::unix::fs::symlink(&project_root, &alias_root)?;
+
+    let config = ConfigToml {
+        projects: Some(HashMap::from([(
+            alias_root.to_string_lossy().to_string(),
+            ProjectConfig {
+                trust_level: Some(TrustLevel::Trusted),
+            },
+        )])),
+        ..Default::default()
+    };
+
+    assert_eq!(config.get_active_project(&project_root), None);
+
+    Ok(())
+}
+
 #[test]
 fn test_set_default_oss_provider() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;

@@ -658,16 +658,11 @@ impl ConfigToml {
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
     pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let mut projects = HashMap::new();
-        for (key, project_config) in self.projects.clone().unwrap_or_default() {
-            for normalized_key in normalized_project_lookup_keys(Path::new(&key)) {
-                projects.insert(normalized_key, project_config.clone());
-            }
-        }
+        let projects = self.projects.as_ref()?;
 
         for normalized_cwd in normalized_project_lookup_keys(resolved_cwd) {
-            if let Some(project_config) = projects.get(&normalized_cwd) {
-                return Some(project_config.clone());
+            if let Some(project_config) = project_config_for_lookup_key(projects, &normalized_cwd) {
+                return Some(project_config);
             }
         }
 
@@ -676,8 +671,10 @@ impl ConfigToml {
         // worktrees inherit trust from the main project.
         if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
             for normalized_repo_root in normalized_project_lookup_keys(&repo_root) {
-                if let Some(project_config_for_root) = projects.get(&normalized_repo_root) {
-                    return Some(project_config_for_root.clone());
+                if let Some(project_config_for_root) =
+                    project_config_for_lookup_key(projects, &normalized_repo_root)
+                {
+                    return Some(project_config_for_root);
                 }
             }
         }
@@ -731,6 +728,24 @@ fn normalize_project_lookup_key(key: String) -> String {
     } else {
         key
     }
+}
+
+fn project_config_for_lookup_key(
+    projects: &HashMap<String, ProjectConfig>,
+    lookup_key: &str,
+) -> Option<ProjectConfig> {
+    if let Some(project_config) = projects.get(lookup_key) {
+        return Some(project_config.clone());
+    }
+
+    let mut normalized_matches: Vec<_> = projects
+        .iter()
+        .filter(|(key, _)| normalize_project_lookup_key((*key).clone()) == lookup_key)
+        .collect();
+    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches
+        .first()
+        .map(|(_, project_config)| (**project_config).clone())
 }
 
 pub fn validate_reserved_model_provider_ids(

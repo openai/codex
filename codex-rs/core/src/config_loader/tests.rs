@@ -1202,6 +1202,65 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let alias_root = tmp.path().join("project_alias");
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"project\"\n",
+    )
+    .await?;
+    std::os::unix::fs::symlink(&project_root, &alias_root)?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        toml::to_string(&ConfigToml {
+            projects: Some(HashMap::from([(
+                alias_root.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&project_root)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert!(
+        project_layers[0].disabled_reason.is_some(),
+        "configured aliases must not collapse into the canonical project key"
+    );
+    assert_eq!(layers.effective_config().get("foo"), None);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn cli_override_can_update_project_local_mcp_server_when_project_is_trusted()
 -> std::io::Result<()> {
