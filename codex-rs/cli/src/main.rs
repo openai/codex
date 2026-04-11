@@ -38,11 +38,13 @@ use supports_color::Stream;
 mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
+mod marketplace_cmd;
 mod mcp_cmd;
 mod queue_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
 use crate::queue_cmd::QueueCommand;
 use crate::queue_cmd::run_queue_command;
@@ -109,6 +111,9 @@ enum Subcommand {
 
     /// Manage external MCP servers for Codex.
     Mcp(McpCli),
+
+    /// Manage plugin marketplaces for Codex.
+    Marketplace(MarketplaceCli),
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
@@ -711,6 +716,18 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run().await?;
+        }
+        Some(Subcommand::Marketplace(mut marketplace_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "marketplace",
+            )?;
+            prepend_config_flags(
+                &mut marketplace_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            marketplace_cli.run().await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
