@@ -167,6 +167,7 @@ WHERE thread_id = ?
         &self,
         thread_id: &str,
         id: &str,
+        due_at: i64,
         expected_last_run_at: Option<i64>,
         params: &ThreadTimerUpdateParams,
     ) -> anyhow::Result<bool> {
@@ -183,7 +184,14 @@ SET trigger_json = ?,
     pending_run = ?
 WHERE thread_id = ?
   AND id = ?
-  AND pending_run = 1
+  AND (
+    pending_run = 1
+    OR (
+      pending_run = 0
+      AND next_run_at IS NOT NULL
+      AND next_run_at <= ?
+    )
+  )
   AND (
     (last_run_at IS NULL AND ? IS NULL)
     OR last_run_at = ?
@@ -200,6 +208,7 @@ WHERE thread_id = ?
         .bind(i64::from(params.pending_run))
         .bind(thread_id)
         .bind(id)
+        .bind(due_at)
         .bind(expected_last_run_at)
         .bind(expected_last_run_at)
         .execute(self.pool.as_ref())
@@ -349,13 +358,13 @@ ORDER BY name
 
         assert!(
             runtime
-                .claim_one_shot_thread_timer("thread-1", "timer-1", 110)
+                .claim_one_shot_thread_timer("thread-1", "timer-1", /*due_at*/ 110)
                 .await
                 .expect("claim timer")
         );
         assert!(
             !runtime
-                .claim_one_shot_thread_timer("thread-1", "timer-1", 110)
+                .claim_one_shot_thread_timer("thread-1", "timer-1", /*due_at*/ 110)
                 .await
                 .expect("claim timer again")
         );
@@ -391,7 +400,8 @@ ORDER BY name
         assert!(
             runtime
                 .claim_recurring_thread_timer(
-                    "thread-1", "timer-1", /*expected_last_run_at*/ None, &update,
+                    "thread-1", "timer-1", /*due_at*/ 110, /*expected_last_run_at*/ None,
+                    &update,
                 )
                 .await
                 .expect("claim recurring timer")
@@ -399,7 +409,8 @@ ORDER BY name
         assert!(
             !runtime
                 .claim_recurring_thread_timer(
-                    "thread-1", "timer-1", /*expected_last_run_at*/ None, &update,
+                    "thread-1", "timer-1", /*due_at*/ 110, /*expected_last_run_at*/ None,
+                    &update,
                 )
                 .await
                 .expect("claim recurring timer again")
@@ -432,7 +443,7 @@ ORDER BY name
 
         assert!(
             runtime
-                .claim_one_shot_thread_timer("thread-1", "timer-1", 110)
+                .claim_one_shot_thread_timer("thread-1", "timer-1", /*due_at*/ 110)
                 .await
                 .expect("claim overdue one-shot timer")
         );
@@ -443,6 +454,46 @@ ORDER BY name
                 .expect("list timers")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn recurring_claim_consumes_overdue_timer_after_restart() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.next_run_at = Some(110);
+        params.pending_run = false;
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create overdue recurring timer");
+        let update = ThreadTimerUpdateParams {
+            trigger_json: params.trigger_json.clone(),
+            content: params.content.clone(),
+            instructions: params.instructions.clone(),
+            meta_json: params.meta_json.clone(),
+            delivery: params.delivery.clone(),
+            next_run_at: Some(120),
+            last_run_at: Some(110),
+            pending_run: false,
+        };
+
+        assert!(
+            runtime
+                .claim_recurring_thread_timer(
+                    "thread-1", "timer-1", /*due_at*/ 110, /*expected_last_run_at*/ None,
+                    &update,
+                )
+                .await
+                .expect("claim overdue recurring timer")
+        );
+        let timers = runtime
+            .list_thread_timers("thread-1")
+            .await
+            .expect("list timers");
+        assert_eq!(timers.len(), 1);
+        assert_eq!(timers[0].next_run_at, Some(120));
+        assert_eq!(timers[0].last_run_at, Some(110));
+        assert!(!timers[0].pending_run);
     }
 
     #[tokio::test]
@@ -468,13 +519,25 @@ ORDER BY name
 
         assert!(
             runtime
-                .claim_recurring_thread_timer("thread-1", "timer-1", Some(100), &update)
+                .claim_recurring_thread_timer(
+                    "thread-1",
+                    "timer-1",
+                    /*due_at*/ 110,
+                    /*expected_last_run_at*/ Some(100),
+                    &update,
+                )
                 .await
                 .expect("claim recurring idle timer")
         );
         assert!(
             !runtime
-                .claim_recurring_thread_timer("thread-1", "timer-1", Some(100), &update)
+                .claim_recurring_thread_timer(
+                    "thread-1",
+                    "timer-1",
+                    /*due_at*/ 110,
+                    /*expected_last_run_at*/ Some(100),
+                    &update,
+                )
                 .await
                 .expect("claim recurring idle timer again")
         );
