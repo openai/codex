@@ -262,12 +262,15 @@ fn normalize_git_url(url: &str) -> String {
 }
 
 fn looks_like_local_path(source: &str) -> bool {
+    let bytes = source.as_bytes();
     source.starts_with("./")
         || source.starts_with("../")
         || source.starts_with('/')
+        || source.starts_with('\\')
         || source.starts_with("~/")
         || source == "."
         || source == ".."
+        || matches!(bytes, [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic())
 }
 
 fn is_ssh_git_url(source: &str) -> bool {
@@ -495,6 +498,21 @@ mod tests {
     #[test]
     fn local_path_source_is_rejected() {
         let err = parse_marketplace_source("./marketplace", /*explicit_ref*/ None).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("local marketplace sources are not supported yet"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn windows_absolute_path_source_is_rejected_as_local() {
+        let err = parse_marketplace_source(
+            r"C:\Users\runneradmin\AppData\Local\Temp\marketplace",
+            /*explicit_ref*/ None,
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string()

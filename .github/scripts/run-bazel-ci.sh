@@ -69,12 +69,33 @@ print_bazel_test_log_tails() {
   local console_log="$1"
   local testlogs_dir
   local -a bazel_info_cmd=(bazel)
+  local -a bazel_info_args=(info)
 
   if (( ${#bazel_startup_args[@]} > 0 )); then
     bazel_info_cmd+=("${bazel_startup_args[@]}")
   fi
 
-  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+  for arg in "${bazel_args[@]:1}"; do
+    case "$arg" in
+      --config=*|--host_platform=*|--platforms=*|--cpu=*|--compilation_mode=*|-c)
+        bazel_info_args+=("$arg")
+        ;;
+    esac
+  done
+
+  if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+    bazel_info_args+=("--config=${ci_config}")
+  fi
+
+  for arg in "${post_config_bazel_args[@]}"; do
+    case "$arg" in
+      --host_platform=*|--platforms=*|--cpu=*|--compilation_mode=*|-c)
+        bazel_info_args+=("$arg")
+        ;;
+    esac
+  done
+
+  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" "${bazel_info_args[@]}" bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
 
   local failed_targets=()
   while IFS= read -r target; do
@@ -93,7 +114,17 @@ print_bazel_test_log_tails() {
   for target in "${failed_targets[@]}"; do
     local rel_path="${target#//}"
     rel_path="${rel_path/:/\/}"
+    local reported_test_log
+    reported_test_log="$(
+      { grep -F "/${rel_path}/test.log" "$console_log" || true; } \
+        | tail -n 1 \
+        | tr -d '\r' \
+        | sed -n -E 's#^.*((/|[A-Za-z]:/)[^[:space:])]+/test\.log).*$#\1#p'
+    )"
     local test_log="${testlogs_dir}/${rel_path}/test.log"
+    if [[ -f "$reported_test_log" ]]; then
+      test_log="$reported_test_log"
+    fi
 
     echo "::group::Bazel test log tail for ${target}"
     if [[ -f "$test_log" ]]; then
