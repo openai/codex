@@ -949,6 +949,17 @@ async fn github_pr_state_resets_when_no_surface_uses_it() {
 }
 
 #[tokio::test]
+async fn stale_github_pr_update_preserves_current_pending_lookup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_github_pr_cwd = Some(PathBuf::from("/repo/current"));
+    chat.status_line_github_pr_pending = true;
+
+    chat.set_status_line_github_pr(PathBuf::from("/repo/old"), None);
+
+    assert!(chat.status_line_github_pr_pending);
+}
+
+#[tokio::test]
 async fn status_line_branch_refreshes_after_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);

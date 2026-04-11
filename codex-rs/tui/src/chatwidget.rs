@@ -1935,7 +1935,6 @@ impl ChatWidget {
         pull_request: Option<GithubPullRequest>,
     ) {
         if self.status_line_github_pr_cwd.as_ref() != Some(&cwd) {
-            self.status_line_github_pr_pending = false;
             return;
         }
         self.status_line_github_pr = pull_request;
