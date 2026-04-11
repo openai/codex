@@ -6827,6 +6827,15 @@
               "null"
             ]
           },
+          "apps": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/ConfigRequirementsApp"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "enforceResidency": {
             "anyOf": [
               {
@@ -6845,8 +6854,149 @@
               "object",
               "null"
             ]
+          },
+          "guardianPolicyConfig": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mcpServers": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/ConfigRequirementsMcpServer"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ConfigRequirementsRules"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
+        "type": "object"
+      },
+      "ConfigRequirementsApp": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ConfigRequirementsMcpServer": {
+        "properties": {
+          "identity": {
+            "$ref": "#/definitions/v2/ConfigRequirementsMcpServerIdentity"
+          }
+        },
+        "required": [
+          "identity"
+        ],
+        "type": "object"
+      },
+      "ConfigRequirementsMcpServerIdentity": {
+        "oneOf": [
+          {
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "command"
+                ],
+                "title": "CommandConfigRequirementsMcpServerIdentityType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "type"
+            ],
+            "title": "CommandConfigRequirementsMcpServerIdentity",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "url"
+                ],
+                "title": "UrlConfigRequirementsMcpServerIdentityType",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "title": "UrlConfigRequirementsMcpServerIdentity",
+            "type": "object"
+          }
+        ]
+      },
+      "ConfigRequirementsPatternToken": {
+        "properties": {
+          "anyOf": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ConfigRequirementsPrefixRule": {
+        "properties": {
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ConfigRequirementsRuleDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "justification": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pattern": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfigRequirementsPatternToken"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
         "type": "object"
       },
       "ConfigRequirementsReadResponse": {
@@ -6865,6 +7015,28 @@
           }
         },
         "title": "ConfigRequirementsReadResponse",
+        "type": "object"
+      },
+      "ConfigRequirementsRuleDecision": {
+        "enum": [
+          "allow",
+          "prompt",
+          "forbidden"
+        ],
+        "type": "string"
+      },
+      "ConfigRequirementsRules": {
+        "properties": {
+          "prefixRules": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfigRequirementsPrefixRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "prefixRules"
+        ],
         "type": "object"
       },
       "ConfigValueWriteParams": {

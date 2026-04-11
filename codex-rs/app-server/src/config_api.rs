@@ -6,7 +6,14 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigRequirements;
+use codex_app_server_protocol::ConfigRequirementsApp;
+use codex_app_server_protocol::ConfigRequirementsMcpServer;
+use codex_app_server_protocol::ConfigRequirementsMcpServerIdentity;
+use codex_app_server_protocol::ConfigRequirementsPatternToken;
+use codex_app_server_protocol::ConfigRequirementsPrefixRule;
 use codex_app_server_protocol::ConfigRequirementsReadResponse;
+use codex_app_server_protocol::ConfigRequirementsRuleDecision;
+use codex_app_server_protocol::ConfigRequirementsRules;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
@@ -391,10 +398,85 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
+        mcp_servers: requirements.mcp_servers.map(|servers| {
+            servers
+                .into_iter()
+                .map(|(name, requirement)| (name, map_mcp_server_requirement_to_api(requirement)))
+                .collect()
+        }),
+        apps: requirements.apps.map(|apps| {
+            apps.apps
+                .into_iter()
+                .map(|(app_id, requirement)| {
+                    (
+                        app_id,
+                        ConfigRequirementsApp {
+                            enabled: requirement.enabled,
+                        },
+                    )
+                })
+                .collect()
+        }),
+        rules: requirements.rules.map(map_requirements_rules_to_api),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+        guardian_policy_config: requirements.guardian_policy_config,
+    }
+}
+
+fn map_mcp_server_requirement_to_api(
+    requirement: codex_core::config_loader::McpServerRequirement,
+) -> ConfigRequirementsMcpServer {
+    ConfigRequirementsMcpServer {
+        identity: match requirement.identity {
+            codex_core::config_loader::McpServerIdentity::Command { command } => {
+                ConfigRequirementsMcpServerIdentity::Command { command }
+            }
+            codex_core::config_loader::McpServerIdentity::Url { url } => {
+                ConfigRequirementsMcpServerIdentity::Url { url }
+            }
+        },
+    }
+}
+
+fn map_requirements_rules_to_api(
+    rules: codex_config::RequirementsExecPolicyToml,
+) -> ConfigRequirementsRules {
+    ConfigRequirementsRules {
+        prefix_rules: rules
+            .prefix_rules
+            .into_iter()
+            .map(|rule| ConfigRequirementsPrefixRule {
+                pattern: rule
+                    .pattern
+                    .into_iter()
+                    .map(|token| ConfigRequirementsPatternToken {
+                        token: token.token,
+                        any_of: token.any_of,
+                    })
+                    .collect(),
+                decision: rule.decision.map(map_requirements_rule_decision_to_api),
+                justification: rule.justification,
+            })
+            .collect(),
+    }
+}
+
+fn map_requirements_rule_decision_to_api(
+    decision: codex_config::RequirementsExecPolicyDecisionToml,
+) -> ConfigRequirementsRuleDecision {
+    match decision {
+        codex_config::RequirementsExecPolicyDecisionToml::Allow => {
+            ConfigRequirementsRuleDecision::Allow
+        }
+        codex_config::RequirementsExecPolicyDecisionToml::Prompt => {
+            ConfigRequirementsRuleDecision::Prompt
+        }
+        codex_config::RequirementsExecPolicyDecisionToml::Forbidden => {
+            ConfigRequirementsRuleDecision::Forbidden
+        }
     }
 }
 
@@ -564,16 +646,55 @@ mod tests {
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
-            guardian_policy_config: None,
+            guardian_policy_config: Some("Use managed guardian policy.".to_string()),
             feature_requirements: Some(codex_core::config_loader::FeatureRequirementsToml {
                 entries: std::collections::BTreeMap::from([
                     ("apps".to_string(), false),
                     ("personality".to_string(), true),
                 ]),
             }),
-            mcp_servers: None,
-            apps: None,
-            rules: None,
+            mcp_servers: Some(std::collections::BTreeMap::from([
+                (
+                    "docs".to_string(),
+                    codex_core::config_loader::McpServerRequirement {
+                        identity: codex_core::config_loader::McpServerIdentity::Command {
+                            command: "codex-mcp".to_string(),
+                        },
+                    },
+                ),
+                (
+                    "remote".to_string(),
+                    codex_core::config_loader::McpServerRequirement {
+                        identity: codex_core::config_loader::McpServerIdentity::Url {
+                            url: "https://example.com/mcp".to_string(),
+                        },
+                    },
+                ),
+            ])),
+            apps: Some(codex_core::config_loader::AppsRequirementsToml {
+                apps: std::collections::BTreeMap::from([(
+                    "calendar".to_string(),
+                    codex_core::config_loader::AppRequirementToml {
+                        enabled: Some(false),
+                    },
+                )]),
+            }),
+            rules: Some(codex_config::RequirementsExecPolicyToml {
+                prefix_rules: vec![codex_config::RequirementsExecPolicyPrefixRuleToml {
+                    pattern: vec![
+                        codex_config::RequirementsExecPolicyPatternTokenToml {
+                            token: Some("rm".to_string()),
+                            any_of: None,
+                        },
+                        codex_config::RequirementsExecPolicyPatternTokenToml {
+                            token: None,
+                            any_of: Some(vec!["-rf".to_string(), "-fr".to_string()]),
+                        },
+                    ],
+                    decision: Some(codex_config::RequirementsExecPolicyDecisionToml::Prompt),
+                    justification: Some("Needs review".to_string()),
+                }],
+            }),
             enforce_residency: Some(CoreResidencyRequirement::Us),
             network: Some(CoreNetworkRequirementsToml {
                 enabled: Some(true),
@@ -638,6 +759,55 @@ mod tests {
             ])),
         );
         assert_eq!(
+            mapped.mcp_servers,
+            Some(std::collections::BTreeMap::from([
+                (
+                    "docs".to_string(),
+                    ConfigRequirementsMcpServer {
+                        identity: ConfigRequirementsMcpServerIdentity::Command {
+                            command: "codex-mcp".to_string(),
+                        },
+                    },
+                ),
+                (
+                    "remote".to_string(),
+                    ConfigRequirementsMcpServer {
+                        identity: ConfigRequirementsMcpServerIdentity::Url {
+                            url: "https://example.com/mcp".to_string(),
+                        },
+                    },
+                ),
+            ])),
+        );
+        assert_eq!(
+            mapped.apps,
+            Some(std::collections::BTreeMap::from([(
+                "calendar".to_string(),
+                ConfigRequirementsApp {
+                    enabled: Some(false),
+                },
+            )])),
+        );
+        assert_eq!(
+            mapped.rules,
+            Some(ConfigRequirementsRules {
+                prefix_rules: vec![ConfigRequirementsPrefixRule {
+                    pattern: vec![
+                        ConfigRequirementsPatternToken {
+                            token: Some("rm".to_string()),
+                            any_of: None,
+                        },
+                        ConfigRequirementsPatternToken {
+                            token: None,
+                            any_of: Some(vec!["-rf".to_string(), "-fr".to_string()]),
+                        },
+                    ],
+                    decision: Some(ConfigRequirementsRuleDecision::Prompt),
+                    justification: Some("Needs review".to_string()),
+                }],
+            }),
+        );
+        assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
         );
@@ -665,6 +835,10 @@ mod tests {
                 allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
                 allow_local_binding: Some(true),
             }),
+        );
+        assert_eq!(
+            mapped.guardian_policy_config,
+            Some("Use managed guardian policy.".to_string()),
         );
     }
 
