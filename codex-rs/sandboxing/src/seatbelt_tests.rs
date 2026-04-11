@@ -95,12 +95,20 @@ fn create_seatbelt_args_routes_network_through_proxy_ports() {
         "expected SOCKS proxy port allow rule in policy:\n{policy}"
     );
     assert!(
-        !policy.contains("\n(allow network-outbound)\n"),
-        "policy should not include blanket outbound allowance when proxy ports are present:\n{policy}"
+        policy.contains("(allow network-bind (local ip \"*:*\"))"),
+        "expected DNS local bind allow rule in policy:\n{policy}"
     );
     assert!(
-        !policy.contains("(allow network-bind (local ip \"localhost:*\"))"),
-        "policy should not allow loopback binding unless explicitly enabled:\n{policy}"
+        policy.contains("(allow network-inbound (local udp \"localhost:*\"))"),
+        "expected DNS UDP reply allow rule in policy:\n{policy}"
+    );
+    assert!(
+        policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
+        "expected DNS egress allow rule in policy:\n{policy}"
+    );
+    assert!(
+        !policy.contains("\n(allow network-outbound)\n"),
+        "policy should not include blanket outbound allowance when proxy ports are present:\n{policy}"
     );
     assert!(
         !policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
@@ -338,6 +346,10 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
         !policy.contains("(allow network-outbound (remote ip \"localhost:"),
         "policy should not include proxy port allowance when proxy config is present without ports:\n{policy}"
     );
+    assert!(
+        !policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
+        "policy should stay fail-closed for DNS when no proxy ports are available:\n{policy}"
+    );
 }
 
 #[test]
@@ -366,6 +378,10 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
     assert!(
         !policy.contains("\n(allow network-outbound)\n"),
         "policy should not include blanket outbound allowance when managed network is active without proxy endpoints:\n{policy}"
+    );
+    assert!(
+        !policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
+        "policy should stay fail-closed for DNS when no proxy endpoints are available:\n{policy}"
     );
 }
 

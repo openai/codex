@@ -254,6 +254,12 @@ fn dynamic_network_policy_for_network(
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
         }
+        if !proxy.ports.is_empty() {
+            policy.push_str("; allow DNS lookups while application traffic remains proxy-routed\n");
+            policy.push_str("(allow network-bind (local ip \"*:*\"))\n");
+            policy.push_str("(allow network-inbound (local udp \"localhost:*\"))\n");
+            policy.push_str("(allow network-outbound (remote ip \"*:53\"))\n");
+        }
         for port in &proxy.ports {
             policy.push_str(&format!(
                 "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
