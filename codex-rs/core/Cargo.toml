@@ -24,6 +24,7 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 bm25 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+chrono-tz = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-analytics = { workspace = true }
 codex-api = { workspace = true }
@@ -87,6 +88,7 @@ once_cell = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+rrule = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "base64",
     "macros",

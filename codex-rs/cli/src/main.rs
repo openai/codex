@@ -40,11 +40,14 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
+mod queue_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use crate::queue_cmd::QueueCommand;
+use crate::queue_cmd::run_queue_command;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -66,6 +69,8 @@ use codex_terminal_detection::TerminalName;
     version,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
+    // Prefer a recognized subcommand over the default interactive prompt positional.
+    subcommand_precedence_over_arg = true,
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
     // the generic `codex` command name that users run.
@@ -139,6 +144,9 @@ enum Subcommand {
 
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
+
+    /// Queue a message to an existing thread.
+    Queue(QueueCommand),
 
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
@@ -806,6 +814,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )
             .await?;
             handle_app_exit(exit_info)?;
+        }
+        Some(Subcommand::Queue(queue_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "queue",
+            )?;
+            run_queue_command(queue_cli, &root_config_overrides, &interactive).await?;
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,

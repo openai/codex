@@ -27,6 +27,7 @@ use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::pending_input::PendingInputItem;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -38,7 +39,6 @@ use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -255,8 +255,8 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
-        let mailbox_items = self.get_pending_input().await;
+        let queued_response_items = self.take_queued_pending_input_for_next_turn().await;
+        let mailbox_items = self.take_pending_input_items().await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -405,7 +405,7 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
-        let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut pending_input = Vec::<PendingInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
@@ -534,15 +534,15 @@ impl Session {
             duration_ms,
         });
         self.send_event(turn_context.as_ref(), event).await;
-
-        if should_clear_active_turn {
-            let session = Arc::clone(self);
-            let _scheduler = tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(async move {
+        let session = Arc::clone(self);
+        let _scheduler = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                session.maybe_start_pending_timer().await;
+                if should_clear_active_turn {
                     session.maybe_start_turn_for_pending_work().await;
-                });
+                }
             });
-        }
+        });
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {

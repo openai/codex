@@ -13,6 +13,7 @@ use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_exposure::DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::shell::default_user_shell;
+use crate::timers::TimersState;
 use crate::tools::format_exec_output_str;
 
 use codex_features::Features;
@@ -73,6 +74,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InjectedMessageEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -2941,9 +2943,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        timer_start_in_progress: Mutex::new(false),
+        timer_db_sync_started: AtomicBool::new(false),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        timers: Mutex::new(TimersState::default()),
+        timer_tasks_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3786,9 +3792,13 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        timer_start_in_progress: Mutex::new(false),
+        timer_db_sync_started: AtomicBool::new(false),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        timers: Mutex::new(TimersState::default()),
+        timer_tasks_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -5048,6 +5058,49 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     .await;
 
     assert_eq!(sess.get_pending_input().await, vec![queued_item]);
+}
+
+#[tokio::test]
+async fn generated_message_records_raw_item_and_emits_injected_event() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let response_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "<codex_message><content>hidden wrapper</content></codex_message>".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    let injected_event = InjectedMessageEvent {
+        content: "Visible message".to_string(),
+        source: "external".to_string(),
+    };
+
+    sess.record_generated_message_and_emit_display(tc.as_ref(), response_item, injected_event)
+        .await;
+
+    let raw = rx.recv().await.expect("raw response item event");
+    assert!(matches!(raw.msg, EventMsg::RawResponseItem(_)));
+
+    let injected = rx.recv().await.expect("injected message event");
+    let EventMsg::InjectedMessage(injected) = injected.msg else {
+        panic!("expected InjectedMessage event");
+    };
+    assert_eq!(
+        injected,
+        InjectedMessageEvent {
+            content: "Visible message".to_string(),
+            source: "external".to_string(),
+        }
+    );
+
+    let no_legacy_user_message =
+        tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv()).await;
+    assert!(
+        no_legacy_user_message.is_err(),
+        "generated messages should not emit a legacy UserMessageEvent"
+    );
 }
 
 #[tokio::test]

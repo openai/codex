@@ -29,6 +29,10 @@ use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
+use crate::messages::MessagePayload;
+use crate::timers::ThreadTimer;
+use crate::timers::ThreadTimerTrigger;
+use crate::timers::TimerDelivery;
 use codex_rollout::state_db::StateDbHandle;
 
 #[derive(Clone, Debug)]
@@ -85,6 +89,11 @@ impl CodexThread {
     #[doc(hidden)]
     pub async fn flush_rollout(&self) -> std::io::Result<()> {
         self.codex.session.flush_rollout().await
+    }
+
+    #[doc(hidden)]
+    pub async fn has_pending_input(&self) -> bool {
+        self.codex.session.has_pending_input().await
     }
 
     pub async fn submit_with_trace(
@@ -275,6 +284,26 @@ impl CodexThread {
         }
 
         Ok(*guard)
+    }
+
+    pub async fn create_timer(
+        &self,
+        trigger: ThreadTimerTrigger,
+        payload: MessagePayload,
+        delivery: TimerDelivery,
+    ) -> Result<ThreadTimer, String> {
+        self.codex
+            .session
+            .create_timer(trigger, payload, delivery)
+            .await
+    }
+
+    pub async fn delete_timer(&self, id: &str) -> Result<bool, String> {
+        self.codex.session.delete_timer(id).await
+    }
+
+    pub async fn list_timers(&self) -> Vec<ThreadTimer> {
+        self.codex.session.list_timers().await
     }
 }
 

@@ -434,6 +434,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "queued_messages": {
+              "type": "boolean"
+            },
             "realtime_conversation": {
               "type": "boolean"
             },
@@ -483,6 +486,9 @@
               "type": "boolean"
             },
             "steer": {
+              "type": "boolean"
+            },
+            "timers": {
               "type": "boolean"
             },
             "tool_call_mcp_elicitation": {
@@ -2283,6 +2289,9 @@
         "prevent_idle_sleep": {
           "type": "boolean"
         },
+        "queued_messages": {
+          "type": "boolean"
+        },
         "realtime_conversation": {
           "type": "boolean"
         },
@@ -2332,6 +2341,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "timers": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -112,6 +113,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
+use codex_protocol::protocol::InjectedMessageEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -200,6 +202,9 @@ use codex_protocol::exec_output::StreamOutput;
 mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
+mod timer_runtime;
+#[cfg(test)]
+mod timer_runtime_tests;
 
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
@@ -282,6 +287,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
+use crate::pending_input::PendingInputItem;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
@@ -305,6 +311,7 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::timers::TimersState;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
@@ -836,13 +843,25 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Prevents concurrent timers from claiming multiple timers before a
+    /// newly started turn becomes the active turn.
+    timer_start_in_progress: Mutex<bool>,
+    timer_db_sync_started: AtomicBool,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
-    idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    idle_pending_input: Mutex<Vec<PendingInputItem>>, // TODO (jif) merge with mailbox!
+    timers: Mutex<TimersState>,
+    timer_tasks_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.timer_tasks_cancellation_token.cancel();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2073,9 +2092,13 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            timer_start_in_progress: Mutex::new(false),
+            timer_db_sync_started: AtomicBool::new(false),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
+            timers: Mutex::new(TimersState::default()),
+            timer_tasks_cancellation_token: CancellationToken::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -2113,7 +2136,6 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
-
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
         // Construct sandbox_state before MCP startup so it can be sent to each
@@ -2208,6 +2230,7 @@ impl Session {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));
         }
+        sess.restore_timers_from_db().await;
 
         memories::start_memories_startup_task(
             &sess,
@@ -2224,6 +2247,39 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    async fn timer_state_db(&self) -> Result<state_db::StateDbHandle, String> {
+        if let Some(state_db) = self.state_db() {
+            return Ok(state_db);
+        }
+
+        let config = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .clone()
+        };
+        if config.ephemeral {
+            return Err("timer storage is unavailable for ephemeral sessions".to_string());
+        }
+        match codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        {
+            Ok(runtime) => Ok(runtime),
+            Err(err) => {
+                let message = format!(
+                    "failed to initialize SQLite state db for timers at {}: {err}",
+                    config.sqlite_home.display()
+                );
+                warn!("{message}");
+                Err(message)
+            }
+        }
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
@@ -4084,6 +4140,19 @@ impl Session {
         self.ensure_rollout_materialized().await;
     }
 
+    pub(crate) async fn record_generated_message_and_emit_display(
+        &self,
+        turn_context: &TurnContext,
+        response_item: ResponseItem,
+        injected_event: InjectedMessageEvent,
+    ) {
+        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+            .await;
+        self.send_event(turn_context, EventMsg::InjectedMessage(injected_event))
+            .await;
+        self.ensure_rollout_materialized().await;
+    }
+
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
@@ -4197,7 +4266,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_input(ResponseInputItem::from(input).into());
         turn_state.accept_mailbox_delivery_for_current_turn();
         Ok(active_turn_id.clone())
     }
@@ -4212,7 +4281,7 @@ impl Session {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 for item in input {
-                    ts.push_pending_input(item);
+                    ts.push_pending_input(item.into());
                 }
                 Ok(())
             }
@@ -4268,7 +4337,16 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
+    #[cfg(test)]
     pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
+        self.prepend_pending_input_items(input.into_iter().map(Into::into).collect())
+            .await
+    }
+
+    pub(crate) async fn prepend_pending_input_items(
+        &self,
+        input: Vec<PendingInputItem>,
+    ) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -4280,7 +4358,16 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        self.take_pending_input_items()
+            .await
+            .into_iter()
+            .map(PendingInputItem::into_model_input)
+            .collect()
+    }
+
+    pub(crate) async fn take_pending_input_items(&self) -> Vec<PendingInputItem> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -4303,6 +4390,7 @@ impl Session {
                 .drain()
                 .into_iter()
                 .map(|mail| mail.to_response_input_item())
+                .map(Into::into)
                 .collect::<Vec<_>>()
         };
         if pending_input.is_empty() {
@@ -4316,7 +4404,6 @@ impl Session {
         }
     }
 
-    /// Queue response items to be injected into the next active turn created for this session.
     #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
@@ -4324,10 +4411,28 @@ impl Session {
         }
 
         let mut idle_pending_input = self.idle_pending_input.lock().await;
-        idle_pending_input.extend(items);
+        idle_pending_input.extend(items.into_iter().map(PendingInputItem::from));
     }
 
-    pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
+    pub(crate) async fn queue_pending_input_for_next_turn(&self, items: Vec<PendingInputItem>) {
+        if items.is_empty() {
+            return;
+        }
+
+        let mut idle_pending_input = self.idle_pending_input.lock().await;
+        for item in items {
+            if let Some(timer_source) = item.generated_timer_source()
+                && idle_pending_input
+                    .iter()
+                    .any(|queued| queued.generated_timer_source() == Some(timer_source))
+            {
+                continue;
+            }
+            idle_pending_input.push(item);
+        }
+    }
+
+    pub(crate) async fn take_queued_pending_input_for_next_turn(&self) -> Vec<PendingInputItem> {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
@@ -6216,7 +6321,7 @@ pub(crate) async fn run_turn(
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = if can_drain_pending_input {
-            sess.get_pending_input().await
+            sess.take_pending_input_items().await
         } else {
             Vec::new()
         };
@@ -6237,7 +6342,9 @@ pub(crate) async fn run_turn(
                     } => {
                         let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
                         if !remaining_pending_input.is_empty() {
-                            let _ = sess.prepend_pending_input(remaining_pending_input).await;
+                            let _ = sess
+                                .prepend_pending_input_items(remaining_pending_input)
+                                .await;
                             requeued_pending_input = true;
                         }
                         blocked_pending_input_contexts = additional_contexts;
@@ -7202,6 +7309,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
         | EventMsg::UserMessage(_)
+        | EventMsg::InjectedMessage(_)
         | EventMsg::AgentMessageDelta(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningDelta(_)

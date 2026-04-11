@@ -6741,6 +6741,17 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
+            EventMsg::InjectedMessage(ev) => {
+                if !ev.content.trim().is_empty() {
+                    self.add_to_history(history_cell::new_user_prompt(
+                        ev.content,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    ));
+                    self.needs_final_message_separator = false;
+                }
+            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }

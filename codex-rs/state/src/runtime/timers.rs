@@ -1,0 +1,665 @@
+//! SQLite-backed state operations for per-thread timers.
+//!
+//! This module extends [`StateRuntime`] with timer CRUD, due-state updates, and
+//! atomic pending-run claims. It also exposes a lightweight `PRAGMA
+//! data_version` checker so active threads can notice cross-process timer
+//! changes without constantly reconciling full timer rows.
+
+use super::*;
+use crate::model::ThreadTimerRow;
+use tokio::sync::Mutex;
+
+pub struct TimerDataVersionChecker {
+    conn: Mutex<SqliteConnection>,
+}
+
+impl TimerDataVersionChecker {
+    pub async fn data_version(&self) -> anyhow::Result<i64> {
+        let mut conn = self.conn.lock().await;
+        let version = sqlx::query_scalar::<_, i64>("PRAGMA data_version")
+            .fetch_one(&mut *conn)
+            .await?;
+        Ok(version)
+    }
+}
+
+impl StateRuntime {
+    pub async fn timer_data_version_checker(&self) -> anyhow::Result<TimerDataVersionChecker> {
+        let state_path = state_db_path(self.codex_home());
+        let options = base_sqlite_options(state_path.as_path());
+        let conn = options.connect().await?;
+        Ok(TimerDataVersionChecker {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    pub async fn create_thread_timer(
+        &self,
+        params: &ThreadTimerCreateParams,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO thread_timers (
+    id,
+    thread_id,
+    source,
+    client_id,
+    trigger_json,
+    content,
+    instructions,
+    meta_json,
+    delivery,
+    created_at,
+    next_run_at,
+    last_run_at,
+    pending_run
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(params.id.as_str())
+        .bind(params.thread_id.as_str())
+        .bind(params.source.as_str())
+        .bind(params.client_id.as_str())
+        .bind(params.trigger_json.as_str())
+        .bind(params.content.as_str())
+        .bind(params.instructions.as_deref())
+        .bind(params.meta_json.as_str())
+        .bind(params.delivery.as_str())
+        .bind(params.created_at)
+        .bind(params.next_run_at)
+        .bind(params.last_run_at)
+        .bind(i64::from(params.pending_run))
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn create_thread_timer_if_below_limit(
+        &self,
+        params: &ThreadTimerCreateParams,
+        max_thread_timers: usize,
+    ) -> anyhow::Result<bool> {
+        let max_thread_timers = i64::try_from(max_thread_timers)?;
+        let result = sqlx::query(
+            r#"
+INSERT INTO thread_timers (
+    id,
+    thread_id,
+    source,
+    client_id,
+    trigger_json,
+    content,
+    instructions,
+    meta_json,
+    delivery,
+    created_at,
+    next_run_at,
+    last_run_at,
+    pending_run
+)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+WHERE (
+    SELECT COUNT(*)
+    FROM thread_timers
+    WHERE thread_id = ?
+) < ?
+            "#,
+        )
+        .bind(params.id.as_str())
+        .bind(params.thread_id.as_str())
+        .bind(params.source.as_str())
+        .bind(params.client_id.as_str())
+        .bind(params.trigger_json.as_str())
+        .bind(params.content.as_str())
+        .bind(params.instructions.as_deref())
+        .bind(params.meta_json.as_str())
+        .bind(params.delivery.as_str())
+        .bind(params.created_at)
+        .bind(params.next_run_at)
+        .bind(params.last_run_at)
+        .bind(i64::from(params.pending_run))
+        .bind(params.thread_id.as_str())
+        .bind(max_thread_timers)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn list_thread_timers(&self, thread_id: &str) -> anyhow::Result<Vec<ThreadTimer>> {
+        let rows = sqlx::query_as::<_, ThreadTimerRow>(
+            r#"
+SELECT
+    id,
+    thread_id,
+    source,
+    client_id,
+    trigger_json,
+    content,
+    instructions,
+    meta_json,
+    delivery,
+    created_at,
+    next_run_at,
+    last_run_at,
+    pending_run
+FROM thread_timers
+WHERE thread_id = ?
+ORDER BY created_at ASC, id ASC
+            "#,
+        )
+        .bind(thread_id)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        Ok(rows.into_iter().map(ThreadTimer::from).collect())
+    }
+
+    pub async fn delete_thread_timer(&self, thread_id: &str, id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query("DELETE FROM thread_timers WHERE thread_id = ? AND id = ?")
+            .bind(thread_id)
+            .bind(id)
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_thread_timer_due(
+        &self,
+        thread_id: &str,
+        id: &str,
+        next_run_at: Option<i64>,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+UPDATE thread_timers
+SET pending_run = 1,
+    next_run_at = ?
+WHERE thread_id = ?
+  AND id = ?
+            "#,
+        )
+        .bind(next_run_at)
+        .bind(thread_id)
+        .bind(id)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn claim_one_shot_thread_timer(
+        &self,
+        thread_id: &str,
+        id: &str,
+        due_at: i64,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+DELETE FROM thread_timers
+WHERE thread_id = ?
+  AND id = ?
+  AND (
+    pending_run = 1
+    OR (
+      pending_run = 0
+      AND next_run_at IS NOT NULL
+      AND next_run_at <= ?
+    )
+  )
+            "#,
+        )
+        .bind(thread_id)
+        .bind(id)
+        .bind(due_at)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn claim_recurring_thread_timer(
+        &self,
+        thread_id: &str,
+        id: &str,
+        due_at: i64,
+        expected_last_run_at: Option<i64>,
+        params: &ThreadTimerUpdateParams,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+UPDATE thread_timers
+SET trigger_json = ?,
+    content = ?,
+    instructions = ?,
+    meta_json = ?,
+    delivery = ?,
+    next_run_at = ?,
+    last_run_at = ?,
+    pending_run = ?
+WHERE thread_id = ?
+  AND id = ?
+  AND (
+    pending_run = 1
+    OR (
+      pending_run = 0
+      AND next_run_at IS NOT NULL
+      AND next_run_at <= ?
+    )
+  )
+  AND (
+    (last_run_at IS NULL AND ? IS NULL)
+    OR last_run_at = ?
+  )
+            "#,
+        )
+        .bind(params.trigger_json.as_str())
+        .bind(params.content.as_str())
+        .bind(params.instructions.as_deref())
+        .bind(params.meta_json.as_str())
+        .bind(params.delivery.as_str())
+        .bind(params.next_run_at)
+        .bind(params.last_run_at)
+        .bind(i64::from(params.pending_run))
+        .bind(thread_id)
+        .bind(id)
+        .bind(due_at)
+        .bind(expected_last_run_at)
+        .bind(expected_last_run_at)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StateRuntime;
+    use super::test_support::unique_temp_dir;
+    use crate::ThreadTimerCreateParams;
+    use crate::ThreadTimerUpdateParams;
+    use pretty_assertions::assert_eq;
+
+    fn timer_params(id: &str, thread_id: &str) -> ThreadTimerCreateParams {
+        ThreadTimerCreateParams {
+            id: id.to_string(),
+            thread_id: thread_id.to_string(),
+            source: "agent".to_string(),
+            client_id: "codex-tui".to_string(),
+            trigger_json: r#"{"kind":"delay","seconds":10,"repeat":true}"#.to_string(),
+            content: "run tests".to_string(),
+            instructions: Some("keep output brief".to_string()),
+            meta_json: r#"{"ticket":"ABC_123"}"#.to_string(),
+            delivery: "after-turn".to_string(),
+            created_at: 100,
+            next_run_at: Some(110),
+            last_run_at: None,
+            pending_run: false,
+        }
+    }
+
+    async fn test_runtime() -> std::sync::Arc<StateRuntime> {
+        StateRuntime::init(unique_temp_dir(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime")
+    }
+
+    #[tokio::test]
+    async fn thread_timers_table_and_indexes_exist() {
+        let runtime = test_runtime().await;
+        let names = sqlx::query_scalar::<_, String>(
+            r#"
+SELECT name
+FROM sqlite_master
+WHERE tbl_name = 'thread_timers'
+  AND name NOT LIKE 'sqlite_autoindex_%'
+ORDER BY name
+            "#,
+        )
+        .fetch_all(runtime.pool.as_ref())
+        .await
+        .expect("query schema objects");
+
+        assert_eq!(
+            names,
+            vec![
+                "idx_thread_timers_thread_created",
+                "idx_thread_timers_thread_next_run",
+                "idx_thread_timers_thread_pending",
+                "thread_timers",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_timer_rows_round_trip_source_and_client_metadata() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.pending_run = true;
+        params.last_run_at = Some(105);
+
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create timer");
+        let timers = runtime
+            .list_thread_timers("thread-1")
+            .await
+            .expect("list timers");
+
+        assert_eq!(timers.len(), 1);
+        let timer = &timers[0];
+        assert_eq!(timer.id, params.id);
+        assert_eq!(timer.thread_id, params.thread_id);
+        assert_eq!(timer.source, params.source);
+        assert_eq!(timer.client_id, params.client_id);
+        assert_eq!(timer.trigger_json, params.trigger_json);
+        assert_eq!(timer.content, params.content);
+        assert_eq!(timer.instructions, params.instructions);
+        assert_eq!(timer.meta_json, params.meta_json);
+        assert_eq!(timer.delivery, params.delivery);
+        assert_eq!(timer.created_at, params.created_at);
+        assert_eq!(timer.next_run_at, params.next_run_at);
+        assert_eq!(timer.last_run_at, params.last_run_at);
+        assert_eq!(timer.pending_run, params.pending_run);
+    }
+
+    #[tokio::test]
+    async fn thread_timer_crud_is_scoped_to_thread_id() {
+        let runtime = test_runtime().await;
+        runtime
+            .create_thread_timer(&timer_params("timer-1", "thread-1"))
+            .await
+            .expect("create thread-1 timer");
+        runtime
+            .create_thread_timer(&timer_params("timer-2", "thread-2"))
+            .await
+            .expect("create thread-2 timer");
+
+        assert_eq!(
+            runtime
+                .list_thread_timers("thread-1")
+                .await
+                .expect("list thread-1 timers")
+                .into_iter()
+                .map(|timer| timer.id)
+                .collect::<Vec<_>>(),
+            vec!["timer-1".to_string()]
+        );
+        assert!(
+            !runtime
+                .delete_thread_timer("thread-1", "timer-2")
+                .await
+                .expect("delete wrong thread timer")
+        );
+        assert!(
+            runtime
+                .delete_thread_timer("thread-2", "timer-2")
+                .await
+                .expect("delete correct thread timer")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_thread_timer_if_below_limit_rejects_full_thread() {
+        let runtime = test_runtime().await;
+        assert!(
+            runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-1", "thread-1"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("create first timer")
+        );
+        assert!(
+            runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-2", "thread-1"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("create second timer")
+        );
+        assert!(
+            !runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-3", "thread-1"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("reject third timer")
+        );
+        assert!(
+            runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-4", "thread-2"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("create timer for different thread")
+        );
+
+        assert_eq!(
+            runtime
+                .list_thread_timers("thread-1")
+                .await
+                .expect("list thread-1 timers")
+                .into_iter()
+                .map(|timer| timer.id)
+                .collect::<Vec<_>>(),
+            vec!["timer-1".to_string(), "timer-2".to_string()]
+        );
+        assert_eq!(
+            runtime
+                .list_thread_timers("thread-2")
+                .await
+                .expect("list thread-2 timers")
+                .into_iter()
+                .map(|timer| timer.id)
+                .collect::<Vec<_>>(),
+            vec!["timer-4".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn one_shot_claim_consumes_pending_timer_once() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.pending_run = true;
+        params.next_run_at = None;
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create pending timer");
+
+        assert!(
+            runtime
+                .claim_one_shot_thread_timer("thread-1", "timer-1", /*due_at*/ 110)
+                .await
+                .expect("claim timer")
+        );
+        assert!(
+            !runtime
+                .claim_one_shot_thread_timer("thread-1", "timer-1", /*due_at*/ 110)
+                .await
+                .expect("claim timer again")
+        );
+        assert!(
+            runtime
+                .list_thread_timers("thread-1")
+                .await
+                .expect("list timers")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn recurring_claim_updates_pending_timer_once() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.pending_run = true;
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create pending timer");
+        let update = ThreadTimerUpdateParams {
+            trigger_json: params.trigger_json.clone(),
+            content: "updated content".to_string(),
+            instructions: None,
+            meta_json: "{}".to_string(),
+            delivery: "steer-current-turn".to_string(),
+            next_run_at: Some(120),
+            last_run_at: Some(110),
+            pending_run: false,
+        };
+
+        assert!(
+            runtime
+                .claim_recurring_thread_timer(
+                    "thread-1", "timer-1", /*due_at*/ 110, /*expected_last_run_at*/ None,
+                    &update,
+                )
+                .await
+                .expect("claim recurring timer")
+        );
+        assert!(
+            !runtime
+                .claim_recurring_thread_timer(
+                    "thread-1", "timer-1", /*due_at*/ 110, /*expected_last_run_at*/ None,
+                    &update,
+                )
+                .await
+                .expect("claim recurring timer again")
+        );
+        let timers = runtime
+            .list_thread_timers("thread-1")
+            .await
+            .expect("list timers");
+        assert_eq!(timers.len(), 1);
+        assert_eq!(timers[0].delivery, "steer-current-turn");
+        assert_eq!(timers[0].content, "updated content");
+        assert_eq!(timers[0].instructions, None);
+        assert_eq!(timers[0].meta_json, "{}");
+        assert_eq!(timers[0].next_run_at, Some(120));
+        assert_eq!(timers[0].last_run_at, Some(110));
+        assert!(!timers[0].pending_run);
+    }
+
+    #[tokio::test]
+    async fn one_shot_claim_consumes_overdue_timer_after_restart() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.trigger_json = r#"{"kind":"delay","seconds":10,"repeat":false}"#.to_string();
+        params.next_run_at = Some(110);
+        params.pending_run = false;
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create overdue one-shot timer");
+
+        assert!(
+            runtime
+                .claim_one_shot_thread_timer("thread-1", "timer-1", /*due_at*/ 110)
+                .await
+                .expect("claim overdue one-shot timer")
+        );
+        assert!(
+            runtime
+                .list_thread_timers("thread-1")
+                .await
+                .expect("list timers")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn recurring_claim_consumes_overdue_timer_after_restart() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.next_run_at = Some(110);
+        params.pending_run = false;
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create overdue recurring timer");
+        let update = ThreadTimerUpdateParams {
+            trigger_json: params.trigger_json.clone(),
+            content: params.content.clone(),
+            instructions: params.instructions.clone(),
+            meta_json: params.meta_json.clone(),
+            delivery: params.delivery.clone(),
+            next_run_at: Some(120),
+            last_run_at: Some(110),
+            pending_run: false,
+        };
+
+        assert!(
+            runtime
+                .claim_recurring_thread_timer(
+                    "thread-1", "timer-1", /*due_at*/ 110, /*expected_last_run_at*/ None,
+                    &update,
+                )
+                .await
+                .expect("claim overdue recurring timer")
+        );
+        let timers = runtime
+            .list_thread_timers("thread-1")
+            .await
+            .expect("list timers");
+        assert_eq!(timers.len(), 1);
+        assert_eq!(timers[0].next_run_at, Some(120));
+        assert_eq!(timers[0].last_run_at, Some(110));
+        assert!(!timers[0].pending_run);
+    }
+
+    #[tokio::test]
+    async fn recurring_idle_claim_rejects_stale_last_run_at_even_when_pending_stays_true() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.pending_run = true;
+        params.last_run_at = Some(100);
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create pending timer");
+        let update = ThreadTimerUpdateParams {
+            trigger_json: params.trigger_json.clone(),
+            content: params.content.clone(),
+            instructions: params.instructions.clone(),
+            meta_json: params.meta_json.clone(),
+            delivery: params.delivery.clone(),
+            next_run_at: Some(120),
+            last_run_at: Some(110),
+            pending_run: true,
+        };
+
+        assert!(
+            runtime
+                .claim_recurring_thread_timer(
+                    "thread-1",
+                    "timer-1",
+                    /*due_at*/ 110,
+                    /*expected_last_run_at*/ Some(100),
+                    &update,
+                )
+                .await
+                .expect("claim recurring idle timer")
+        );
+        assert!(
+            !runtime
+                .claim_recurring_thread_timer(
+                    "thread-1",
+                    "timer-1",
+                    /*due_at*/ 110,
+                    /*expected_last_run_at*/ Some(100),
+                    &update,
+                )
+                .await
+                .expect("claim recurring idle timer again")
+        );
+        let timers = runtime
+            .list_thread_timers("thread-1")
+            .await
+            .expect("list timers");
+        assert_eq!(timers.len(), 1);
+        assert_eq!(timers[0].last_run_at, Some(110));
+        assert!(timers[0].pending_run);
+    }
+}
