@@ -55,7 +55,6 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
-use codex_analytics::ThreadInitializationMode;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::AuthMode;
@@ -657,7 +656,6 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
-            thread_initialization_mode: ThreadInitializationMode::New,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -1175,7 +1173,6 @@ pub(crate) struct SessionConfiguration {
     app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
-    thread_initialization_mode: ThreadInitializationMode,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1200,7 +1197,6 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
-            initialization_mode: self.thread_initialization_mode,
         }
     }
 
@@ -6534,7 +6530,6 @@ async fn track_turn_resolved_config_analytics(
             submission_type: None,
             ephemeral: thread_config.ephemeral,
             session_source: thread_config.session_source,
-            initialization_mode: thread_config.initialization_mode,
             model: turn_context.model_info.slug.clone(),
             model_provider: turn_context.config.model_provider_id.clone(),
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
