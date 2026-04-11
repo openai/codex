@@ -29,6 +29,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::github_pr::GithubPullRequest;
 use crate::history_cell::HistoryCell;
 
 use codex_config::types::ApprovalsReviewer;
@@ -578,6 +579,11 @@ pub(crate) enum AppEvent {
     StatusLineBranchUpdated {
         cwd: PathBuf,
         branch: Option<String>,
+    },
+    /// Async update of the current branch's GitHub PR for status surfaces.
+    GithubPullRequestUpdated {
+        cwd: PathBuf,
+        pull_request: Option<GithubPullRequest>,
     },
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {

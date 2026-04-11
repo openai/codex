@@ -38,7 +38,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use std::time::Duration;
 
 mod app_link_view;
@@ -86,6 +85,7 @@ mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
+pub(crate) use footer::StatusLine;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
@@ -1164,7 +1164,7 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLine>) {
         if self.composer.set_status_line(status_line) {
             self.request_redraw();
         }

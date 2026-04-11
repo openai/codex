@@ -912,6 +912,43 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
 }
 
 #[tokio::test]
+async fn github_pr_values_feed_status_line_and_terminal_title() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_github_pr = Some(GithubPullRequest {
+        number: 123,
+        url: "https://github.com/openai/codex/pull/123".to_string(),
+    });
+
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::GithubPr),
+        Some("PR #123".to_string())
+    );
+    assert_eq!(
+        chat.terminal_title_value_for_item(TerminalTitleItem::GithubPr, Instant::now()),
+        Some("PR #123".to_string())
+    );
+}
+
+#[tokio::test]
+async fn github_pr_state_resets_when_no_surface_uses_it() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_github_pr = Some(GithubPullRequest {
+        number: 123,
+        url: "https://github.com/openai/codex/pull/123".to_string(),
+    });
+    chat.status_line_github_pr_pending = true;
+    chat.status_line_github_pr_lookup_complete = true;
+    chat.config.tui_status_line = Some(vec!["model_name".to_string()]);
+    chat.config.tui_terminal_title = Some(vec!["model".to_string()]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(chat.status_line_github_pr, None);
+    assert!(!chat.status_line_github_pr_pending);
+    assert!(!chat.status_line_github_pr_lookup_complete);
+}
+
+#[tokio::test]
 async fn status_line_branch_refreshes_after_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);

@@ -41,8 +41,10 @@
 //! In short: `single_line_footer_layout` chooses *what* best fits, and the two
 //! render helpers choose whether to draw the chosen line or the default
 //! `FooterProps` mapping.
+use crate::hyperlink::mark_underlined_hyperlink;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
@@ -54,6 +56,55 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StatusLine {
+    line: Line<'static>,
+    hyperlink_url: Option<String>,
+}
+
+impl StatusLine {
+    pub(crate) fn new(line: Line<'static>) -> Self {
+        Self {
+            line,
+            hyperlink_url: None,
+        }
+    }
+
+    pub(crate) fn with_hyperlink(mut self, url: String) -> Self {
+        self.hyperlink_url = Some(url);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn line(&self) -> &Line<'static> {
+        &self.line
+    }
+
+    pub(crate) fn into_dimmed_line(self) -> Self {
+        Self {
+            line: self.line.dim(),
+            hyperlink_url: self.hyperlink_url,
+        }
+    }
+
+    pub(crate) fn truncate_with_ellipsis_if_overflow(self, max_width: usize) -> Self {
+        Self {
+            line: truncate_line_with_ellipsis_if_overflow(self.line, max_width),
+            hyperlink_url: self.hyperlink_url,
+        }
+    }
+
+    pub(crate) fn width(&self) -> usize {
+        self.line.width()
+    }
+
+    fn mark_hyperlink(&self, buf: &mut Buffer, area: Rect) {
+        if let Some(url) = self.hyperlink_url.as_deref() {
+            mark_underlined_hyperlink(buf, area, url);
+        }
+    }
+}
 
 /// The rendering inputs for the footer area under the composer.
 ///
@@ -76,7 +127,7 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
-    pub(crate) status_line_value: Option<Line<'static>>,
+    pub(crate) status_line_value: Option<StatusLine>,
     pub(crate) status_line_enabled: bool,
     /// Active thread label shown when the footer is rendering contextual information instead of an
     /// instructional hint.
@@ -217,6 +268,12 @@ pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'stati
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
     .render(area, buf);
+}
+
+pub(crate) fn render_status_line(area: Rect, buf: &mut Buffer, status_line: StatusLine) {
+    let line = status_line.line.clone();
+    render_footer_line(area, buf, line);
+    status_line.mark_hyperlink(buf, area);
 }
 
 /// Render footer content directly from `FooterProps`.
@@ -587,7 +644,7 @@ fn footer_from_props_lines(
     // Passive footer context can come from the configurable status line, the
     // active agent label, or both combined.
     if let Some(status_line) = passive_footer_status_line(props) {
-        return vec![status_line.dim()];
+        return vec![status_line.into_dimmed_line().line];
     }
     match props.mode {
         FooterMode::QuitShortcutReminder => {
@@ -635,7 +692,7 @@ fn footer_from_props_lines(
 /// The returned line may contain the configured status line, the currently viewed agent label, or
 /// both combined. Active instructional states such as quit reminders, shortcut overlays, and queue
 /// prompts deliberately return `None` so those call-to-action hints stay visible.
-pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'static>> {
+pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<StatusLine> {
     if !shows_passive_footer_line(props) {
         return None;
     }
@@ -648,10 +705,10 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
 
     if let Some(active_agent_label) = props.active_agent_label.as_ref() {
         if let Some(existing) = line.as_mut() {
-            existing.spans.push(" · ".into());
-            existing.spans.push(active_agent_label.clone().into());
+            existing.line.spans.push(" · ".into());
+            existing.line.spans.push(active_agent_label.clone().into());
         } else {
-            line = Some(Line::from(active_agent_label.clone()));
+            line = Some(StatusLine::new(Line::from(active_agent_label.clone())));
         }
     }
 
@@ -1059,7 +1116,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
     use crate::test_backend::VT100Backend;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -1116,8 +1172,8 @@ mod tests {
                     ) {
                     passive_status_line
                         .as_ref()
-                        .map(|line| line.clone().dim())
-                        .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
+                        .map(|line| line.clone().into_dimmed_line())
+                        .map(|line| line.truncate_with_ellipsis_if_overflow(available_width))
                 } else {
                     None
                 };
@@ -1162,10 +1218,8 @@ mod tests {
                     && left_width > max_left
                     && let Some(line) = passive_status_line
                         .as_ref()
-                        .map(|line| line.clone().dim())
-                        .map(|line| {
-                            truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
-                        })
+                        .map(|line| line.clone().into_dimmed_line())
+                        .map(|line| line.truncate_with_ellipsis_if_overflow(max_left as usize))
                 {
                     left_width = line.width() as u16;
                     truncated_status_line = Some(line);
@@ -1177,8 +1231,8 @@ mod tests {
                     FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                 ) {
                     if status_line_active {
-                        if let Some(line) = truncated_status_line.clone() {
-                            render_footer_line(area, f.buffer_mut(), line);
+                        if let Some(line) = truncated_status_line {
+                            render_status_line(area, f.buffer_mut(), line);
                         }
                         if can_show_left_and_context && let Some(line) = &right_line {
                             render_context_right(area, f.buffer_mut(), line);
@@ -1259,6 +1313,21 @@ mod tests {
         let mut terminal = Terminal::new(VT100Backend::new(width, height)).expect("terminal");
         draw_footer_frame(&mut terminal, height, props, collaboration_mode_indicator);
         terminal.backend().vt100().screen().contents()
+    }
+
+    #[test]
+    fn status_line_marks_underlined_segment_as_hyperlink() {
+        let area = Rect::new(0, 0, 24, 1);
+        let mut buf = Buffer::empty(area);
+        let status_line = StatusLine::new(Line::from("PR #123".underlined()))
+            .with_hyperlink("https://github.com/o/r/pull/123".to_string());
+
+        render_status_line(area, &mut buf, status_line);
+
+        let rendered = (0..area.width)
+            .map(|col| buf[(col, 0)].symbol())
+            .collect::<String>();
+        assert!(rendered.contains("\x1B]8;;https://github.com/o/r/pull/123\x07P"));
     }
 
     #[test]
@@ -1504,7 +1573,9 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_value: Some(StatusLine::new(Line::from(
+                "Status line content".to_string(),
+            ))),
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1521,7 +1592,9 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_value: Some(StatusLine::new(Line::from(
+                "Status line content".to_string(),
+            ))),
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1538,7 +1611,9 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_value: Some(StatusLine::new(Line::from(
+                "Status line content".to_string(),
+            ))),
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1622,9 +1697,9 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
-            status_line_value: Some(Line::from(
+            status_line_value: Some(StatusLine::new(Line::from(
                 "Status line content that should truncate before the mode indicator".to_string(),
-            )),
+            ))),
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1663,7 +1738,9 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_value: Some(StatusLine::new(Line::from(
+                "Status line content".to_string(),
+            ))),
             status_line_enabled: true,
             active_agent_label: Some("Robie [explorer]".to_string()),
         };
@@ -1683,10 +1760,10 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
-            status_line_value: Some(Line::from(
+            status_line_value: Some(StatusLine::new(Line::from(
                 "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),
-            )),
+            ))),
             status_line_enabled: true,
             active_agent_label: None,
         };

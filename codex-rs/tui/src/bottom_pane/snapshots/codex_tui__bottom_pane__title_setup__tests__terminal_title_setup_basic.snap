@@ -8,14 +8,14 @@ expression: "render_lines(&view, 84)"
                                                                                     
   Type to search                                                                    
   >                                                                                 
-› [x] project        Project name (falls back to current directory name)            
-  [x] spinner        Animated task spinner (omitted while idle or when animations…  
-  [x] status         Compact session status text (Ready, Working, Thinking)         
-  [x] thread         Current thread title (omitted until available)                 
-  [ ] app-name       Codex app name                                                 
-  [ ] git-branch     Current Git branch (omitted when unavailable)                  
-  [ ] model          Current model name                                             
-  [ ] task-progress  Latest task progress from update_plan (omitted until availab…  
+› [x] project     Project name (falls back to current directory name)               
+  [x] spinner     Animated task spinner (omitted while idle or when animations ar…  
+  [x] status      Compact session status text (Ready, Working, Thinking)            
+  [x] thread      Current thread title (omitted until available)                    
+  [ ] app-name    Codex app name                                                    
+  [ ] git-branch  Current Git branch (omitted when unavailable)                     
+  [ ] github-pr   Current branch's GitHub PR (omitted when unavailable)             
+  [ ] model       Current model name                                                
                                                                                     
   my-project ⠋ Working | Investigate flaky test                                     
   Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.

@@ -62,6 +62,9 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
+    /// Current branch's GitHub pull request (if available from gh).
+    GithubPr,
+
     /// Visual meter of context window usage.
     ///
     /// Also accepts legacy `context-remaining` and `context-used` config values.
@@ -112,6 +115,7 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::GithubPr => "Current branch's GitHub PR (omitted when unavailable)",
             StatusLineItem::ContextUsage => {
                 "Visual meter of context window usage (omitted when unknown)"
             }
@@ -137,24 +141,32 @@ impl StatusLineItem {
     }
 }
 
-const SELECTABLE_STATUS_LINE_ITEMS: &[StatusLineItem] = &[
-    StatusLineItem::ModelName,
-    StatusLineItem::ModelWithReasoning,
-    StatusLineItem::CurrentDir,
-    StatusLineItem::ProjectRoot,
-    StatusLineItem::GitBranch,
-    StatusLineItem::ContextUsage,
-    StatusLineItem::FiveHourLimit,
-    StatusLineItem::WeeklyLimit,
-    StatusLineItem::CodexVersion,
-    StatusLineItem::ContextWindowSize,
-    StatusLineItem::UsedTokens,
-    StatusLineItem::TotalInputTokens,
-    StatusLineItem::TotalOutputTokens,
-    StatusLineItem::SessionId,
-    StatusLineItem::FastMode,
-    StatusLineItem::ThreadTitle,
-];
+fn selectable_status_line_items(github_pr_available: bool) -> Vec<StatusLineItem> {
+    let mut items = vec![
+        StatusLineItem::ModelName,
+        StatusLineItem::ModelWithReasoning,
+        StatusLineItem::CurrentDir,
+        StatusLineItem::ProjectRoot,
+        StatusLineItem::GitBranch,
+    ];
+    if github_pr_available {
+        items.push(StatusLineItem::GithubPr);
+    }
+    items.extend([
+        StatusLineItem::ContextUsage,
+        StatusLineItem::FiveHourLimit,
+        StatusLineItem::WeeklyLimit,
+        StatusLineItem::CodexVersion,
+        StatusLineItem::ContextWindowSize,
+        StatusLineItem::UsedTokens,
+        StatusLineItem::TotalInputTokens,
+        StatusLineItem::TotalOutputTokens,
+        StatusLineItem::SessionId,
+        StatusLineItem::FastMode,
+        StatusLineItem::ThreadTitle,
+    ]);
+    items
+}
 
 /// Runtime values used to preview the current status-line selection.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -214,6 +226,7 @@ impl StatusLineSetupView {
     pub(crate) fn new(
         status_line_items: Option<&[String]>,
         preview_data: StatusLinePreviewData,
+        github_pr_available: bool,
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut used_ids = HashSet::new();
@@ -228,11 +241,13 @@ impl StatusLineSetupView {
                 if !used_ids.insert(item_id.clone()) {
                     continue;
                 }
-                items.push(Self::status_line_select_item(item, /*enabled*/ true));
+                if item != StatusLineItem::GithubPr || github_pr_available {
+                    items.push(Self::status_line_select_item(item, /*enabled*/ true));
+                }
             }
         }
 
-        for item in SELECTABLE_STATUS_LINE_ITEMS.iter().cloned() {
+        for item in selectable_status_line_items(github_pr_available) {
             let item_id = item.to_string();
             if used_ids.contains(&item_id) {
                 continue;
@@ -430,10 +445,32 @@ mod tests {
                 ),
                 (StatusLineItem::WeeklyLimit, "weekly 82%".to_string()),
             ]),
+            /*github_pr_available*/ true,
             AppEventSender::new(tx_raw),
         );
 
         assert_snapshot!(render_lines(&view, /*width*/ 72));
+    }
+
+    #[test]
+    fn setup_view_hides_github_pr_when_gh_unavailable() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let view = StatusLineSetupView::new(
+            Some(&[
+                StatusLineItem::ModelName.to_string(),
+                StatusLineItem::GithubPr.to_string(),
+            ]),
+            StatusLinePreviewData::from_iter([
+                (StatusLineItem::ModelName, "gpt-5-codex".to_string()),
+                (StatusLineItem::GithubPr, "PR #123".to_string()),
+            ]),
+            /*github_pr_available*/ false,
+            AppEventSender::new(tx_raw),
+        );
+
+        let rendered = render_lines(&view, /*width*/ 72);
+        assert!(!rendered.contains("github-pr"));
+        assert!(!rendered.contains("PR #123"));
     }
 
     fn render_lines(view: &StatusLineSetupView, width: u16) -> String {

@@ -51,6 +51,27 @@ impl StatusSurfaceSelections {
                 .terminal_title_items
                 .contains(&TerminalTitleItem::GitBranch)
     }
+
+    fn uses_github_pr(&self) -> bool {
+        self.status_line_items.contains(&StatusLineItem::GithubPr)
+            || self
+                .terminal_title_items
+                .contains(&TerminalTitleItem::GithubPr)
+    }
+}
+
+struct StatusLineSegment {
+    line: Line<'static>,
+    hyperlink_url: Option<String>,
+}
+
+impl StatusLineSegment {
+    fn text(value: String) -> Self {
+        Self {
+            line: Line::from(value),
+            hyperlink_url: None,
+        }
+    }
 }
 
 /// Cached project-root display name keyed by the cwd used for the last lookup.
@@ -124,13 +145,26 @@ impl ChatWidget {
             self.status_line_branch = None;
             self.status_line_branch_pending = false;
             self.status_line_branch_lookup_complete = false;
+        } else {
+            let cwd = self.status_line_cwd().to_path_buf();
+            self.sync_status_line_branch_state(&cwd);
+            if !self.status_line_branch_lookup_complete {
+                self.request_status_line_branch(cwd);
+            }
+        }
+
+        let uses_github_pr = selections.uses_github_pr();
+        if !uses_github_pr || !crate::github_pr::gh_available() {
+            self.status_line_github_pr = None;
+            self.status_line_github_pr_pending = false;
+            self.status_line_github_pr_lookup_complete = false;
             return;
         }
 
         let cwd = self.status_line_cwd().to_path_buf();
-        self.sync_status_line_branch_state(&cwd);
-        if !self.status_line_branch_lookup_complete {
-            self.request_status_line_branch(cwd);
+        self.sync_status_line_github_pr_state(&cwd);
+        if !self.status_line_github_pr_lookup_complete {
+            self.request_status_line_github_pr(cwd);
         }
     }
 
@@ -142,19 +176,30 @@ impl ChatWidget {
             return;
         }
 
-        let mut parts = Vec::new();
+        let mut spans = Vec::new();
+        let mut hyperlink_url = None;
         for item in &selections.status_line_items {
-            if let Some(value) = self.status_line_value_for_item(item) {
-                parts.push(value);
+            if let Some(segment) = self.status_line_segment_for_item(item) {
+                if !spans.is_empty() {
+                    spans.push(" · ".into());
+                }
+                if hyperlink_url.is_none() {
+                    hyperlink_url.clone_from(&segment.hyperlink_url);
+                }
+                spans.extend(segment.line.spans);
             }
         }
 
-        let line = if parts.is_empty() {
+        let status_line = if spans.is_empty() {
             None
         } else {
-            Some(Line::from(parts.join(" · ")))
+            let status_line = StatusLine::new(Line::from(spans));
+            Some(match hyperlink_url {
+                Some(url) => status_line.with_hyperlink(url),
+                None => status_line,
+            })
         };
-        self.set_status_line(line);
+        self.set_status_line(status_line);
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.
@@ -264,12 +309,18 @@ impl ChatWidget {
 
     pub(super) fn request_status_line_branch_refresh(&mut self) {
         let selections = self.status_surface_selections();
-        if !selections.uses_git_branch() {
+        if !selections.uses_git_branch() && !selections.uses_github_pr() {
             return;
         }
         let cwd = self.status_line_cwd().to_path_buf();
-        self.sync_status_line_branch_state(&cwd);
-        self.request_status_line_branch(cwd);
+        if selections.uses_git_branch() {
+            self.sync_status_line_branch_state(&cwd);
+            self.request_status_line_branch(cwd.clone());
+        }
+        if selections.uses_github_pr() && crate::github_pr::gh_available() {
+            self.sync_status_line_github_pr_state(&cwd);
+            self.request_status_line_github_pr(cwd);
+        }
     }
 
     /// Parses configured status-line ids into known items and collects unknown ids.
@@ -397,6 +448,20 @@ impl ChatWidget {
         self.status_line_branch_lookup_complete = false;
     }
 
+    fn sync_status_line_github_pr_state(&mut self, cwd: &Path) {
+        if self
+            .status_line_github_pr_cwd
+            .as_ref()
+            .is_some_and(|path| path == cwd)
+        {
+            return;
+        }
+        self.status_line_github_pr_cwd = Some(cwd.to_path_buf());
+        self.status_line_github_pr = None;
+        self.status_line_github_pr_pending = false;
+        self.status_line_github_pr_lookup_complete = false;
+    }
+
     /// Starts an async git-branch lookup unless one is already running.
     ///
     /// The resulting `StatusLineBranchUpdated` event carries the lookup cwd so callers can reject
@@ -410,6 +475,18 @@ impl ChatWidget {
         tokio::spawn(async move {
             let branch = current_branch_name(&cwd).await;
             tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
+        });
+    }
+
+    fn request_status_line_github_pr(&mut self, cwd: PathBuf) {
+        if self.status_line_github_pr_pending {
+            return;
+        }
+        self.status_line_github_pr_pending = true;
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let pull_request = crate::github_pr::lookup_current_branch_pull_request(&cwd).await;
+            tx.send(AppEvent::GithubPullRequestUpdated { cwd, pull_request });
         });
     }
 
@@ -441,6 +518,10 @@ impl ChatWidget {
             }
             StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
             StatusLineItem::GitBranch => self.status_line_branch.clone(),
+            StatusLineItem::GithubPr => self
+                .status_line_github_pr
+                .as_ref()
+                .map(GithubPullRequest::label),
             StatusLineItem::UsedTokens => {
                 let usage = self.status_line_total_usage();
                 let total = usage.tokens_in_context_window();
@@ -502,11 +583,27 @@ impl ChatWidget {
         }
     }
 
+    fn status_line_segment_for_item(&mut self, item: &StatusLineItem) -> Option<StatusLineSegment> {
+        match item {
+            StatusLineItem::GithubPr => {
+                self.status_line_github_pr
+                    .as_ref()
+                    .map(|pr| StatusLineSegment {
+                        line: Line::from(pr.label().underlined()),
+                        hyperlink_url: Some(pr.url.clone()),
+                    })
+            }
+            _ => self
+                .status_line_value_for_item(item)
+                .map(StatusLineSegment::text),
+        }
+    }
+
     /// Resolves one configured terminal-title item into a displayable segment.
     ///
     /// Returning `None` means "omit this segment for now" so callers can keep
     /// the configured order while hiding values that are not yet available.
-    fn terminal_title_value_for_item(
+    pub(super) fn terminal_title_value_for_item(
         &mut self,
         item: TerminalTitleItem,
         now: Instant,
@@ -529,6 +626,9 @@ impl ChatWidget {
             }),
             TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
+            }),
+            TerminalTitleItem::GithubPr => self.status_line_github_pr.as_ref().map(|pr| {
+                Self::truncate_terminal_title_part(pr.label(), /*max_chars*/ 16)
             }),
             TerminalTitleItem::Model => Some(Self::truncate_terminal_title_part(
                 self.model_display_name().to_string(),

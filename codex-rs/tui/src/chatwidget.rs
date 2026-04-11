@@ -47,11 +47,13 @@ use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
+use crate::bottom_pane::StatusLine;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
+use crate::github_pr::GithubPullRequest;
 use crate::legacy_core::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
@@ -965,6 +967,14 @@ pub(crate) struct ChatWidget {
     status_line_branch_pending: bool,
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
+    // Cached GitHub PR for the current branch (None if unknown or unavailable).
+    status_line_github_pr: Option<GithubPullRequest>,
+    // CWD used to resolve the cached GitHub PR; change resets PR state.
+    status_line_github_pr_cwd: Option<PathBuf>,
+    // True while an async GitHub PR lookup is in flight.
+    status_line_github_pr_pending: bool,
+    // True once we've attempted a GitHub PR lookup for the current CWD.
+    status_line_github_pr_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
@@ -1813,7 +1823,7 @@ impl ChatWidget {
     }
 
     /// Sets the currently rendered footer status-line value.
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLine>) {
         self.bottom_pane.set_status_line(status_line);
     }
 
@@ -1909,6 +1919,21 @@ impl ChatWidget {
         self.status_line_branch = branch;
         self.status_line_branch_pending = false;
         self.status_line_branch_lookup_complete = true;
+        self.refresh_status_surfaces();
+    }
+
+    pub(crate) fn set_status_line_github_pr(
+        &mut self,
+        cwd: PathBuf,
+        pull_request: Option<GithubPullRequest>,
+    ) {
+        if self.status_line_github_pr_cwd.as_ref() != Some(&cwd) {
+            self.status_line_github_pr_pending = false;
+            return;
+        }
+        self.status_line_github_pr = pull_request;
+        self.status_line_github_pr_pending = false;
+        self.status_line_github_pr_lookup_complete = true;
         self.refresh_status_surfaces();
     }
 
@@ -4871,6 +4896,10 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            status_line_github_pr: None,
+            status_line_github_pr_cwd: None,
+            status_line_github_pr_pending: false,
+            status_line_github_pr_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -7611,12 +7640,14 @@ impl ChatWidget {
 
     fn open_status_line_setup(&mut self) {
         let configured_status_line_items = self.configured_status_line_items();
+        let gh_available = crate::github_pr::gh_available();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
             StatusLinePreviewData::from_iter(StatusLineItem::iter().filter_map(|item| {
                 self.status_line_value_for_item(&item)
                     .map(|value| (item, value))
             })),
+            gh_available,
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -7627,6 +7658,7 @@ impl ChatWidget {
         self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
         let view = TerminalTitleSetupView::new(
             Some(configured_terminal_title_items.as_slice()),
+            crate::github_pr::gh_available(),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));

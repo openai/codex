@@ -44,6 +44,8 @@ pub(crate) enum TerminalTitleItem {
     Thread,
     /// Current git branch (if available).
     GitBranch,
+    /// Current branch's GitHub pull request (if available from gh).
+    GithubPr,
     /// Current model name.
     Model,
     /// Latest checklist task progress from `update_plan` (if available).
@@ -61,6 +63,7 @@ impl TerminalTitleItem {
             TerminalTitleItem::Status => "Compact session status text (Ready, Working, Thinking)",
             TerminalTitleItem::Thread => "Current thread title (omitted until available)",
             TerminalTitleItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            TerminalTitleItem::GithubPr => "Current branch's GitHub PR (omitted when unavailable)",
             TerminalTitleItem::Model => "Current model name",
             TerminalTitleItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
@@ -80,6 +83,7 @@ impl TerminalTitleItem {
             TerminalTitleItem::Status => "Working",
             TerminalTitleItem::Thread => "Investigate flaky test",
             TerminalTitleItem::GitBranch => "feat/awesome-feature",
+            TerminalTitleItem::GithubPr => "PR #123",
             TerminalTitleItem::Model => "gpt-5.2-codex",
             TerminalTitleItem::TaskProgress => "Tasks 2/5",
         }
@@ -101,6 +105,10 @@ impl TerminalTitleItem {
             Some(_) => " | ",
         }
     }
+}
+
+fn terminal_title_item_selectable(item: TerminalTitleItem, github_pr_available: bool) -> bool {
+    item != TerminalTitleItem::GithubPr || github_pr_available
 }
 
 fn parse_terminal_title_items<T>(ids: impl Iterator<Item = T>) -> Option<Vec<TerminalTitleItem>>
@@ -128,11 +136,16 @@ impl TerminalTitleSetupView {
     /// main TUI still warns about them when rendering the actual title, but the
     /// picker itself only exposes the selectable items it can meaningfully
     /// preview and persist.
-    pub(crate) fn new(title_items: Option<&[String]>, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(
+        title_items: Option<&[String]>,
+        github_pr_available: bool,
+        app_event_tx: AppEventSender,
+    ) -> Self {
         let selected_items = title_items
             .into_iter()
             .flatten()
             .filter_map(|id| id.parse::<TerminalTitleItem>().ok())
+            .filter(|item| terminal_title_item_selectable(*item, github_pr_available))
             .unique()
             .collect_vec();
         let selected_set = selected_items
@@ -144,6 +157,7 @@ impl TerminalTitleSetupView {
             .map(|item| Self::title_select_item(item, /*enabled*/ true))
             .chain(
                 TerminalTitleItem::iter()
+                    .filter(|item| terminal_title_item_selectable(*item, github_pr_available))
                     .filter(|item| !selected_set.contains(item))
                     .map(|item| Self::title_select_item(item, /*enabled*/ false)),
             )
@@ -280,11 +294,25 @@ mod tests {
             "status".to_string(),
             "thread".to_string(),
         ];
-        let view = TerminalTitleSetupView::new(Some(&selected), tx);
+        let view =
+            TerminalTitleSetupView::new(Some(&selected), /*github_pr_available*/ true, tx);
         assert_snapshot!(
             "terminal_title_setup_basic",
             render_lines(&view, /*width*/ 84)
         );
+    }
+
+    #[test]
+    fn hides_github_pr_when_gh_unavailable() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let selected = ["project".to_string(), "github-pr".to_string()];
+        let view =
+            TerminalTitleSetupView::new(Some(&selected), /*github_pr_available*/ false, tx);
+
+        let rendered = render_lines(&view, /*width*/ 84);
+        assert!(!rendered.contains("github-pr"));
+        assert!(!rendered.contains("PR #123"));
     }
 
     #[test]
@@ -310,12 +338,13 @@ mod tests {
 
     #[test]
     fn parse_terminal_title_items_accepts_kebab_case_variants() {
-        let items = parse_terminal_title_items(["app-name", "git-branch"].into_iter());
+        let items = parse_terminal_title_items(["app-name", "git-branch", "github-pr"].into_iter());
         assert_eq!(
             items,
             Some(vec![
                 TerminalTitleItem::AppName,
                 TerminalTitleItem::GitBranch,
+                TerminalTitleItem::GithubPr,
             ])
         );
     }

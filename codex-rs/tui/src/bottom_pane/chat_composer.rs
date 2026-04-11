@@ -118,7 +118,6 @@ use crate::bottom_pane::footer::mode_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
-use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -146,6 +145,7 @@ use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
+use super::footer::StatusLine;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;
@@ -160,6 +160,7 @@ use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
+use super::footer::render_status_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
@@ -334,7 +335,7 @@ pub(crate) struct ChatComposer {
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
     is_zellij: bool,
-    status_line_value: Option<Line<'static>>,
+    status_line_value: Option<StatusLine>,
     status_line_enabled: bool,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
@@ -1037,8 +1038,10 @@ impl ChatComposer {
 
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
-        self.status_line_value.as_ref().map(|line| {
-            line.spans
+        self.status_line_value.as_ref().map(|status_line| {
+            status_line
+                .line()
+                .spans
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>()
@@ -3309,7 +3312,7 @@ impl ChatComposer {
         }
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) -> bool {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLine>) -> bool {
         if self.status_line_value == status_line {
             return false;
         }
@@ -3508,13 +3511,14 @@ impl ChatComposer {
                     hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
                 let status_line_active = uses_passive_footer_status_layout(&footer_props);
                 let combined_status_line = if status_line_active {
-                    passive_footer_status_line(&footer_props).map(ratatui::prelude::Stylize::dim)
+                    passive_footer_status_line(&footer_props).map(StatusLine::into_dimmed_line)
                 } else {
                     None
                 };
                 let mut truncated_status_line = if status_line_active {
                     combined_status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
+                        line.clone()
+                            .truncate_with_ellipsis_if_overflow(available_width)
                     })
                 } else {
                     None
@@ -3569,7 +3573,8 @@ impl ChatComposer {
                     && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
                     && left_width > max_left
                     && let Some(line) = combined_status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
+                        line.clone()
+                            .truncate_with_ellipsis_if_overflow(max_left as usize)
                     })
                 {
                     left_width = line.width() as u16;
@@ -3621,7 +3626,7 @@ impl ChatComposer {
                         SummaryLeft::Default => {
                             if status_line_active {
                                 if let Some(line) = truncated_status_line.clone() {
-                                    render_footer_line(hint_rect, buf, line);
+                                    render_status_line(hint_rect, buf, line);
                                 } else {
                                     render_footer_from_props(
                                         hint_rect,
@@ -3658,7 +3663,7 @@ impl ChatComposer {
                     render_footer_hint_items(hint_rect, buf, items);
                 } else if status_line_active {
                     if let Some(line) = truncated_status_line {
-                        render_footer_line(hint_rect, buf, line);
+                        render_status_line(hint_rect, buf, line);
                     }
                 } else {
                     render_footer_from_props(
