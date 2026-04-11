@@ -647,7 +647,7 @@ impl Codex {
             network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            codex_home: config.codex_home.clone(),
+            codex_home: config.codex_home.to_path_buf(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
@@ -1894,7 +1894,7 @@ impl Session {
                 tx
             } else {
                 ShellSnapshot::start_snapshotting(
-                    config.codex_home.clone(),
+                    config.codex_home.to_path_buf(),
                     conversation_id,
                     session_configuration.cwd.to_path_buf(),
                     &mut default_shell,
@@ -2146,7 +2146,7 @@ impl Session {
             INITIAL_SUBMIT_ID.to_owned(),
             tx_event.clone(),
             sandbox_state,
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
         )
@@ -4506,7 +4506,7 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             sandbox_state,
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
         )

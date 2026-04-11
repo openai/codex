@@ -147,7 +147,7 @@ pub(crate) fn test_config() -> Config {
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("temp dir should resolve"),
     )
     .expect("load default test config")
 }
@@ -399,7 +399,7 @@ pub struct Config {
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
-    pub codex_home: PathBuf,
+    pub codex_home: AbsolutePathBuf,
 
     /// Directory where Codex stores the SQLite state DB.
     pub sqlite_home: PathBuf,
@@ -590,7 +590,7 @@ impl Default for MultiAgentV2Config {
 
 impl AuthManagerConfig for Config {
     fn codex_home(&self) -> PathBuf {
-        self.codex_home.clone()
+        self.codex_home.to_path_buf()
     }
 
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
@@ -653,8 +653,8 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = match codex_home {
-            Some(codex_home) => codex_home,
-            None => find_codex_home()?.into_path_buf(),
+            Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
+            None => find_codex_home()?,
         };
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
@@ -730,7 +730,7 @@ impl Config {
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
-            codex_home: self.codex_home.clone(),
+            codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
             mcp_oauth_callback_url: self.mcp_oauth_callback_url.clone(),
@@ -760,8 +760,11 @@ impl Config {
     pub fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
-        let codex_home = find_codex_home()?.into_path_buf();
-        Self::load_default_with_cli_overrides_for_codex_home(codex_home, cli_overrides)
+        let codex_home = find_codex_home()?;
+        Self::load_default_with_cli_overrides_for_codex_home(
+            codex_home.to_path_buf(),
+            cli_overrides,
+        )
     }
 
     /// Load a default configuration for a specific Codex home without reading
@@ -778,6 +781,7 @@ impl Config {
         })?;
         let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
         crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
+        let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)?;
         let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
         Self::load_config_with_layer_stack(
             config_toml,
@@ -1383,7 +1387,7 @@ impl Config {
     fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        codex_home: AbsolutePathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
@@ -1393,7 +1397,7 @@ impl Config {
     pub(crate) fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
         validate_model_providers(&cfg.model_providers)
@@ -1893,11 +1897,7 @@ impl Config {
             .log_dir
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf)
-            .unwrap_or_else(|| {
-                let mut p = codex_home.clone();
-                p.push("log");
-                p
-            });
+            .unwrap_or_else(|| codex_home.join("log").to_path_buf());
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()

@@ -392,7 +392,9 @@ async fn forked_thread_history_line_includes_name_and_id_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut chat = chat;
     let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
+            .expect("temp dir is absolute");
 
     let forked_from_id =
         ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
@@ -429,7 +431,9 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut chat = chat;
     let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
+            .expect("temp dir is absolute");
 
     let forked_from_id =
         ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");

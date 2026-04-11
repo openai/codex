@@ -227,10 +227,6 @@ impl ThreadManager {
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("config codex_home should be absolute: {err}"),
-        };
         let restriction_product = session_source.restriction_product();
         let openai_models_provider = config
             .model_providers
@@ -239,12 +235,12 @@ impl ThreadManager {
             .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(/*base_url*/ None));
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
-            codex_home.clone(),
+            codex_home.to_path_buf(),
             restriction_product,
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
-            skills_codex_home,
+            codex_home.clone(),
             config.bundled_skills_enabled(),
             restriction_product,
         ));
@@ -254,7 +250,7 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new_with_provider(
-                    codex_home,
+                    codex_home.to_path_buf(),
                     auth_manager.clone(),
                     config.model_catalog.clone(),
                     collaboration_modes_config,

@@ -1299,7 +1299,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -1374,7 +1374,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -1822,7 +1822,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));

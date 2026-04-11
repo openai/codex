@@ -10803,7 +10803,7 @@ impl ChatWidget {
             return;
         }
 
-        let plugins = PluginsManager::new(self.config.codex_home.clone())
+        let plugins = PluginsManager::new(self.config.codex_home.to_path_buf())
             .plugins_for_config(&self.config)
             .capability_summaries()
             .to_vec();
