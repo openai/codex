@@ -455,6 +455,18 @@ async fn ingest_turn_prerequisites(
 ) {
     if include_initialize {
         ingest_initialize(reducer, out).await;
+        reducer
+            .ingest(
+                AnalyticsFact::Response {
+                    connection_id: 7,
+                    response: Box::new(sample_thread_start_response(
+                        "thread-2", /*ephemeral*/ false, "gpt-5",
+                    )),
+                },
+                out,
+            )
+            .await;
+        out.clear();
     }
 
     reducer
