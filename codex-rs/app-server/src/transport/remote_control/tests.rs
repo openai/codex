@@ -99,6 +99,24 @@ fn remote_control_auth_dot_json(account_id: Option<&str>) -> AuthDotJson {
     }
 }
 
+fn remote_control_api_key_auth_dot_json() -> AuthDotJson {
+    AuthDotJson {
+        auth_mode: Some(AuthMode::ApiKey),
+        openai_api_key: Some("sk-test-api-key".to_string()),
+        tokens: None,
+        last_refresh: None,
+    }
+}
+
+fn remote_control_invalid_chatgpt_auth_dot_json() -> AuthDotJson {
+    AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: Some(chrono::Utc::now()),
+    }
+}
+
 async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime> {
     StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string())
         .await
@@ -129,7 +147,9 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
@@ -394,7 +414,9 @@ async fn remote_control_transport_reconnects_after_disconnect() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
@@ -466,7 +488,7 @@ async fn remote_control_start_allows_remote_control_invalid_url_when_disabled() 
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ false,
+        RemoteControlStartup::Disabled,
     )
     .await
     .expect("disabled remote control should not validate the URL at startup");
@@ -476,6 +498,104 @@ async fn remote_control_start_allows_remote_control_invalid_url_when_disabled() 
         .await
         .expect("remote control task should stop")
         .expect("remote control task should join");
+}
+
+#[tokio::test]
+async fn remote_control_auth_validation_treats_api_key_auth_as_recoverable_unless_only_transport() {
+    let codex_home = TempDir::new().expect("temp dir should create");
+    save_auth(
+        codex_home.path(),
+        &remote_control_api_key_auth_dot_json(),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("api key auth should save");
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+
+    validate_remote_control_auth(&auth_manager)
+        .await
+        .expect("api key auth should be recoverable while another transport is available");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let err = match start_remote_control(
+        "http://127.0.0.1:1/backend-api/".to_string(),
+        /*state_db*/ None,
+        auth_manager,
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::RequireReady,
+        },
+    )
+    .await
+    {
+        Ok((remote_task, _remote_handle)) => {
+            shutdown_token.cancel();
+            let _ = remote_task.await;
+            panic!("api key auth should fail when remote control is the only startup transport");
+        }
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        err.to_string(),
+        "remote control requires ChatGPT authentication; API key auth is not supported"
+    );
+}
+
+#[tokio::test]
+async fn remote_control_auth_validation_treats_invalid_chatgpt_auth_as_recoverable() {
+    let codex_home = TempDir::new().expect("temp dir should create");
+    save_auth(
+        codex_home.path(),
+        &remote_control_invalid_chatgpt_auth_dot_json(),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("invalid ChatGPT auth should save");
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+
+    validate_remote_control_auth(&auth_manager)
+        .await
+        .expect("invalid ChatGPT auth should be recoverable while another transport is available");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let err = match start_remote_control(
+        "http://127.0.0.1:1/backend-api/".to_string(),
+        /*state_db*/ None,
+        auth_manager,
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::RequireReady,
+        },
+    )
+    .await
+    {
+        Ok((remote_task, _remote_handle)) => {
+            shutdown_token.cancel();
+            let _ = remote_task.await;
+            panic!(
+                "invalid ChatGPT auth should fail when remote control is the only startup transport"
+            );
+        }
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        err.to_string(),
+        "remote control cannot read ChatGPT authentication token: Token data is not available."
+    );
 }
 
 #[tokio::test]
@@ -495,7 +615,9 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
@@ -548,7 +670,9 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
@@ -715,7 +839,9 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
@@ -932,7 +1058,9 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
@@ -999,7 +1127,9 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
         transport_event_tx,
         shutdown_token.clone(),
         Some(app_server_client_name_rx),
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
@@ -1056,7 +1186,9 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start before account id is available");
@@ -1090,6 +1222,77 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
         Some(&expected_enrollment.server_id)
+    );
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_reloads_api_key_auth_until_chatgpt_auth_available() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    save_auth(
+        codex_home.path(),
+        &remote_control_api_key_auth_dot_json(),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("api key auth should save");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, _remote_handle) = start_remote_control(
+        remote_control_url,
+        Some(state_db),
+        auth_manager,
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
+    )
+    .await
+    .expect("remote control should start while API key auth is recoverable");
+
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("remote control should wait until ChatGPT auth is available");
+
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(Some("account_id")),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("ChatGPT auth should save");
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        enroll_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    respond_with_json(
+        enroll_request.stream,
+        json!({ "server_id": "srv_e_ready", "environment_id": "env_ready" }),
+    )
+    .await;
+    let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
+    assert_eq!(
+        handshake_request
+            .headers
+            .get("x-codex-server-id")
+            .map(String::as_str),
+        Some("srv_e_ready")
     );
 
     shutdown_token.cancel();
@@ -1139,7 +1342,9 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         transport_event_tx,
         shutdown_token.clone(),
         /*app_server_client_name_rx*/ None,
-        /*initial_enabled*/ true,
+        RemoteControlStartup::Enabled {
+            auth: RemoteControlAuthStartup::AllowRecoverable,
+        },
     )
     .await
     .expect("remote control should start");
