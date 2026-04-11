@@ -2845,7 +2845,6 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
- "codex-core",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",
@@ -2931,6 +2930,7 @@ name = "codex-utils-absolute-path"
 version = "0.0.0"
 dependencies = [
  "dirs",
+ "dunce",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
