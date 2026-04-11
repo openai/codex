@@ -2,6 +2,7 @@ use super::*;
 use codex_protocol::protocol::SkillDependencies;
 use codex_protocol::protocol::SkillMetadata;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::test_support::PathBufExt as _;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
@@ -12,7 +13,7 @@ fn skill_with_tools(tools: Vec<SkillToolDependency>) -> SkillMetadata {
         short_description: None,
         interface: None,
         dependencies: Some(SkillDependencies { tools }),
-        path: PathBuf::from("skill"),
+        path: PathBuf::from("/tmp/skill").abs(),
         scope: SkillScope::User,
         enabled: true,
     }
