@@ -100,6 +100,8 @@ pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
         "Business".to_string()
     } else if plan_type.is_business_like() {
         "Enterprise".to_string()
+    } else if plan_type == PlanType::ProLite {
+        "Pro Lite".to_string()
     } else {
         title_case(format!("{plan_type:?}").as_str())
     }
@@ -216,6 +218,7 @@ mod tests {
             (PlanType::Go, "Go"),
             (PlanType::Plus, "Plus"),
             (PlanType::Pro, "Pro"),
+            (PlanType::ProLite, "Pro Lite"),
             (PlanType::Team, "Business"),
             (PlanType::SelfServeBusinessUsageBased, "Business"),
             (PlanType::Business, "Enterprise"),

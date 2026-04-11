@@ -16,6 +16,7 @@ impl PlanType {
             "go" => Self::Known(KnownPlan::Go),
             "plus" => Self::Known(KnownPlan::Plus),
             "pro" => Self::Known(KnownPlan::Pro),
+            "prolite" => Self::Known(KnownPlan::ProLite),
             "team" => Self::Known(KnownPlan::Team),
             "self_serve_business_usage_based" => {
                 Self::Known(KnownPlan::SelfServeBusinessUsageBased)
@@ -36,6 +37,7 @@ pub enum KnownPlan {
     Go,
     Plus,
     Pro,
+    ProLite,
     Team,
     #[serde(rename = "self_serve_business_usage_based")]
     SelfServeBusinessUsageBased,
@@ -54,6 +56,7 @@ impl KnownPlan {
             Self::Go => "Go",
             Self::Plus => "Plus",
             Self::Pro => "Pro",
+            Self::ProLite => "Pro Lite",
             Self::Team => "Team",
             Self::SelfServeBusinessUsageBased => "Self Serve Business Usage Based",
             Self::Business => "Business",
@@ -69,6 +72,7 @@ impl KnownPlan {
             Self::Go => "go",
             Self::Plus => "plus",
             Self::Pro => "pro",
+            Self::ProLite => "prolite",
             Self::Team => "team",
             Self::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
             Self::Business => "business",
