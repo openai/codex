@@ -1,11 +1,11 @@
 #![cfg(not(debug_assertions))]
 
+use crate::legacy_core::config::Config;
 use crate::update_action;
 use crate::update_action::UpdateAction;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use codex_core::config::Config;
 use codex_login::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;
