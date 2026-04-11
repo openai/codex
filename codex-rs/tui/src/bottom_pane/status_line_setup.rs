@@ -173,6 +173,43 @@ fn selectable_status_line_items(github_pr_available: bool) -> Vec<StatusLineItem
     items
 }
 
+fn hidden_configured_status_line_items(
+    status_line_items: Option<&[String]>,
+    github_pr_available: bool,
+) -> Vec<(usize, StatusLineItem)> {
+    if github_pr_available {
+        return Vec::new();
+    }
+
+    let mut hidden_items = Vec::new();
+    for (index, id) in status_line_items.into_iter().flatten().enumerate() {
+        let Ok(item) = id.parse::<StatusLineItem>() else {
+            continue;
+        };
+        if item == StatusLineItem::GithubPr
+            && !hidden_items
+                .iter()
+                .any(|(_, hidden_item)| hidden_item == &item)
+        {
+            hidden_items.push((index, item));
+        }
+    }
+    hidden_items
+}
+
+fn restore_hidden_status_line_items(
+    mut items: Vec<StatusLineItem>,
+    hidden_items: &[(usize, StatusLineItem)],
+) -> Vec<StatusLineItem> {
+    for (index, item) in hidden_items {
+        if items.contains(item) {
+            continue;
+        }
+        items.insert((*index).min(items.len()), item.clone());
+    }
+    items
+}
+
 /// Runtime values used to preview the current status-line selection.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct StatusLinePreviewData {
@@ -234,6 +271,8 @@ impl StatusLineSetupView {
     ) -> Self {
         let mut used_ids = HashSet::new();
         let mut items = Vec::new();
+        let hidden_configured_items =
+            hidden_configured_status_line_items(status_line_items, github_pr_available);
 
         if let Some(selected_items) = status_line_items.as_ref() {
             for id in *selected_items {
@@ -271,12 +310,13 @@ impl StatusLineSetupView {
             .items(items)
             .enable_ordering()
             .on_preview(move |items| preview_data.line_for_items(items))
-            .on_confirm(|ids, app_event| {
+            .on_confirm(move |ids, app_event| {
                 let items = ids
                     .iter()
                     .map(|id| id.parse::<StatusLineItem>())
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap_or_default();
+                let items = restore_hidden_status_line_items(items, &hidden_configured_items);
                 app_event.send(AppEvent::StatusLineSetup { items });
             })
             .on_cancel(|app_event| {
@@ -326,6 +366,9 @@ impl Renderable for StatusLineSetupView {
 mod tests {
     use super::*;
     use crate::app_event_sender::AppEventSender;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
@@ -474,6 +517,35 @@ mod tests {
         let rendered = render_lines(&view, /*width*/ 72);
         assert!(!rendered.contains("github-pr"));
         assert!(!rendered.contains("PR #123"));
+    }
+
+    #[tokio::test]
+    async fn confirm_preserves_hidden_github_pr_when_gh_unavailable() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let mut view = StatusLineSetupView::new(
+            Some(&[
+                StatusLineItem::ModelName.to_string(),
+                StatusLineItem::GithubPr.to_string(),
+                StatusLineItem::CurrentDir.to_string(),
+            ]),
+            StatusLinePreviewData::default(),
+            /*github_pr_available*/ false,
+            AppEventSender::new(tx_raw),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let Some(AppEvent::StatusLineSetup { items }) = rx.recv().await else {
+            panic!("expected status line setup event");
+        };
+        assert_eq!(
+            items,
+            vec![
+                StatusLineItem::ModelName,
+                StatusLineItem::GithubPr,
+                StatusLineItem::CurrentDir,
+            ]
+        );
     }
 
     fn render_lines(view: &StatusLineSetupView, width: u16) -> String {

@@ -117,6 +117,43 @@ fn terminal_title_item_selectable(item: TerminalTitleItem, github_pr_available: 
     item != TerminalTitleItem::GithubPr || github_pr_available
 }
 
+fn hidden_configured_terminal_title_items(
+    title_items: Option<&[String]>,
+    github_pr_available: bool,
+) -> Vec<(usize, TerminalTitleItem)> {
+    if github_pr_available {
+        return Vec::new();
+    }
+
+    let mut hidden_items = Vec::new();
+    for (index, id) in title_items.into_iter().flatten().enumerate() {
+        let Ok(item) = id.parse::<TerminalTitleItem>() else {
+            continue;
+        };
+        if item == TerminalTitleItem::GithubPr
+            && !hidden_items
+                .iter()
+                .any(|(_, hidden_item)| hidden_item == &item)
+        {
+            hidden_items.push((index, item));
+        }
+    }
+    hidden_items
+}
+
+fn restore_hidden_terminal_title_items(
+    mut items: Vec<TerminalTitleItem>,
+    hidden_items: &[(usize, TerminalTitleItem)],
+) -> Vec<TerminalTitleItem> {
+    for (index, item) in hidden_items {
+        if items.contains(item) {
+            continue;
+        }
+        items.insert((*index).min(items.len()), *item);
+    }
+    items
+}
+
 fn parse_terminal_title_items<T>(ids: impl Iterator<Item = T>) -> Option<Vec<TerminalTitleItem>>
 where
     T: AsRef<str>,
@@ -147,6 +184,8 @@ impl TerminalTitleSetupView {
         github_pr_available: bool,
         app_event_tx: AppEventSender,
     ) -> Self {
+        let hidden_configured_items =
+            hidden_configured_terminal_title_items(title_items, github_pr_available);
         let selected_items = title_items
             .into_iter()
             .flatten()
@@ -212,10 +251,11 @@ impl TerminalTitleSetupView {
                 };
                 app_event.send(AppEvent::TerminalTitleSetupPreview { items });
             })
-            .on_confirm(|ids, app_event| {
+            .on_confirm(move |ids, app_event| {
                 let Some(items) = parse_terminal_title_items(ids.iter().map(String::as_str)) else {
                     return;
                 };
+                let items = restore_hidden_terminal_title_items(items, &hidden_configured_items);
                 app_event.send(AppEvent::TerminalTitleSetup { items });
             })
             .on_cancel(|app_event| {
@@ -263,6 +303,9 @@ impl Renderable for TerminalTitleSetupView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
@@ -319,6 +362,33 @@ mod tests {
         let rendered = render_lines(&view, /*width*/ 84);
         assert!(!rendered.contains("github-pr"));
         assert!(!rendered.contains("PR #123"));
+    }
+
+    #[tokio::test]
+    async fn confirm_preserves_hidden_github_pr_when_gh_unavailable() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let selected = [
+            "project".to_string(),
+            "github-pr".to_string(),
+            "model".to_string(),
+        ];
+        let mut view =
+            TerminalTitleSetupView::new(Some(&selected), /*github_pr_available*/ false, tx);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let Some(AppEvent::TerminalTitleSetup { items }) = rx.recv().await else {
+            panic!("expected terminal title setup event");
+        };
+        assert_eq!(
+            items,
+            vec![
+                TerminalTitleItem::Project,
+                TerminalTitleItem::GithubPr,
+                TerminalTitleItem::Model,
+            ]
+        );
     }
 
     #[test]
