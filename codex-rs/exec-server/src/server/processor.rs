@@ -365,6 +365,7 @@ mod tests {
             process_id,
             argv: sleep_then_print_argv(),
             cwd: std::env::current_dir().expect("cwd"),
+            env_policy: None,
             env,
             tty: false,
             arg0: None,

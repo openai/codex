@@ -5,6 +5,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_config::shell_environment;
+use codex_config::types::EnvironmentVariablePattern;
+use codex_config::types::ShellEnvironmentPolicy;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
@@ -19,6 +22,7 @@ use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
+use crate::protocol::ExecEnvPolicy;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
@@ -150,12 +154,13 @@ impl LocalProcess {
             process_map.insert(process_id.clone(), ProcessEntry::Starting);
         }
 
+        let env = child_env(&params);
         let spawned_result = if params.tty {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
                 params.cwd.as_path(),
-                &params.env,
+                &env,
                 &params.arg0,
                 TerminalSize::default(),
             )
@@ -165,7 +170,7 @@ impl LocalProcess {
                 program,
                 args,
                 params.cwd.as_path(),
-                &params.env,
+                &env,
                 &params.arg0,
             )
             .await
@@ -372,6 +377,36 @@ impl LocalProcess {
         };
 
         Ok(TerminateResponse { running })
+    }
+}
+
+fn child_env(params: &ExecParams) -> HashMap<String, String> {
+    let Some(env_policy) = &params.env_policy else {
+        return params.env.clone();
+    };
+
+    let policy = shell_environment_policy(env_policy);
+    let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
+    env.extend(params.env.clone());
+    env
+}
+
+fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolicy {
+    ShellEnvironmentPolicy {
+        inherit: env_policy.inherit.clone(),
+        ignore_default_excludes: env_policy.ignore_default_excludes,
+        exclude: env_policy
+            .exclude
+            .iter()
+            .map(|pattern| EnvironmentVariablePattern::new_case_insensitive(pattern))
+            .collect(),
+        r#set: env_policy.r#set.clone(),
+        include_only: env_policy
+            .include_only
+            .iter()
+            .map(|pattern| EnvironmentVariablePattern::new_case_insensitive(pattern))
+            .collect(),
+        use_profile: false,
     }
 }
 
@@ -617,4 +652,55 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_config::types::ShellEnvironmentPolicyInherit;
+
+    fn test_exec_params(env: HashMap<String, String>) -> ExecParams {
+        ExecParams {
+            process_id: ProcessId::from("env-test"),
+            argv: vec!["true".to_string()],
+            cwd: std::path::PathBuf::from("/tmp"),
+            env_policy: None,
+            env,
+            tty: false,
+            arg0: None,
+        }
+    }
+
+    #[test]
+    fn child_env_defaults_to_exact_env() {
+        let params = test_exec_params(HashMap::from([("ONLY_THIS".to_string(), "1".to_string())]));
+
+        assert_eq!(
+            child_env(&params),
+            HashMap::from([("ONLY_THIS".to_string(), "1".to_string())])
+        );
+    }
+
+    #[test]
+    fn child_env_applies_policy_then_overlay() {
+        let mut params = test_exec_params(HashMap::from([
+            ("OVERLAY".to_string(), "overlay".to_string()),
+            ("POLICY_SET".to_string(), "overlay-wins".to_string()),
+        ]));
+        params.env_policy = Some(ExecEnvPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::from([("POLICY_SET".to_string(), "policy".to_string())]),
+            include_only: Vec::new(),
+        });
+
+        assert_eq!(
+            child_env(&params),
+            HashMap::from([
+                ("OVERLAY".to_string(), "overlay".to_string()),
+                ("POLICY_SET".to_string(), "overlay-wins".to_string()),
+            ])
+        );
+    }
 }

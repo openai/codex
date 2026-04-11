@@ -33,6 +33,7 @@ pub use process::ExecProcess;
 pub use process::StartedExecProcess;
 pub use process_id::ProcessId;
 pub use protocol::ExecClosedNotification;
+pub use protocol::ExecEnvPolicy;
 pub use protocol::ExecExitedNotification;
 pub use protocol::ExecOutputDeltaNotification;
 pub use protocol::ExecOutputStream;
