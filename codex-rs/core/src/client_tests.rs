@@ -167,10 +167,10 @@ async fn model_client_with_agent_task(
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         SessionSource::Cli,
-        None,
-        false,
-        false,
-        None,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
     );
     (codex_home, client, agent_task, stored_identity)
 }
@@ -332,10 +332,10 @@ async fn responses_http_uses_agent_assertion_when_agent_task_is_present() {
             &test_prompt("hello"),
             &model_info,
             &session_telemetry,
-            None,
+            /*effort*/ None,
             ReasoningSummary::Auto,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("stream request should succeed");
@@ -387,10 +387,10 @@ async fn websocket_agent_task_bypasses_cached_bearer_prewarm() {
             &prompt,
             &model_info,
             &session_telemetry,
-            None,
+            /*effort*/ None,
             ReasoningSummary::Auto,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("bearer prewarm should succeed");
@@ -402,10 +402,10 @@ async fn websocket_agent_task_bypasses_cached_bearer_prewarm() {
             &prompt,
             &model_info,
             &session_telemetry,
-            None,
+            /*effort*/ None,
             ReasoningSummary::Auto,
-            None,
-            None,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
         )
         .await
         .expect("agent task stream should succeed");
