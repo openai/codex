@@ -74,6 +74,57 @@ INSERT INTO thread_timers (
         Ok(())
     }
 
+    pub async fn create_thread_timer_if_below_limit(
+        &self,
+        params: &ThreadTimerCreateParams,
+        max_thread_timers: usize,
+    ) -> anyhow::Result<bool> {
+        let max_thread_timers = i64::try_from(max_thread_timers)?;
+        let result = sqlx::query(
+            r#"
+INSERT INTO thread_timers (
+    id,
+    thread_id,
+    source,
+    client_id,
+    trigger_json,
+    content,
+    instructions,
+    meta_json,
+    delivery,
+    created_at,
+    next_run_at,
+    last_run_at,
+    pending_run
+)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+WHERE (
+    SELECT COUNT(*)
+    FROM thread_timers
+    WHERE thread_id = ?
+) < ?
+            "#,
+        )
+        .bind(params.id.as_str())
+        .bind(params.thread_id.as_str())
+        .bind(params.source.as_str())
+        .bind(params.client_id.as_str())
+        .bind(params.trigger_json.as_str())
+        .bind(params.content.as_str())
+        .bind(params.instructions.as_deref())
+        .bind(params.meta_json.as_str())
+        .bind(params.delivery.as_str())
+        .bind(params.created_at)
+        .bind(params.next_run_at)
+        .bind(params.last_run_at)
+        .bind(i64::from(params.pending_run))
+        .bind(params.thread_id.as_str())
+        .bind(max_thread_timers)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn list_thread_timers(&self, thread_id: &str) -> anyhow::Result<Vec<ThreadTimer>> {
         let rows = sqlx::query_as::<_, ThreadTimerRow>(
             r#"
@@ -342,6 +393,68 @@ ORDER BY name
                 .delete_thread_timer("thread-2", "timer-2")
                 .await
                 .expect("delete correct thread timer")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_thread_timer_if_below_limit_rejects_full_thread() {
+        let runtime = test_runtime().await;
+        assert!(
+            runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-1", "thread-1"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("create first timer")
+        );
+        assert!(
+            runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-2", "thread-1"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("create second timer")
+        );
+        assert!(
+            !runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-3", "thread-1"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("reject third timer")
+        );
+        assert!(
+            runtime
+                .create_thread_timer_if_below_limit(
+                    &timer_params("timer-4", "thread-2"),
+                    /*max_thread_timers*/ 2,
+                )
+                .await
+                .expect("create timer for different thread")
+        );
+
+        assert_eq!(
+            runtime
+                .list_thread_timers("thread-1")
+                .await
+                .expect("list thread-1 timers")
+                .into_iter()
+                .map(|timer| timer.id)
+                .collect::<Vec<_>>(),
+            vec!["timer-1".to_string(), "timer-2".to_string()]
+        );
+        assert_eq!(
+            runtime
+                .list_thread_timers("thread-2")
+                .await
+                .expect("list thread-2 timers")
+                .into_iter()
+                .map(|timer| timer.id)
+                .collect::<Vec<_>>(),
+            vec!["timer-4".to_string()]
         );
     }
 
