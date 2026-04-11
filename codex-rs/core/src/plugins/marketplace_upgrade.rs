@@ -5,7 +5,11 @@ use codex_config::record_user_marketplace;
 use codex_config::types::MarketplaceConfig;
 use codex_config::types::MarketplaceSourceType;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
@@ -13,9 +17,11 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tracing::warn;
 
+use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 
 const MARKETPLACE_UPGRADE_GIT_TIMEOUT: Duration = Duration::from_secs(30);
+const MARKETPLACE_INSTALL_METADATA_FILE: &str = ".codex-marketplace-install.json";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct ConfiguredMarketplaceUpgradeOutcome {
@@ -30,6 +36,16 @@ struct ConfiguredGitMarketplace {
     ref_name: Option<String>,
     sparse_paths: Vec<String>,
     last_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+struct ActivatedMarketplaceMetadata {
+    source_type: MarketplaceSourceType,
+    source: String,
+    ref_name: Option<String>,
+    sparse_paths: Vec<String>,
+    revision: String,
 }
 
 pub(super) fn upgrade_configured_git_marketplaces(
@@ -78,7 +94,7 @@ fn configured_git_marketplaces(config: &Config) -> Vec<ConfiguredGitMarketplace>
     };
     let marketplaces = match marketplaces_value
         .clone()
-        .try_into::<std::collections::HashMap<String, MarketplaceConfig>>()
+        .try_into::<HashMap<String, MarketplaceConfig>>()
     {
         Ok(marketplaces) => marketplaces,
         Err(err) => {
@@ -89,36 +105,41 @@ fn configured_git_marketplaces(config: &Config) -> Vec<ConfiguredGitMarketplace>
 
     let mut configured = marketplaces
         .into_iter()
-        .filter_map(|(name, marketplace)| {
-            let MarketplaceConfig {
-                last_updated: _,
-                last_revision,
-                source_type,
-                source,
-                ref_name,
-                sparse_paths,
-            } = marketplace;
-            if source_type != Some(MarketplaceSourceType::Git) {
-                return None;
-            }
-            let Some(source) = source else {
-                warn!(
-                    marketplace = name,
-                    "ignoring configured Git marketplace without source"
-                );
-                return None;
-            };
-            Some(ConfiguredGitMarketplace {
-                name,
-                source,
-                ref_name,
-                sparse_paths: sparse_paths.unwrap_or_default(),
-                last_revision,
-            })
-        })
+        .filter_map(|(name, marketplace)| configured_git_marketplace_from_config(name, marketplace))
         .collect::<Vec<_>>();
     configured.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     configured
+}
+
+fn configured_git_marketplace_from_config(
+    name: String,
+    marketplace: MarketplaceConfig,
+) -> Option<ConfiguredGitMarketplace> {
+    let MarketplaceConfig {
+        last_updated: _,
+        last_revision,
+        source_type,
+        source,
+        ref_name,
+        sparse_paths,
+    } = marketplace;
+    if source_type != Some(MarketplaceSourceType::Git) {
+        return None;
+    }
+    let Some(source) = source else {
+        warn!(
+            marketplace = name,
+            "ignoring configured Git marketplace without source"
+        );
+        return None;
+    };
+    Some(ConfiguredGitMarketplace {
+        name,
+        source,
+        ref_name,
+        sparse_paths: sparse_paths.unwrap_or_default(),
+        last_revision,
+    })
 }
 
 fn upgrade_configured_git_marketplace(
@@ -137,6 +158,7 @@ fn upgrade_configured_git_marketplace(
         .join(".agents/plugins/marketplace.json")
         .is_file()
         && marketplace.last_revision.as_deref() == Some(remote_revision.as_str())
+        && activated_marketplace_metadata_matches(&destination, marketplace, &remote_revision)
     {
         return Ok(None);
     }
@@ -173,6 +195,7 @@ fn upgrade_configured_git_marketplace(
             marketplace.name
         ));
     }
+    write_activated_marketplace_metadata(staged_dir.path(), marketplace, &remote_revision)?;
 
     let last_updated = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let update = MarketplaceConfigUpdate {
@@ -184,6 +207,7 @@ fn upgrade_configured_git_marketplace(
         sparse_paths: &marketplace.sparse_paths,
     };
     activate_marketplace_root(&destination, staged_dir, || {
+        ensure_configured_git_marketplace_unchanged(codex_home, marketplace)?;
         record_user_marketplace(codex_home, &marketplace.name, &update).map_err(|err| {
             format!(
                 "failed to record upgraded marketplace `{}` in user config.toml: {err}",
@@ -195,6 +219,113 @@ fn upgrade_configured_git_marketplace(
     AbsolutePathBuf::try_from(destination)
         .map(Some)
         .map_err(|err| format!("upgraded marketplace path is not absolute: {err}"))
+}
+
+fn activated_marketplace_metadata_matches(
+    root: &Path,
+    marketplace: &ConfiguredGitMarketplace,
+    revision: &str,
+) -> bool {
+    let metadata = match std::fs::read_to_string(activated_marketplace_metadata_path(root)) {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
+    let metadata = match serde_json::from_str::<ActivatedMarketplaceMetadata>(&metadata) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            warn!(
+                marketplace = marketplace.name,
+                error = %err,
+                "failed to parse activated marketplace metadata"
+            );
+            return false;
+        }
+    };
+    metadata == activated_marketplace_metadata(marketplace, revision)
+}
+
+fn write_activated_marketplace_metadata(
+    root: &Path,
+    marketplace: &ConfiguredGitMarketplace,
+    revision: &str,
+) -> Result<(), String> {
+    let metadata = activated_marketplace_metadata(marketplace, revision);
+    let contents = serde_json::to_string_pretty(&metadata)
+        .map_err(|err| format!("failed to serialize activated marketplace metadata: {err}"))?;
+    std::fs::write(activated_marketplace_metadata_path(root), contents)
+        .map_err(|err| format!("failed to write activated marketplace metadata: {err}"))
+}
+
+fn activated_marketplace_metadata(
+    marketplace: &ConfiguredGitMarketplace,
+    revision: &str,
+) -> ActivatedMarketplaceMetadata {
+    ActivatedMarketplaceMetadata {
+        source_type: MarketplaceSourceType::Git,
+        source: marketplace.source.clone(),
+        ref_name: marketplace.ref_name.clone(),
+        sparse_paths: marketplace.sparse_paths.clone(),
+        revision: revision.to_string(),
+    }
+}
+
+fn activated_marketplace_metadata_path(root: &Path) -> PathBuf {
+    root.join(MARKETPLACE_INSTALL_METADATA_FILE)
+}
+
+fn ensure_configured_git_marketplace_unchanged(
+    codex_home: &Path,
+    expected: &ConfiguredGitMarketplace,
+) -> Result<(), String> {
+    let current = read_configured_git_marketplace(codex_home, &expected.name)?;
+    match current {
+        Some(current) if current == *expected => Ok(()),
+        Some(_) => Err(format!(
+            "configured marketplace `{}` changed while auto-upgrade was in flight",
+            expected.name
+        )),
+        None => Err(format!(
+            "configured marketplace `{}` was removed or is no longer a Git marketplace",
+            expected.name
+        )),
+    }
+}
+
+fn read_configured_git_marketplace(
+    codex_home: &Path,
+    marketplace_name: &str,
+) -> Result<Option<ConfiguredGitMarketplace>, String> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let raw_config = match std::fs::read_to_string(&config_path) {
+        Ok(raw_config) => raw_config,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "failed to read user config {} while checking marketplace auto-upgrade: {err}",
+                config_path.display()
+            ));
+        }
+    };
+    let config: toml::Value = toml::from_str(&raw_config).map_err(|err| {
+        format!(
+            "failed to parse user config {} while checking marketplace auto-upgrade: {err}",
+            config_path.display()
+        )
+    })?;
+    let Some(marketplaces_value) = config.get("marketplaces") else {
+        return Ok(None);
+    };
+    let mut marketplaces = marketplaces_value
+        .clone()
+        .try_into::<HashMap<String, MarketplaceConfig>>()
+        .map_err(|err| format!("invalid marketplaces config while checking auto-upgrade: {err}"))?;
+    let Some(marketplace) = marketplaces.remove(marketplace_name) else {
+        return Ok(None);
+    };
+    Ok(configured_git_marketplace_from_config(
+        marketplace_name.to_string(),
+        marketplace,
+    ))
 }
 
 fn git_remote_revision(
@@ -210,11 +341,7 @@ fn git_remote_revision(
 
     let ref_name = ref_name.unwrap_or("HEAD");
     let output = run_git_command_with_timeout(
-        Command::new("git")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .arg("ls-remote")
-            .arg(source)
-            .arg(ref_name),
+        git_command().arg("ls-remote").arg(source).arg(ref_name),
         "git ls-remote marketplace source",
         timeout,
     )?;
@@ -249,19 +376,14 @@ fn clone_git_source(
 ) -> Result<(), String> {
     if sparse_paths.is_empty() {
         let output = run_git_command_with_timeout(
-            Command::new("git")
-                .env("GIT_OPTIONAL_LOCKS", "0")
-                .arg("clone")
-                .arg(source)
-                .arg(destination),
+            git_command().arg("clone").arg(source).arg(destination),
             "git clone marketplace source",
             timeout,
         )?;
         ensure_git_success(&output, "git clone marketplace source")?;
         if let Some(ref_name) = ref_name {
             let output = run_git_command_with_timeout(
-                Command::new("git")
-                    .env("GIT_OPTIONAL_LOCKS", "0")
+                git_command()
                     .arg("-C")
                     .arg(destination)
                     .arg("checkout")
@@ -275,8 +397,7 @@ fn clone_git_source(
     }
 
     let output = run_git_command_with_timeout(
-        Command::new("git")
-            .env("GIT_OPTIONAL_LOCKS", "0")
+        git_command()
             .arg("clone")
             .arg("--filter=blob:none")
             .arg("--no-checkout")
@@ -287,9 +408,8 @@ fn clone_git_source(
     )?;
     ensure_git_success(&output, "git clone marketplace source")?;
 
-    let mut sparse_checkout = Command::new("git");
+    let mut sparse_checkout = git_command();
     sparse_checkout
-        .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
         .arg(destination)
         .arg("sparse-checkout")
@@ -303,8 +423,7 @@ fn clone_git_source(
     ensure_git_success(&output, "git sparse-checkout marketplace source")?;
 
     let output = run_git_command_with_timeout(
-        Command::new("git")
-            .env("GIT_OPTIONAL_LOCKS", "0")
+        git_command()
             .arg("-C")
             .arg(destination)
             .arg("checkout")
@@ -313,6 +432,14 @@ fn clone_git_source(
         timeout,
     )?;
     ensure_git_success(&output, "git checkout marketplace ref")
+}
+
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    command
 }
 
 fn activate_marketplace_root(
@@ -522,6 +649,7 @@ mod tests {
         let revision = git_output(source_repo.path(), &["rev-parse", "HEAD"]);
         let installed_root = marketplace_install_root(codex_home.path()).join("debug");
         write_marketplace_repo(&installed_root, "debug", "old");
+        write_installed_metadata(&installed_root, source_repo.path(), None, &[], &revision);
         write_file(
             &codex_home.path().join(CONFIG_TOML_FILE),
             &marketplace_config(source_repo.path(), &revision),
@@ -540,6 +668,42 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt")).unwrap(),
             "old"
+        );
+    }
+
+    #[tokio::test]
+    async fn upgrade_configured_git_marketplace_reclones_when_install_metadata_differs() {
+        let codex_home = TempDir::new().unwrap();
+        let source_repo = TempDir::new().unwrap();
+        write_marketplace_repo(source_repo.path(), "debug", "new");
+        init_git_repo(source_repo.path());
+        let revision = git_output(source_repo.path(), &["rev-parse", "HEAD"]);
+        let installed_root = marketplace_install_root(codex_home.path()).join("debug");
+        write_marketplace_repo(&installed_root, "debug", "old");
+        write_installed_metadata(&installed_root, source_repo.path(), None, &[], &revision);
+        write_file(
+            &codex_home.path().join(CONFIG_TOML_FILE),
+            &marketplace_config_with_ref(source_repo.path(), &revision, &revision),
+        );
+
+        let config = load_plugins_config(codex_home.path()).await;
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+
+        assert_eq!(
+            outcome,
+            ConfiguredMarketplaceUpgradeOutcome {
+                upgraded_roots: vec![
+                    AbsolutePathBuf::try_from(
+                        marketplace_install_root(codex_home.path()).join("debug")
+                    )
+                    .unwrap()
+                ],
+                all_succeeded: true,
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt")).unwrap(),
+            "new"
         );
     }
 
@@ -600,6 +764,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upgrade_configured_git_marketplace_rolls_back_when_config_changes() {
+        let codex_home = TempDir::new().unwrap();
+        let source_repo = TempDir::new().unwrap();
+        write_marketplace_repo(source_repo.path(), "debug", "new");
+        init_git_repo(source_repo.path());
+        let changed_source_repo = TempDir::new().unwrap();
+        write_marketplace_repo(changed_source_repo.path(), "debug", "changed");
+        init_git_repo(changed_source_repo.path());
+        let installed_root = marketplace_install_root(codex_home.path()).join("debug");
+        write_marketplace_repo(&installed_root, "debug", "old");
+        write_file(
+            &codex_home.path().join(CONFIG_TOML_FILE),
+            &marketplace_config(source_repo.path(), "old-revision"),
+        );
+        let config = load_plugins_config(codex_home.path()).await;
+        write_file(
+            &codex_home.path().join(CONFIG_TOML_FILE),
+            &marketplace_config(changed_source_repo.path(), "changed-revision"),
+        );
+
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+
+        assert_eq!(
+            outcome,
+            ConfiguredMarketplaceUpgradeOutcome {
+                upgraded_roots: Vec::new(),
+                all_succeeded: false,
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt")).unwrap(),
+            "old"
+        );
+        let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).unwrap();
+        assert!(config.contains(&changed_source_repo.path().display().to_string()));
+        assert!(config.contains(r#"last_revision = "changed-revision""#));
+    }
+
+    #[tokio::test]
     async fn upgrade_configured_git_marketplaces_ignores_local_unconfigured_marketplace() {
         let codex_home = TempDir::new().unwrap();
         write_marketplace_repo(codex_home.path(), "local", "local");
@@ -647,6 +850,44 @@ source = "{}"
 "#,
             source_repo.display()
         )
+    }
+
+    fn marketplace_config_with_ref(
+        source_repo: &Path,
+        last_revision: &str,
+        ref_name: &str,
+    ) -> String {
+        format!(
+            r#"[features]
+plugins = true
+
+[marketplaces.debug]
+last_updated = "2026-04-10T00:00:00Z"
+last_revision = "{last_revision}"
+source_type = "git"
+source = "{}"
+ref = "{ref_name}"
+"#,
+            source_repo.display()
+        )
+    }
+
+    fn write_installed_metadata(
+        root: &Path,
+        source_repo: &Path,
+        ref_name: Option<&str>,
+        sparse_paths: &[String],
+        revision: &str,
+    ) {
+        let marketplace = ConfiguredGitMarketplace {
+            name: "debug".to_string(),
+            source: source_repo.display().to_string(),
+            ref_name: ref_name.map(str::to_string),
+            sparse_paths: sparse_paths.to_vec(),
+            last_revision: Some(revision.to_string()),
+        };
+        write_activated_marketplace_metadata(root, &marketplace, revision)
+            .expect("metadata should write");
     }
 
     fn write_marketplace_repo(root: &Path, marketplace_name: &str, marker: &str) {
