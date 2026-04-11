@@ -28,6 +28,27 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
 
+fn assert_wall_time_line(line: &str) {
+    assert_regex_match(r"^Wall time: [0-9]+(?:\.[0-9]+)? seconds$", line);
+}
+
+fn split_wall_time_wrapped_output(output: &str) -> &str {
+    let (wall_time, rest) = output
+        .split_once('\n')
+        .expect("wall-time output should contain an Output section");
+    assert_wall_time_line(wall_time);
+    rest.strip_prefix("Output:\n")
+        .expect("wall-time output should contain Output marker")
+}
+
+fn assert_wall_time_header(output: &str) {
+    let (wall_time, marker) = output
+        .split_once('\n')
+        .expect("wall-time header should contain an Output marker");
+    assert_wall_time_line(wall_time);
+    assert_eq!(marker, "Output:");
+}
+
 // Verifies that a standard tool call (shell_command) exceeding the model formatting
 // limits is truncated before being sent back to the model.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -400,9 +421,9 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         "MCP output should not include line-based truncation header: {output}"
     );
 
-    let truncated_pattern = r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
+    let truncated_pattern = r#"(?s)^Wall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
     assert_regex_match(truncated_pattern, &output);
-    assert!(output.len() < 2500, "{}", output.len());
+    assert!(output.len() < 2600, "{}", output.len());
 
     Ok(())
 }
@@ -502,13 +523,18 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     // Wait for completion to ensure the outbound request is captured.
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     let output_item = final_mock.single_request().function_call_output(call_id);
-    // Expect exactly one array element: the image item; and no trailing summary text.
+    // Expect exactly the wall-time text and image item; no trailing truncation summary.
     let output = output_item.get("output").expect("output");
     assert!(output.is_array(), "expected array output");
     let arr = output.as_array().unwrap();
-    assert_eq!(arr.len(), 1, "no truncation summary should be appended");
+    assert_eq!(arr.len(), 2, "no truncation summary should be appended");
+    assert_wall_time_header(
+        arr[0]["text"]
+            .as_str()
+            .expect("first MCP image output item should be wall-time text"),
+    );
     assert_eq!(
-        arr[0],
+        arr[1],
         json!({"type": "input_image", "image_url": openai_png})
     );
 
@@ -758,9 +784,10 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         .function_call_output_text(call_id)
         .context("function_call_output present for rmcp call")?;
 
-    let parsed: Value = serde_json::from_str(&output)?;
+    let wrapped_output = split_wall_time_wrapped_output(&output);
+    let parsed: Value = serde_json::from_str(wrapped_output)?;
     assert_eq!(
-        output.len(),
+        wrapped_output.len(),
         80031,
         "parsed MCP output should retain its serialized length"
     );
