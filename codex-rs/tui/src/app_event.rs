@@ -122,6 +122,9 @@ pub(crate) enum AppEvent {
     ClearUi,
 
     /// Clear the current context, start a fresh session, and submit an initial user message.
+    ///
+    /// This is the Plan Mode handoff path: the previous thread remains resumable, but the model
+    /// sees only the explicit prompt carried in `text` once the new session is configured.
     ClearUiAndSubmitUserMessage {
         text: String,
     },

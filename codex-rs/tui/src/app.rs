@@ -3313,7 +3313,8 @@ impl App {
         initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
-        // history.
+        // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
+        // until the new session is configured and any replayed turns have been rendered.
         self.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
             .await;
         let model = self.chat_widget.current_model().to_string();
@@ -3378,6 +3379,9 @@ impl App {
         started: AppServerStartedThread,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) -> Result<()> {
+        // Initial messages are for freshly attached primary threads only. Thread switches and
+        // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
+        // user turn by accident.
         self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,

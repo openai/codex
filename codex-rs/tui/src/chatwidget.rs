@@ -258,6 +258,11 @@ const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and P
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
+/// Builds the first prompt for implementing an approved plan in a fresh thread.
+///
+/// The prompt deliberately carries only the approved plan, not a compacted transcript. Adding
+/// planning-session history here would make the option behave like a partial resume instead of a
+/// context clear, which can reintroduce rejected approaches into the implementation turn.
 fn plan_implementation_clear_context_message(plan_markdown: &str) -> String {
     format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}")
 }
@@ -791,6 +796,9 @@ pub(crate) struct ChatWidget {
     /// a single cache avoids coupling copy state to the backtrack transcript.
     last_agent_markdown: Option<String>,
     /// Raw markdown of the most recently completed proposed plan.
+    ///
+    /// This is cached only for the approval popup. It is reset at the start of each new task so the
+    /// fresh-context action cannot accidentally submit an older plan after a later turn begins.
     latest_proposed_plan_markdown: Option<String>,
     /// Whether this turn already produced a copyable response.
     ///
