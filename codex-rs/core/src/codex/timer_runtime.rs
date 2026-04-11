@@ -20,6 +20,7 @@ use crate::pending_input::GeneratedMessageInput;
 use crate::pending_input::PendingInputItem;
 use crate::timers::ClaimedTimer;
 use crate::timers::CreateTimer;
+use crate::timers::MAX_ACTIVE_TIMERS_PER_THREAD;
 use crate::timers::PersistedTimer;
 use crate::timers::RecurringTimerPolicy;
 use crate::timers::RestoredTimerTask;
@@ -157,11 +158,25 @@ impl Session {
         let params = self
             .thread_timer_create_params(&persisted_timer, TIMER_SOURCE_AGENT)
             .await?;
-        if let Err(err) = state_db.create_thread_timer(&params).await {
-            if let Some(runtime) = self.timers.lock().await.remove_timer(&id) {
-                TimersState::cancel_runtime(&runtime);
+        match state_db
+            .create_thread_timer_if_below_limit(&params, MAX_ACTIVE_TIMERS_PER_THREAD)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Some(runtime) = self.timers.lock().await.remove_timer(&id) {
+                    TimersState::cancel_runtime(&runtime);
+                }
+                return Err(format!(
+                    "too many active timers; each thread supports at most {MAX_ACTIVE_TIMERS_PER_THREAD} timers"
+                ));
             }
-            return Err(format!("failed to persist timer to sqlite: {err}"));
+            Err(err) => {
+                if let Some(runtime) = self.timers.lock().await.remove_timer(&id) {
+                    TimersState::cancel_runtime(&runtime);
+                }
+                return Err(format!("failed to persist timer to sqlite: {err}"));
+            }
         }
 
         if let Some(timer_spec) = timer_spec {
