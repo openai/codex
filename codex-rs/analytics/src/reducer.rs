@@ -723,6 +723,13 @@ impl AnalyticsReducer {
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
+        let Some(thread_metadata) = self.thread_metadata.get(&pending_request.thread_id) else {
+            tracing::warn!(
+                thread_id = %pending_request.thread_id,
+                "dropping turn steer analytics event: missing thread lifecycle metadata"
+            );
+            return;
+        };
         let tracking = TrackEventsContext {
             model_slug: String::new(),
             thread_id: pending_request.thread_id,
@@ -745,6 +752,10 @@ impl AnalyticsReducer {
                 connection_state.app_server_client.clone(),
                 connection_state.runtime.clone(),
                 &tracking,
+                thread_metadata.thread_source,
+                thread_metadata.initialization_mode,
+                thread_metadata.subagent_source.clone(),
+                thread_metadata.parent_thread_id.clone(),
                 turn_steer,
             ),
         }));
