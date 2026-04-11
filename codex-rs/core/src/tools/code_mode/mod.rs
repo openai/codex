@@ -119,7 +119,6 @@ impl CodeModeTurnHost for CoreTurnHost {
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String> {
         call_nested_tool(
-            self.exec.clone(),
             self.tool_runtime.clone(),
             tool_name,
             input,
@@ -250,6 +249,8 @@ pub(super) async fn build_enabled_tools(
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
+    // Keep the code-mode runtime catalog complete: prompt deferral hides
+    // descriptions, but `ALL_TOOLS` and `tools[...]` should stay callable.
     let mcp_tools = exec
         .session
         .services
@@ -271,7 +272,6 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
 }
 
 async fn call_nested_tool(
-    exec: ExecContext,
     tool_runtime: ToolCallRuntime,
     tool_name: String,
     input: Option<JsonValue>,
@@ -283,28 +283,33 @@ async fn call_nested_tool(
         )));
     }
 
-    let payload =
-        if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name, &None).await {
-            match serialize_function_tool_arguments(&tool_name, input) {
-                Ok(raw_arguments) => ToolPayload::Mcp {
-                    server,
-                    tool,
+    let call_id = format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4());
+    let call = if let Some(mcp_tool_call) = tool_runtime.resolve_mcp_tool_call(&tool_name).await {
+        match serialize_function_tool_arguments(&tool_name, input) {
+            Ok(raw_arguments) => ToolCall {
+                tool_name: mcp_tool_call.dispatch_name,
+                call_id,
+                tool_namespace: mcp_tool_call.dispatch_namespace,
+                payload: ToolPayload::Mcp {
+                    server: mcp_tool_call.tool_info.server_name,
+                    tool: mcp_tool_call.tool_info.tool.name.to_string(),
                     raw_arguments,
                 },
-                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+            },
+            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+        }
+    } else {
+        match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
+            Ok(payload) => ToolCall {
+                tool_name: tool_name.clone(),
+                call_id,
+                tool_namespace: None,
+                payload,
+            },
+            Err(error) => {
+                return Err(FunctionCallError::RespondToModel(error));
             }
-        } else {
-            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-                Ok(payload) => payload,
-                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-            }
-        };
-
-    let call = ToolCall {
-        tool_name: tool_name.clone(),
-        call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
-        tool_namespace: None,
-        payload,
+        }
     };
     let result = tool_runtime
         .handle_tool_call_with_source(call, ToolCallSource::CodeMode, cancellation_token)

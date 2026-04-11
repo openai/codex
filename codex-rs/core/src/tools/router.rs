@@ -38,6 +38,13 @@ pub struct ToolRouter {
     model_visible_specs: Vec<ToolSpec>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedMcpToolCall {
+    pub(crate) dispatch_name: String,
+    pub(crate) dispatch_namespace: Option<String>,
+    pub(crate) tool_info: ToolInfo,
+}
+
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
@@ -109,6 +116,42 @@ impl ToolRouter {
             .iter()
             .filter(|config| config.supports_parallel_tool_calls)
             .any(|config| config.name() == tool_name)
+    }
+
+    pub(crate) async fn resolve_mcp_tool_call(
+        &self,
+        session: &Session,
+        tool_name: &str,
+    ) -> Option<ResolvedMcpToolCall> {
+        if !tool_name.starts_with("mcp__") {
+            return None;
+        }
+
+        let tool_info = session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await
+            .get(tool_name)
+            .cloned()?;
+        let (dispatch_name, dispatch_namespace) = if self.find_spec(tool_name).is_some() {
+            // Direct MCP tools are registered by qualified name; deferred MCP
+            // tools are registered under namespace:name.
+            (tool_name.to_string(), None)
+        } else {
+            (
+                tool_info.callable_name.clone(),
+                Some(tool_info.callable_namespace.clone()),
+            )
+        };
+
+        Some(ResolvedMcpToolCall {
+            dispatch_name,
+            dispatch_namespace,
+            tool_info,
+        })
     }
 
     #[instrument(level = "trace", skip_all, err)]
