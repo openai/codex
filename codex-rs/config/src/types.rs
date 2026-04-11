@@ -614,6 +614,9 @@ pub struct MarketplaceConfig {
     /// Last time Codex successfully added or refreshed this marketplace.
     #[serde(default)]
     pub last_updated: Option<String>,
+    /// Git revision Codex last successfully activated for this marketplace.
+    #[serde(default)]
+    pub last_revision: Option<String>,
     /// Source kind used to install this marketplace.
     #[serde(default)]
     pub source_type: Option<MarketplaceSourceType>,
