@@ -6039,6 +6039,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        plugins_manager.maybe_start_configured_marketplace_upgrade_for_config(&config);
         let mut remote_sync_error = None;
         let auth = self.auth_manager.auth().await;
 
