@@ -24,7 +24,7 @@ const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 /// We keep the cache behind one mutex because each child process speaks a simple
 /// request/response protocol over a single stdin/stdout pair, so callers targeting the same
 /// executable must serialize access anyway.
-pub(super) fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
+pub(crate) fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
     static PARSER_PROCESSES: LazyLock<Mutex<HashMap<String, PowershellParserProcess>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -35,7 +35,7 @@ pub(super) fn parse_with_powershell_ast(executable: &str, script: &str) -> Power
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum PowershellParseOutcome {
+pub(crate) enum PowershellParseOutcome {
     Commands(Vec<Vec<String>>),
     Unsupported,
     Failed,
