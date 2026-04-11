@@ -3,6 +3,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -43,14 +44,15 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     std::fs::create_dir(&working_directory)?;
 
     // Mock server: long-running shell command then (after abort) nothing else needed.
-    let server = create_mock_responses_server_sequence(vec![create_shell_command_sse_response(
-        shell_command.clone(),
-        Some(&working_directory),
-        Some(10_000),
-        "call_sleep",
-    )?])
-    .await;
-    create_config_toml(&codex_home, &server.uri(), "never", "danger-full-access")?;
+    let server =
+        create_mock_responses_server_sequence_unchecked(vec![create_shell_command_sse_response(
+            shell_command.clone(),
+            Some(&working_directory),
+            Some(10_000),
+            "call_sleep",
+        )?])
+        .await;
+    create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -87,6 +89,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     )
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let turn_id = turn.id.clone();
 
     // Give the command a brief moment to start.
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -96,7 +99,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     let interrupt_id = mcp
         .send_turn_interrupt_request(TurnInterruptParams {
             thread_id: thread_id.clone(),
-            turn_id: turn.id,
+            turn_id: turn_id.clone(),
         })
         .await?;
     let interrupt_resp: JSONRPCResponse = timeout(
