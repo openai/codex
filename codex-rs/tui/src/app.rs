@@ -445,16 +445,12 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
             continue;
         };
-        if layer.disabled_reason.is_none() {
+        let Some(disabled_reason) = &layer.disabled_reason else {
             continue;
-        }
+        };
         disabled_folders.push((
             dot_codex_folder.as_path().display().to_string(),
-            layer
-                .disabled_reason
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "config.toml is disabled.".to_string()),
+            disabled_reason.clone(),
         ));
     }
 
@@ -463,8 +459,8 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     }
 
     let mut message = concat!(
-        "Project config.toml files are disabled in the following folders. ",
-        "Settings in those files are ignored, but skills and exec policies still load.\n",
+        "Project-local config, hooks, and exec policies are disabled in the following folders ",
+        "until the project is trusted, but skills still load.\n",
     )
     .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {

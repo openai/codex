@@ -53,10 +53,15 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         column.push(
             Paragraph::new(
-                "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
+                "Do you trust the contents of this directory? Working with untrusted \
+                 contents comes with higher risk of prompt injection. Trusting the \
+                 directory allows project-local config, hooks, and exec policies to load."
+                    .to_string(),
             )
-                .wrap(Wrap { trim: true })
-                .inset(Insets::tlbr(/*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0)),
+            .wrap(Wrap { trim: true })
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.push("");
 
