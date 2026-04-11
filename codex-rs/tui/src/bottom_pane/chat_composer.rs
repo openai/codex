@@ -3784,6 +3784,7 @@ impl ChatComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::PathBufExt;
     use image::ImageBuffer;
     use image::Rgba;
     use pretty_assertions::assert_eq;
@@ -4840,7 +4841,7 @@ mod tests {
             }),
             dependencies: None,
             policy: None,
-            path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+            path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md").abs(),
             scope: codex_protocol::protocol::SkillScope::Repo,
         }]));
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
@@ -4938,7 +4939,7 @@ mod tests {
                     }),
                     dependencies: None,
                     policy: None,
-                    path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+                    path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md").abs(),
                     scope: codex_protocol::protocol::SkillScope::Repo,
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {

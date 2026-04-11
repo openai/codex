@@ -1,12 +1,11 @@
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
 
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::SkillConfig;
 use codex_config::SkillsConfig;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::warn;
 
 use crate::SkillMetadata;
@@ -14,7 +13,7 @@ use crate::SkillMetadata;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SkillConfigRuleSelector {
     Name(String),
-    Path(PathBuf),
+    Path(AbsolutePathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,7 +71,7 @@ pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> S
 pub fn resolve_disabled_skill_paths(
     skills: &[SkillMetadata],
     rules: &SkillConfigRules,
-) -> HashSet<PathBuf> {
+) -> HashSet<AbsolutePathBuf> {
     let mut disabled_paths = HashSet::new();
 
     for entry in &rules.entries {
@@ -105,9 +104,16 @@ pub fn resolve_disabled_skill_paths(
 
 fn skill_config_rule_selector(entry: &SkillConfig) -> Option<SkillConfigRuleSelector> {
     match (entry.path.as_ref(), entry.name.as_deref()) {
-        (Some(path), None) => Some(SkillConfigRuleSelector::Path(normalize_rule_path(
-            path.as_path(),
-        ))),
+        (Some(path), None) => match path.canonicalize() {
+            Ok(path) => Some(SkillConfigRuleSelector::Path(path)),
+            Err(err) => {
+                warn!(
+                    "ignoring skills.config path override that could not be canonicalized: {}: {err}",
+                    path.display()
+                );
+                None
+            }
+        },
         (None, Some(name)) => {
             let name = name.trim();
             if name.is_empty() {
@@ -126,8 +132,4 @@ fn skill_config_rule_selector(entry: &SkillConfig) -> Option<SkillConfigRuleSele
             None
         }
     }
-}
-
-fn normalize_rule_path(path: &Path) -> PathBuf {
-    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

@@ -167,7 +167,7 @@ pub struct PluginDetail {
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
-    pub disabled_skill_paths: HashSet<PathBuf>,
+    pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
 }
@@ -422,7 +422,7 @@ impl PluginsManager {
         &self,
         config_layer_stack: &ConfigLayerStack,
         plugins_feature_enabled: bool,
-    ) -> Vec<PathBuf> {
+    ) -> Vec<AbsolutePathBuf> {
         if !plugins_feature_enabled {
             return Vec::new();
         }
@@ -586,7 +586,7 @@ impl PluginsManager {
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
                 &result.plugin_id,
-                result.installed_path.as_path(),
+                &result.installed_path,
             ));
         }
 
@@ -981,7 +981,7 @@ impl PluginsManager {
         let manifest_paths = &manifest.paths;
         let skill_config_rules = skill_config_rules_from_stack(&config.config_layer_stack);
         let resolved_skills = load_plugin_skills(
-            source_path.as_path(),
+            &source_path,
             manifest_paths,
             self.restriction_product,
             &skill_config_rules,
@@ -1059,7 +1059,7 @@ impl PluginsManager {
         roots: &[AbsolutePathBuf],
     ) {
         let mut roots = roots.to_vec();
-        roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+        roots.sort_unstable();
         roots.dedup();
         if roots.is_empty() {
             return;
@@ -1228,7 +1228,7 @@ impl PluginsManager {
         {
             roots.push(curated_repo_root);
         }
-        roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+        roots.sort_unstable();
         roots.dedup();
         roots
     }
@@ -1693,9 +1693,9 @@ fn load_plugin(
         .map(str::to_string)
         .or_else(|| Some(manifest.name.clone()));
     loaded_plugin.manifest_description = manifest.description.clone();
-    loaded_plugin.skill_roots = plugin_skill_roots(plugin_root.as_path(), manifest_paths);
+    loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
     let resolved_skills = load_plugin_skills(
-        plugin_root.as_path(),
+        &plugin_root,
         manifest_paths,
         restriction_product,
         skill_config_rules,
@@ -1724,7 +1724,7 @@ fn load_plugin(
 
 struct ResolvedPluginSkills {
     skills: Vec<SkillMetadata>,
-    disabled_skill_paths: HashSet<PathBuf>,
+    disabled_skill_paths: HashSet<AbsolutePathBuf>,
     had_errors: bool,
 }
 
@@ -1740,7 +1740,7 @@ impl ResolvedPluginSkills {
 }
 
 fn load_plugin_skills(
-    plugin_root: &Path,
+    plugin_root: &AbsolutePathBuf,
     manifest_paths: &PluginManifestPaths,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
@@ -1768,17 +1768,20 @@ fn load_plugin_skills(
     }
 }
 
-fn plugin_skill_roots(plugin_root: &Path, manifest_paths: &PluginManifestPaths) -> Vec<PathBuf> {
+fn plugin_skill_roots(
+    plugin_root: &AbsolutePathBuf,
+    manifest_paths: &PluginManifestPaths,
+) -> Vec<AbsolutePathBuf> {
     let mut paths = default_skill_roots(plugin_root);
     if let Some(path) = &manifest_paths.skills {
-        paths.push(path.to_path_buf());
+        paths.push(path.clone());
     }
     paths.sort_unstable();
     paths.dedup();
     paths
 }
 
-fn default_skill_roots(plugin_root: &Path) -> Vec<PathBuf> {
+fn default_skill_roots(plugin_root: &AbsolutePathBuf) -> Vec<AbsolutePathBuf> {
     let skills_dir = plugin_root.join(DEFAULT_SKILLS_DIR_NAME);
     if skills_dir.is_dir() {
         vec![skills_dir]
@@ -1805,8 +1808,8 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     {
         paths.push(default_path);
     }
-    paths.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
-    paths.dedup_by(|left, right| left.as_path() == right.as_path());
+    paths.sort_unstable();
+    paths.dedup();
     paths
 }
 
@@ -1838,8 +1841,8 @@ fn default_app_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     {
         paths.push(default_path);
     }
-    paths.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
-    paths.dedup_by(|left, right| left.as_path() == right.as_path());
+    paths.sort_unstable();
+    paths.dedup();
     paths
 }
 
@@ -1884,18 +1887,18 @@ fn load_apps_from_paths(
 
 pub fn plugin_telemetry_metadata_from_root(
     plugin_id: &PluginId,
-    plugin_root: &Path,
+    plugin_root: &AbsolutePathBuf,
 ) -> PluginTelemetryMetadata {
-    let Some(manifest) = load_plugin_manifest(plugin_root) else {
+    let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
         return PluginTelemetryMetadata::from_plugin_id(plugin_id);
     };
 
     let manifest_paths = &manifest.paths;
     let has_skills = !plugin_skill_roots(plugin_root, manifest_paths).is_empty();
     let mut mcp_server_names = Vec::new();
-    for path in plugin_mcp_config_paths(plugin_root, manifest_paths) {
+    for path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         mcp_server_names.extend(
-            load_mcp_servers_from_file(plugin_root, &path)
+            load_mcp_servers_from_file(plugin_root.as_path(), &path)
                 .mcp_servers
                 .into_keys(),
         );
@@ -1911,7 +1914,7 @@ pub fn plugin_telemetry_metadata_from_root(
             description: None,
             has_skills,
             mcp_server_names,
-            app_connector_ids: load_plugin_apps(plugin_root),
+            app_connector_ids: load_plugin_apps(plugin_root.as_path()),
         }),
     }
 }
@@ -1941,7 +1944,7 @@ pub fn installed_plugin_telemetry_metadata(
         return PluginTelemetryMetadata::from_plugin_id(plugin_id);
     };
 
-    plugin_telemetry_metadata_from_root(plugin_id, plugin_root.as_path())
+    plugin_telemetry_metadata_from_root(plugin_id, &plugin_root)
 }
 
 fn load_mcp_servers_from_file(

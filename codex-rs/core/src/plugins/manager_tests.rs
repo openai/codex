@@ -16,6 +16,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
+use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use tempfile::TempDir;
@@ -163,7 +164,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
             ),
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
-            skill_roots: vec![plugin_root.join("skills")],
+            skill_roots: vec![plugin_root.join("skills").abs()],
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,
             mcp_servers: HashMap::from([(
@@ -204,7 +205,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
     );
     assert_eq!(
         outcome.effective_skill_roots(),
-        vec![plugin_root.join("skills")]
+        vec![plugin_root.join("skills").abs()]
     );
     assert_eq!(outcome.effective_mcp_servers().len(), 1);
     assert_eq!(
@@ -242,7 +243,9 @@ enabled = false
 enabled = true
 "#;
     let outcome = load_plugins_from_config(config_toml, codex_home.path());
-    let skill_path = dunce::canonicalize(skill_path).expect("skill path should canonicalize");
+    let skill_path = dunce::canonicalize(skill_path)
+        .expect("skill path should canonicalize")
+        .abs();
 
     assert_eq!(
         outcome.plugins()[0].disabled_skill_paths,
@@ -324,7 +327,7 @@ fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
 
     let metadata = plugin_telemetry_metadata_from_root(
         &PluginId::parse("sample@test").expect("plugin id should parse"),
-        &plugin_root,
+        &plugin_root.abs(),
     );
 
     assert_eq!(
@@ -489,8 +492,8 @@ fn load_plugins_uses_manifest_configured_component_paths() {
     assert_eq!(
         outcome.plugins()[0].skill_roots,
         vec![
-            plugin_root.join("custom-skills"),
-            plugin_root.join("skills")
+            plugin_root.join("custom-skills").abs(),
+            plugin_root.join("skills").abs()
         ]
     );
     assert_eq!(
@@ -598,7 +601,7 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
 
     assert_eq!(
         outcome.plugins()[0].skill_roots,
-        vec![plugin_root.join("skills")]
+        vec![plugin_root.join("skills").abs()]
     );
     assert_eq!(
         outcome.plugins()[0].mcp_servers,
@@ -798,7 +801,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
     };
     let outcome = PluginLoadOutcome::from_plugins(vec![
         LoadedPlugin {
-            skill_roots: vec![codex_home.path().join("skills-plugin/skills")],
+            skill_roots: vec![codex_home.path().join("skills-plugin/skills").abs()],
             has_enabled_skills: true,
             ..plugin("skills@test", "skills-plugin", "skills-plugin")
         },
@@ -815,7 +818,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         plugin("empty@test", "empty-plugin", "empty-plugin"),
         LoadedPlugin {
             enabled: false,
-            skill_roots: vec![codex_home.path().join("disabled-plugin/skills")],
+            skill_roots: vec![codex_home.path().join("disabled-plugin/skills").abs()],
             apps: vec![connector("connector_hidden")],
             ..plugin("disabled@test", "disabled-plugin", "disabled-plugin")
         },

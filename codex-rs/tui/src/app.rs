@@ -5395,7 +5395,7 @@ impl App {
             }
             AppEvent::SetSkillEnabled { path, enabled } => {
                 let edits = [ConfigEdit::SetSkillConfig {
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                     enabled,
                 }];
                 match ConfigEditsBuilder::new(&self.config.codex_home)
@@ -5404,7 +5404,7 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        self.chat_widget.update_skill_enabled(path.clone(), enabled);
+                        self.chat_widget.update_skill_enabled(path, enabled);
                         if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                             tracing::warn!(
                                 error = %err,

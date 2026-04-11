@@ -1,7 +1,10 @@
 use super::*;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 fn make_skill(name: &str, path: &str) -> SkillMetadata {
     SkillMetadata {
@@ -11,7 +14,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: PathBuf::from(path),
+        path_to_skills_md: PathBuf::from(path).abs(),
         scope: codex_protocol::protocol::SkillScope::User,
     }
 }
@@ -29,7 +32,7 @@ fn assert_mentions(text: &str, expected_names: &[&str], expected_paths: &[&str])
 fn collect_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
-    disabled_paths: &HashSet<PathBuf>,
+    disabled_paths: &HashSet<AbsolutePathBuf>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
     collect_explicit_skill_mentions(inputs, skills, disabled_paths, connector_slug_counts)
@@ -196,7 +199,7 @@ fn collect_explicit_skill_mentions_skips_disabled_structured_and_blocks_plain_fa
             path: PathBuf::from("/tmp/alpha"),
         },
     ];
-    let disabled = HashSet::from([PathBuf::from("/tmp/alpha")]);
+    let disabled = HashSet::from([PathBuf::from("/tmp/alpha").abs()]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);
@@ -290,7 +293,7 @@ fn collect_explicit_skill_mentions_skips_when_linked_path_disabled() {
         text: "use [$demo-skill](/tmp/alpha)".to_string(),
         text_elements: Vec::new(),
     }];
-    let disabled = HashSet::from([PathBuf::from("/tmp/alpha")]);
+    let disabled = HashSet::from([PathBuf::from("/tmp/alpha").abs()]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);

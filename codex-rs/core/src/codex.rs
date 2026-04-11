@@ -4874,7 +4874,6 @@ mod handlers {
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
 
-    use crate::SkillError;
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::config_loader::CloudRequirementsLoader;
@@ -4905,6 +4904,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::SkillErrorInfo;
     use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -5322,7 +5322,7 @@ mod handlers {
         let mut skills = Vec::new();
         let empty_cli_overrides: &[(String, toml::Value)] = &[];
         for cwd in cwds {
-            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+            let cwd_abs = match AbsolutePathBuf::from_absolute_path_checked(cwd.as_path()) {
                 Ok(path) => path,
                 Err(err) => {
                     let message = err.to_string();
@@ -5330,17 +5330,17 @@ mod handlers {
                     skills.push(SkillsListEntry {
                         cwd: cwd_for_entry.clone(),
                         skills: Vec::new(),
-                        errors: super::errors_to_info(&[SkillError {
+                        errors: vec![SkillErrorInfo {
                             path: cwd_for_entry,
                             message,
-                        }]),
+                        }],
                     });
                     continue;
                 }
             };
             let config_layer_stack = match load_config_layers_state(
                 &codex_home,
-                Some(cwd_abs),
+                Some(cwd_abs.clone()),
                 empty_cli_overrides,
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
@@ -5354,10 +5354,10 @@ mod handlers {
                     skills.push(SkillsListEntry {
                         cwd: cwd_for_entry.clone(),
                         skills: Vec::new(),
-                        errors: super::errors_to_info(&[SkillError {
+                        errors: vec![SkillErrorInfo {
                             path: cwd_for_entry,
                             message,
-                        }]),
+                        }],
                     });
                     continue;
                 }
@@ -5367,7 +5367,7 @@ mod handlers {
                 config.features.enabled(Feature::Plugins),
             );
             let skills_input = crate::SkillsLoadInput::new(
-                cwd.clone(),
+                cwd_abs,
                 effective_skill_roots,
                 config_layer_stack,
                 config.bundled_skills_enabled(),
@@ -5910,7 +5910,7 @@ async fn spawn_review_thread(
 
 fn skills_to_info(
     skills: &[SkillMetadata],
-    disabled_paths: &HashSet<PathBuf>,
+    disabled_paths: &HashSet<AbsolutePathBuf>,
 ) -> Vec<ProtocolSkillMetadata> {
     skills
         .iter()
@@ -5956,7 +5956,7 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
     errors
         .iter()
         .map(|err| SkillErrorInfo {
-            path: err.path.clone(),
+            path: err.path.to_path_buf(),
             message: err.message.clone(),
         })
         .collect()

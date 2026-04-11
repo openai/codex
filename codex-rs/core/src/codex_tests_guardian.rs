@@ -24,6 +24,7 @@ use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::codex_linux_sandbox_exe_or_skip;
@@ -427,7 +428,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     ));
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
+        config.codex_home.clone().abs(),
         /*bundled_skills_enabled*/ true,
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));

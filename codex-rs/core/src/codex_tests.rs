@@ -2719,7 +2719,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
+        config.codex_home.clone().abs(),
         /*bundled_skills_enabled*/ true,
     ));
     let result = Session::new(
@@ -2833,7 +2833,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
+        config.codex_home.clone().abs(),
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
@@ -3678,7 +3678,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
+        config.codex_home.clone().abs(),
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());

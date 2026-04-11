@@ -949,7 +949,7 @@ pub(super) fn plugins_test_detail(
                 description: format!("{name} description"),
                 short_description: None,
                 interface: None,
-                path: PathBuf::from(format!("/skills/{name}/SKILL.md")),
+                path: plugins_test_absolute_path(&format!("skills/{name}/SKILL.md")),
                 enabled: true,
             })
             .collect(),
