@@ -32,7 +32,6 @@ codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-config = { workspace = true }
-codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
@@ -136,7 +135,6 @@ arboard = { workspace = true }
 
 [dev-dependencies]
 codex-cli = { workspace = true }
-codex-core = { workspace = true }
 codex-mcp = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
