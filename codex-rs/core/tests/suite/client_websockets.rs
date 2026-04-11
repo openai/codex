@@ -1003,6 +1003,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .expect("submission should succeed while emitting usage limit error events");
@@ -1088,6 +1089,7 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .expect("submission should succeed while emitting invalid request events");
@@ -1260,6 +1262,56 @@ async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_c
     assert_eq!(
         second_metadata["workspaces"][0]["has_changes"].as_bool(),
         Some(true)
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_preserves_custom_turn_metadata_fields() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+    let turn_metadata = json!({
+        "turn_id": "turn-123",
+        "fiber_run_id": "fiber-123",
+        "origin": "app-server",
+    })
+    .to_string();
+
+    stream_until_complete_with_turn_metadata(
+        &mut client_session,
+        &harness,
+        &prompt,
+        /*service_tier*/ None,
+        Some(&turn_metadata),
+    )
+    .await;
+
+    let body = server
+        .single_connection()
+        .first()
+        .expect("missing request")
+        .body_json();
+
+    assert_eq!(body["type"].as_str(), Some("response.create"));
+    assert_eq!(
+        body["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .map(|value| serde_json::from_str::<serde_json::Value>(value).expect("valid json")),
+        Some(json!({
+            "turn_id": "turn-123",
+            "fiber_run_id": "fiber-123",
+            "origin": "app-server",
+        }))
     );
 
     server.shutdown().await;
@@ -1812,6 +1864,23 @@ async fn stream_until_complete_with_service_tier(
 }
 
 async fn stream_until_complete_with_turn_metadata(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+    service_tier: Option<ServiceTier>,
+    turn_metadata_header: Option<&str>,
+) {
+    stream_until_complete_with_request_metadata(
+        client_session,
+        harness,
+        prompt,
+        service_tier,
+        turn_metadata_header,
+    )
+    .await;
+}
+
+async fn stream_until_complete_with_request_metadata(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
     prompt: &Prompt,

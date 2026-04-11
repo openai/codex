@@ -3,8 +3,8 @@
 //! The [`McpConnectionManager`] owns one [`codex_rmcp_client::RmcpClient`] per
 //! configured server (keyed by the *server name*). It offers convenience
 //! helpers to query the available tools across *all* servers and returns them
-//! in a single aggregated map using the fully-qualified tool name
-//! `"<server><MCP_TOOL_NAME_DELIMITER><tool>"` as the key.
+//! in a single aggregated map using the model-visible fully-qualified tool name
+//! as the key.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -25,8 +25,9 @@ use crate::mcp::McpConfig;
 use crate::mcp::ToolPluginProvenance;
 use crate::mcp::configured_mcp_servers;
 use crate::mcp::effective_mcp_servers;
-use crate::mcp::sanitize_responses_api_tool_name;
+use crate::mcp::mcp_permission_prompt_is_auto_approved;
 use crate::mcp::tool_plugin_provenance;
+pub(crate) use crate::mcp_tool_names::qualify_tools;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -73,6 +74,8 @@ use rmcp::model::Tool;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value as JsonValue;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::sync::Mutex;
@@ -89,13 +92,8 @@ use codex_login::CodexAuth;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 
-/// Delimiter used to separate the server name from the tool name in a fully
-/// qualified tool name.
-///
-/// OpenAI requires tool names to conform to `^[a-zA-Z0-9_-]+$`, so we must
-/// choose a delimiter from this character set.
+/// Delimiter used to separate MCP tool-name parts.
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Default timeout for initializing MCP server & initially listing tools.
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -103,7 +101,7 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
-const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 1;
+const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 2;
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
@@ -135,65 +133,109 @@ pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCac
     }
 }
 
-fn qualify_tools<I>(tools: I) -> HashMap<String, ToolInfo>
-where
-    I: IntoIterator<Item = ToolInfo>,
-{
-    let mut used_names = HashSet::new();
-    let mut seen_raw_names = HashSet::new();
-    let mut qualified_tools = HashMap::new();
-    for tool in tools {
-        let qualified_name_raw = if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            format!(
-                "mcp{}{}{}{}",
-                MCP_TOOL_NAME_DELIMITER, tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
-            )
-        } else {
-            format!("{}{}", tool.tool_namespace, tool.tool_name)
-        };
-        if !seen_raw_names.insert(qualified_name_raw.clone()) {
-            warn!("skipping duplicated tool {}", qualified_name_raw);
-            continue;
-        }
-
-        // Start from a "pretty" name (sanitized), then deterministically disambiguate on
-        // collisions by appending a hash of the *raw* (unsanitized) qualified name. This
-        // ensures tools like `foo.bar` and `foo_bar` don't collapse to the same key.
-        let mut qualified_name = sanitize_responses_api_tool_name(&qualified_name_raw);
-
-        // Enforce length constraints early; use the raw name for the hash input so the
-        // output remains stable even when sanitization changes.
-        if qualified_name.len() > MAX_TOOL_NAME_LENGTH {
-            let sha1_str = sha1_hex(&qualified_name_raw);
-            let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
-            qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
-        }
-
-        if used_names.contains(&qualified_name) {
-            warn!("skipping duplicated tool {}", qualified_name);
-            continue;
-        }
-
-        used_names.insert(qualified_name.clone());
-        qualified_tools.insert(qualified_name, tool);
-    }
-
-    qualified_tools
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
+    /// Raw MCP server name used for routing the tool call.
     pub server_name: String,
-    pub tool_name: String,
-    pub tool_namespace: String,
+    /// Model-visible tool name used in Responses API tool declarations.
+    #[serde(rename = "tool_name", alias = "callable_name")]
+    pub callable_name: String,
+    /// Model-visible namespace used for deferred tool loading.
+    #[serde(rename = "tool_namespace", alias = "callable_namespace")]
+    pub callable_namespace: String,
+    /// Instructions from the MCP server initialize result.
     #[serde(default)]
     pub server_instructions: Option<String>,
+    /// Raw MCP tool definition; `tool.name` is sent back to the MCP server.
     pub tool: Tool,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
     pub connector_description: Option<String>,
+}
+
+const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
+
+pub fn declared_openai_file_input_param_names(
+    meta: Option<&Map<String, JsonValue>>,
+) -> Vec<String> {
+    let Some(meta) = meta else {
+        return Vec::new();
+    };
+
+    meta.get(META_OPENAI_FILE_PARAMS)
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(JsonValue::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Returns the model-visible view of a tool while preserving the raw metadata
+/// used by execution. Keep cache entries raw and call this at manager return
+/// boundaries.
+fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
+    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
+    if file_params.is_empty() {
+        return tool.clone();
+    }
+
+    let mut tool = tool.clone();
+    let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
+    mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
+    if let JsonValue::Object(input_schema) = input_schema {
+        tool.input_schema = Arc::new(input_schema);
+    }
+    tool
+}
+
+fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
+    let Some(properties) = input_schema
+        .as_object_mut()
+        .and_then(|schema| schema.get_mut("properties"))
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return;
+    };
+
+    for field_name in file_params {
+        let Some(property_schema) = properties.get_mut(field_name) else {
+            continue;
+        };
+        mask_input_property_schema(property_schema);
+    }
+}
+
+fn mask_input_property_schema(schema: &mut JsonValue) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+
+    let mut description = object
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
+    if description.is_empty() {
+        description = guidance.to_string();
+    } else if !description.contains(guidance) {
+        description = format!("{description} {guidance}");
+    }
+
+    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
+        || object.get("items").is_some();
+    object.clear();
+    object.insert("description".to_string(), JsonValue::String(description));
+    if is_array {
+        object.insert("type".to_string(), JsonValue::String("array".to_string()));
+        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
+    } else {
+        object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,17 +285,31 @@ fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
     }
 }
 
+fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> bool {
+    match elicitation {
+        CreateElicitationRequestParams::FormElicitationParams {
+            requested_schema, ..
+        } => {
+            // Auto-accept confirm/approval elicitations without schema requirements.
+            requested_schema.properties.is_empty()
+        }
+        CreateElicitationRequestParams::UrlElicitationParams { .. } => false,
+    }
+}
+
 #[derive(Clone)]
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     approval_policy: Arc<StdMutex<AskForApproval>>,
+    sandbox_policy: Arc<StdMutex<SandboxPolicy>>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval) -> Self {
+    fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
+            sandbox_policy: Arc::new(StdMutex::new(sandbox_policy)),
         }
     }
 
@@ -275,16 +331,33 @@ impl ElicitationRequestManager {
     fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
+        let sandbox_policy = self.sandbox_policy.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
+            let sandbox_policy = sandbox_policy.clone();
             async move {
-                if approval_policy
+                let approval_policy = approval_policy
                     .lock()
-                    .is_ok_and(|policy| elicitation_is_rejected_by_policy(*policy))
+                    .map(|policy| *policy)
+                    .unwrap_or(AskForApproval::Never);
+                let sandbox_policy = sandbox_policy
+                    .lock()
+                    .map(|policy| policy.clone())
+                    .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
+                if mcp_permission_prompt_is_auto_approved(approval_policy, &sandbox_policy)
+                    && can_auto_accept_elicitation(&elicitation)
                 {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Accept,
+                        content: Some(serde_json::json!({})),
+                        meta: None,
+                    });
+                }
+
+                if elicitation_is_rejected_by_policy(approval_policy) {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Decline,
                         content: None,
@@ -502,6 +575,10 @@ impl AsyncManagedClient {
         let annotate_tools = |tools: Vec<ToolInfo>| {
             let mut tools = tools;
             for tool in &mut tools {
+                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                }
+
                 let plugin_names = match tool.connector_id.as_deref() {
                     Some(connector_id) => self
                         .tool_plugin_provenance
@@ -604,11 +681,17 @@ impl McpConnectionManager {
         tool_plugin_provenance(config)
     }
 
-    pub fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
+    pub fn new_uninitialized(
+        approval_policy: &Constrained<AskForApproval>,
+        sandbox_policy: &Constrained<SandboxPolicy>,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
-            elicitation_requests: ElicitationRequestManager::new(approval_policy.value()),
+            elicitation_requests: ElicitationRequestManager::new(
+                approval_policy.value(),
+                sandbox_policy.get().clone(),
+            ),
         }
     }
 
@@ -623,6 +706,12 @@ impl McpConnectionManager {
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
+        }
+    }
+
+    pub fn set_sandbox_policy(&self, sandbox_policy: &SandboxPolicy) {
+        if let Ok(mut policy) = self.elicitation_requests.sandbox_policy.lock() {
+            *policy = sandbox_policy.clone();
         }
     }
 
@@ -643,7 +732,10 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            initial_sandbox_state.sandbox_policy.clone(),
+        );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let mcp_servers = mcp_servers.clone();
@@ -815,14 +907,14 @@ impl McpConnectionManager {
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
-        let mut tools = HashMap::new();
+        let mut tools = Vec::new();
         for managed_client in self.clients.values() {
             let Some(server_tools) = managed_client.listed_tools().await else {
                 continue;
             };
-            tools.extend(qualify_tools(server_tools));
+            tools.extend(server_tools);
         }
-        tools
+        qualify_tools(tools)
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -867,10 +959,13 @@ impl McpConnectionManager {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        Ok(qualify_tools(filter_tools(
-            tools,
-            &managed_client.tool_filter,
-        )))
+        let tools = filter_tools(tools, &managed_client.tool_filter)
+            .into_iter()
+            .map(|mut tool| {
+                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                tool
+            });
+        Ok(qualify_tools(tools))
     }
 
     /// Returns a single map that contains all resources. Each key is the
@@ -1223,7 +1318,7 @@ fn normalize_codex_apps_tool_title(
     value.to_string()
 }
 
-fn normalize_codex_apps_tool_name(
+fn normalize_codex_apps_callable_name(
     server_name: &str,
     tool_name: &str,
     connector_id: Option<&str>,
@@ -1258,10 +1353,13 @@ fn normalize_codex_apps_tool_name(
     tool_name
 }
 
-fn normalize_codex_apps_namespace(server_name: &str, connector_name: Option<&str>) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        server_name.to_string()
-    } else if let Some(connector_name) = connector_name {
+fn normalize_codex_apps_callable_namespace(
+    server_name: &str,
+    connector_name: Option<&str>,
+) -> String {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(connector_name) = connector_name
+    {
         format!(
             "mcp{}{}{}{}",
             MCP_TOOL_NAME_DELIMITER,
@@ -1270,7 +1368,7 @@ fn normalize_codex_apps_namespace(server_name: &str, connector_name: Option<&str
             sanitize_name(connector_name)
         )
     } else {
-        server_name.to_string()
+        format!("mcp{MCP_TOOL_NAME_DELIMITER}{server_name}{MCP_TOOL_NAME_DELIMITER}")
     }
 }
 
@@ -1319,19 +1417,15 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
-fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCapability> {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-        // indicates this should be an empty object.
-        Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: None,
-            }),
-            url: None,
-        })
-    } else {
-        None
-    }
+fn elicitation_capability_for_server(_server_name: &str) -> Option<ElicitationCapability> {
+    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+    // indicates this should be an empty object.
+    Some(ElicitationCapability {
+        form: Some(FormElicitationCapability {
+            schema_validation: None,
+        }),
+        url: None,
+    })
 }
 
 async fn start_server_task(
@@ -1376,6 +1470,12 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
+    let server_supports_sandbox_state_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
+        .is_some();
     let list_start = Instant::now();
     let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(
@@ -1405,12 +1505,6 @@ async fn start_server_task(
     }
     let tools = filter_tools(tools, &tool_filter);
 
-    let server_supports_sandbox_state_capability = initialize_result
-        .capabilities
-        .experimental
-        .as_ref()
-        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
-        .is_some();
     let managed = ManagedClient {
         client: Arc::clone(&client),
         tools,
@@ -1606,14 +1700,16 @@ async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
-            let tool_name = normalize_codex_apps_tool_name(
+            let callable_name = normalize_codex_apps_callable_name(
                 server_name,
                 &tool.tool.name,
                 tool.connector_id.as_deref(),
                 tool.connector_name.as_deref(),
             );
-            let tool_namespace =
-                normalize_codex_apps_namespace(server_name, tool.connector_name.as_deref());
+            let callable_namespace = normalize_codex_apps_callable_namespace(
+                server_name,
+                tool.connector_name.as_deref(),
+            );
             let connector_name = tool.connector_name;
             let connector_description = tool.connector_description;
             let mut tool_def = tool.tool;
@@ -1626,8 +1722,8 @@ async fn list_tools_for_client_uncached(
             }
             ToolInfo {
                 server_name: server_name.to_owned(),
-                tool_name,
-                tool_namespace,
+                callable_name,
+                callable_namespace,
                 server_instructions: server_instructions.map(str::to_string),
                 tool: tool_def,
                 connector_id: tool.connector_id,

@@ -59,6 +59,12 @@ backend-managed system read roots required for basic execution, such as
 `C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, and
 `C:\ProgramData`. When it is `false`, those extra system roots are omitted.
 
+The elevated Windows sandbox also supports:
+
+- legacy `ReadOnly` and `WorkspaceWrite` behavior
+- split filesystem policies that need exact readable roots, exact writable
+  roots, or extra read-only carveouts under writable roots
+
 The unelevated restricted-token backend still supports the legacy full-read
 Windows model for legacy `ReadOnly` and `WorkspaceWrite` behavior. It also
 supports a narrow split-filesystem subset: full-read split policies whose
@@ -66,12 +72,11 @@ writable roots still match the legacy `WorkspaceWrite` root set, but add extra
 read-only carveouts under those writable roots.
 
 New `[permissions]` / split filesystem policies remain supported on Windows
-only when they round-trip through the legacy `SandboxPolicy` model without
-changing semantics. Policies that would require direct read restriction,
-explicit unreadable carveouts, reopened writable descendants under read-only
-carveouts, different writable root sets, or split carveout support in the
-elevated setup/runner backend still fail closed instead of running with weaker
-enforcement.
+only when they can be enforced directly by the selected Windows backend or
+round-trip through the legacy `SandboxPolicy` model without changing semantics.
+Policies that would require direct explicit unreadable carveouts (`none`) or
+reopened writable descendants under read-only carveouts still fail closed
+instead of running with weaker enforcement.
 
 ### All Platforms
 

@@ -6,11 +6,11 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 /**
  * Start filesystem watch notifications for an absolute path.
  */
-export type FsWatchParams = { 
+export type FsWatchParams = {
 /**
  * Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
  */
-watchId: string, 
+watchId: string,
 /**
  * Absolute file or directory path to watch.
  */

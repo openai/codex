@@ -12,7 +12,7 @@ use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
 use crate::ToolNamespace;
-use crate::ToolRegistryPlanAppTool;
+use crate::ToolRegistryPlanDeferredTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
 use crate::mcp_call_tool_result_output_schema;
@@ -51,6 +51,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -59,7 +60,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let (tools, _) = build_specs(
         &config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -152,6 +153,7 @@ fn test_build_specs_collab_tools_enabled() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -160,7 +162,7 @@ fn test_build_specs_collab_tools_enabled() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -191,6 +193,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -199,7 +202,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -333,6 +336,7 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -341,7 +345,7 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -367,6 +371,7 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -375,7 +380,7 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
@@ -397,6 +402,7 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -405,7 +411,7 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
@@ -434,6 +440,7 @@ fn disabled_environment_omits_environment_backed_tools() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -446,7 +453,7 @@ fn disabled_environment_omits_environment_backed_tools() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -471,6 +478,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             "agent_job:test".to_string(),
@@ -481,7 +489,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -509,6 +517,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -517,7 +526,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
@@ -531,6 +540,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -539,7 +549,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
@@ -558,6 +568,7 @@ fn request_permissions_requires_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -566,7 +577,7 @@ fn request_permissions_requires_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     assert_lacks_tool_name(&tools, "request_permissions");
@@ -577,6 +588,7 @@ fn request_permissions_requires_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -585,7 +597,7 @@ fn request_permissions_requires_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let request_permissions_tool = find_tool(&tools, "request_permissions");
@@ -605,6 +617,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -613,7 +626,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -630,6 +643,7 @@ fn js_repl_requires_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -638,7 +652,7 @@ fn js_repl_requires_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -663,6 +677,7 @@ fn js_repl_enabled_adds_tools() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -671,7 +686,7 @@ fn js_repl_enabled_adds_tools() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -683,15 +698,17 @@ fn image_generation_tools_require_feature_and_supported_model() {
     let supported_model_info = model_info();
     let mut unsupported_model_info = supported_model_info.clone();
     unsupported_model_info.input_modalities = vec![InputModality::Text];
-    let default_features = Features::with_defaults();
-    let mut image_generation_features = default_features.clone();
+    let mut image_generation_disabled_features = Features::with_defaults();
+    image_generation_disabled_features.disable(Feature::ImageGeneration);
+    let mut image_generation_features = Features::with_defaults();
     image_generation_features.enable(Feature::ImageGeneration);
 
     let available_models = Vec::new();
     let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &supported_model_info,
         available_models: &available_models,
-        features: &default_features,
+        features: &image_generation_disabled_features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -700,20 +717,21 @@ fn image_generation_tools_require_feature_and_supported_model() {
     let (default_tools, _) = build_specs(
         &default_tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     assert!(
         !default_tools
             .iter()
             .any(|tool| tool.spec.name() == "image_generation"),
-        "image_generation should be disabled by default"
+        "image_generation should be disabled when the feature is disabled"
     );
 
     let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &supported_model_info,
         available_models: &available_models,
         features: &image_generation_features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -722,7 +740,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
     let (supported_tools, _) = build_specs(
         &supported_tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     assert_contains_tool_names(&supported_tools, &["image_generation"]);
@@ -739,6 +757,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
         model_info: &unsupported_model_info,
         available_models: &available_models,
         features: &image_generation_features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -747,7 +766,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     assert!(
@@ -768,6 +787,7 @@ fn web_search_mode_cached_sets_external_web_access_false() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -776,7 +796,7 @@ fn web_search_mode_cached_sets_external_web_access_false() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -803,6 +823,7 @@ fn web_search_mode_live_sets_external_web_access_true() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -811,7 +832,7 @@ fn web_search_mode_live_sets_external_web_access_true() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -851,6 +872,7 @@ fn web_search_config_is_forwarded_to_tool_spec() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -860,7 +882,7 @@ fn web_search_config_is_forwarded_to_tool_spec() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -892,6 +914,7 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -900,7 +923,7 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -926,6 +949,7 @@ fn mcp_resource_tools_are_hidden_without_mcp_servers() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -934,7 +958,7 @@ fn mcp_resource_tools_are_hidden_without_mcp_servers() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -956,6 +980,7 @@ fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -964,7 +989,7 @@ fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
     let (tools, _) = build_specs(
         &tools_config,
         Some(HashMap::new()),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -989,6 +1014,7 @@ fn test_parallel_support_flags() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -997,7 +1023,7 @@ fn test_parallel_support_flags() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -1015,6 +1041,7 @@ fn test_test_model_info_includes_sync_tool() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1023,7 +1050,7 @@ fn test_test_model_info_includes_sync_tool() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -1040,6 +1067,7 @@ fn test_build_specs_mcp_tools_converted() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1070,7 +1098,7 @@ fn test_build_specs_mcp_tools_converted() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -1131,6 +1159,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1152,7 +1181,12 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
         ),
     ]);
 
-    let (tools, _) = build_specs(&tools_config, Some(tools_map), /*app_tools*/ None, &[]);
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(tools_map),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
 
     let mcp_names: Vec<_> = tools
         .iter()
@@ -1168,7 +1202,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
 }
 
 #[test]
-fn search_tool_description_lists_each_codex_apps_connector_once() {
+fn search_tool_description_lists_each_mcp_source_once() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -1178,13 +1212,14 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
-    let (tools, _) = build_specs(
+    let (tools, handlers) = build_specs(
         &tools_config,
         Some(HashMap::from([
             (
@@ -1201,29 +1236,32 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
             ),
         ])),
         Some(vec![
-            app_tool(
+            deferred_mcp_tool(
                 "_create_event",
                 "mcp__codex_apps__calendar",
                 CODEX_APPS_MCP_SERVER_NAME,
                 Some("Calendar"),
                 Some("Plan events and manage your calendar."),
             ),
-            app_tool(
+            deferred_mcp_tool(
                 "_list_events",
                 "mcp__codex_apps__calendar",
                 CODEX_APPS_MCP_SERVER_NAME,
                 Some("Calendar"),
                 Some("Plan events and manage your calendar."),
             ),
-            app_tool(
+            deferred_mcp_tool(
                 "_search_threads",
                 "mcp__codex_apps__gmail",
                 CODEX_APPS_MCP_SERVER_NAME,
                 Some("Gmail"),
                 Some("Find and summarize email threads."),
             ),
-            app_tool(
-                "echo", "rmcp", "rmcp", /*connector_name*/ None,
+            deferred_mcp_tool(
+                "echo",
+                "mcp__rmcp__",
+                "rmcp",
+                /*connector_name*/ None,
                 /*connector_description*/ None,
             ),
         ]),
@@ -1243,14 +1281,24 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
             .count(),
         1
     );
+    assert!(description.contains("- rmcp"));
     assert!(!description.contains("mcp__rmcp__echo"));
+
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: "mcp__codex_apps__calendar:_create_event".to_string(),
+        kind: ToolHandlerKind::Mcp,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: "mcp__rmcp__:echo".to_string(),
+        kind: ToolHandlerKind::Mcp,
+    }));
 }
 
 #[test]
 fn search_tool_requires_model_capability_and_feature_flag() {
     let model_info = search_capable_model_info();
-    let app_tools = Some(vec![app_tool(
-        "calendar_create_event",
+    let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
+        "_create_event",
         "mcp__codex_apps__calendar",
         CODEX_APPS_MCP_SERVER_NAME,
         Some("Calendar"),
@@ -1266,6 +1314,7 @@ fn search_tool_requires_model_capability_and_feature_flag() {
         },
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1274,7 +1323,7 @@ fn search_tool_requires_model_capability_and_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        app_tools.clone(),
+        deferred_mcp_tools.clone(),
         &[],
     );
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
@@ -1283,6 +1332,7 @@ fn search_tool_requires_model_capability_and_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1291,7 +1341,7 @@ fn search_tool_requires_model_capability_and_feature_flag() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        app_tools.clone(),
+        deferred_mcp_tools.clone(),
         &[],
     );
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
@@ -1302,12 +1352,18 @@ fn search_tool_requires_model_capability_and_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    let (tools, _) = build_specs(&tools_config, /*mcp_tools*/ None, app_tools, &[]);
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        deferred_mcp_tools,
+        &[],
+    );
     assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
 }
 
@@ -1324,6 +1380,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1332,8 +1389,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
     let (tools, _) = build_specs_with_discoverable_tools(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        /*tool_namespaces*/ None,
+        /*deferred_mcp_tools*/ None,
         Some(vec![discoverable_connector(
             "connector_2128aebfecb84f64a069897515042a44",
             "Google Calendar",
@@ -1364,6 +1420,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1372,8 +1429,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     let (tools, _) = build_specs_with_discoverable_tools(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        /*tool_namespaces*/ None,
+        /*deferred_mcp_tools*/ None,
         Some(vec![discoverable_connector(
             "connector_2128aebfecb84f64a069897515042a44",
             "Google Calendar",
@@ -1410,6 +1466,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1440,8 +1497,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     let (tools, _) = build_specs_with_discoverable_tools(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        /*tool_namespaces*/ None,
+        /*deferred_mcp_tools*/ None,
         Some(discoverable_tools),
         &[],
     );
@@ -1512,6 +1568,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1535,7 +1592,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -1551,7 +1608,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
 exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult>; };
 ```"#
     );
 }
@@ -1567,6 +1624,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1623,7 +1681,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
                 }),
             ),
         )])),
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
 
@@ -1636,7 +1694,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
     assert!(description.contains(
         r#"exec tool declaration:
 ```ts
-declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };
+declare const tools: { mcp__sample__fn(args: { open?: Array<{ lineno?: number | null; ref_id: string; }> | null; response_length?: "short" | "medium" | "long"; tagged_list?: Array<{ kind: "tagged"; scope: "one" | "two"; variant: "alpha" | "beta"; }> | null; }): Promise<CallToolResult>; };
 ```"#
     ));
 }
@@ -1652,6 +1710,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1661,7 +1720,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let ToolSpec::Function(ResponsesApiTool { description, .. }) =
@@ -1687,6 +1746,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1696,7 +1756,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
@@ -1709,8 +1769,8 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     assert!(description.starts_with(
         "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
-    assert!(description.contains("### `update_plan` (`update_plan`)"));
-    assert!(description.contains("### `view_image` (`view_image`)"));
+    assert!(description.contains("### `update_plan`"));
+    assert!(description.contains("### `view_image`"));
 }
 
 #[test]
@@ -1723,6 +1783,7 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -1732,7 +1793,7 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
-        /*app_tools*/ None,
+        /*deferred_mcp_tools*/ None,
         &[],
     );
     let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
@@ -1743,8 +1804,8 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     assert!(!description.starts_with(
         "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
-    assert!(!description.contains("### `update_plan` (`update_plan`)"));
-    assert!(!description.contains("### `view_image` (`view_image`)"));
+    assert!(!description.contains("### `update_plan`"));
+    assert!(!description.contains("### `view_image`"));
 }
 
 fn model_info() -> ModelInfo {
@@ -1792,14 +1853,13 @@ fn search_capable_model_info() -> ModelInfo {
 fn build_specs<'a>(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
-    app_tools: Option<Vec<ToolRegistryPlanAppTool<'a>>>,
+    deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
     build_specs_with_discoverable_tools(
         config,
         mcp_tools,
-        app_tools,
-        /*tool_namespaces*/ None,
+        deferred_mcp_tools,
         /*discoverable_tools*/ None,
         dynamic_tools,
     )
@@ -1808,16 +1868,15 @@ fn build_specs<'a>(
 fn build_specs_with_discoverable_tools<'a>(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
-    app_tools: Option<Vec<ToolRegistryPlanAppTool<'a>>>,
-    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
+    deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
     build_specs_with_optional_tool_namespaces(
         config,
         mcp_tools,
-        tool_namespaces,
-        app_tools,
+        deferred_mcp_tools,
+        /*tool_namespaces*/ None,
         discoverable_tools,
         dynamic_tools,
     )
@@ -1826,8 +1885,8 @@ fn build_specs_with_discoverable_tools<'a>(
 fn build_specs_with_optional_tool_namespaces<'a>(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
     tool_namespaces: Option<HashMap<String, ToolNamespace>>,
-    app_tools: Option<Vec<ToolRegistryPlanAppTool<'a>>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
@@ -1835,13 +1894,12 @@ fn build_specs_with_optional_tool_namespaces<'a>(
         config,
         ToolRegistryPlanParams {
             mcp_tools: mcp_tools.as_ref(),
+            deferred_mcp_tools: deferred_mcp_tools.as_deref(),
             tool_namespaces: tool_namespaces.as_ref(),
-            app_tools: app_tools.as_deref(),
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,
             default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
             wait_agent_timeouts: wait_agent_timeout_options(),
-            codex_apps_mcp_server_name: CODEX_APPS_MCP_SERVER_NAME,
         },
     );
     (plan.specs, plan.handlers)
@@ -1859,6 +1917,78 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
         icons: None,
         meta: None,
     }
+}
+
+#[test]
+fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let mut tool = mcp_tool(
+        "echo",
+        "Echo text",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"}
+            },
+            "required": ["message"],
+            "additionalProperties": false
+        }),
+    );
+    tool.output_schema = Some(std::sync::Arc::new(rmcp::model::object(
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "echo": {"type": "string"},
+                "env": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "null"}
+                    ]
+                }
+            },
+            "required": ["echo", "env"],
+            "additionalProperties": false
+        }),
+    )));
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([("mcp__sample__echo".to_string(), tool)])),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        &find_tool(&tools, "mcp__sample__echo").spec
+    else {
+        panic!("expected function tool");
+    };
+
+    assert_eq!(
+        description,
+        r#"Echo text
+
+exec tool declaration:
+```ts
+declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+```"#
+    );
 }
 
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
@@ -1880,14 +2010,14 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
     }))
 }
 
-fn app_tool<'a>(
+fn deferred_mcp_tool<'a>(
     tool_name: &'a str,
     tool_namespace: &'a str,
     server_name: &'a str,
     connector_name: Option<&'a str>,
     connector_description: Option<&'a str>,
-) -> ToolRegistryPlanAppTool<'a> {
-    ToolRegistryPlanAppTool {
+) -> ToolRegistryPlanDeferredTool<'a> {
+    ToolRegistryPlanDeferredTool {
         tool_name,
         tool_namespace,
         server_name,

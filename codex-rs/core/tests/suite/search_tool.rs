@@ -2,6 +2,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -24,15 +26,18 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
+use std::time::Duration;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
-    "You have access to all the tools of the following apps/connectors",
+    "You have access to tools from the following MCP servers/connectors",
     "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
@@ -165,7 +170,7 @@ async fn search_tool_flag_adds_tool_search() -> Result<()> {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query for apps tools."},
+                    "query": {"type": "string", "description": "Search query for MCP tools."},
                     "limit": {"type": "number", "description": "Maximum number of tools to return (defaults to 8)."},
                 },
                 "required": ["query"],
@@ -427,6 +432,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -577,6 +583,126 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .iter()
             .any(|name| name == CALENDAR_CREATE_TOOL),
         "post-tool follow-up should still rely on tool_search_output history, not tool injection: {third_request_tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let echo_call_id = "tool-search-echo";
+    let image_call_id = "tool-search-image";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    echo_call_id,
+                    &json!({
+                        "query": "Echo back the provided message and include environment data.",
+                        "limit": 8,
+                    }),
+                ),
+                ev_tool_search_call(
+                    image_call_id,
+                    &json!({
+                        "query": "Return a single image content block.",
+                        "limit": 8,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                "rmcp".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: Some(vec!["echo".to_string(), "image".to_string()]),
+                    disabled_tools: Some(vec!["image".to_string()]),
+                    scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "Find the rmcp echo and image tools.",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let first_request_tools = tool_names(&requests[0].body_json());
+    assert!(
+        first_request_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "first request should advertise tool_search: {first_request_tools:?}"
+    );
+    assert!(
+        !first_request_tools
+            .iter()
+            .any(|name| name == "mcp__rmcp__echo"),
+        "non-app MCP tools should be hidden before search in large-search mode: {first_request_tools:?}"
+    );
+
+    let echo_tools = tool_search_output_tools(&requests[1], echo_call_id);
+    let rmcp_echo_tools = echo_tools
+        .iter()
+        .filter(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp__"))
+        .flat_map(|namespace| namespace.get("tools").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect::<Vec<_>>();
+    assert_eq!(rmcp_echo_tools, vec!["echo".to_string()]);
+
+    let image_tools = tool_search_output_tools(&requests[1], image_call_id);
+    let found_rmcp_image_tool = image_tools
+        .iter()
+        .filter(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp__"))
+        .flat_map(|namespace| namespace.get("tools").and_then(Value::as_array))
+        .flatten()
+        .any(|tool| tool.get("name").and_then(Value::as_str).is_some());
+    assert!(
+        !found_rmcp_image_tool,
+        "disabled non-app MCP tools should not be searchable: {image_tools:?}"
     );
 
     Ok(())
