@@ -7,6 +7,7 @@ retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
@@ -151,13 +152,19 @@ impl ToolOrchestrator {
                 otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                 match decision {
-                    ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+                    ReviewDecision::Denied => {
                         let reason = if let Some(review_id) = guardian_review_id.as_deref() {
                             guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
                         } else {
                             "rejected by user".to_string()
                         };
                         return Err(ToolError::Rejected(reason));
+                    }
+                    ReviewDecision::TimedOut => {
+                        return Err(ToolError::Rejected(guardian_timeout_message()));
+                    }
+                    ReviewDecision::Abort => {
+                        return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -306,9 +313,7 @@ impl ToolOrchestrator {
                     otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                     match decision {
-                        ReviewDecision::Denied
-                        | ReviewDecision::TimedOut
-                        | ReviewDecision::Abort => {
+                        ReviewDecision::Denied => {
                             let reason = if let Some(review_id) = guardian_review_id.as_deref() {
                                 guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
                                     .await
@@ -316,6 +321,12 @@ impl ToolOrchestrator {
                                 "rejected by user".to_string()
                             };
                             return Err(ToolError::Rejected(reason));
+                        }
+                        ReviewDecision::TimedOut => {
+                            return Err(ToolError::Rejected(guardian_timeout_message()));
+                        }
+                        ReviewDecision::Abort => {
+                            return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
