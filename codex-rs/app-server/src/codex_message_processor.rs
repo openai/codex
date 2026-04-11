@@ -9682,7 +9682,7 @@ mod tests {
         let expected = ConversationSummary {
             conversation_id,
             timestamp: Some(timestamp.clone()),
-            updated_at: Some("2025-09-05T16:53:11Z".to_string()),
+            updated_at: Some(timestamp),
             path: path.clone(),
             preview: String::new(),
             model_provider: "fallback".to_string(),
