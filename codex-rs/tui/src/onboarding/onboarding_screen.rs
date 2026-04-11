@@ -1,8 +1,8 @@
+use crate::legacy_core::config::Config;
+#[cfg(target_os = "windows")]
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
-use codex_app_server_client::legacy_core::config::Config;
-#[cfg(target_os = "windows")]
-use codex_app_server_client::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::ServerNotification;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;

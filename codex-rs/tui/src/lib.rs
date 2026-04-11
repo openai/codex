@@ -3,6 +3,22 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+use crate::legacy_core::check_execpolicy_for_warnings;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config::ConfigBuilder;
+use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::find_codex_home;
+use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
+use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::config_loader::CloudRequirementsLoader;
+use crate::legacy_core::config_loader::ConfigLoadError;
+use crate::legacy_core::config_loader::LoaderOverrides;
+use crate::legacy_core::config_loader::format_config_error_with_source;
+use crate::legacy_core::find_thread_meta_by_name_str;
+use crate::legacy_core::format_exec_policy_error_with_source;
+use crate::legacy_core::path_utils;
+use crate::legacy_core::read_session_meta_line;
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
@@ -14,22 +30,6 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
-use codex_app_server_client::legacy_core::check_execpolicy_for_warnings;
-use codex_app_server_client::legacy_core::config::Config;
-use codex_app_server_client::legacy_core::config::ConfigBuilder;
-use codex_app_server_client::legacy_core::config::ConfigOverrides;
-use codex_app_server_client::legacy_core::config::find_codex_home;
-use codex_app_server_client::legacy_core::config::load_config_as_toml_with_cli_overrides;
-use codex_app_server_client::legacy_core::config::resolve_oss_provider;
-use codex_app_server_client::legacy_core::config_loader::CloudRequirementsLoader;
-use codex_app_server_client::legacy_core::config_loader::ConfigLoadError;
-use codex_app_server_client::legacy_core::config_loader::LoaderOverrides;
-use codex_app_server_client::legacy_core::config_loader::format_config_error_with_source;
-use codex_app_server_client::legacy_core::find_thread_meta_by_name_str;
-use codex_app_server_client::legacy_core::format_exec_policy_error_with_source;
-use codex_app_server_client::legacy_core::path_utils;
-use codex_app_server_client::legacy_core::read_session_meta_line;
-use codex_app_server_client::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -73,6 +73,8 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
+
+pub(crate) use codex_app_server_client::legacy_core;
 
 mod additional_dirs;
 mod app;
@@ -166,7 +168,7 @@ mod voice;
 #[allow(dead_code)]
 mod voice {
     use crate::app_event_sender::AppEventSender;
-    use codex_app_server_client::legacy_core::config::Config;
+    use crate::legacy_core::config::Config;
     use codex_protocol::protocol::RealtimeAudioFrame;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -751,12 +753,11 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) =
-        codex_app_server_client::legacy_core::personality_migration::maybe_migrate_personality(
-            &codex_home,
-            &config_toml,
-        )
-        .await
+    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
+        &codex_home,
+        &config_toml,
+    )
+    .await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
@@ -873,7 +874,7 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = codex_app_server_client::legacy_core::config::log_dir(&config)?;
+    let log_dir = crate::legacy_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -934,7 +935,7 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_app_server_client::legacy_core::otel_init::build_provider(
+        crate::legacy_core::otel_init::build_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
@@ -1735,8 +1736,8 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_app_server_client::legacy_core::config::ConfigBuilder;
-    use codex_app_server_client::legacy_core::config::ConfigOverrides;
+    use crate::legacy_core::config::ConfigBuilder;
+    use crate::legacy_core::config::ConfigOverrides;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;

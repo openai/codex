@@ -58,9 +58,9 @@ pub use crate::remote::RemoteAppServerConnectArgs;
 
 /// Transitional access to core-only embedded app-server types.
 ///
-/// New TUI behavior should prefer the typed app-server protocol and client
-/// methods. This module exists so clients can remove a direct `codex-core`
-/// dependency while legacy embedded startup/config paths are migrated to RPCs.
+/// New TUI behavior should prefer the app-server protocol methods. This
+/// module exists so clients can remove a direct `codex-core` dependency
+/// while legacy startup/config paths are migrated to RPCs.
 pub mod legacy_core {
     pub use codex_core::Cursor;
     pub use codex_core::DEFAULT_PROJECT_DOC_FILENAME;

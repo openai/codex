@@ -109,10 +109,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
 }
 
 pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        codex_app_server_client::legacy_core::test_support::construct_model_info_offline(
-            model, config,
-        );
+    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
     SessionTelemetry::new(
         ThreadId::new(),
         model,
@@ -134,7 +131,7 @@ pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
             .enabled(Feature::DefaultModeRequestUserInput),
     };
     Arc::new(ModelCatalog::new(
-        codex_app_server_client::legacy_core::test_support::all_model_presets().clone(),
+        crate::legacy_core::test_support::all_model_presets().clone(),
         collaboration_modes_config,
     ))
 }
@@ -152,7 +149,7 @@ pub(super) async fn make_chatwidget_manual(
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
     let resolved_model = model_override.map(str::to_owned).unwrap_or_else(|| {
-        codex_app_server_client::legacy_core::test_support::get_model_offline(cfg.model.as_deref())
+        crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref())
     });
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());

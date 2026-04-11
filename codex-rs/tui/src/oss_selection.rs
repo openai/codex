@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::LazyLock;
 
-use codex_app_server_client::legacy_core::config::set_default_oss_provider;
+use crate::legacy_core::config::set_default_oss_provider;
 use codex_model_provider_info::DEFAULT_LMSTUDIO_PORT;
 use codex_model_provider_info::DEFAULT_OLLAMA_PORT;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
