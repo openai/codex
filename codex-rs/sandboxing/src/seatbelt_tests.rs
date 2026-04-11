@@ -95,24 +95,20 @@ fn create_seatbelt_args_routes_network_through_proxy_ports() {
         "expected SOCKS proxy port allow rule in policy:\n{policy}"
     );
     assert!(
-        policy.contains("(allow network-bind (local ip \"*:*\"))"),
-        "expected DNS local bind allow rule in policy:\n{policy}"
-    );
-    assert!(
-        policy.contains("(allow network-inbound (local udp \"localhost:*\"))"),
-        "expected DNS UDP reply allow rule in policy:\n{policy}"
-    );
-    assert!(
-        policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
-        "expected DNS egress allow rule in policy:\n{policy}"
-    );
-    assert!(
         !policy.contains("\n(allow network-outbound)\n"),
         "policy should not include blanket outbound allowance when proxy ports are present:\n{policy}"
     );
     assert!(
+        !policy.contains("(allow network-bind (local ip \"*:*\"))"),
+        "policy should not allow local binding unless explicitly enabled:\n{policy}"
+    );
+    assert!(
         !policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
         "policy should not allow loopback inbound unless explicitly enabled:\n{policy}"
+    );
+    assert!(
+        !policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
+        "policy should not allow raw DNS unless local binding is explicitly enabled:\n{policy}"
     );
 }
 
@@ -298,7 +294,7 @@ fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
     );
 
     assert!(
-        policy.contains("(allow network-bind (local ip \"localhost:*\"))"),
+        policy.contains("(allow network-bind (local ip \"*:*\"))"),
         "policy should allow loopback local binding when explicitly enabled:\n{policy}"
     );
     assert!(
@@ -308,6 +304,10 @@ fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
     assert!(
         policy.contains("(allow network-outbound (remote ip \"localhost:*\"))"),
         "policy should allow loopback outbound when explicitly enabled:\n{policy}"
+    );
+    assert!(
+        policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
+        "policy should allow DNS egress when local binding is explicitly enabled:\n{policy}"
     );
     assert!(
         !policy.contains("\n(allow network-outbound)\n"),
