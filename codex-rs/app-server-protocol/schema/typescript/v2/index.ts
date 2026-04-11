@@ -187,6 +187,8 @@ export type { McpServerStartupState } from "./McpServerStartupState";
 export type { McpServerStatus } from "./McpServerStatus";
 export type { McpServerStatusDetail } from "./McpServerStatusDetail";
 export type { McpServerStatusUpdatedNotification } from "./McpServerStatusUpdatedNotification";
+export type { McpServerToolCallParams } from "./McpServerToolCallParams";
+export type { McpServerToolCallResponse } from "./McpServerToolCallResponse";
 export type { McpToolCallError } from "./McpToolCallError";
 export type { McpToolCallProgressNotification } from "./McpToolCallProgressNotification";
 export type { McpToolCallResult } from "./McpToolCallResult";
