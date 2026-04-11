@@ -8,6 +8,7 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::messages::MessagePayload;
+use codex_core::timers::MAX_ACTIVE_TIMERS_PER_THREAD;
 use codex_core::timers::ThreadTimerStorageCreateParams;
 use codex_core::timers::ThreadTimerTrigger;
 use codex_core::timers::TimerDelivery;
@@ -80,7 +81,7 @@ pub(crate) async fn run_queue_command(
             delivery,
         })
         .map_err(anyhow::Error::msg)?;
-        state_db.create_thread_timer(&timer_params).await?;
+        create_thread_timer_for_queue(&state_db, &timer_params).await?;
         remove_queued_work_if_thread_missing(
             config.codex_home.as_path(),
             &state_db,
@@ -122,6 +123,24 @@ pub(crate) async fn run_queue_command(
         message_params.id, message_params.thread_id
     );
     Ok(())
+}
+
+async fn create_thread_timer_for_queue(
+    state_db: &StateRuntime,
+    timer_params: &codex_state::ThreadTimerCreateParams,
+) -> anyhow::Result<()> {
+    if state_db
+        .create_thread_timer_if_below_limit(timer_params, MAX_ACTIVE_TIMERS_PER_THREAD)
+        .await?
+    {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "thread `{}` already has the maximum of {} active timers",
+        timer_params.thread_id,
+        MAX_ACTIVE_TIMERS_PER_THREAD
+    )
 }
 
 enum QueuedWork<'a> {
@@ -552,5 +571,63 @@ mod tests {
                 .expect("list messages"),
             Vec::new()
         );
+    }
+
+    #[tokio::test]
+    async fn queued_timer_rejects_thread_at_timer_limit() {
+        let sqlite_home = TempDir::new().expect("sqlite home tempdir");
+        let runtime = StateRuntime::init(
+            sqlite_home.path().to_path_buf(),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize state runtime");
+        let thread_id = ThreadId::new().to_string();
+        for index in 0..MAX_ACTIVE_TIMERS_PER_THREAD {
+            runtime
+                .create_thread_timer(&test_timer_params(&thread_id, &format!("timer-{index}")))
+                .await
+                .expect("seed timer");
+        }
+
+        let err = create_thread_timer_for_queue(
+            &runtime,
+            &test_timer_params(&thread_id, "timer-over-limit"),
+        )
+        .await
+        .expect_err("thread at timer limit should reject queued timer");
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "thread `{thread_id}` already has the maximum of {MAX_ACTIVE_TIMERS_PER_THREAD} active timers"
+            )
+        );
+        assert_eq!(
+            runtime
+                .list_thread_timers(&thread_id)
+                .await
+                .expect("list timers")
+                .len(),
+            MAX_ACTIVE_TIMERS_PER_THREAD
+        );
+    }
+
+    fn test_timer_params(thread_id: &str, id: &str) -> codex_state::ThreadTimerCreateParams {
+        codex_state::ThreadTimerCreateParams {
+            id: id.to_string(),
+            thread_id: thread_id.to_string(),
+            source: "external".to_string(),
+            client_id: "codex-cli".to_string(),
+            trigger_json: r#"{"kind":"schedule","dtstart":"2026-04-10T12:00:00"}"#.to_string(),
+            content: "do work".to_string(),
+            instructions: None,
+            meta_json: "{}".to_string(),
+            delivery: TimerDelivery::AfterTurn.as_str().to_string(),
+            created_at: 100,
+            next_run_at: Some(200),
+            last_run_at: None,
+            pending_run: false,
+        }
     }
 }
