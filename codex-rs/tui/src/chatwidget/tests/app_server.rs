@@ -11,6 +11,7 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
         id: "spawn-begin".into(),
         msg: EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
             call_id: "call-spawn".to_string(),
+            tool: codex_protocol::protocol::CollabAgentSpawnTool::SpawnAgent,
             sender_thread_id,
             prompt: "Explore the repo".to_string(),
             model: "gpt-5".to_string(),
@@ -21,6 +22,7 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
         id: "spawn-end".into(),
         msg: EventMsg::CollabAgentSpawnEnd(CollabAgentSpawnEndEvent {
             call_id: "call-spawn".to_string(),
+            tool: codex_protocol::protocol::CollabAgentSpawnTool::SpawnAgent,
             sender_thread_id,
             new_thread_id: Some(spawned_thread_id),
             new_agent_nickname: Some("Robie".to_string()),
@@ -28,6 +30,7 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             prompt: "Explore the repo".to_string(),
             model: "gpt-5".to_string(),
             reasoning_effort: ReasoningEffortConfig::High,
+            agent_statuses: Vec::new(),
             status: AgentStatus::PendingInit,
         }),
     });
@@ -442,6 +445,69 @@ async fn live_app_server_collab_spawn_completed_renders_requested_model_and_effo
         .join("\n");
     assert_chatwidget_snapshot!(
         "app_server_collab_spawn_completed_renders_requested_model_and_effort",
+        combined
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_collab_batch_spawn_completed_renders_worker_statuses() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let sender_thread_id =
+        ThreadId::from_string("019cff70-2599-75e2-af72-b90000000002").expect("valid thread id");
+    let worker_thread_id =
+        ThreadId::from_string("019cff70-2599-75e2-af72-b91781b41a8e").expect("valid thread id");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CollabAgentToolCall {
+                id: "spawn-batch-1".to_string(),
+                tool: AppServerCollabAgentTool::SpawnAgentsOnCsv,
+                status: AppServerCollabAgentToolCallStatus::InProgress,
+                sender_thread_id: sender_thread_id.to_string(),
+                receiver_thread_ids: Vec::new(),
+                prompt: Some("Return {path}".to_string()),
+                model: Some("gpt-5.1".to_string()),
+                reasoning_effort: Some(ReasoningEffortConfig::Low),
+                agents_states: HashMap::new(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CollabAgentToolCall {
+                id: "spawn-batch-1".to_string(),
+                tool: AppServerCollabAgentTool::SpawnAgentsOnCsv,
+                status: AppServerCollabAgentToolCallStatus::Completed,
+                sender_thread_id: sender_thread_id.to_string(),
+                receiver_thread_ids: vec![worker_thread_id.to_string()],
+                prompt: Some("Return {path}".to_string()),
+                model: Some("gpt-5.1".to_string()),
+                reasoning_effort: Some(ReasoningEffortConfig::Low),
+                agents_states: HashMap::from([(
+                    worker_thread_id.to_string(),
+                    AppServerCollabAgentState {
+                        status: AppServerCollabAgentStatus::Completed,
+                        message: None,
+                    },
+                )]),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let combined = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!(
+        "app_server_collab_batch_spawn_completed_renders_worker_statuses",
         combined
     );
 }

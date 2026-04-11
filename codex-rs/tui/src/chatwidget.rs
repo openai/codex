@@ -3792,8 +3792,8 @@ impl ChatWidget {
         let first_receiver_metadata =
             first_receiver.map(|thread_id| self.collab_agent_metadata(thread_id));
 
-        match tool {
-            CollabAgentTool::SpawnAgent => {
+        match tool.clone() {
+            CollabAgentTool::SpawnAgent | CollabAgentTool::SpawnAgentsOnCsv => {
                 if let (Some(model), Some(reasoning_effort)) = (model.clone(), reasoning_effort) {
                     self.pending_collab_spawn_requests.insert(
                         id.clone(),
@@ -3816,9 +3816,23 @@ impl ChatWidget {
                                     }
                                 })
                         });
+                    let (agent_statuses, statuses) = app_server_collab_agent_statuses_to_core(
+                        &receiver_thread_ids,
+                        &agents_states,
+                        &self.collab_agent_metadata,
+                    );
                     self.on_collab_event(multi_agents::spawn_end(
                         codex_protocol::protocol::CollabAgentSpawnEndEvent {
                             call_id: id,
+                            tool: match tool {
+                                CollabAgentTool::SpawnAgent => {
+                                    codex_protocol::protocol::CollabAgentSpawnTool::SpawnAgent
+                                }
+                                CollabAgentTool::SpawnAgentsOnCsv => {
+                                    codex_protocol::protocol::CollabAgentSpawnTool::SpawnAgentsOnCsv
+                                }
+                                _ => unreachable!("non-spawn collab tool"),
+                            },
                             sender_thread_id,
                             new_thread_id: first_receiver,
                             new_agent_nickname: first_receiver_metadata
@@ -3830,10 +3844,20 @@ impl ChatWidget {
                             prompt: prompt.unwrap_or_default(),
                             model: String::new(),
                             reasoning_effort: ReasoningEffortConfig::Medium,
+                            agent_statuses,
                             status: first_receiver
                                 .as_ref()
-                                .and_then(|thread_id| agents_states.get(&thread_id.to_string()))
-                                .map(app_server_collab_state_to_core)
+                                .and_then(|thread_id| statuses.get(thread_id))
+                                .cloned()
+                                .or_else(|| match status {
+                                    CollabAgentToolCallStatus::Completed => {
+                                        Some(AgentStatus::Completed(None))
+                                    }
+                                    CollabAgentToolCallStatus::Failed => {
+                                        Some(AgentStatus::Errored("Agent spawn failed".into()))
+                                    }
+                                    CollabAgentToolCallStatus::InProgress => None,
+                                })
                                 .unwrap_or_else(|| {
                                     AgentStatus::Errored("Agent spawn failed".into())
                                 }),

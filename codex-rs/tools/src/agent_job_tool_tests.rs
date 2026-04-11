@@ -40,6 +40,20 @@ fn spawn_agents_on_csv_tool_requires_csv_and_instruction() {
                         )),
                     ),
                     (
+                        "model".to_string(),
+                        JsonSchema::string(Some(
+                            "Optional model override for each worker sub-agent. Replaces the inherited model."
+                                .to_string(),
+                        )),
+                    ),
+                    (
+                        "reasoning_effort".to_string(),
+                        JsonSchema::string(Some(
+                            "Optional reasoning effort override for each worker sub-agent. Replaces the inherited reasoning effort."
+                                .to_string(),
+                        )),
+                    ),
+                    (
                         "max_concurrency".to_string(),
                         JsonSchema::number(Some(
                             "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."

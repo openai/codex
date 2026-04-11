@@ -51,6 +51,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentSpawnBeginEvent {
                     call_id: call_id.clone(),
+                    tool: CollabAgentSpawnTool::SpawnAgent,
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
                     model: args.model.clone().unwrap_or_default(),
@@ -141,6 +142,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentSpawnEndEvent {
                     call_id,
+                    tool: CollabAgentSpawnTool::SpawnAgent,
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
                     new_agent_nickname,
@@ -148,6 +150,7 @@ impl ToolHandler for Handler {
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
+                    agent_statuses: Vec::new(),
                     status,
                 }
                 .into(),

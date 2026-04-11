@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: combined
+---
+• Spawned 1 CSV workers (gpt-5.1 low)
+  └ Return {path}
+    019cff70-2599-75e2-af72-b91781b41a8e: Completed

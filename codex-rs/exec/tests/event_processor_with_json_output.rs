@@ -761,6 +761,96 @@ fn collab_spawn_begin_and_end_emit_item_events() {
 }
 
 #[test]
+fn collab_batch_spawn_begin_and_end_emit_item_events() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+
+    let started =
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
+            item: ThreadItem::CollabAgentToolCall {
+                id: "collab-batch-1".to_string(),
+                tool: CollabAgentTool::SpawnAgentsOnCsv,
+                status: ApiCollabAgentToolCallStatus::InProgress,
+                sender_thread_id: "thread-parent".to_string(),
+                receiver_thread_ids: Vec::new(),
+                prompt: Some("Return {path}".to_string()),
+                model: Some("gpt-5.1".to_string()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Low),
+                agents_states: std::collections::HashMap::new(),
+            },
+            thread_id: "thread-parent".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+    let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::CollabAgentToolCall {
+                id: "collab-batch-1".to_string(),
+                tool: CollabAgentTool::SpawnAgentsOnCsv,
+                status: ApiCollabAgentToolCallStatus::Completed,
+                sender_thread_id: "thread-parent".to_string(),
+                receiver_thread_ids: vec!["thread-child".to_string()],
+                prompt: Some("Return {path}".to_string()),
+                model: Some("gpt-5.1".to_string()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Low),
+                agents_states: std::collections::HashMap::from([(
+                    "thread-child".to_string(),
+                    ApiCollabAgentState {
+                        status: ApiCollabAgentStatus::Completed,
+                        message: None,
+                    },
+                )]),
+            },
+            thread_id: "thread-parent".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
+
+    assert_eq!(
+        started,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
+                        tool: CollabTool::SpawnAgentsOnCsv,
+                        sender_thread_id: "thread-parent".to_string(),
+                        receiver_thread_ids: Vec::new(),
+                        prompt: Some("Return {path}".to_string()),
+                        agents_states: std::collections::HashMap::new(),
+                        status: CollabToolCallStatus::InProgress,
+                    },),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
+                        tool: CollabTool::SpawnAgentsOnCsv,
+                        sender_thread_id: "thread-parent".to_string(),
+                        receiver_thread_ids: vec!["thread-child".to_string()],
+                        prompt: Some("Return {path}".to_string()),
+                        agents_states: std::collections::HashMap::from([(
+                            "thread-child".to_string(),
+                            CollabAgentState {
+                                status: CollabAgentStatus::Completed,
+                                message: None,
+                            },
+                        )]),
+                        status: CollabToolCallStatus::Completed,
+                    },),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
 fn file_change_completion_maps_change_kinds() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 

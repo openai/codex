@@ -242,6 +242,7 @@ impl EventProcessorWithJsonOutput {
                 details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
                     tool: match tool {
                         CollabAgentTool::SpawnAgent => CollabTool::SpawnAgent,
+                        CollabAgentTool::SpawnAgentsOnCsv => CollabTool::SpawnAgentsOnCsv,
                         CollabAgentTool::SendInput => CollabTool::SendInput,
                         CollabAgentTool::ResumeAgent => CollabTool::Wait,
                         CollabAgentTool::Wait => CollabTool::Wait,
