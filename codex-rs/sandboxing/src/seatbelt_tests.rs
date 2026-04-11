@@ -634,8 +634,9 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_0")
-            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_1"),
-        "expected explicit writable root .git/.codex carveouts in policy:\n{policy_text}",
+            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_1")
+            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_2"),
+        "expected explicit writable root .git/.codex/config.toml carveouts in policy:\n{policy_text}",
     );
     assert!(
         policy_text.contains("(subpath (param \"WRITABLE_ROOT_2\"))"),
@@ -667,6 +668,10 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         format!(
             "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_1_EXCLUDED_2={}",
+            dot_codex_canonical.join("config.toml").to_string_lossy()
         ),
         format!(
             "-DWRITABLE_ROOT_2={}",
@@ -999,7 +1004,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .map(|p| p.to_string_lossy().to_string());
 
     let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
+        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_2"))) )"#
     } else {
         ""
     };
@@ -1014,7 +1019,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_2"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
 "#,
     );
@@ -1035,6 +1040,10 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
+            dot_codex_canonical.join("config.toml").to_string_lossy()
+        ),
+        format!(
             "-DWRITABLE_ROOT_1={}",
             PathBuf::from("/tmp")
                 .canonicalize()
@@ -1052,6 +1061,10 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         expected_args.push(format!(
             "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
+        ));
+        expected_args.push(format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_2={}",
+            dot_codex_canonical.join("config.toml").to_string_lossy()
         ));
     }
 
