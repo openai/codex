@@ -9,7 +9,6 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
@@ -128,11 +127,13 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let cwd = req.cwd.to_path_buf();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
+        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
-            if routes_approval_to_guardian(turn) {
+            if let Some(review_id) = guardian_review_id {
                 return review_approval_request(
                     session,
                     turn,
+                    review_id,
                     GuardianApprovalRequest::ExecCommand {
                         id: call_id,
                         command,
@@ -202,13 +203,22 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(
-            base_command,
-            session_shell.as_ref(),
-            &req.cwd,
-            &req.explicit_env_overrides,
-            &req.env,
-        );
+        let environment_is_remote = ctx
+            .turn
+            .environment
+            .as_ref()
+            .is_some_and(|environment| environment.is_remote());
+        let command = if environment_is_remote {
+            base_command.to_vec()
+        } else {
+            maybe_wrap_shell_lc_with_snapshot(
+                base_command,
+                session_shell.as_ref(),
+                &req.cwd,
+                &req.explicit_env_overrides,
+                &req.env,
+            )
+        };
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
         } else {

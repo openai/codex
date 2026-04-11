@@ -47,6 +47,7 @@ use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::resume_picker::SessionTarget;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 use crate::tui;
@@ -81,6 +82,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
@@ -3300,6 +3302,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
+        session_start_source: Option<ThreadStartSource>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -3321,7 +3324,10 @@ impl App {
             }
         }
         self.config = config.clone();
-        match app_server.start_thread(&config).await {
+        match app_server
+            .start_thread_with_session_start_source(&config, session_start_source)
+            .await
+        {
             Ok(started) => {
                 if let Err(err) = self
                     .replace_chat_widget_with_app_server_thread(tui, app_server, started)
@@ -3604,7 +3610,10 @@ impl App {
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
-        tui.set_notification_method(config.tui_notification_method);
+        tui.set_notification_settings(
+            config.tui_notifications.method,
+            config.tui_notifications.condition,
+        );
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
@@ -4044,6 +4053,108 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    async fn resume_target_session(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        target_session: SessionTarget,
+    ) -> Result<AppRunControl> {
+        if self.ignore_same_thread_resume(&target_session) {
+            tui.frame_requester().schedule_frame();
+            return Ok(AppRunControl::Continue);
+        }
+
+        let current_cwd = self.config.cwd.to_path_buf();
+        let resume_cwd = if self.remote_app_server_url.is_some() {
+            current_cwd.clone()
+        } else {
+            match crate::resolve_cwd_for_resume_or_fork(
+                tui,
+                &self.config,
+                &current_cwd,
+                target_session.thread_id,
+                target_session.path.as_deref(),
+                CwdPromptAction::Resume,
+                /*allow_prompt*/ true,
+            )
+            .await?
+            {
+                crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                crate::ResolveCwdOutcome::Exit => {
+                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                }
+            }
+        };
+
+        let mut resume_config = match self
+            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
+            .await
+        {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to rebuild configuration for resume: {err}"
+                ));
+                return Ok(AppRunControl::Continue);
+            }
+        };
+        self.apply_runtime_policy_overrides(&mut resume_config);
+
+        let summary = session_summary(
+            self.chat_widget.token_usage(),
+            self.chat_widget.thread_id(),
+            self.chat_widget.thread_name(),
+        );
+        match app_server
+            .resume_thread(resume_config.clone(), target_session.thread_id)
+            .await
+        {
+            Ok(resumed) => {
+                self.shutdown_current_thread(app_server).await;
+                self.config = resume_config;
+                tui.set_notification_settings(
+                    self.config.tui_notifications.method,
+                    self.config.tui_notifications.condition,
+                );
+                self.file_search
+                    .update_search_dir(self.config.cwd.to_path_buf());
+                match self
+                    .replace_chat_widget_with_app_server_thread(tui, app_server, resumed)
+                    .await
+                {
+                    Ok(()) => {
+                        if let Some(summary) = summary {
+                            let mut lines: Vec<Line<'static>> = Vec::new();
+                            if let Some(usage_line) = summary.usage_line {
+                                lines.push(usage_line.into());
+                            }
+                            if let Some(command) = summary.resume_command {
+                                let spans =
+                                    vec!["To continue this session, run ".into(), command.cyan()];
+                                lines.push(spans.into());
+                            }
+                            self.chat_widget.add_plain_history_lines(lines);
+                        }
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to attach to resumed app-server thread: {err}"
+                        ));
+                    }
+                }
+            }
+            Err(err) => {
+                let path_display = target_session.display_label();
+                self.chat_widget.add_error_message(format!(
+                    "Failed to resume session from {path_display}: {err}"
+                ));
+            }
+        }
+
+        Ok(AppRunControl::Continue)
+    }
+
     async fn handle_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -4052,15 +4163,21 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                self.start_fresh_session_with_summary_hint(tui, app_server)
-                    .await;
+                self.start_fresh_session_with_summary_hint(
+                    tui, app_server, /*session_start_source*/ None,
+                )
+                .await;
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(tui, app_server)
-                    .await;
+                self.start_fresh_session_with_summary_hint(
+                    tui,
+                    app_server,
+                    Some(ThreadStartSource::Clear),
+                )
+                .await;
             }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
@@ -4094,94 +4211,13 @@ impl App {
                 .await?
                 {
                     SessionSelection::Resume(target_session) => {
-                        if self.ignore_same_thread_resume(&target_session) {
-                            tui.frame_requester().schedule_frame();
-                            return Ok(AppRunControl::Continue);
-                        }
-                        let current_cwd = self.config.cwd.to_path_buf();
-                        let resume_cwd = if self.remote_app_server_url.is_some() {
-                            current_cwd.clone()
-                        } else {
-                            match crate::resolve_cwd_for_resume_or_fork(
-                                tui,
-                                &self.config,
-                                &current_cwd,
-                                target_session.thread_id,
-                                target_session.path.as_deref(),
-                                CwdPromptAction::Resume,
-                                /*allow_prompt*/ true,
-                            )
+                        match self
+                            .resume_target_session(tui, app_server, target_session)
                             .await?
-                            {
-                                crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
-                                crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-                                crate::ResolveCwdOutcome::Exit => {
-                                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-                                }
-                            }
-                        };
-                        let mut resume_config = match self
-                            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
-                            .await
                         {
-                            Ok(cfg) => cfg,
-                            Err(err) => {
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to rebuild configuration for resume: {err}"
-                                ));
-                                return Ok(AppRunControl::Continue);
-                            }
-                        };
-                        self.apply_runtime_policy_overrides(&mut resume_config);
-                        let summary = session_summary(
-                            self.chat_widget.token_usage(),
-                            self.chat_widget.thread_id(),
-                            self.chat_widget.thread_name(),
-                        );
-                        match app_server
-                            .resume_thread(resume_config.clone(), target_session.thread_id)
-                            .await
-                        {
-                            Ok(resumed) => {
-                                self.shutdown_current_thread(app_server).await;
-                                self.config = resume_config;
-                                tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search
-                                    .update_search_dir(self.config.cwd.to_path_buf());
-                                match self
-                                    .replace_chat_widget_with_app_server_thread(
-                                        tui, app_server, resumed,
-                                    )
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        if let Some(summary) = summary {
-                                            let mut lines: Vec<Line<'static>> = Vec::new();
-                                            if let Some(usage_line) = summary.usage_line {
-                                                lines.push(usage_line.into());
-                                            }
-                                            if let Some(command) = summary.resume_command {
-                                                let spans = vec![
-                                                    "To continue this session, run ".into(),
-                                                    command.cyan(),
-                                                ];
-                                                lines.push(spans.into());
-                                            }
-                                            self.chat_widget.add_plain_history_lines(lines);
-                                        }
-                                    }
-                                    Err(err) => {
-                                        self.chat_widget.add_error_message(format!(
-                                            "Failed to attach to resumed app-server thread: {err}"
-                                        ));
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                let path_display = target_session.display_label();
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to resume session from {path_display}: {err}"
-                                ));
+                            AppRunControl::Continue => {}
+                            AppRunControl::Exit(reason) => {
+                                return Ok(AppRunControl::Exit(reason));
                             }
                         }
                     }
@@ -4192,6 +4228,26 @@ impl App {
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ResumeSessionByIdOrName(id_or_name) => {
+                match crate::lookup_session_target_with_app_server(
+                    app_server,
+                    self.config.codex_home.as_path(),
+                    &id_or_name,
+                )
+                .await?
+                {
+                    Some(target_session) => {
+                        return self
+                            .resume_target_session(tui, app_server, target_session)
+                            .await;
+                    }
+                    None => {
+                        self.chat_widget.add_error_message(format!(
+                            "No saved chat found matching '{id_or_name}'."
+                        ));
+                    }
+                }
             }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
@@ -5656,7 +5712,6 @@ impl App {
             }
         }
         self.handle_backtrack_rollback_succeeded(num_turns);
-        self.chat_widget.handle_thread_rolled_back();
     }
 
     fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {

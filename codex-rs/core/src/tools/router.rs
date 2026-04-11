@@ -16,10 +16,8 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
-use codex_tools::ToolNamespace;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
-use rmcp::model::Tool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
@@ -41,53 +39,24 @@ pub struct ToolRouter {
 }
 
 pub(crate) struct ToolRouterParams<'a> {
-    pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
-    pub(crate) tool_namespaces: Option<HashMap<String, ToolNamespace>>,
-    pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
-}
-
-pub(crate) struct McpToolRouterInputs {
-    pub(crate) mcp_tools: HashMap<String, Tool>,
-    pub(crate) tool_namespaces: HashMap<String, ToolNamespace>,
-}
-
-pub(crate) fn map_mcp_tool_infos(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolRouterInputs {
-    McpToolRouterInputs {
-        mcp_tools: mcp_tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
-            .collect(),
-        tool_namespaces: mcp_tools
-            .iter()
-            .map(|(name, tool)| {
-                (
-                    name.clone(),
-                    ToolNamespace {
-                        name: tool.tool_namespace.clone(),
-                        description: tool.server_instructions.clone(),
-                    },
-                )
-            })
-            .collect(),
-    }
 }
 
 impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
         let ToolRouterParams {
             mcp_tools,
-            tool_namespaces,
-            app_tools,
+            deferred_mcp_tools,
             discoverable_tools,
             dynamic_tools,
         } = params;
         let builder = build_specs_with_discoverable_tools(
             config,
             mcp_tools,
-            app_tools,
-            tool_namespaces,
+            deferred_mcp_tools,
             discoverable_tools,
             dynamic_tools,
         );

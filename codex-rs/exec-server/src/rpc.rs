@@ -179,7 +179,8 @@ pub(crate) struct RpcClient {
 
 impl RpcClient {
     pub(crate) fn new(connection: JsonRpcConnection) -> (Self, mpsc::Receiver<RpcClientEvent>) {
-        let (write_tx, mut incoming_rx, transport_tasks) = connection.into_parts();
+        let (write_tx, mut incoming_rx, _disconnected_rx, transport_tasks) =
+            connection.into_parts();
         let pending = Arc::new(Mutex::new(HashMap::<RequestId, PendingRequest>::new()));
         let (event_tx, event_rx) = mpsc::channel(128);
 

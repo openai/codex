@@ -223,6 +223,11 @@ impl MessageProcessor {
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
+        let analytics_events_client = AnalyticsEventsClient::new(
+            Arc::clone(&auth_manager),
+            config.chatgpt_base_url.trim_end_matches('/').to_string(),
+            config.analytics_enabled,
+        );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -233,12 +238,8 @@ impl MessageProcessor {
                     .enabled(Feature::DefaultModeRequestUserInput),
             },
             environment_manager,
+            Some(analytics_events_client.clone()),
         ));
-        let analytics_events_client = AnalyticsEventsClient::new(
-            Arc::clone(&auth_manager),
-            config.chatgpt_base_url.trim_end_matches('/').to_string(),
-            config.analytics_enabled,
-        );
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
@@ -298,7 +299,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(
-        &mut self,
+        &self,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         transport: AppServerTransport,
@@ -372,7 +373,7 @@ impl MessageProcessor {
     /// This bypasses JSON request deserialization but keeps identical request
     /// semantics by delegating to `handle_client_request`.
     pub(crate) async fn process_client_request(
-        &mut self,
+        &self,
         connection_id: ConnectionId,
         request: ClientRequest,
         session: &mut ConnectionSessionState,
@@ -470,7 +471,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn try_attach_thread_listener(
-        &mut self,
+        &self,
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
@@ -497,7 +498,7 @@ impl MessageProcessor {
         self.codex_message_processor.shutdown_threads().await;
     }
 
-    pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
         self.outgoing.connection_closed(connection_id).await;
         self.fs_watch_manager.connection_closed(connection_id).await;
         self.codex_message_processor
@@ -511,20 +512,20 @@ impl MessageProcessor {
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.
-    pub(crate) async fn process_response(&mut self, response: JSONRPCResponse) {
+    pub(crate) async fn process_response(&self, response: JSONRPCResponse) {
         tracing::info!("<- response: {:?}", response);
         let JSONRPCResponse { id, result, .. } = response;
         self.outgoing.notify_client_response(id, result).await
     }
 
     /// Handle an error object received from the peer.
-    pub(crate) async fn process_error(&mut self, err: JSONRPCError) {
+    pub(crate) async fn process_error(&self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
         self.outgoing.notify_client_error(err.id, err.error).await;
     }
 
     async fn handle_client_request(
-        &mut self,
+        &self,
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         session: &mut ConnectionSessionState,

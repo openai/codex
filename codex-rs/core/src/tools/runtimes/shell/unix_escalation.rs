@@ -4,6 +4,7 @@ use crate::exec::ExecExpiration;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
@@ -133,7 +134,7 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
-        windows_restricted_token_filesystem_overlay: _windows_restricted_token_filesystem_overlay,
+        windows_sandbox_filesystem_overrides: _windows_sandbox_filesystem_overrides,
         arg0,
     } = sandbox_exec_request;
     let ParsedShellCommand { script, login, .. } = extract_shell_script(&command)?;
@@ -315,6 +316,11 @@ enum DecisionSource {
     UnmatchedCommandFallback,
 }
 
+struct PromptDecision {
+    decision: ReviewDecision,
+    guardian_review_id: Option<String>,
+}
+
 fn execve_prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
     decision_source: &DecisionSource,
@@ -376,7 +382,7 @@ impl CoreShellActionProvider {
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
         additional_permissions: Option<PermissionProfile>,
-    ) -> anyhow::Result<ReviewDecision> {
+    ) -> anyhow::Result<PromptDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
         let session = self.session.clone();
@@ -384,12 +390,14 @@ impl CoreShellActionProvider {
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
+        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
-                if routes_approval_to_guardian(&turn) {
-                    return review_approval_request(
+                if let Some(review_id) = guardian_review_id.clone() {
+                    let decision = review_approval_request(
                         &session,
                         &turn,
+                        review_id,
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
                             source,
@@ -401,8 +409,12 @@ impl CoreShellActionProvider {
                         /*retry_reason*/ None,
                     )
                     .await;
+                    return PromptDecision {
+                        decision,
+                        guardian_review_id,
+                    };
                 }
-                session
+                let decision = session
                     .request_command_approval(
                         &turn,
                         call_id,
@@ -415,7 +427,11 @@ impl CoreShellActionProvider {
                         additional_permissions,
                         Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
                     )
-                    .await
+                    .await;
+                PromptDecision {
+                    decision,
+                    guardian_review_id: None,
+                }
             })
             .await)
     }
@@ -442,10 +458,10 @@ impl CoreShellActionProvider {
                 {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
-                    match self
+                    let prompt_decision = self
                         .prompt(program, argv, workdir, &self.stopwatch, prompt_permissions)
-                        .await?
-                    {
+                        .await?;
+                    match prompt_decision.decision {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedForSession
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
@@ -470,9 +486,10 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            let message = if routes_approval_to_guardian(&self.turn) {
-                                guardian_rejection_message(self.session.as_ref(), &self.call_id)
-                                    .await
+                            let message = if let Some(review_id) =
+                                prompt_decision.guardian_review_id.as_deref()
+                            {
+                                guardian_rejection_message(self.session.as_ref(), review_id).await
                             } else {
                                 "User denied execution".to_string()
                             };
@@ -722,7 +739,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 sandbox_policy: self.sandbox_policy.clone(),
                 file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
                 network_sandbox_policy: self.network_sandbox_policy,
-                windows_restricted_token_filesystem_overlay: None,
+                windows_sandbox_filesystem_overrides: None,
                 arg0: self.arg0.clone(),
             },
             /*stdout_stream*/ None,

@@ -55,6 +55,7 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
@@ -283,6 +284,15 @@ impl AppServerSession {
     }
 
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
+        self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
+            .await
+    }
+
+    pub(crate) async fn start_thread_with_session_start_source(
+        &mut self,
+        config: &Config,
+        session_start_source: Option<ThreadStartSource>,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadStartResponse = self
             .client
@@ -292,6 +302,7 @@ impl AppServerSession {
                     config,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
+                    session_start_source,
                 ),
             })
             .await
@@ -421,6 +432,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
+                    responsesapi_client_metadata: None,
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
@@ -471,6 +483,7 @@ impl AppServerSession {
                 params: TurnSteerParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
+                    responsesapi_client_metadata: None,
                     expected_turn_id: turn_id,
                 },
             })
@@ -645,6 +658,7 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     prompt: params.prompt,
                     session_id: params.session_id,
+                    voice: params.voice,
                     transport: params.transport.map(|transport| match transport {
                         ConversationStartTransport::Websocket => {
                             ThreadRealtimeStartTransport::Websocket
@@ -853,6 +867,7 @@ fn thread_start_params_from_config(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
+    session_start_source: Option<ThreadStartSource>,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
@@ -863,6 +878,7 @@ fn thread_start_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
+        session_start_source,
         persist_extended_history: true,
         ..ThreadStartParams::default()
     }
@@ -1169,10 +1185,26 @@ mod tests {
             &config,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
         assert_eq!(params.model_provider, Some(config.model_provider_id));
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_can_mark_clear_source() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+
+        let params = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            Some(ThreadStartSource::Clear),
+        );
+
+        assert_eq!(params.session_start_source, Some(ThreadStartSource::Clear));
     }
 
     #[tokio::test]
@@ -1185,6 +1217,7 @@ mod tests {
             &config,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
@@ -1218,6 +1251,7 @@ mod tests {
             &config,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
+            /*session_start_source*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),

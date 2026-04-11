@@ -29,6 +29,7 @@ codex_rust_crate(
     },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
+        "templates/realtime/backend_prompt.md",
     ],
     integration_test_timeout = "long",
     test_data_extra = [

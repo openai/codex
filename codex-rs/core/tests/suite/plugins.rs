@@ -213,6 +213,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -288,6 +289,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -360,6 +362,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

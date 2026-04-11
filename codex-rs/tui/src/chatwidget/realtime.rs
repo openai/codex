@@ -15,8 +15,6 @@ use std::sync::atomic::AtomicU16;
 #[cfg(not(target_os = "linux"))]
 use std::time::Duration;
 
-const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum RealtimeConversationPhase {
     #[default]
@@ -262,9 +260,10 @@ impl ChatWidget {
     ) {
         self.submit_op(AppCommand::realtime_conversation_start(
             ConversationStartParams {
-                prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
+                prompt: None,
                 session_id: None,
                 transport,
+                voice: self.config.realtime.voice,
             },
         ));
     }
@@ -341,7 +340,9 @@ impl ChatWidget {
                 ev.payload,
                 RealtimeEvent::AudioOut(_)
                     | RealtimeEvent::InputAudioSpeechStarted(_)
+                    | RealtimeEvent::ResponseCreated(_)
                     | RealtimeEvent::ResponseCancelled(_)
+                    | RealtimeEvent::ResponseDone(_)
             )
         {
             return;
@@ -354,7 +355,9 @@ impl ChatWidget {
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCreated(_) => {}
             RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
+            RealtimeEvent::ResponseDone(_) => {}
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}

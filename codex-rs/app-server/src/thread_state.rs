@@ -352,8 +352,8 @@ impl ThreadStateManager {
         true
     }
 
-    pub(crate) async fn remove_connection(&self, connection_id: ConnectionId) {
-        let thread_states = {
+    pub(crate) async fn remove_connection(&self, connection_id: ConnectionId) -> Vec<ThreadId> {
+        {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
             let thread_ids = state
@@ -367,36 +367,13 @@ impl ThreadStateManager {
             }
             thread_ids
                 .into_iter()
-                .map(|thread_id| {
-                    (
-                        thread_id,
-                        state
-                            .threads
-                            .get(&thread_id)
-                            .is_none_or(|thread_entry| thread_entry.connection_ids.is_empty()),
-                        state
-                            .threads
-                            .get(&thread_id)
-                            .map(|thread_entry| thread_entry.state.clone()),
-                    )
+                .filter(|thread_id| {
+                    state
+                        .threads
+                        .get(thread_id)
+                        .is_some_and(|thread_entry| thread_entry.connection_ids.is_empty())
                 })
                 .collect::<Vec<_>>()
-        };
-
-        for (thread_id, no_subscribers, thread_state) in thread_states {
-            if !no_subscribers {
-                continue;
-            }
-            let Some(thread_state) = thread_state else {
-                continue;
-            };
-            let listener_generation = thread_state.lock().await.listener_generation;
-            tracing::debug!(
-                thread_id = %thread_id,
-                connection_id = ?connection_id,
-                listener_generation,
-                "retaining thread listener after connection disconnect left zero subscribers"
-            );
         }
     }
 }

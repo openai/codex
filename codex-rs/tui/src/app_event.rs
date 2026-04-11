@@ -124,6 +124,9 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
+    /// Resume a thread by UUID or thread name inside the running TUI session.
+    ResumeSessionByIdOrName(String),
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 

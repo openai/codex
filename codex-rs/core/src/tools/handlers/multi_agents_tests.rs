@@ -2004,6 +2004,7 @@ async fn send_input_accepts_structured_items() {
             },
         ],
         final_output_json_schema: None,
+        responsesapi_client_metadata: None,
     };
     let captured = manager
         .captured_ops()
