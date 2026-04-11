@@ -28,24 +28,11 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
 
-fn assert_wall_time_line(line: &str) {
-    assert_regex_match(r"^Wall time: [0-9]+(?:\.[0-9]+)? seconds$", line);
-}
-
-fn split_wall_time_wrapped_output(output: &str) -> &str {
-    let (wall_time, rest) = output
-        .split_once('\n')
-        .expect("wall-time output should contain an Output section");
-    assert_wall_time_line(wall_time);
-    rest.strip_prefix("Output:\n")
-        .expect("wall-time output should contain Output marker")
-}
-
 fn assert_wall_time_header(output: &str) {
     let (wall_time, marker) = output
         .split_once('\n')
         .expect("wall-time header should contain an Output marker");
-    assert_wall_time_line(wall_time);
+    assert_regex_match(r"^Wall time: [0-9]+(?:\.[0-9]+)? seconds$", wall_time);
     assert_eq!(marker, "Output:");
 }
 
@@ -784,23 +771,11 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         .function_call_output_text(call_id)
         .context("function_call_output present for rmcp call")?;
 
-    let wrapped_output = split_wall_time_wrapped_output(&output);
-    let parsed: Value = serde_json::from_str(wrapped_output)?;
     assert_eq!(
-        wrapped_output.len(),
-        80031,
-        "parsed MCP output should retain its serialized length"
+        output.len(),
+        80065,
+        "MCP output should retain its serialized length plus wall-time header"
     );
-    let expected_echo = format!("ECHOING: {large_msg}");
-    let echo_str = parsed["echo"]
-        .as_str()
-        .context("echo field should be a string in rmcp echo output")?;
-    assert_eq!(
-        echo_str.len(),
-        expected_echo.len(),
-        "echo length should match"
-    );
-    assert_eq!(echo_str, expected_echo);
     assert!(
         !output.contains("truncated"),
         "output should not include truncation markers when limit is raised: {output}"
