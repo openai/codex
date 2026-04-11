@@ -619,7 +619,9 @@ impl TestCodexBuilder {
                 config.codex_self_exe = Some(codex_exec);
             }
         }
-        if let Some(path) = find_codex_cli_exe() {
+        if config.codex_linux_sandbox_exe.is_none()
+            && let Some(path) = find_codex_cli_exe()
+        {
             config.codex_linux_sandbox_exe = Some(path);
         }
 

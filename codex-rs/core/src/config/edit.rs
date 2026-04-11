@@ -529,11 +529,9 @@ impl ConfigDocument {
             return false;
         };
 
-        let path = Path::new(path);
         for (key, item) in filesystem.iter() {
             if matches!(item.as_str(), Some("write")) {
-                let candidate = Path::new(key);
-                if path.starts_with(candidate) && path != candidate {
+                if is_strict_descendant_config_path(path, key) {
                     return true;
                 }
                 continue;
@@ -542,8 +540,7 @@ impl ConfigDocument {
             let Some(scoped_entries) = item.as_table() else {
                 continue;
             };
-            let base = Path::new(key);
-            if !base.is_absolute() {
+            if !is_absolute_config_path(key) {
                 continue;
             }
 
@@ -552,12 +549,8 @@ impl ConfigDocument {
                     continue;
                 }
 
-                let candidate = if subpath == "." {
-                    base.to_path_buf()
-                } else {
-                    base.join(subpath)
-                };
-                if path.starts_with(&candidate) && path != candidate {
+                let candidate = join_config_path(key, subpath);
+                if is_strict_descendant_config_path(path, &candidate) {
                     return true;
                 }
             }
@@ -575,13 +568,11 @@ impl ConfigDocument {
             return false;
         };
 
-        let path = Path::new(path);
         let mut descendants_to_remove = Vec::new();
         let mut scoped_parents_to_prune = Vec::new();
         for (key, item) in filesystem.iter() {
             if matches!(item.as_str(), Some("read")) {
-                let candidate = Path::new(key);
-                if candidate.starts_with(path) && candidate != path {
+                if is_strict_descendant_config_path(key, path) {
                     descendants_to_remove.push(vec![key.to_string()]);
                 }
                 continue;
@@ -590,8 +581,7 @@ impl ConfigDocument {
             let Some(scoped_entries) = item.as_table() else {
                 continue;
             };
-            let base = Path::new(key);
-            if !base.is_absolute() {
+            if !is_absolute_config_path(key) {
                 continue;
             }
 
@@ -600,12 +590,8 @@ impl ConfigDocument {
                     continue;
                 }
 
-                let candidate = if subpath == "." {
-                    base.to_path_buf()
-                } else {
-                    base.join(subpath)
-                };
-                if candidate.starts_with(path) && candidate != path {
+                let candidate = join_config_path(key, subpath);
+                if is_strict_descendant_config_path(&candidate, path) {
                     descendants_to_remove.push(vec![key.to_string(), subpath.to_string()]);
                     scoped_parents_to_prune.push(key.to_string());
                 }
@@ -916,6 +902,47 @@ fn normalize_skill_config_path(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .to_string()
+}
+
+fn is_absolute_config_path(path: &str) -> bool {
+    path.starts_with('/')
+        || path.starts_with('\\')
+        || path.as_bytes().get(0..3).is_some_and(|prefix| {
+            prefix[0].is_ascii_alphabetic() && prefix[1] == b':' && is_separator(prefix[2])
+        })
+}
+
+fn is_separator(byte: u8) -> bool {
+    byte == b'/' || byte == b'\\'
+}
+
+fn join_config_path(base: &str, subpath: &str) -> String {
+    if subpath == "." {
+        return base.to_string();
+    }
+
+    format!(
+        "{}/{}",
+        base.trim_end_matches(['/', '\\']),
+        subpath.trim_start_matches(['/', '\\'])
+    )
+}
+
+fn is_strict_descendant_config_path(path: &str, ancestor: &str) -> bool {
+    let path = normalize_config_path(path);
+    let ancestor = normalize_config_path(ancestor);
+    path != ancestor
+        && path
+            .strip_prefix(&ancestor)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn normalize_config_path(path: &str) -> String {
+    let mut normalized = path.replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
 }
 
 fn filesystem_path_access(
