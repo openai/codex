@@ -96,15 +96,47 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
-        parse_completed,
+    let mut results = Vec::new();
+    let mut tiers = dispatcher::select_handlers_by_trust_precedence(
+        &matched,
+        HookEventName::UserPromptSubmit,
+        /*matcher_input*/ None,
     )
-    .await;
+    .into_iter()
+    .peekable();
+    while let Some(tier) = tiers.next() {
+        let tier_results = dispatcher::execute_handlers(
+            shell,
+            tier,
+            input_json.clone(),
+            request.cwd.as_path(),
+            Some(request.turn_id.clone()),
+            parse_completed,
+        )
+        .await;
+        let tier_should_stop = tier_results.iter().any(|result| result.data.should_stop);
+        results.extend(tier_results);
+        if tier_should_stop {
+            let skipped_message =
+                "skipped because a higher-precedence UserPromptSubmit hook stopped processing"
+                    .to_string();
+            for skipped_handler in tiers.flatten() {
+                results.push(dispatcher::ParsedHandler {
+                    completed: dispatcher::skipped_completed_event(
+                        &skipped_handler,
+                        Some(request.turn_id.clone()),
+                        skipped_message.clone(),
+                    ),
+                    data: UserPromptSubmitHandlerData {
+                        should_stop: false,
+                        stop_reason: None,
+                        additional_contexts_for_model: Vec::new(),
+                    },
+                });
+            }
+            break;
+        }
+    }
 
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
@@ -270,6 +302,7 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> UserPr
 mod tests {
     use std::path::PathBuf;
 
+    use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
@@ -277,7 +310,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::UserPromptSubmitHandlerData;
+    use super::UserPromptSubmitRequest;
     use super::parse_completed;
+    use crate::engine::CommandShell;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
 
@@ -410,6 +445,89 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn higher_precedence_stop_skips_lower_precedence_handlers() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let marker_path = temp.path().join("project-ran");
+        let (shell_program, shell_args, stopping_command, project_command) = if cfg!(windows) {
+            (
+                "cmd.exe".to_string(),
+                vec!["/D".to_string(), "/C".to_string()],
+                r#"echo {^"decision^":^"block^",^"reason^":^"slow down^",^"hookSpecificOutput^":{^"hookEventName^":^"UserPromptSubmit^",^"additionalContext^":^"trusted context^"}}"#.to_string(),
+                "type nul > project-ran && echo project context".to_string(),
+            )
+        } else {
+            (
+                "/bin/sh".to_string(),
+                vec!["-c".to_string()],
+                "printf '%s' '{\"decision\":\"block\",\"reason\":\"slow down\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"trusted context\"}}'".to_string(),
+                "touch project-ran && printf 'project context'".to_string(),
+            )
+        };
+        let handlers = vec![
+            ConfiguredHandler {
+                event_name: HookEventName::UserPromptSubmit,
+                matcher: None,
+                command: stopping_command,
+                timeout_sec: 5,
+                status_message: None,
+                source_path: PathBuf::from("/tmp/home/.codex/hooks.json"),
+                is_project: false,
+                display_order: 0,
+            },
+            ConfiguredHandler {
+                event_name: HookEventName::UserPromptSubmit,
+                matcher: None,
+                command: project_command,
+                timeout_sec: 5,
+                status_message: None,
+                source_path: PathBuf::from("/tmp/project/.codex/hooks.json"),
+                is_project: true,
+                display_order: 1,
+            },
+        ];
+
+        let outcome = super::run(
+            &handlers,
+            &CommandShell {
+                program: shell_program,
+                args: shell_args,
+            },
+            UserPromptSubmitRequest {
+                session_id: ThreadId::new(),
+                turn_id: "turn-1".to_string(),
+                cwd: temp.path().to_path_buf(),
+                transcript_path: None,
+                model: "gpt-5".to_string(),
+                permission_mode: "default".to_string(),
+                prompt: "hello".to_string(),
+            },
+        )
+        .await;
+
+        assert!(outcome.should_stop);
+        assert_eq!(outcome.stop_reason, Some("slow down".to_string()));
+        assert_eq!(
+            outcome.additional_contexts,
+            vec!["trusted context".to_string()]
+        );
+        assert!(!marker_path.exists());
+        assert_eq!(outcome.hook_events.len(), 2);
+        assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Blocked);
+        assert_eq!(outcome.hook_events[1].run.status, HookRunStatus::Failed);
+        assert_eq!(
+            outcome.hook_events[1].run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text:
+                    "skipped because a higher-precedence UserPromptSubmit hook stopped processing"
+                        .to_string(),
+            }]
+        );
+
+        Ok(())
+    }
+
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::UserPromptSubmit,
@@ -418,6 +536,7 @@ mod tests {
             timeout_sec: 5,
             status_message: None,
             source_path: PathBuf::from("/tmp/hooks.json"),
+            is_project: false,
             display_order: 0,
         }
     }

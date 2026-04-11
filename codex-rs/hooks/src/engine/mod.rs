@@ -35,6 +35,7 @@ pub(crate) struct ConfiguredHandler {
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: PathBuf,
+    pub is_project: bool,
     pub display_order: i64,
 }
 
