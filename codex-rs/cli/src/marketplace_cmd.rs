@@ -186,6 +186,7 @@ fn record_added_marketplace(
     let last_updated = utc_timestamp_now()?;
     let update = MarketplaceConfigUpdate {
         last_updated: &last_updated,
+        last_revision: None,
         source_type: install_metadata.config_source_type(),
         source: &source,
         ref_name: install_metadata.ref_name(),
