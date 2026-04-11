@@ -91,6 +91,11 @@ impl CodexThread {
         self.codex.session.flush_rollout().await
     }
 
+    #[doc(hidden)]
+    pub async fn has_pending_input(&self) -> bool {
+        self.codex.session.has_pending_input().await
+    }
+
     pub async fn submit_with_trace(
         &self,
         op: Op,

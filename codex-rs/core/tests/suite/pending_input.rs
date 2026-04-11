@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_core::CodexThread;
 use codex_protocol::AgentPath;
@@ -31,6 +32,7 @@ use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -157,6 +159,22 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
         })
         .await
         .unwrap_or_else(|err| panic!("submit queue-only agent mail: {err}"));
+}
+
+async fn wait_for_pending_input(codex: &CodexThread) {
+    if timeout(Duration::from_secs(5), async {
+        loop {
+            if codex.has_pending_input().await {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_err()
+    {
+        panic!("mailbox message should become pending input");
+    }
 }
 
 async fn wait_for_reasoning_item_started(codex: &CodexThread) {
@@ -346,6 +364,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
     wait_for_reasoning_item_started(&codex).await;
 
     submit_queue_only_agent_mail(&codex, "queued child update").await;
+    wait_for_pending_input(&codex).await;
 
     let _ = gate_reasoning_done_tx.send(());
 
@@ -408,6 +427,7 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
     .await;
 
     submit_queue_only_agent_mail(&codex, "queued child update").await;
+    wait_for_pending_input(&codex).await;
 
     let _ = gate_message_done_tx.send(());
 
