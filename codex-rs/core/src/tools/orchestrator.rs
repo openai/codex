@@ -151,7 +151,7 @@ impl ToolOrchestrator {
                 otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                 match decision {
-                    ReviewDecision::Denied | ReviewDecision::Abort => {
+                    ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
                         let reason = if let Some(review_id) = guardian_review_id.as_deref() {
                             guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
                         } else {
@@ -306,7 +306,9 @@ impl ToolOrchestrator {
                     otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                     match decision {
-                        ReviewDecision::Denied | ReviewDecision::Abort => {
+                        ReviewDecision::Denied
+                        | ReviewDecision::TimedOut
+                        | ReviewDecision::Abort => {
                             let reason = if let Some(review_id) = guardian_review_id.as_deref() {
                                 guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
                                     .await
