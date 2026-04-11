@@ -153,6 +153,16 @@ impl AgentIdentityManager {
         Ok(stored_identity)
     }
 
+    pub(crate) async fn task_matches_current_binding(&self, task: &RegisteredAgentTask) -> bool {
+        if !self.feature_enabled {
+            return false;
+        }
+
+        self.current_auth_binding()
+            .await
+            .is_some_and(|(_, binding)| task.matches_binding(&binding))
+    }
+
     async fn current_auth_binding(&self) -> Option<(CodexAuth, AgentIdentityBinding)> {
         let Some(auth) = self.auth_manager.auth().await else {
             debug!("skipping agent identity flow because no auth is available");
@@ -371,12 +381,11 @@ impl StoredAgentIdentity {
     }
 
     fn matches_binding(&self, binding: &AgentIdentityBinding) -> bool {
-        self.binding_id == binding.binding_id
-            && self.chatgpt_account_id == binding.chatgpt_account_id
-            && match binding.chatgpt_user_id.as_deref() {
-                Some(chatgpt_user_id) => self.chatgpt_user_id.as_deref() == Some(chatgpt_user_id),
-                None => true,
-            }
+        binding.matches_parts(
+            &self.binding_id,
+            &self.chatgpt_account_id,
+            self.chatgpt_user_id.as_deref(),
+        )
     }
 
     fn validate_key_material(&self) -> Result<()> {
@@ -395,6 +404,20 @@ impl StoredAgentIdentity {
 }
 
 impl AgentIdentityBinding {
+    fn matches_parts(
+        &self,
+        binding_id: &str,
+        chatgpt_account_id: &str,
+        chatgpt_user_id: Option<&str>,
+    ) -> bool {
+        binding_id == self.binding_id
+            && chatgpt_account_id == self.chatgpt_account_id
+            && match self.chatgpt_user_id.as_deref() {
+                Some(expected_user_id) => chatgpt_user_id == Some(expected_user_id),
+                None => true,
+            }
+    }
+
     fn from_auth(auth: &CodexAuth, forced_workspace_id: Option<String>) -> Option<Self> {
         if !auth.is_chatgpt_auth() {
             return None;

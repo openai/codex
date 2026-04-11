@@ -16,6 +16,9 @@ const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RegisteredAgentTask {
+    pub(crate) binding_id: String,
+    pub(crate) chatgpt_account_id: String,
+    pub(crate) chatgpt_user_id: Option<String>,
     pub(crate) agent_runtime_id: String,
     pub(crate) task_id: String,
     pub(crate) registered_at: String,
@@ -41,6 +44,15 @@ impl AgentIdentityManager {
         let Some((auth, binding)) = self.current_auth_binding().await else {
             return Ok(None);
         };
+
+        self.register_task_for_binding(auth, binding).await
+    }
+
+    async fn register_task_for_binding(
+        &self,
+        auth: CodexAuth,
+        binding: AgentIdentityBinding,
+    ) -> Result<Option<RegisteredAgentTask>> {
         let stored_identity = self
             .ensure_registered_identity_for_binding(&auth, &binding)
             .await?;
@@ -70,6 +82,9 @@ impl AgentIdentityManager {
                 .await
                 .with_context(|| format!("failed to parse agent task response from {url}"))?;
             let registered_task = RegisteredAgentTask {
+                binding_id: stored_identity.binding_id.clone(),
+                chatgpt_account_id: stored_identity.chatgpt_account_id.clone(),
+                chatgpt_user_id: stored_identity.chatgpt_user_id.clone(),
                 agent_runtime_id: stored_identity.agent_runtime_id.clone(),
                 task_id: decrypt_task_id_response(
                     &stored_identity,
@@ -88,6 +103,22 @@ impl AgentIdentityManager {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         anyhow::bail!("agent task registration failed with status {status} from {url}: {body}")
+    }
+}
+
+impl RegisteredAgentTask {
+    pub(super) fn matches_binding(&self, binding: &AgentIdentityBinding) -> bool {
+        binding.matches_parts(
+            &self.binding_id,
+            &self.chatgpt_account_id,
+            self.chatgpt_user_id.as_deref(),
+        )
+    }
+
+    pub(crate) fn has_same_binding(&self, other: &Self) -> bool {
+        self.binding_id == other.binding_id
+            && self.chatgpt_account_id == other.chatgpt_account_id
+            && self.chatgpt_user_id == other.chatgpt_user_id
     }
 }
 
@@ -211,6 +242,9 @@ mod tests {
         assert_eq!(
             task,
             RegisteredAgentTask {
+                binding_id: "chatgpt-account-account-123".to_string(),
+                chatgpt_account_id: "account-123".to_string(),
+                chatgpt_user_id: Some("user-123".to_string()),
                 agent_runtime_id: "agent-123".to_string(),
                 task_id: "task_123".to_string(),
                 registered_at: task.registered_at.clone(),
@@ -254,6 +288,79 @@ mod tests {
 
         assert_eq!(task.agent_runtime_id, "agent-fallback");
         assert_eq!(task.task_id, "task_fallback");
+    }
+
+    #[tokio::test]
+    async fn register_task_for_binding_keeps_one_auth_snapshot() {
+        let server = MockServer::start().await;
+        let target_url = agent_task_registration_url(&server.uri(), "agent-123");
+        mount_human_biscuit(&server, &target_url).await;
+        let binding_auth = make_chatgpt_auth("account-123", Some("user-123"));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(make_chatgpt_auth("account-456", Some("user-456")));
+        let manager = AgentIdentityManager::new_for_tests(
+            auth_manager,
+            /*feature_enabled*/ true,
+            server.uri(),
+            SessionSource::Cli,
+        );
+        let stored_identity =
+            seed_stored_identity(&manager, &binding_auth, "agent-123", "account-123");
+        let encrypted_task_id =
+            encrypt_task_id_for_identity(&stored_identity, "task_123").expect("task ciphertext");
+        let binding =
+            AgentIdentityBinding::from_auth(&binding_auth, /*forced_workspace_id*/ None)
+                .expect("binding");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agent/agent-123/task/register"))
+            .and(header("x-openai-authorization", "human-biscuit"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "encrypted_task_id": encrypted_task_id,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let task = manager
+            .register_task_for_binding(binding_auth, binding)
+            .await
+            .unwrap()
+            .expect("task should be registered");
+
+        assert_eq!(
+            task,
+            RegisteredAgentTask {
+                binding_id: "chatgpt-account-account-123".to_string(),
+                chatgpt_account_id: "account-123".to_string(),
+                chatgpt_user_id: Some("user-123".to_string()),
+                agent_runtime_id: "agent-123".to_string(),
+                task_id: "task_123".to_string(),
+                registered_at: task.registered_at.clone(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn task_matches_current_binding_rejects_stale_auth_binding() {
+        let auth_manager =
+            AuthManager::from_auth_for_testing(make_chatgpt_auth("account-456", Some("user-456")));
+        let manager = AgentIdentityManager::new_for_tests(
+            auth_manager,
+            /*feature_enabled*/ true,
+            "https://chatgpt.com/backend-api/".to_string(),
+            SessionSource::Cli,
+        );
+        let task = RegisteredAgentTask {
+            binding_id: "chatgpt-account-account-123".to_string(),
+            chatgpt_account_id: "account-123".to_string(),
+            chatgpt_user_id: Some("user-123".to_string()),
+            agent_runtime_id: "agent-123".to_string(),
+            task_id: "task_123".to_string(),
+            registered_at: "2026-03-23T12:00:00Z".to_string(),
+        };
+
+        assert!(!manager.task_matches_current_binding(&task).await);
     }
 
     async fn mount_human_biscuit(server: &MockServer, target_url: &str) {

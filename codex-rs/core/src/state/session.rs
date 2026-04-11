@@ -197,6 +197,10 @@ impl SessionState {
         self.agent_task = Some(agent_task);
     }
 
+    pub(crate) fn clear_agent_task(&mut self) {
+        self.agent_task = None;
+    }
+
     // Adds connector IDs to the active set and returns the merged selection.
     pub(crate) fn merge_connector_selection<I>(&mut self, connector_ids: I) -> HashSet<String>
     where

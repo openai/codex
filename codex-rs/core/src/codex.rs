@@ -1590,37 +1590,89 @@ impl Session {
         .await;
         handlers::shutdown(self, self.next_internal_sub_id()).await;
     }
-    async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
-        {
+
+    async fn cached_agent_task_for_current_binding(&self) -> Option<RegisteredAgentTask> {
+        let agent_task = {
             let state = self.state.lock().await;
-            if let Some(agent_task) = state.agent_task() {
+            state.agent_task()
+        }?;
+
+        if self
+            .services
+            .agent_identity_manager
+            .task_matches_current_binding(&agent_task)
+            .await
+        {
+            debug!(
+                agent_runtime_id = %agent_task.agent_runtime_id,
+                task_id = %agent_task.task_id,
+                "reusing cached agent task"
+            );
+            return Some(agent_task);
+        }
+
+        debug!(
+            agent_runtime_id = %agent_task.agent_runtime_id,
+            task_id = %agent_task.task_id,
+            "discarding cached agent task because auth binding changed"
+        );
+        let mut state = self.state.lock().await;
+        if state.agent_task().as_ref() == Some(&agent_task) {
+            state.clear_agent_task();
+        }
+        None
+    }
+
+    async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
+        if let Some(agent_task) = self.cached_agent_task_for_current_binding().await {
+            return Ok(Some(agent_task));
+        }
+
+        for _ in 0..2 {
+            let Some(agent_task) = self.services.agent_identity_manager.register_task().await?
+            else {
+                return Ok(None);
+            };
+
+            if !self
+                .services
+                .agent_identity_manager
+                .task_matches_current_binding(&agent_task)
+                .await
+            {
                 debug!(
                     agent_runtime_id = %agent_task.agent_runtime_id,
                     task_id = %agent_task.task_id,
-                    "reusing cached agent task"
+                    "discarding newly registered agent task because auth binding changed"
                 );
-                return Ok(Some(agent_task));
+                continue;
             }
+
+            {
+                let mut state = self.state.lock().await;
+                if let Some(existing_agent_task) = state.agent_task() {
+                    if existing_agent_task.has_same_binding(&agent_task) {
+                        return Ok(Some(existing_agent_task));
+                    }
+                    debug!(
+                        agent_runtime_id = %existing_agent_task.agent_runtime_id,
+                        task_id = %existing_agent_task.task_id,
+                        "replacing cached agent task because auth binding changed"
+                    );
+                }
+                state.set_agent_task(agent_task.clone());
+            }
+
+            info!(
+                thread_id = %self.conversation_id,
+                agent_runtime_id = %agent_task.agent_runtime_id,
+                task_id = %agent_task.task_id,
+                "registered agent task for thread"
+            );
+            return Ok(Some(agent_task));
         }
 
-        let Some(agent_task) = self.services.agent_identity_manager.register_task().await? else {
-            return Ok(None);
-        };
-        {
-            let mut state = self.state.lock().await;
-            if let Some(existing_agent_task) = state.agent_task() {
-                return Ok(Some(existing_agent_task));
-            }
-            state.set_agent_task(agent_task.clone());
-        }
-
-        info!(
-            thread_id = %self.conversation_id,
-            agent_runtime_id = %agent_task.agent_runtime_id,
-            task_id = %agent_task.task_id,
-            "registered agent task for thread"
-        );
-        Ok(Some(agent_task))
+        Ok(None)
     }
 
     #[allow(clippy::too_many_arguments)]
