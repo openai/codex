@@ -57,7 +57,6 @@ pub struct TurnResolvedConfigFact {
     pub submission_type: Option<TurnSubmissionType>,
     pub ephemeral: bool,
     pub session_source: SessionSource,
-    pub initialization_mode: ThreadInitializationMode,
     pub model: String,
     pub model_provider: String,
     pub sandbox_policy: SandboxPolicy,
