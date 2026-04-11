@@ -52,7 +52,7 @@ enum PendingMessageStart {
 }
 
 enum PendingMessageClaim {
-    Claimed(PendingInputItem, TimerDelivery),
+    Claimed(Box<PendingInputItem>, TimerDelivery),
     NotReady,
 }
 
@@ -271,6 +271,7 @@ impl Session {
         let PendingMessageClaim::Claimed(input_item, delivery) = claim else {
             return PendingMessageStart::NotReady;
         };
+        let input_item = *input_item;
 
         match delivery {
             TimerDelivery::SteerCurrentTurn => {
@@ -364,7 +365,7 @@ impl Session {
                         item: message_prompt_input_item(&message_context),
                         injected_event: injected_message_event(&message_context),
                     });
-                    return Some(PendingMessageClaim::Claimed(input_item, delivery));
+                    return Some(PendingMessageClaim::Claimed(Box::new(input_item), delivery));
                 }
                 Some(codex_state::ThreadMessageClaim::Invalid { id, reason }) => {
                     warn!("dropped invalid queued message {id}: {reason}");
