@@ -480,6 +480,7 @@ mod tests {
     use crate::legacy_core::config_loader::ConfigRequirementsToml;
     use crate::legacy_core::config_loader::ConstrainedWithSource;
     use crate::legacy_core::config_loader::FeatureRequirementsToml;
+    use crate::legacy_core::config_loader::FilesystemConstraints;
     use crate::legacy_core::config_loader::McpServerIdentity;
     use crate::legacy_core::config_loader::McpServerRequirement;
     use crate::legacy_core::config_loader::NetworkConstraints;
@@ -487,7 +488,6 @@ mod tests {
     use crate::legacy_core::config_loader::NetworkDomainPermissionsToml;
     use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
     use crate::legacy_core::config_loader::NetworkUnixSocketPermissionsToml;
-    use crate::legacy_core::config_loader::FilesystemConstraints;
     use crate::legacy_core::config_loader::RequirementSource;
     use crate::legacy_core::config_loader::ResidencyRequirement;
     use crate::legacy_core::config_loader::SandboxModeRequirement;
