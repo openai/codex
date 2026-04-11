@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn github_shorthand_parses_ref_suffix() {
         assert_eq!(
-            parse_marketplace_source("owner/repo@main", /* explicit_ref */ None).unwrap(),
+            parse_marketplace_source("owner/repo@main", /*explicit_ref*/ None).unwrap(),
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: Some("main".to_string()),
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(
             parse_marketplace_source(
                 "https://example.com/team/repo.git#v1",
-                /* explicit_ref */ None,
+                /*explicit_ref*/ None,
             )
             .unwrap(),
             MarketplaceSource::Git {
@@ -426,7 +426,7 @@ mod tests {
         assert_eq!(
             parse_marketplace_source(
                 "owner/repo@main",
-                /* explicit_ref */ Some("release".to_string()),
+                /*explicit_ref*/ Some("release".to_string()),
             )
             .unwrap(),
             MarketplaceSource::Git {
@@ -438,10 +438,10 @@ mod tests {
 
     #[test]
     fn github_shorthand_and_git_url_normalize_to_same_source() {
-        let shorthand = parse_marketplace_source("owner/repo", /* explicit_ref */ None).unwrap();
+        let shorthand = parse_marketplace_source("owner/repo", /*explicit_ref*/ None).unwrap();
         let git_url = parse_marketplace_source(
             "https://github.com/owner/repo.git",
-            /* explicit_ref */ None,
+            /*explicit_ref*/ None,
         )
         .unwrap();
 
@@ -458,11 +458,8 @@ mod tests {
     #[test]
     fn github_url_with_trailing_slash_normalizes_without_extra_path_segment() {
         assert_eq!(
-            parse_marketplace_source(
-                "https://github.com/owner/repo/",
-                /* explicit_ref */ None
-            )
-            .unwrap(),
+            parse_marketplace_source("https://github.com/owner/repo/", /*explicit_ref*/ None)
+                .unwrap(),
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: None,
@@ -473,11 +470,8 @@ mod tests {
     #[test]
     fn non_github_https_source_parses_as_git_url() {
         assert_eq!(
-            parse_marketplace_source(
-                "https://gitlab.com/owner/repo",
-                /* explicit_ref */ None
-            )
-            .unwrap(),
+            parse_marketplace_source("https://gitlab.com/owner/repo", /*explicit_ref*/ None)
+                .unwrap(),
             MarketplaceSource::Git {
                 url: "https://gitlab.com/owner/repo".to_string(),
                 ref_name: None,
@@ -488,7 +482,7 @@ mod tests {
     #[test]
     fn file_url_source_is_rejected() {
         let err =
-            parse_marketplace_source("file:///tmp/marketplace.git", /* explicit_ref */ None)
+            parse_marketplace_source("file:///tmp/marketplace.git", /*explicit_ref*/ None)
                 .unwrap_err();
 
         assert!(
@@ -500,7 +494,7 @@ mod tests {
 
     #[test]
     fn local_path_source_is_rejected() {
-        let err = parse_marketplace_source("./marketplace", /* explicit_ref */ None).unwrap_err();
+        let err = parse_marketplace_source("./marketplace", /*explicit_ref*/ None).unwrap_err();
 
         assert!(
             err.to_string()
@@ -514,7 +508,7 @@ mod tests {
         assert_eq!(
             parse_marketplace_source(
                 "ssh://git@github.com/owner/repo.git#main",
-                /* explicit_ref */ None,
+                /*explicit_ref*/ None,
             )
             .unwrap(),
             MarketplaceSource::Git {
@@ -526,8 +520,14 @@ mod tests {
 
     #[test]
     fn utc_timestamp_formats_unix_epoch_as_rfc3339_utc() {
-        assert_eq!(format_utc_timestamp(0), "1970-01-01T00:00:00Z");
-        assert_eq!(format_utc_timestamp(1_775_779_200), "2026-04-10T00:00:00Z");
+        assert_eq!(
+            format_utc_timestamp(/*seconds_since_epoch*/ 0),
+            "1970-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            format_utc_timestamp(/*seconds_since_epoch*/ 1_775_779_200),
+            "2026-04-10T00:00:00Z"
+        );
     }
 
     #[test]
