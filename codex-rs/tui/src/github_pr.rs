@@ -16,6 +16,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 use tokio::process::Command;
@@ -23,6 +24,8 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 
 const GH_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
+static GH_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// Compact GitHub pull request metadata that can be rendered in status surfaces.
 ///
@@ -91,7 +94,9 @@ pub(crate) async fn lookup_current_branch_pull_request(cwd: &Path) -> Option<Git
 }
 
 fn resolve_gh_path() -> Option<PathBuf> {
-    resolve_gh_path_from_path(std::env::var_os("PATH").as_deref())
+    GH_PATH
+        .get_or_init(|| resolve_gh_path_from_path(std::env::var_os("PATH").as_deref()))
+        .clone()
 }
 
 fn resolve_gh_path_from_path(path_env: Option<&OsStr>) -> Option<PathBuf> {
