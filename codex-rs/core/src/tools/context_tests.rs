@@ -113,9 +113,21 @@ fn mcp_tool_output_response_item_includes_wall_time() {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             assert_eq!(call_id, "mcp-call-1");
             assert_eq!(output.success, Some(true));
+            let Some(text) = output.body.to_text() else {
+                panic!("MCP output should serialize as text");
+            };
+            let Some(payload) = text.strip_prefix("Wall time: 1.2500 seconds\nOutput:\n") else {
+                panic!("MCP output should include wall-time header: {text}");
+            };
+            let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_else(|err| {
+                panic!("MCP output should serialize JSON content: {err}");
+            });
             assert_eq!(
-                output.body.to_text().as_deref(),
-                Some("Wall time: 1.2500 seconds\nOutput:\n[{\"text\":\"done\",\"type\":\"text\"}]")
+                parsed,
+                json!([{
+                    "type": "text",
+                    "text": "done",
+                }])
             );
         }
         other => panic!("expected FunctionCallOutput, got {other:?}"),
