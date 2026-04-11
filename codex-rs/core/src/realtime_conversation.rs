@@ -589,6 +589,11 @@ async fn prepare_realtime_start(
         .transport
         .unwrap_or(ConversationStartTransport::Websocket);
     let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
+    crate::client::apply_fedramp_api_endpoint_if_needed(
+        &provider,
+        auth.as_ref(),
+        &mut api_provider,
+    );
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }

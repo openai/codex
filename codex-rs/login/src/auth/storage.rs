@@ -34,6 +34,13 @@ pub struct AuthDotJson {
     #[serde(rename = "OPENAI_API_KEY")]
     pub openai_api_key: Option<String>,
 
+    #[serde(
+        rename = "OPENAI_API_KEY_IS_FEDRAMP",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub openai_api_key_is_fedramp: Option<bool>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenData>,
 

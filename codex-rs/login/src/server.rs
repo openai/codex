@@ -779,6 +779,7 @@ pub(crate) async fn persist_tokens_async(
         let auth = AuthDotJson {
             auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: api_key,
+            openai_api_key_is_fedramp: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
         };

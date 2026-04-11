@@ -60,6 +60,7 @@ use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::OPENAI_GOV_API_BASE_URL;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::build_reqwest_client;
@@ -166,6 +167,19 @@ struct CurrentClientSetup {
     auth: Option<CodexAuth>,
     api_provider: codex_api::Provider,
     api_auth: CoreAuthProvider,
+}
+
+pub(crate) fn apply_fedramp_api_endpoint_if_needed(
+    provider_info: &ModelProviderInfo,
+    auth: Option<&CodexAuth>,
+    api_provider: &mut codex_api::Provider,
+) {
+    if auth.is_some_and(CodexAuth::openai_api_key_is_fedramp)
+        && provider_info.is_openai()
+        && provider_info.base_url.is_none()
+    {
+        api_provider.base_url = OPENAI_GOV_API_BASE_URL.to_string();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -664,10 +678,15 @@ impl ModelClient {
             Some(manager) => manager.auth().await,
             None => None,
         };
-        let api_provider = self
+        let mut api_provider = self
             .state
             .provider
             .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+        apply_fedramp_api_endpoint_if_needed(
+            &self.state.provider,
+            auth.as_ref(),
+            &mut api_provider,
+        );
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         Ok(CurrentClientSetup {
             auth,

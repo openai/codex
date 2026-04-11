@@ -12,8 +12,11 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
+use codex_login::OPENAI_GOV_API_BASE_URL;
+use codex_login::OpenAiApiKeyLoginCheck;
 use codex_login::ServerOptions;
-use codex_login::login_with_api_key;
+use codex_login::check_openai_api_key_for_login;
+use codex_login::login_with_api_key_and_fedramp_status;
 use codex_login::logout;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
@@ -35,6 +38,21 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const OPENAI_MODEL_PROVIDER_ID: &str = "openai";
+
+fn should_check_openai_api_key_for_login_provider(
+    model_provider_id: &str,
+    model_provider_base_url: Option<&str>,
+) -> bool {
+    model_provider_id == OPENAI_MODEL_PROVIDER_ID && model_provider_base_url.is_none()
+}
+
+fn should_check_openai_api_key_for_login(config: &Config) -> bool {
+    should_check_openai_api_key_for_login_provider(
+        &config.model_provider_id,
+        config.model_provider.base_url.as_deref(),
+    )
+}
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -171,20 +189,40 @@ pub async fn run_login_with_api_key(
         std::process::exit(1);
     }
 
-    match login_with_api_key(
+    let login_check = if should_check_openai_api_key_for_login(&config) {
+        match check_openai_api_key_for_login(&api_key).await {
+            Ok(check) => Some(check),
+            Err(e) => {
+                eprintln!("Error logging in: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    let openai_api_key_is_fedramp = login_check.as_ref().map(
+        |OpenAiApiKeyLoginCheck {
+             current_organization_is_fedramp,
+         }| *current_organization_is_fedramp,
+    );
+
+    if let Err(e) = login_with_api_key_and_fedramp_status(
         &config.codex_home,
         &api_key,
+        openai_api_key_is_fedramp,
         config.cli_auth_credentials_store_mode,
     ) {
-        Ok(_) => {
-            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
-            std::process::exit(0);
-        }
-        Err(e) => {
-            eprintln!("Error logging in: {e}");
-            std::process::exit(1);
-        }
+        eprintln!("Error logging in: {e}");
+        std::process::exit(1);
     }
+
+    if openai_api_key_is_fedramp == Some(true) {
+        eprintln!("FedRAMP API key detected. Codex will use {OPENAI_GOV_API_BASE_URL}.");
+    }
+
+    eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+    std::process::exit(0);
 }
 
 pub fn read_api_key_from_stdin() -> String {
@@ -393,6 +431,7 @@ fn safe_format_key(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::safe_format_key;
+    use super::should_check_openai_api_key_for_login_provider;
 
     #[test]
     fn formats_long_key() {
@@ -404,5 +443,28 @@ mod tests {
     fn short_key_returns_stars() {
         let key = "sk-proj-12345";
         assert_eq!(safe_format_key(key), "***");
+    }
+
+    #[test]
+    fn checks_api_key_only_for_default_openai_provider() {
+        assert!(should_check_openai_api_key_for_login_provider(
+            "openai", None
+        ));
+    }
+
+    #[test]
+    fn skips_api_key_check_for_custom_openai_base_url() {
+        assert!(!should_check_openai_api_key_for_login_provider(
+            "openai",
+            Some("https://proxy.example/v1")
+        ));
+    }
+
+    #[test]
+    fn skips_api_key_check_for_custom_provider() {
+        assert!(!should_check_openai_api_key_for_login_provider(
+            "custom_provider",
+            Some("https://provider.example/v1")
+        ));
     }
 }

@@ -24,6 +24,7 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
+use crate::default_client::build_reqwest_client;
 use crate::default_client::create_client;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
@@ -49,6 +50,7 @@ pub enum CodexAuth {
 #[derive(Debug, Clone)]
 pub struct ApiKeyAuth {
     api_key: String,
+    openai_api_key_is_fedramp: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +86,19 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+pub const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
+pub const OPENAI_GOV_API_BASE_URL: &str = "https://gov.api.openai.com/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiApiKeyLoginCheck {
+    pub current_organization_is_fedramp: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeAuthCheckResponse {
+    #[serde(default)]
+    current_organization_is_fedramp: bool,
+}
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -195,7 +210,10 @@ impl CodexAuth {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
-            return Ok(Self::from_api_key(api_key));
+            return Ok(Self::from_api_key_with_fedramp_status(
+                api_key,
+                auth_dot_json.openai_api_key_is_fedramp.unwrap_or(false),
+            ));
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -356,6 +374,7 @@ impl CodexAuth {
         let auth_dot_json = AuthDotJson {
             auth_mode: Some(ApiAuthMode::Chatgpt),
             openai_api_key: None,
+            openai_api_key_is_fedramp: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
                 access_token: "Access Token".to_string(),
@@ -375,9 +394,24 @@ impl CodexAuth {
     }
 
     pub fn from_api_key(api_key: &str) -> Self {
+        Self::from_api_key_with_fedramp_status(api_key, /*openai_api_key_is_fedramp*/ false)
+    }
+
+    pub fn from_api_key_with_fedramp_status(
+        api_key: &str,
+        openai_api_key_is_fedramp: bool,
+    ) -> Self {
         Self::ApiKey(ApiKeyAuth {
             api_key: api_key.to_owned(),
+            openai_api_key_is_fedramp,
         })
+    }
+
+    pub fn openai_api_key_is_fedramp(&self) -> bool {
+        match self {
+            Self::ApiKey(auth) => auth.openai_api_key_is_fedramp,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => false,
+        }
     }
 }
 
@@ -417,6 +451,52 @@ pub fn read_codex_api_key_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+pub async fn check_openai_api_key_for_login(
+    api_key: &str,
+) -> std::io::Result<OpenAiApiKeyLoginCheck> {
+    check_openai_api_key_for_login_with_base_url(api_key, OPENAI_API_BASE_URL).await
+}
+
+pub async fn check_openai_api_key_for_login_with_base_url(
+    api_key: &str,
+    api_base_url: &str,
+) -> std::io::Result<OpenAiApiKeyLoginCheck> {
+    let client = build_reqwest_client();
+    let url = format!("{}/me", api_base_url.trim_end_matches('/'));
+    let response = client
+        .get(url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|err| std::io::Error::other(format!("/v1/me auth check failed: {err}")))?;
+
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "API key was rejected by /v1/me.",
+        ));
+    }
+    if !status.is_success() {
+        return Err(std::io::Error::other(format!(
+            "/v1/me auth check failed with {status}"
+        )));
+    }
+
+    let payload = response
+        .json::<MeAuthCheckResponse>()
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!(
+                "/v1/me auth check returned an invalid response: {err}"
+            ))
+        })?;
+
+    Ok(OpenAiApiKeyLoginCheck {
+        current_organization_is_fedramp: payload.current_organization_is_fedramp,
+    })
+}
+
 /// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
 /// if a file was removed, `Ok(false)` if no auth file was present.
 pub fn logout(
@@ -433,9 +513,25 @@ pub fn login_with_api_key(
     api_key: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
+    login_with_api_key_and_fedramp_status(
+        codex_home,
+        api_key,
+        /*openai_api_key_is_fedramp*/ None,
+        auth_credentials_store_mode,
+    )
+}
+
+/// Writes an `auth.json` that contains the API key and optional FedRAMP routing metadata.
+pub fn login_with_api_key_and_fedramp_status(
+    codex_home: &Path,
+    api_key: &str,
+    openai_api_key_is_fedramp: Option<bool>,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
+        openai_api_key_is_fedramp,
         tokens: None,
         last_refresh: None,
     };
@@ -809,6 +905,7 @@ impl AuthDotJson {
         Ok(Self {
             auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
             openai_api_key: None,
+            openai_api_key_is_fedramp: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
         })

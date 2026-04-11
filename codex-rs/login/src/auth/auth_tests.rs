@@ -16,6 +16,11 @@ use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tempfile::tempdir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -54,6 +59,7 @@ fn login_with_api_key_overwrites_existing_auth_json() {
     let auth_path = dir.path().join("auth.json");
     let stale_auth = json!({
         "OPENAI_API_KEY": "sk-old",
+        "OPENAI_API_KEY_IS_FEDRAMP": true,
         "tokens": {
             "id_token": "stale.header.payload",
             "access_token": "stale-access",
@@ -75,7 +81,91 @@ fn login_with_api_key_overwrites_existing_auth_json() {
         .try_read_auth_json(&auth_path)
         .expect("auth.json should parse");
     assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
+    assert_eq!(auth.openai_api_key_is_fedramp, None);
     assert!(auth.tokens.is_none(), "tokens should be cleared");
+}
+
+#[test]
+fn login_with_api_key_and_fedramp_status_persists_status_with_key() {
+    let dir = tempdir().unwrap();
+
+    super::login_with_api_key_and_fedramp_status(
+        dir.path(),
+        "sk-fed",
+        Some(true),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("login_with_api_key_and_fedramp_status should succeed");
+
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let auth_file = dir.path().join("auth.json");
+    let auth_dot_json = storage
+        .try_read_auth_json(&auth_file)
+        .expect("auth.json should parse");
+    assert_eq!(auth_dot_json.openai_api_key.as_deref(), Some("sk-fed"));
+    assert_eq!(auth_dot_json.openai_api_key_is_fedramp, Some(true));
+
+    let auth = super::load_auth(
+        dir.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(auth.openai_api_key_is_fedramp());
+}
+
+#[tokio::test]
+async fn api_key_login_check_reads_fedramp_status_from_current_org() {
+    let server = MockServer::start().await;
+    mount_me_response(
+        &server, /*status*/ 200, /*current_organization_is_fedramp*/ true,
+    )
+    .await;
+
+    let result =
+        check_openai_api_key_for_login_with_base_url("sk-test", &format!("{}/v1", server.uri()))
+            .await
+            .expect("auth check should succeed");
+
+    assert!(result.current_organization_is_fedramp);
+}
+
+#[tokio::test]
+async fn api_key_login_check_ignores_fedramp_membership_if_current_org_is_commercial() {
+    let server = MockServer::start().await;
+    let response = ResponseTemplate::new(200).set_body_json(json!({
+        "current_organization_is_fedramp": false,
+        "orgs": {
+            "data": [
+                {
+                    "id": "org-fed-membership",
+                    "is_fedramp": true
+                }
+            ]
+        }
+    }));
+    mount_me_response_template(&server, response).await;
+
+    let result =
+        check_openai_api_key_for_login_with_base_url("sk-test", &format!("{}/v1", server.uri()))
+            .await
+            .expect("auth check should succeed");
+
+    assert!(!result.current_organization_is_fedramp);
+}
+
+#[tokio::test]
+async fn api_key_login_check_rejects_invalid_api_key() {
+    let server = MockServer::start().await;
+    mount_me_response_template(&server, ResponseTemplate::new(401)).await;
+
+    let error =
+        check_openai_api_key_for_login_with_base_url("sk-test", &format!("{}/v1", server.uri()))
+            .await
+            .expect_err("auth check should fail");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 }
 
 #[test]
@@ -84,6 +174,25 @@ fn missing_auth_json_returns_none() {
     let auth = CodexAuth::from_auth_storage(dir.path(), AuthCredentialsStoreMode::File)
         .expect("call should succeed");
     assert_eq!(auth, None);
+}
+
+async fn mount_me_response(
+    server: &MockServer,
+    status: u16,
+    current_organization_is_fedramp: bool,
+) {
+    let response = ResponseTemplate::new(status).set_body_json(json!({
+        "current_organization_is_fedramp": current_organization_is_fedramp,
+    }));
+    mount_me_response_template(server, response).await;
+}
+
+async fn mount_me_response_template(server: &MockServer, response: ResponseTemplate) {
+    Mock::given(method("GET"))
+        .and(path("/v1/me"))
+        .respond_with(response)
+        .mount(server)
+        .await;
 }
 
 #[tokio::test]
@@ -122,6 +231,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         AuthDotJson {
             auth_mode: None,
             openai_api_key: None,
+            openai_api_key_is_fedramp: None,
             tokens: Some(TokenData {
                 id_token: IdTokenInfo {
                     email: Some("user@example.com".to_string()),
@@ -160,8 +270,32 @@ async fn loads_api_key_from_auth_json() {
     .unwrap();
     assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
+    assert!(!auth.openai_api_key_is_fedramp());
 
     assert!(auth.get_token_data().is_err());
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn loads_api_key_fedramp_status_from_auth_json() {
+    let dir = tempdir().unwrap();
+    let auth_file = dir.path().join("auth.json");
+    std::fs::write(
+        auth_file,
+        r#"{"OPENAI_API_KEY":"sk-test-key","OPENAI_API_KEY_IS_FEDRAMP":true}"#,
+    )
+    .unwrap();
+
+    let auth = super::load_auth(
+        dir.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
+    assert_eq!(auth.api_key(), Some("sk-test-key"));
+    assert!(auth.openai_api_key_is_fedramp());
 }
 
 #[test]
@@ -170,6 +304,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
+        openai_api_key_is_fedramp: None,
         tokens: None,
         last_refresh: None,
     };
