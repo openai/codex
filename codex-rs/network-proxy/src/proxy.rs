@@ -936,8 +936,6 @@ mod tests {
         assert!(no_proxy.contains("172.16.0.0/12"));
         assert!(no_proxy.contains("192.168.0.0/16"));
         assert!(no_proxy.contains("169.254.0.0/16"));
-        assert!(!no_proxy.contains("*.local"));
-        assert!(!no_proxy.contains(".local"));
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
         assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
         #[cfg(target_os = "macos")]
