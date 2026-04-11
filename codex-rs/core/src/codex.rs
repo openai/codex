@@ -4418,7 +4418,16 @@ impl Session {
         }
 
         let mut idle_pending_input = self.idle_pending_input.lock().await;
-        idle_pending_input.extend(items);
+        for item in items {
+            if let Some(timer_source) = item.generated_timer_source()
+                && idle_pending_input
+                    .iter()
+                    .any(|queued| queued.generated_timer_source() == Some(timer_source))
+            {
+                continue;
+            }
+            idle_pending_input.push(item);
+        }
     }
 
     pub(crate) async fn take_queued_pending_input_for_next_turn(&self) -> Vec<PendingInputItem> {

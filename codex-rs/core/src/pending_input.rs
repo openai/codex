@@ -14,6 +14,17 @@ pub(crate) enum PendingInputItem {
 }
 
 impl PendingInputItem {
+    pub(crate) fn generated_timer_source(&self) -> Option<&str> {
+        match self {
+            Self::Plain(_) => None,
+            Self::GeneratedMessage(generated) => generated
+                .injected_event
+                .source
+                .starts_with("timer ")
+                .then_some(generated.injected_event.source.as_str()),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn into_model_input(self) -> ResponseInputItem {
         match self {

@@ -326,11 +326,6 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
                 ev_assistant_message("msg-2", "queued turn"),
                 ev_completed("resp-2"),
             ]),
-            sse(vec![
-                ev_response_created("resp-3"),
-                ev_assistant_message("msg-3", "next timer turn"),
-                ev_completed("resp-3"),
-            ]),
         ],
     )
     .await;
@@ -351,19 +346,8 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.session_id.to_string();
-    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
-        thread_id,
-        "external".to_string(),
-        "queued hello".to_string(),
-        /*instructions*/ None,
-        "{}".to_string(),
-        TimerDelivery::AfterTurn.as_str().to_string(),
-        Utc::now().timestamp(),
-    ))
-    .await?;
-
-    test.codex
+    let timer = test
+        .codex
         .create_timer(
             ThreadTimerTrigger::Delay {
                 seconds: 0,
@@ -378,10 +362,46 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
         )
         .await
         .map_err(|err| anyhow!("{err}"))?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::InjectedMessage(event) => event.source == format!("timer {}", timer.id),
+            _ => false,
+        },
+        Duration::from_secs(20),
+    )
+    .await;
+    let thread_id = test.session_configured.session_id.to_string();
+    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+        thread_id,
+        "external".to_string(),
+        "queued hello".to_string(),
+        /*instructions*/ None,
+        "{}".to_string(),
+        TimerDelivery::AfterTurn.as_str().to_string(),
+        Utc::now().timestamp(),
+    ))
+    .await?;
 
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(20),
+    )
+    .await;
+    assert!(
+        test.codex
+            .delete_timer(&timer.id)
+            .await
+            .map_err(|err| anyhow!("{err}"))?,
+        "test should delete the idle recurring timer before it can schedule another turn"
+    );
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::InjectedMessage(event) => event.source == "external",
+            _ => false,
+        },
         Duration::from_secs(20),
     )
     .await;

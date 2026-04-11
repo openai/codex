@@ -45,6 +45,17 @@ const TIMER_CLIENT_ID_FALLBACK: &str = "codex-cli";
 const TIMER_DB_SYNC_INTERVAL: Duration = Duration::from_secs(15);
 const TIMER_DB_MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+enum PendingMessageStart {
+    Started,
+    NotReady,
+    None,
+}
+
+enum PendingMessageClaim {
+    Claimed(PendingInputItem, TimerDelivery),
+    NotReady,
+}
+
 fn db_timer_to_persisted_timer(row: codex_state::ThreadTimer) -> Option<PersistedTimer> {
     let trigger = match serde_json::from_str(&row.trigger_json) {
         Ok(trigger) => trigger,
@@ -202,8 +213,9 @@ impl Session {
         {
             return;
         }
-        if self.maybe_start_pending_message().await {
-            return;
+        match self.maybe_start_pending_message().await {
+            PendingMessageStart::Started | PendingMessageStart::NotReady => return,
+            PendingMessageStart::None => {}
         }
         self.try_start_pending_timer(IdleRecurringTimerPolicy::IncludeAll)
             .await;
@@ -252,9 +264,12 @@ impl Session {
         true
     }
 
-    async fn maybe_start_pending_message(self: &Arc<Self>) -> bool {
-        let Some((input_item, delivery)) = self.claim_next_message_for_delivery().await else {
-            return false;
+    async fn maybe_start_pending_message(self: &Arc<Self>) -> PendingMessageStart {
+        let Some(claim) = self.claim_next_message_for_delivery().await else {
+            return PendingMessageStart::None;
+        };
+        let PendingMessageClaim::Claimed(input_item, delivery) = claim else {
+            return PendingMessageStart::NotReady;
         };
 
         match delivery {
@@ -275,12 +290,10 @@ impl Session {
             }
         }
         *self.timer_start_in_progress.lock().await = false;
-        true
+        PendingMessageStart::Started
     }
 
-    async fn claim_next_message_for_delivery(
-        self: &Arc<Self>,
-    ) -> Option<(PendingInputItem, TimerDelivery)> {
+    async fn claim_next_message_for_delivery(self: &Arc<Self>) -> Option<PendingMessageClaim> {
         if !self.queued_messages_feature_enabled() {
             return None;
         }
@@ -351,7 +364,7 @@ impl Session {
                         item: message_prompt_input_item(&message_context),
                         injected_event: injected_message_event(&message_context),
                     });
-                    return Some((input_item, delivery));
+                    return Some(PendingMessageClaim::Claimed(input_item, delivery));
                 }
                 Some(codex_state::ThreadMessageClaim::Invalid { id, reason }) => {
                     warn!("dropped invalid queued message {id}: {reason}");
@@ -359,7 +372,7 @@ impl Session {
                 }
                 Some(codex_state::ThreadMessageClaim::NotReady) | None => {
                     *self.timer_start_in_progress.lock().await = false;
-                    return None;
+                    return claim.map(|_| PendingMessageClaim::NotReady);
                 }
             }
         }
@@ -630,6 +643,11 @@ impl Session {
             let mut last_full_refresh = tokio::time::Instant::now();
             let mut interval = tokio::time::interval(TIMER_DB_SYNC_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            if let Some(session) = weak.upgrade() {
+                session.sync_timers_from_db(/*emit_update*/ true).await;
+                session.maybe_start_pending_timer().await;
+                last_full_refresh = tokio::time::Instant::now();
+            }
 
             loop {
                 tokio::select! {
