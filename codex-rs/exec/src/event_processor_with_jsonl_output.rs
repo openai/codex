@@ -485,17 +485,6 @@ impl EventProcessorWithJsonOutput {
                 }
                 CodexStatus::Running
             }
-            ServerNotification::FileChangeChangesStarted(notification) => {
-                let item = ThreadItem::FileChange {
-                    id: notification.item_id,
-                    changes: Vec::new(),
-                    status: PatchApplyStatus::InProgress,
-                };
-                if let Some(item) = self.map_started_item(item) {
-                    events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
-                }
-                CodexStatus::Running
-            }
             ServerNotification::FileChangeChangesDelta(notification) => {
                 let item_id = notification.item_id;
                 let item = ThreadItem::FileChange {

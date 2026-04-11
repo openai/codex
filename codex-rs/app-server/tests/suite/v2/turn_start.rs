@@ -21,7 +21,6 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeChangesDeltaNotification;
-use codex_app_server_protocol::FileChangeChangesStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -1688,6 +1687,22 @@ async fn turn_start_streams_apply_patch_change_deltas_v2() -> Result<()> {
                 "type": "response.output_item.added",
                 "item": {
                     "type": "function_call",
+                    "id": "fc-other-call",
+                    "call_id": "other-call",
+                    "name": "not_apply_patch",
+                    "arguments": "",
+                    "status": "in_progress"
+                }
+            }),
+            serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc-other-call",
+                "delta": r#"{"input":"*** Begin Patch\n*** Add File: ignored.txt\n+ignored"#,
+            }),
+            serde_json::json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "function_call",
                     "id": item_id,
                     "call_id": call_id,
                     "name": "apply_patch",
@@ -1747,21 +1762,6 @@ async fn turn_start_streams_apply_patch_change_deltas_v2() -> Result<()> {
     )
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
-
-    let started_notif = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/fileChange/changesStarted"),
-    )
-    .await??;
-    let started: FileChangeChangesStartedNotification = serde_json::from_value(
-        started_notif
-            .params
-            .clone()
-            .expect("item/fileChange/changesStarted params"),
-    )?;
-    assert_eq!(started.thread_id, thread.id);
-    assert_eq!(started.turn_id, turn.id);
-    assert_eq!(started.item_id, call_id);
 
     let mut streamed_content = String::new();
     while streamed_content != "live line\n" {

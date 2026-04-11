@@ -39,7 +39,6 @@ use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeChangesDeltaNotification;
-use codex_app_server_protocol::FileChangeChangesStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -1570,18 +1569,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_server_notification(ServerNotification::ItemStarted(notification))
                     .await;
             }
-        }
-        EventMsg::ApplyPatchChangesStarted(event) => {
-            let notification = FileChangeChangesStartedNotification {
-                thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
-                item_id: event.call_id,
-            };
-            outgoing
-                .send_server_notification(ServerNotification::FileChangeChangesStarted(
-                    notification,
-                ))
-                .await;
         }
         EventMsg::ApplyPatchChangesDelta(event) => {
             let notification = FileChangeChangesDeltaNotification {

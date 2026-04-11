@@ -1069,9 +1069,6 @@ fn should_process_notification(
         ServerNotification::ItemStarted(notification) => {
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }
-        ServerNotification::FileChangeChangesStarted(notification) => {
-            notification.thread_id == thread_id && notification.turn_id == turn_id
-        }
         ServerNotification::FileChangeChangesDelta(notification) => {
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }

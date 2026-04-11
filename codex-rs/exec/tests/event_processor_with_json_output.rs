@@ -9,7 +9,6 @@ use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus as ApiCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeChangesDeltaNotification;
-use codex_app_server_protocol::FileChangeChangesStartedNotification;
 use codex_app_server_protocol::FileUpdateChange as ApiFileUpdateChange;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -831,13 +830,6 @@ fn file_change_completion_maps_change_kinds() {
 fn file_change_progress_stream_maps_to_exec_item_events() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
-    let started = processor.collect_thread_events(ServerNotification::FileChangeChangesStarted(
-        FileChangeChangesStartedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            item_id: "patch-1".to_string(),
-        },
-    ));
     let delta_1 = processor.collect_thread_events(ServerNotification::FileChangeChangesDelta(
         FileChangeChangesDeltaNotification {
             thread_id: "thread-1".to_string(),
@@ -879,21 +871,6 @@ fn file_change_progress_stream_maps_to_exec_item_events() {
             turn_id: "turn-1".to_string(),
         }));
 
-    assert_eq!(
-        started,
-        CollectedThreadEvents {
-            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
-                item: ExecThreadItem {
-                    id: "item_0".to_string(),
-                    details: ThreadItemDetails::FileChange(FileChangeItem {
-                        changes: Vec::new(),
-                        status: PatchApplyStatus::InProgress,
-                    }),
-                },
-            })],
-            status: CodexStatus::Running,
-        }
-    );
     assert_eq!(
         delta_1,
         CollectedThreadEvents {

@@ -129,12 +129,12 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
             response_item_records_turn_ttft(item)
         }
         ResponseEvent::OutputTextDelta(_)
-        | ResponseEvent::ToolCallInputDelta { .. }
         | ResponseEvent::ReasoningSummaryDelta { .. }
         | ResponseEvent::ReasoningContentDelta { .. } => true,
         ResponseEvent::Created
         | ResponseEvent::ServerModel(_)
         | ResponseEvent::ServerReasoningIncluded(_)
+        | ResponseEvent::ToolCallInputDelta { .. }
         | ResponseEvent::Completed { .. }
         | ResponseEvent::ReasoningSummaryPartAdded { .. }
         | ResponseEvent::RateLimits(_)

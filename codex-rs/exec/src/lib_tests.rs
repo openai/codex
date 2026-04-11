@@ -327,18 +327,6 @@ fn should_process_notification_allows_file_change_input_events() {
     let turn_id = "turn-1";
 
     assert!(should_process_notification(
-        &ServerNotification::FileChangeChangesStarted(
-            codex_app_server_protocol::FileChangeChangesStartedNotification {
-                thread_id: thread_id.to_string(),
-                turn_id: turn_id.to_string(),
-                item_id: "call-1".to_string(),
-            }
-        ),
-        thread_id,
-        turn_id,
-    ));
-
-    assert!(should_process_notification(
         &ServerNotification::FileChangeChangesDelta(
             codex_app_server_protocol::FileChangeChangesDeltaNotification {
                 thread_id: thread_id.to_string(),

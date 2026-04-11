@@ -1355,10 +1355,6 @@ pub enum EventMsg {
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
     PatchApplyBegin(PatchApplyBeginEvent),
 
-    /// Notification that the model has started streaming structured changes
-    /// for an `apply_patch` call.
-    ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent),
-
     /// Incremental model-generated structured changes for an `apply_patch` call.
     ApplyPatchChangesDelta(ApplyPatchChangesDeltaEvent),
 
@@ -3009,12 +3005,6 @@ pub struct PatchApplyBeginEvent {
     pub auto_approved: bool,
     /// The changes to be applied.
     pub changes: HashMap<PathBuf, FileChange>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ApplyPatchChangesStartedEvent {
-    /// Identifier for the originating `apply_patch` tool call.
-    pub call_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

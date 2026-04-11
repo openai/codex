@@ -168,18 +168,6 @@ async fn live_app_server_file_change_input_updates_writing_status() {
     );
 
     chat.handle_server_notification(
-        ServerNotification::FileChangeChangesStarted(
-            codex_app_server_protocol::FileChangeChangesStartedNotification {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "call-1".to_string(),
-            },
-        ),
-        /*replay_kind*/ None,
-    );
-    assert_eq!(chat.current_status.header, "Writing file. 0 chars");
-
-    chat.handle_server_notification(
         ServerNotification::FileChangeChangesDelta(
             codex_app_server_protocol::FileChangeChangesDeltaNotification {
                 thread_id: "thread-1".to_string(),

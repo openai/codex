@@ -318,11 +318,9 @@ use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::util::ApplyPatchInputStream;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_apply_patch::ApplyPatchProgress;
-use codex_apply_patch::ApplyPatchProgressChange;
-use codex_apply_patch::parse_patch_progress;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -345,8 +343,6 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-use codex_protocol::protocol::ApplyPatchChangesDeltaEvent;
-use codex_protocol::protocol::ApplyPatchChangesStartedEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -7071,7 +7067,6 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyBegin(_)
-        | EventMsg::ApplyPatchChangesStarted(_)
         | EventMsg::ApplyPatchChangesDelta(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
@@ -7445,8 +7440,8 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
-    let mut response_tool_item_ids: HashMap<String, String> = HashMap::new();
-    let mut tool_input_streams: HashMap<String, ToolInputStreamState> = HashMap::new();
+    let mut active_apply_patch_call_id: Option<String> = None;
+    let mut apply_patch_input_stream = ApplyPatchInputStream::default();
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -7489,22 +7484,24 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                if let Some((response_item_id, call_id)) = response_item_stream_ids(&item) {
-                    response_tool_item_ids.insert(response_item_id, call_id.clone());
-                    response_tool_item_ids.insert(call_id.clone(), call_id.clone());
-                    let is_apply_patch_item = response_item_is_apply_patch(&item);
-                    if let Some(input) = response_item_tool_input(&item)
-                        && (is_apply_patch_item || tool_input_looks_like_apply_patch(input))
-                    {
-                        maybe_emit_apply_patch_tool_input(
-                            &sess,
-                            &turn_context,
-                            &mut tool_input_streams,
-                            call_id,
-                            input,
-                        )
-                        .await;
-                    }
+                if let Some(done_call_id) = match &item {
+                    ResponseItem::FunctionCall { call_id, .. }
+                    | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.as_str()),
+                    ResponseItem::Message { .. }
+                    | ResponseItem::Reasoning { .. }
+                    | ResponseItem::LocalShellCall { .. }
+                    | ResponseItem::ToolSearchCall { .. }
+                    | ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
+                    | ResponseItem::ToolSearchOutput { .. }
+                    | ResponseItem::WebSearchCall { .. }
+                    | ResponseItem::ImageGenerationCall { .. }
+                    | ResponseItem::GhostSnapshot { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::Other => None,
+                } && active_apply_patch_call_id.as_deref() == Some(done_call_id)
+                {
+                    active_apply_patch_call_id = None;
                 }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
@@ -7579,21 +7576,24 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
-                let stream_ids = response_item_stream_ids(&item);
-                if let Some((response_item_id, call_id)) = stream_ids.clone() {
-                    response_tool_item_ids.insert(response_item_id, call_id.clone());
-                    response_tool_item_ids.insert(call_id.clone(), call_id);
-                }
-                if let Some((_, call_id)) = stream_ids
-                    && response_item_is_apply_patch(&item)
-                {
-                    maybe_start_apply_patch_changes_stream(
-                        &sess,
-                        &turn_context,
-                        &mut tool_input_streams,
-                        call_id,
-                    )
-                    .await;
+                match &item {
+                    ResponseItem::FunctionCall { call_id, name, .. }
+                    | ResponseItem::CustomToolCall { call_id, name, .. } => {
+                        active_apply_patch_call_id =
+                            (name == "apply_patch").then(|| call_id.clone());
+                    }
+                    ResponseItem::Message { .. }
+                    | ResponseItem::Reasoning { .. }
+                    | ResponseItem::LocalShellCall { .. }
+                    | ResponseItem::ToolSearchCall { .. }
+                    | ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
+                    | ResponseItem::ToolSearchOutput { .. }
+                    | ResponseItem::WebSearchCall { .. }
+                    | ResponseItem::ImageGenerationCall { .. }
+                    | ResponseItem::GhostSnapshot { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::Other => {}
                 }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
@@ -7725,22 +7725,22 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ToolCallInputDelta {
-                item_id,
+                item_id: _,
                 call_id,
                 delta,
             } => {
-                let Some(call_id) = call_id
-                    .or_else(|| response_tool_item_ids.get(&item_id).cloned())
-                    .or(Some(item_id))
-                else {
+                let Some(active_call_id) = active_apply_patch_call_id.clone() else {
                     continue;
                 };
-                let state = tool_input_state_mut(&mut tool_input_streams, call_id.clone());
-                state.input.push_str(&delta);
-                let should_start =
-                    state.apply_patch_started || tool_input_looks_like_apply_patch(&state.input);
-                maybe_emit_apply_patch_changes(&sess, &turn_context, call_id, state, should_start)
-                    .await;
+                let call_id = match call_id {
+                    Some(call_id) if call_id != active_call_id => continue,
+                    Some(call_id) => call_id,
+                    None => active_call_id,
+                };
+                if let Some(event) = apply_patch_input_stream.push_delta(call_id, &delta) {
+                    sess.send_event(&turn_context, EventMsg::ApplyPatchChangesDelta(event))
+                        .await;
+                }
             }
             ResponseEvent::ReasoningSummaryDelta {
                 delta,
@@ -7819,280 +7819,6 @@ async fn try_run_sampling_request(
     }
 
     outcome
-}
-
-struct ToolInputStreamState {
-    input: String,
-    apply_patch_started: bool,
-    last_progress: Option<ApplyPatchProgress>,
-}
-
-fn tool_input_state_mut(
-    tool_input_streams: &mut HashMap<String, ToolInputStreamState>,
-    call_id: String,
-) -> &mut ToolInputStreamState {
-    tool_input_streams
-        .entry(call_id)
-        .or_insert_with(|| ToolInputStreamState {
-            input: String::new(),
-            apply_patch_started: false,
-            last_progress: None,
-        })
-}
-
-async fn maybe_start_apply_patch_changes_stream(
-    sess: &Session,
-    turn_context: &TurnContext,
-    tool_input_streams: &mut HashMap<String, ToolInputStreamState>,
-    call_id: String,
-) {
-    let state = tool_input_state_mut(tool_input_streams, call_id.clone());
-    if state.apply_patch_started {
-        return;
-    }
-    state.apply_patch_started = true;
-    sess.send_event(
-        turn_context,
-        EventMsg::ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent {
-            call_id: call_id.clone(),
-        }),
-    )
-    .await;
-    maybe_emit_apply_patch_changes(
-        sess,
-        turn_context,
-        call_id,
-        state,
-        /*should_start*/ false,
-    )
-    .await;
-}
-
-fn tool_input_looks_like_apply_patch(input: &str) -> bool {
-    input.contains("apply_patch") || input.contains("\"name\":\"apply_patch\"")
-}
-
-async fn maybe_emit_apply_patch_tool_input(
-    sess: &Session,
-    turn_context: &TurnContext,
-    tool_input_streams: &mut HashMap<String, ToolInputStreamState>,
-    call_id: String,
-    completed_input: &str,
-) {
-    if completed_input.is_empty() {
-        return;
-    }
-
-    let state = tool_input_state_mut(tool_input_streams, call_id.clone());
-    let should_start = !state.apply_patch_started;
-    let delta_start = if completed_input.starts_with(&state.input) {
-        state.input.len()
-    } else {
-        state.input.len().min(completed_input.len())
-    };
-    let delta = completed_input.get(delta_start..).unwrap_or_default();
-    if !delta.is_empty() {
-        state.input.push_str(delta);
-    }
-    if !should_start && delta.is_empty() {
-        return;
-    }
-    maybe_emit_apply_patch_changes(sess, turn_context, call_id, state, should_start).await;
-}
-
-async fn maybe_emit_apply_patch_changes(
-    sess: &Session,
-    turn_context: &TurnContext,
-    call_id: String,
-    state: &mut ToolInputStreamState,
-    should_start: bool,
-) {
-    let patch_text = apply_patch_text_from_tool_input(&state.input);
-    let progress = parse_patch_progress(&patch_text);
-    if !state.apply_patch_started && (should_start || progress.is_some()) {
-        state.apply_patch_started = true;
-        sess.send_event(
-            turn_context,
-            EventMsg::ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent {
-                call_id: call_id.clone(),
-            }),
-        )
-        .await;
-    }
-
-    let Some(progress) = progress else {
-        return;
-    };
-    if state.last_progress.as_ref() == Some(&progress) {
-        return;
-    }
-    state.last_progress = Some(progress.clone());
-    sess.send_event(
-        turn_context,
-        EventMsg::ApplyPatchChangesDelta(ApplyPatchChangesDeltaEvent {
-            call_id,
-            changes: convert_apply_patch_progress_to_protocol(progress.changes),
-            active_path: progress.active_path,
-        }),
-    )
-    .await;
-}
-
-fn convert_apply_patch_progress_to_protocol(
-    changes: HashMap<PathBuf, ApplyPatchProgressChange>,
-) -> HashMap<PathBuf, FileChange> {
-    changes
-        .into_iter()
-        .map(|(path, change)| {
-            let change = match change {
-                ApplyPatchProgressChange::Add { content } => FileChange::Add { content },
-                ApplyPatchProgressChange::Delete => FileChange::Delete {
-                    content: String::new(),
-                },
-                ApplyPatchProgressChange::Update {
-                    unified_diff,
-                    move_path,
-                } => FileChange::Update {
-                    unified_diff,
-                    move_path,
-                },
-            };
-            (path, change)
-        })
-        .collect()
-}
-
-fn apply_patch_text_from_tool_input(input: &str) -> String {
-    extract_json_input_prefix(input).unwrap_or_else(|| input.to_string())
-}
-
-fn extract_json_input_prefix(input: &str) -> Option<String> {
-    let key = "\"input\"";
-    let mut search_start = 0;
-    while let Some(offset) = input[search_start..].find(key) {
-        let key_start = search_start + offset;
-        let mut index = key_start + key.len();
-        index = skip_json_whitespace(input, index);
-        if input.as_bytes().get(index) != Some(&b':') {
-            search_start = key_start + key.len();
-            continue;
-        }
-        index += 1;
-        index = skip_json_whitespace(input, index);
-        if input.as_bytes().get(index) != Some(&b'"') {
-            search_start = key_start + key.len();
-            continue;
-        }
-        return Some(decode_json_string_prefix(&input[index + 1..]));
-    }
-    None
-}
-
-fn skip_json_whitespace(input: &str, mut index: usize) -> usize {
-    while let Some(byte) = input.as_bytes().get(index)
-        && byte.is_ascii_whitespace()
-    {
-        index += 1;
-    }
-    index
-}
-
-fn decode_json_string_prefix(input: &str) -> String {
-    let mut decoded = String::new();
-    let mut chars = input.chars();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => break,
-            '\\' => {
-                let Some(escaped) = chars.next() else {
-                    break;
-                };
-                match escaped {
-                    '"' => decoded.push('"'),
-                    '\\' => decoded.push('\\'),
-                    '/' => decoded.push('/'),
-                    'b' => decoded.push('\u{0008}'),
-                    'f' => decoded.push('\u{000c}'),
-                    'n' => decoded.push('\n'),
-                    'r' => decoded.push('\r'),
-                    't' => decoded.push('\t'),
-                    'u' => {
-                        let mut digits = String::with_capacity(4);
-                        for _ in 0..4 {
-                            let Some(digit) = chars.next() else {
-                                return decoded;
-                            };
-                            digits.push(digit);
-                        }
-                        if let Ok(value) = u16::from_str_radix(&digits, 16)
-                            && let Some(ch) = char::from_u32(u32::from(value))
-                        {
-                            decoded.push(ch);
-                        }
-                    }
-                    other => decoded.push(other),
-                }
-            }
-            other => decoded.push(other),
-        }
-    }
-    decoded
-}
-
-fn response_item_is_apply_patch(item: &ResponseItem) -> bool {
-    match item {
-        ResponseItem::FunctionCall { name, .. } | ResponseItem::CustomToolCall { name, .. } => {
-            name == "apply_patch"
-        }
-        _ => false,
-    }
-}
-
-fn response_item_stream_ids(item: &ResponseItem) -> Option<(String, String)> {
-    match item {
-        ResponseItem::FunctionCall { id, call_id, .. }
-        | ResponseItem::CustomToolCall { id, call_id, .. } => {
-            let response_item_id = id.clone().unwrap_or_else(|| call_id.clone());
-            Some((response_item_id, call_id.clone()))
-        }
-        ResponseItem::LocalShellCall { id, call_id, .. } => {
-            let call_id = call_id.clone()?;
-            let response_item_id = id.clone().unwrap_or_else(|| call_id.clone());
-            Some((response_item_id, call_id))
-        }
-        _ => None,
-    }
-}
-
-fn response_item_tool_input(item: &ResponseItem) -> Option<&str> {
-    match item {
-        ResponseItem::FunctionCall { arguments, .. } => Some(arguments),
-        ResponseItem::CustomToolCall { input, .. } => Some(input),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod apply_patch_tool_input_tests {
-    use super::apply_patch_text_from_tool_input;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn decodes_partial_function_call_arguments() {
-        let input = r#"{"input":"*** Begin Patch\n*** Add File: src/hello.txt\n+hel"#;
-
-        assert_eq!(
-            apply_patch_text_from_tool_input(input),
-            "*** Begin Patch\n*** Add File: src/hello.txt\n+hel"
-        );
-    }
-
-    #[test]
-    fn keeps_direct_custom_tool_input() {
-        let input = "*** Begin Patch\n*** Delete File: gone.txt";
-
-        assert_eq!(apply_patch_text_from_tool_input(input), input);
-    }
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {

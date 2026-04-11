@@ -150,8 +150,6 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 #[cfg(test)]
 use codex_protocol::protocol::ApplyPatchChangesDeltaEvent;
 #[cfg(test)]
-use codex_protocol::protocol::ApplyPatchChangesStartedEvent;
-#[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
 #[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -6460,9 +6458,6 @@ impl ChatWidget {
             ServerNotification::FileChangeOutputDelta(notification) => {
                 self.on_patch_apply_output_delta(notification.item_id, notification.delta);
             }
-            ServerNotification::FileChangeChangesStarted(notification) => {
-                self.on_apply_patch_input_started(notification.item_id);
-            }
             ServerNotification::FileChangeChangesDelta(notification) => {
                 self.on_apply_patch_changes_delta(
                     notification.item_id,
@@ -7102,9 +7097,6 @@ impl ChatWidget {
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
-            EventMsg::ApplyPatchChangesStarted(ApplyPatchChangesStartedEvent { call_id }) => {
-                self.on_apply_patch_input_started(call_id)
-            }
             EventMsg::ApplyPatchChangesDelta(ApplyPatchChangesDeltaEvent {
                 call_id,
                 changes,

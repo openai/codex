@@ -114,7 +114,6 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ItemCompleted(_)
             | ServerNotification::AgentMessageDelta(_)
-            | ServerNotification::FileChangeChangesStarted(_)
             | ServerNotification::FileChangeChangesDelta(_)
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)

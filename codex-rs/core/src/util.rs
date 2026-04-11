@@ -1,8 +1,14 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_apply_patch::ApplyPatchArgs;
+use codex_apply_patch::Hunk;
+use codex_apply_patch::parse_patch_streaming;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ApplyPatchChangesDeltaEvent;
+use codex_protocol::protocol::FileChange;
 use rand::Rng;
 use tracing::error;
 
@@ -132,6 +138,193 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
             format!("codex resume {escaped}")
         }
     })
+}
+
+#[derive(Default)]
+pub(crate) struct ApplyPatchInputStream {
+    call_id: Option<String>,
+    input: String,
+    last_progress: Option<Vec<Hunk>>,
+}
+
+impl ApplyPatchInputStream {
+    pub(crate) fn push_delta(
+        &mut self,
+        call_id: String,
+        delta: &str,
+    ) -> Option<ApplyPatchChangesDeltaEvent> {
+        if self.call_id.as_deref() != Some(call_id.as_str()) {
+            self.call_id = Some(call_id.clone());
+            self.input.clear();
+            self.last_progress = None;
+        }
+
+        self.input.push_str(delta);
+
+        let patch_text = apply_patch_text_from_tool_input_prefix(&self.input)?;
+        let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&patch_text).ok()?;
+        if hunks.is_empty() {
+            return None;
+        }
+        if self.last_progress.as_ref() == Some(&hunks) {
+            return None;
+        }
+
+        let active_path = hunks.last().map(Hunk::path).map(Path::to_path_buf);
+        let changes = convert_apply_patch_hunks_to_protocol(&hunks);
+        self.last_progress = Some(hunks);
+        Some(ApplyPatchChangesDeltaEvent {
+            call_id,
+            changes,
+            active_path,
+        })
+    }
+}
+
+fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, FileChange> {
+    hunks
+        .iter()
+        .map(|hunk| {
+            let path = hunk_source_path(hunk).to_path_buf();
+            let change = match hunk {
+                Hunk::AddFile { contents, .. } => FileChange::Add {
+                    content: contents.clone(),
+                },
+                Hunk::DeleteFile { .. } => FileChange::Delete {
+                    content: String::new(),
+                },
+                Hunk::UpdateFile {
+                    chunks, move_path, ..
+                } => FileChange::Update {
+                    unified_diff: format_update_chunks_for_progress(chunks),
+                    move_path: move_path.clone(),
+                },
+            };
+            (path, change)
+        })
+        .collect()
+}
+
+fn hunk_source_path(hunk: &Hunk) -> &Path {
+    match hunk {
+        Hunk::AddFile { path, .. } | Hunk::DeleteFile { path } | Hunk::UpdateFile { path, .. } => {
+            path
+        }
+    }
+}
+
+fn format_update_chunks_for_progress(chunks: &[codex_apply_patch::UpdateFileChunk]) -> String {
+    let mut unified_diff = String::new();
+    for chunk in chunks {
+        match &chunk.change_context {
+            Some(context) => {
+                unified_diff.push_str("@@ ");
+                unified_diff.push_str(context);
+                unified_diff.push('\n');
+            }
+            None => {
+                unified_diff.push_str("@@");
+                unified_diff.push('\n');
+            }
+        }
+        for line in &chunk.old_lines {
+            unified_diff.push('-');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        for line in &chunk.new_lines {
+            unified_diff.push('+');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        if chunk.is_end_of_file {
+            unified_diff.push_str("*** End of File");
+            unified_diff.push('\n');
+        }
+    }
+    unified_diff
+}
+
+fn apply_patch_text_from_tool_input_prefix(input: &str) -> Option<String> {
+    let trimmed = input.trim_start();
+    if trimmed.starts_with('{') {
+        extract_json_input_prefix(trimmed)
+    } else {
+        Some(input.to_string())
+    }
+}
+
+fn extract_json_input_prefix(input: &str) -> Option<String> {
+    let key = "\"input\"";
+    let mut search_start = 0;
+    while let Some(offset) = input[search_start..].find(key) {
+        let key_start = search_start + offset;
+        let mut index = key_start + key.len();
+        index = skip_json_whitespace(input, index);
+        if input.as_bytes().get(index) != Some(&b':') {
+            search_start = key_start + key.len();
+            continue;
+        }
+        index += 1;
+        index = skip_json_whitespace(input, index);
+        if input.as_bytes().get(index) != Some(&b'"') {
+            search_start = key_start + key.len();
+            continue;
+        }
+        return Some(decode_json_string_prefix(&input[index + 1..]));
+    }
+    None
+}
+
+fn skip_json_whitespace(input: &str, mut index: usize) -> usize {
+    while let Some(byte) = input.as_bytes().get(index)
+        && byte.is_ascii_whitespace()
+    {
+        index += 1;
+    }
+    index
+}
+
+fn decode_json_string_prefix(input: &str) -> String {
+    let mut decoded = String::new();
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => break,
+            '\\' => {
+                let Some(escaped) = chars.next() else {
+                    break;
+                };
+                match escaped {
+                    '"' => decoded.push('"'),
+                    '\\' => decoded.push('\\'),
+                    '/' => decoded.push('/'),
+                    'b' => decoded.push('\u{0008}'),
+                    'f' => decoded.push('\u{000c}'),
+                    'n' => decoded.push('\n'),
+                    'r' => decoded.push('\r'),
+                    't' => decoded.push('\t'),
+                    'u' => {
+                        let mut digits = String::with_capacity(4);
+                        for _ in 0..4 {
+                            let Some(digit) = chars.next() else {
+                                return decoded;
+                            };
+                            digits.push(digit);
+                        }
+                        if let Ok(value) = u16::from_str_radix(&digits, 16)
+                            && let Some(ch) = char::from_u32(u32::from(value))
+                        {
+                            decoded.push(ch);
+                        }
+                    }
+                    other => decoded.push(other),
+                }
+            }
+            other => decoded.push(other),
+        }
+    }
+    decoded
 }
 
 #[cfg(test)]

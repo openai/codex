@@ -94,7 +94,6 @@ export type { FeedbackUploadParams } from "./FeedbackUploadParams";
 export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";
 export type { FileChangeChangesDeltaNotification } from "./FileChangeChangesDeltaNotification";
-export type { FileChangeChangesStartedNotification } from "./FileChangeChangesStartedNotification";
 export type { FileChangeOutputDeltaNotification } from "./FileChangeOutputDeltaNotification";
 export type { FileChangeRequestApprovalParams } from "./FileChangeRequestApprovalParams";
 export type { FileChangeRequestApprovalResponse } from "./FileChangeRequestApprovalResponse";

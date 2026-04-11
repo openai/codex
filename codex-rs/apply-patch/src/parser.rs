@@ -26,7 +26,6 @@ use crate::ApplyPatchArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_absolute_path::test_support::PathBufExt;
-use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -133,7 +132,14 @@ pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
     parse_patch_text(patch, mode)
 }
 
-#[derive(Clone, Copy)]
+/// Parses streamed patch text that may not have reached `*** End Patch` yet.
+///
+/// This entry point is for progress reporting only; callers must not use its
+/// output to apply a patch.
+pub fn parse_patch_streaming(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
+    parse_patch_text(patch, ParseMode::Streaming)
+}
+
 enum ParseMode {
     /// Parse the patch text argument as is.
     Strict,
@@ -208,9 +214,16 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
     let mut remaining_lines = &lines[1..body_end_index];
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
-        let (hunk, hunk_lines) = match parse_one_hunk(remaining_lines, line_number, mode)? {
-            HunkParse::Complete(hunk, hunk_lines) => (hunk, hunk_lines),
-            HunkParse::Incomplete => break,
+        let parsed_hunk = parse_one_hunk(remaining_lines, line_number);
+        let (hunk, hunk_lines) = match parsed_hunk {
+            Ok(parsed) => parsed,
+            Err(err) if matches!(mode, ParseMode::Streaming) => {
+                if hunks.is_empty() {
+                    return Err(err);
+                }
+                break;
+            }
+            Err(err) => return Err(err),
         };
         hunks.push(hunk);
         line_number += hunk_lines;
@@ -295,19 +308,9 @@ fn check_start_and_end_lines_strict(
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum HunkParse {
-    Complete(Hunk, usize),
-    Incomplete,
-}
-
 /// Attempts to parse a single hunk from the start of lines.
 /// Returns the parsed hunk and the number of lines parsed (or a ParseError).
-fn parse_one_hunk(
-    lines: &[&str],
-    line_number: usize,
-    mode: ParseMode,
-) -> Result<HunkParse, ParseError> {
+fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), ParseError> {
     // Be tolerant of case mismatches and extra padding around marker strings.
     let first_line = lines[0].trim();
     if let Some(path) = first_line.strip_prefix(ADD_FILE_MARKER) {
@@ -323,7 +326,7 @@ fn parse_one_hunk(
                 break;
             }
         }
-        return Ok(HunkParse::Complete(
+        return Ok((
             AddFile {
                 path: PathBuf::from(path),
                 contents,
@@ -332,7 +335,7 @@ fn parse_one_hunk(
         ));
     } else if let Some(path) = first_line.strip_prefix(DELETE_FILE_MARKER) {
         // Delete File
-        return Ok(HunkParse::Complete(
+        return Ok((
             DeleteFile {
                 path: PathBuf::from(path),
             },
@@ -367,37 +370,24 @@ fn parse_one_hunk(
                 break;
             }
 
-            let parsed_chunk = parse_update_file_chunk(
+            let (chunk, chunk_lines) = parse_update_file_chunk(
                 remaining_lines,
                 line_number + parsed_lines,
                 chunks.is_empty(),
-            );
-            let (chunk, chunk_lines) = match parsed_chunk {
-                Ok(parsed) => parsed,
-                Err(err) if matches!(mode, ParseMode::Streaming) => {
-                    if chunks.is_empty() {
-                        return Ok(HunkParse::Incomplete);
-                    }
-                    break;
-                }
-                Err(err) => return Err(err),
-            };
+            )?;
             chunks.push(chunk);
             parsed_lines += chunk_lines;
             remaining_lines = &remaining_lines[chunk_lines..]
         }
 
         if chunks.is_empty() {
-            if matches!(mode, ParseMode::Streaming) {
-                return Ok(HunkParse::Incomplete);
-            }
             return Err(InvalidHunkError {
                 message: format!("Update file hunk for path '{path}' is empty"),
                 line_number,
             });
         }
 
-        return Ok(HunkParse::Complete(
+        return Ok((
             UpdateFile {
                 path: PathBuf::from(path),
                 move_path: move_path.map(PathBuf::from),
@@ -407,23 +397,12 @@ fn parse_one_hunk(
         ));
     }
 
-    if matches!(mode, ParseMode::Streaming) && is_partial_hunk_header(first_line) {
-        return Ok(HunkParse::Incomplete);
-    }
-
     Err(InvalidHunkError {
         message: format!(
             "'{first_line}' is not a valid hunk header. Valid hunk headers: '*** Add File: {{path}}', '*** Delete File: {{path}}', '*** Update File: {{path}}'"
         ),
         line_number,
     })
-}
-
-fn is_partial_hunk_header(line: &str) -> bool {
-    !line.is_empty()
-        && [ADD_FILE_MARKER, DELETE_FILE_MARKER, UPDATE_FILE_MARKER]
-            .iter()
-            .any(|marker| marker.starts_with(line))
 }
 
 fn parse_update_file_chunk(
@@ -519,151 +498,40 @@ fn parse_update_file_chunk(
     Ok((chunk, parsed_lines + start_index))
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct ApplyPatchProgress {
-    pub changes: HashMap<PathBuf, ApplyPatchProgressChange>,
-    pub active_path: Option<PathBuf>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ApplyPatchProgressChange {
-    Add {
-        content: String,
-    },
-    Delete,
-    Update {
-        unified_diff: String,
-        move_path: Option<PathBuf>,
-    },
-}
-
-/// Parses streamed `apply_patch` patch text into best-effort structured progress.
-///
-/// Unlike [`parse_patch`], this parser intentionally accepts incomplete input
-/// via [`ParseMode::Streaming`] so callers can report progress while the model
-/// is still writing the patch. The returned changes are not authoritative and
-/// must not be used to apply a patch.
-pub fn parse_patch_progress(patch: &str) -> Option<ApplyPatchProgress> {
-    let parsed = parse_patch_text(patch, ParseMode::Streaming).ok()?;
-    let active_path = parsed.hunks.last().map(Hunk::path).map(Path::to_path_buf);
-    let changes = parsed
-        .hunks
-        .iter()
-        .map(|hunk| {
-            (
-                hunk.source_path().to_path_buf(),
-                ApplyPatchProgressChange::from(hunk),
-            )
+#[test]
+fn test_parse_patch_streaming() {
+    assert_eq!(
+        parse_patch_streaming("*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor"),
+        Ok(ApplyPatchArgs {
+            hunks: vec![AddFile {
+                path: PathBuf::from("src/hello.txt"),
+                contents: "hello\nwor\n".to_string(),
+            }],
+            patch: "*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor".to_string(),
+            workdir: None,
         })
-        .collect();
-
-    let progress = ApplyPatchProgress {
-        changes,
-        active_path,
-    };
-    if progress.changes.is_empty() && progress.active_path.is_none() {
-        return None;
-    }
-    Some(progress)
-}
-
-impl Hunk {
-    fn source_path(&self) -> &Path {
-        match self {
-            AddFile { path, .. } | DeleteFile { path } | UpdateFile { path, .. } => path,
-        }
-    }
-}
-
-impl From<&Hunk> for ApplyPatchProgressChange {
-    fn from(hunk: &Hunk) -> Self {
-        match hunk {
-            AddFile { contents, .. } => ApplyPatchProgressChange::Add {
-                content: contents.clone(),
-            },
-            DeleteFile { .. } => ApplyPatchProgressChange::Delete,
-            UpdateFile {
-                chunks, move_path, ..
-            } => ApplyPatchProgressChange::Update {
-                unified_diff: format_update_chunks_for_progress(chunks),
-                move_path: move_path.clone(),
-            },
-        }
-    }
-}
-
-fn format_update_chunks_for_progress(chunks: &[UpdateFileChunk]) -> String {
-    let mut unified_diff = String::new();
-    for chunk in chunks {
-        match &chunk.change_context {
-            Some(context) => {
-                unified_diff.push_str(CHANGE_CONTEXT_MARKER);
-                unified_diff.push_str(context);
-                unified_diff.push('\n');
-            }
-            None => {
-                unified_diff.push_str(EMPTY_CHANGE_CONTEXT_MARKER);
-                unified_diff.push('\n');
-            }
-        }
-        for line in &chunk.old_lines {
-            unified_diff.push('-');
-            unified_diff.push_str(line);
-            unified_diff.push('\n');
-        }
-        for line in &chunk.new_lines {
-            unified_diff.push('+');
-            unified_diff.push_str(line);
-            unified_diff.push('\n');
-        }
-        if chunk.is_end_of_file {
-            unified_diff.push_str(EOF_MARKER);
-            unified_diff.push('\n');
-        }
-    }
-    unified_diff
-}
-
-#[test]
-fn test_parse_patch_progress_direct_add() {
-    let progress =
-        parse_patch_progress("*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor")
-            .expect("patch progress");
-
-    assert_eq!(progress.active_path, Some(PathBuf::from("src/hello.txt")));
-    assert_eq!(
-        progress.changes,
-        HashMap::from([(
-            PathBuf::from("src/hello.txt"),
-            ApplyPatchProgressChange::Add {
-                content: "hello\nwor\n".to_string(),
-            },
-        )])
     );
-}
 
-#[test]
-fn test_parse_patch_progress_update_and_move_path() {
-    let progress = parse_patch_progress(
-        "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new",
-    )
-    .expect("patch progress");
-
-    assert_eq!(progress.active_path, Some(PathBuf::from("src/new.rs")));
     assert_eq!(
-        progress.changes,
-        HashMap::from([(
-            PathBuf::from("src/old.rs"),
-            ApplyPatchProgressChange::Update {
-                unified_diff: "@@\n-old\n+new\n".to_string(),
+        parse_patch_streaming(
+            "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new",
+        ),
+        Ok(ApplyPatchArgs {
+            hunks: vec![UpdateFile {
+                path: PathBuf::from("src/old.rs"),
                 move_path: Some(PathBuf::from("src/new.rs")),
-            },
-        )])
+                chunks: vec![UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["old".to_string()],
+                    new_lines: vec!["new".to_string()],
+                    is_end_of_file: false,
+                }],
+            }],
+            patch: "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new".to_string(),
+            workdir: None,
+        })
     );
-}
 
-#[test]
-fn test_parse_patch_text_streaming_mode_omits_end_marker() {
     assert!(
         parse_patch_text(
             "*** Begin Patch\n*** Delete File: gone.txt",
@@ -678,41 +546,25 @@ fn test_parse_patch_text_streaming_mode_omits_end_marker() {
         )
         .is_err()
     );
-}
 
-#[test]
-fn test_parse_patch_text_streaming_mode_rejects_invalid_hunk_after_complete_hunk() {
-    assert!(
-        parse_patch_text(
-            "*** Begin Patch\n*** Add File: src/one.txt\n+one\nnot a hunk",
-            ParseMode::Streaming
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn test_parse_patch_progress_complete_hunks_without_end_marker() {
-    let progress = parse_patch_progress(
-        "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt\n",
-    )
-    .expect("patch progress");
-
-    assert_eq!(progress.active_path, Some(PathBuf::from("src/two.txt")));
     assert_eq!(
-        progress.changes,
-        HashMap::from([
-            (
-                PathBuf::from("src/one.txt"),
-                ApplyPatchProgressChange::Add {
-                    content: "one\n".to_string(),
+        parse_patch_streaming(
+            "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt\n",
+        ),
+        Ok(ApplyPatchArgs {
+            hunks: vec![
+                AddFile {
+                    path: PathBuf::from("src/one.txt"),
+                    contents: "one\n".to_string(),
                 },
-            ),
-            (
-                PathBuf::from("src/two.txt"),
-                ApplyPatchProgressChange::Delete,
-            ),
-        ])
+                DeleteFile {
+                    path: PathBuf::from("src/two.txt"),
+                },
+            ],
+            patch: "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt"
+                .to_string(),
+            workdir: None,
+        })
     );
 }
 
@@ -1057,20 +909,12 @@ fn test_parse_patch_lenient() {
 #[test]
 fn test_parse_one_hunk() {
     assert_eq!(
-        parse_one_hunk(&["bad"], /*line_number*/ 234, ParseMode::Strict),
+        parse_one_hunk(&["bad"], /*line_number*/ 234),
         Err(InvalidHunkError {
             message: "'bad' is not a valid hunk header. \
             Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'".to_string(),
             line_number: 234
         })
-    );
-    assert_eq!(
-        parse_one_hunk(
-            &["*** Update"],
-            /*line_number*/ 234,
-            ParseMode::Streaming
-        ),
-        Ok(HunkParse::Incomplete)
     );
     // Other edge cases are already covered by tests above/below.
 }

@@ -988,7 +988,6 @@ There are additional item-specific events:
 
 #### fileChange
 
-- `item/fileChange/changesStarted` - emitted when the model starts generating an `apply_patch` file change; `itemId` matches the subsequent `fileChange` item id.
 - `item/fileChange/changesDelta` - streams structured file-change snapshots parsed from the model-generated patch before it is executed. Each notification includes `changes` and `activePath`; it does not expose the raw provider tool input.
 - `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
 

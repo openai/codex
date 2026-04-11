@@ -979,7 +979,6 @@ server_notification_definitions! {
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
-    FileChangeChangesStarted => "item/fileChange/changesStarted" (v2::FileChangeChangesStartedNotification),
     FileChangeChangesDelta => "item/fileChange/changesDelta" (v2::FileChangeChangesDeltaNotification),
     ServerRequestResolved => "serverRequest/resolved" (v2::ServerRequestResolvedNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),

@@ -98,9 +98,7 @@ type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorErro
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
         notification,
-        ServerNotification::TurnCompleted(_)
-            | ServerNotification::FileChangeChangesStarted(_)
-            | ServerNotification::FileChangeChangesDelta(_)
+        ServerNotification::TurnCompleted(_) | ServerNotification::FileChangeChangesDelta(_)
     )
 }
 
