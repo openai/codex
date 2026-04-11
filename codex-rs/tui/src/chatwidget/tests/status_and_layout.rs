@@ -954,7 +954,7 @@ async fn stale_github_pr_update_preserves_current_pending_lookup() {
     chat.status_line_github_pr_cwd = Some(PathBuf::from("/repo/current"));
     chat.status_line_github_pr_pending = true;
 
-    chat.set_status_line_github_pr(PathBuf::from("/repo/old"), None);
+    chat.set_status_line_github_pr(PathBuf::from("/repo/old"), /*pull_request*/ None);
 
     assert!(chat.status_line_github_pr_pending);
 }
