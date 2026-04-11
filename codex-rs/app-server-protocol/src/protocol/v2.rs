@@ -2242,6 +2242,8 @@ pub struct FeedbackUploadParams {
     pub include_logs: bool,
     #[ts(optional = nullable)]
     pub extra_log_files: Option<Vec<PathBuf>>,
+    #[ts(optional = nullable)]
+    pub tags: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

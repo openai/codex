@@ -76,14 +76,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    if if let (Ok(snapshot_cwd), Ok(command_cwd)) = (
-        path_utils::normalize_for_path_comparison(snapshot.cwd.as_path()),
-        path_utils::normalize_for_path_comparison(cwd),
-    ) {
-        snapshot_cwd != command_cwd
-    } else {
-        snapshot.cwd != cwd
-    } {
+    if !path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd) {
         return command.to_vec();
     }
 

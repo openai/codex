@@ -1148,13 +1148,7 @@ fn thread_list_params(
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(a),
-        path_utils::normalize_for_path_comparison(b),
-    ) {
-        return ca == cb;
-    }
-    a == b
+    path_utils::paths_match_after_normalization(a, b)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
