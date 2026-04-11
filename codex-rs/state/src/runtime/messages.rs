@@ -70,6 +70,15 @@ ORDER BY queued_at ASC, seq ASC
         Ok(rows.into_iter().map(ThreadMessage::from).collect())
     }
 
+    pub async fn delete_thread_message(&self, thread_id: &str, id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query("DELETE FROM thread_messages WHERE thread_id = ? AND id = ?")
+            .bind(thread_id)
+            .bind(id)
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn claim_next_thread_message(
         &self,
         thread_id: &str,
@@ -215,6 +224,55 @@ ORDER BY name
         assert_eq!(message.meta_json, params.meta_json);
         assert_eq!(message.delivery, params.delivery);
         assert_eq!(message.queued_at, params.queued_at);
+    }
+
+    #[tokio::test]
+    async fn delete_thread_message_is_scoped_to_thread_id() {
+        let runtime = test_runtime().await;
+        runtime
+            .create_thread_message(&message_params(
+                "message-1",
+                "thread-1",
+                /*queued_at*/ 100,
+            ))
+            .await
+            .expect("create thread-1 message");
+        runtime
+            .create_thread_message(&message_params(
+                "message-2",
+                "thread-2",
+                /*queued_at*/ 100,
+            ))
+            .await
+            .expect("create thread-2 message");
+
+        let deleted_wrong_thread = runtime
+            .delete_thread_message("thread-2", "message-1")
+            .await
+            .expect("delete wrong-thread message");
+        assert!(!deleted_wrong_thread);
+        let deleted = runtime
+            .delete_thread_message("thread-1", "message-1")
+            .await
+            .expect("delete thread-1 message");
+        assert!(deleted);
+        assert_eq!(
+            runtime
+                .list_thread_messages("thread-1")
+                .await
+                .expect("list thread-1 messages"),
+            Vec::new()
+        );
+        assert_eq!(
+            runtime
+                .list_thread_messages("thread-2")
+                .await
+                .expect("list thread-2 messages")
+                .into_iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec!["message-2".to_string()]
+        );
     }
 
     #[tokio::test]

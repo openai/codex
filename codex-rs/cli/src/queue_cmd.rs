@@ -81,6 +81,13 @@ pub(crate) async fn run_queue_command(
         })
         .map_err(anyhow::Error::msg)?;
         state_db.create_thread_timer(&timer_params).await?;
+        remove_queued_work_if_thread_missing(
+            config.codex_home.as_path(),
+            &state_db,
+            &timer_params.thread_id,
+            QueuedWork::Timer(&timer_params.id),
+        )
+        .await?;
         println!(
             "{}",
             queue_timer_success_message(
@@ -103,11 +110,47 @@ pub(crate) async fn run_queue_command(
         unix_timestamp_now()?,
     );
     state_db.create_thread_message(&message_params).await?;
+    remove_queued_work_if_thread_missing(
+        config.codex_home.as_path(),
+        &state_db,
+        &message_params.thread_id,
+        QueuedWork::Message(&message_params.id),
+    )
+    .await?;
     println!(
         "Queued message {} for thread {}.",
         message_params.id, message_params.thread_id
     );
     Ok(())
+}
+
+enum QueuedWork<'a> {
+    Timer(&'a str),
+    Message(&'a str),
+}
+
+async fn remove_queued_work_if_thread_missing(
+    codex_home: &Path,
+    state_db: &StateRuntime,
+    thread_id: &str,
+    queued_work: QueuedWork<'_>,
+) -> anyhow::Result<()> {
+    if codex_core::find_thread_path_by_id_str(codex_home, thread_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match queued_work {
+        QueuedWork::Timer(id) => {
+            state_db.delete_thread_timer(thread_id, id).await?;
+        }
+        QueuedWork::Message(id) => {
+            state_db.delete_thread_message(thread_id, id).await?;
+        }
+    }
+    anyhow::bail!("thread `{thread_id}` was archived before queued work could be created");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,6 +504,53 @@ mod tests {
                 .expect_err("stale name should fail")
                 .to_string(),
             "no thread named `stale`"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_cleanup_removes_message_when_thread_disappears() {
+        let codex_home = TempDir::new().expect("codex home tempdir");
+        let sqlite_home = TempDir::new().expect("sqlite home tempdir");
+        let runtime = StateRuntime::init(
+            sqlite_home.path().to_path_buf(),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize state runtime");
+        let thread_id = ThreadId::new().to_string();
+        let params = codex_state::ThreadMessageCreateParams::new(
+            thread_id.clone(),
+            "external".to_string(),
+            "do work".to_string(),
+            /*instructions*/ None,
+            "{}".to_string(),
+            TimerDelivery::AfterTurn.as_str().to_string(),
+            /*queued_at*/ 100,
+        );
+        runtime
+            .create_thread_message(&params)
+            .await
+            .expect("create message");
+
+        let err = remove_queued_work_if_thread_missing(
+            codex_home.path(),
+            &runtime,
+            &thread_id,
+            QueuedWork::Message(&params.id),
+        )
+        .await
+        .expect_err("missing thread should fail after cleanup");
+
+        assert_eq!(
+            err.to_string(),
+            format!("thread `{thread_id}` was archived before queued work could be created")
+        );
+        assert_eq!(
+            runtime
+                .list_thread_messages(&thread_id)
+                .await
+                .expect("list messages"),
+            Vec::new()
         );
     }
 }
