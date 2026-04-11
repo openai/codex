@@ -39,6 +39,9 @@ async fn set_agent_task_persists_plaintext_task_for_session_reuse() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
     let agent_task = RegisteredAgentTask {
+        binding_id: "chatgpt-account-account-123".to_string(),
+        chatgpt_account_id: "account-123".to_string(),
+        chatgpt_user_id: Some("user-123".to_string()),
         agent_runtime_id: "agent_123".to_string(),
         task_id: "task_123".to_string(),
         registered_at: "2026-03-23T12:00:00Z".to_string(),
@@ -47,6 +50,25 @@ async fn set_agent_task_persists_plaintext_task_for_session_reuse() {
     state.set_agent_task(agent_task.clone());
 
     assert_eq!(state.agent_task(), Some(agent_task));
+}
+
+#[tokio::test]
+async fn clear_agent_task_removes_cached_task() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+    let agent_task = RegisteredAgentTask {
+        binding_id: "chatgpt-account-account-123".to_string(),
+        chatgpt_account_id: "account-123".to_string(),
+        chatgpt_user_id: Some("user-123".to_string()),
+        agent_runtime_id: "agent_123".to_string(),
+        task_id: "task_123".to_string(),
+        registered_at: "2026-03-23T12:00:00Z".to_string(),
+    };
+
+    state.set_agent_task(agent_task);
+    state.clear_agent_task();
+
+    assert_eq!(state.agent_task(), None);
 }
 
 #[tokio::test]

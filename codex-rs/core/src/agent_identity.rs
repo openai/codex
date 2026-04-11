@@ -150,9 +150,20 @@ impl AgentIdentityManager {
             return Ok(None);
         };
 
+        self.ensure_registered_identity_for_binding(&binding).await
+    }
+
+    async fn ensure_registered_identity_for_binding(
+        &self,
+        binding: &AgentIdentityBinding,
+    ) -> Result<Option<StoredAgentIdentity>> {
+        if !self.feature_enabled {
+            return Ok(None);
+        }
+
         let _guard = self.ensure_lock.lock().await;
 
-        if let Some(stored_identity) = self.load_stored_identity(&binding)? {
+        if let Some(stored_identity) = self.load_stored_identity(binding)? {
             info!(
                 agent_runtime_id = %stored_identity.agent_runtime_id,
                 binding_id = %binding.binding_id,
@@ -161,9 +172,19 @@ impl AgentIdentityManager {
             return Ok(Some(stored_identity));
         }
 
-        let stored_identity = self.register_agent_identity(&binding).await?;
-        self.store_identity(&binding, &stored_identity)?;
+        let stored_identity = self.register_agent_identity(binding).await?;
+        self.store_identity(binding, &stored_identity)?;
         Ok(Some(stored_identity))
+    }
+
+    pub(crate) async fn task_matches_current_binding(&self, task: &RegisteredAgentTask) -> bool {
+        if !self.feature_enabled {
+            return false;
+        }
+
+        self.current_binding()
+            .await
+            .is_some_and(|binding| task.matches_binding(&binding))
     }
 
     async fn current_binding(&self) -> Option<AgentIdentityBinding> {
@@ -360,12 +381,11 @@ impl AgentIdentityManager {
 
 impl StoredAgentIdentity {
     fn matches_binding(&self, binding: &AgentIdentityBinding) -> bool {
-        self.binding_id == binding.binding_id
-            && self.chatgpt_account_id == binding.chatgpt_account_id
-            && match binding.chatgpt_user_id.as_deref() {
-                Some(chatgpt_user_id) => self.chatgpt_user_id.as_deref() == Some(chatgpt_user_id),
-                None => true,
-            }
+        binding.matches_parts(
+            &self.binding_id,
+            &self.chatgpt_account_id,
+            self.chatgpt_user_id.as_deref(),
+        )
     }
 
     fn validate_key_material(&self) -> Result<()> {
@@ -388,6 +408,20 @@ impl StoredAgentIdentity {
 }
 
 impl AgentIdentityBinding {
+    fn matches_parts(
+        &self,
+        binding_id: &str,
+        chatgpt_account_id: &str,
+        chatgpt_user_id: Option<&str>,
+    ) -> bool {
+        binding_id == self.binding_id
+            && chatgpt_account_id == self.chatgpt_account_id
+            && match self.chatgpt_user_id.as_deref() {
+                Some(expected_user_id) => chatgpt_user_id == Some(expected_user_id),
+                None => true,
+            }
+    }
+
     fn from_auth(auth: &CodexAuth, forced_workspace_id: Option<String>) -> Option<Self> {
         if !auth.is_chatgpt_auth() {
             return None;
