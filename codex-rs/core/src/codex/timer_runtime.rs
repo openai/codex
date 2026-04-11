@@ -572,7 +572,11 @@ impl Session {
         let thread_id = self.thread_id_string();
         let result = if claimed.deleted_one_shot_timer {
             state_db
-                .claim_one_shot_thread_timer(&thread_id, &claimed.timer.id)
+                .claim_one_shot_thread_timer(
+                    &thread_id,
+                    &claimed.timer.id,
+                    claimed.context.queued_at,
+                )
                 .await
         } else {
             let persisted_timer = PersistedTimer {
