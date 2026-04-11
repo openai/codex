@@ -103,8 +103,10 @@ fn resolve_gh_path_from_path(path_env: Option<&OsStr>) -> Option<PathBuf> {
     path_env
         .into_iter()
         .flat_map(std::env::split_paths)
+        .filter(|dir| dir.is_absolute())
         .flat_map(|dir| gh_executable_names().map(move |name| dir.join(name)))
         .find(|path| is_executable_file(path))
+        .and_then(|path| path.canonicalize().ok())
 }
 
 #[cfg(windows)]
@@ -202,6 +204,23 @@ mod tests {
 
         let resolved = resolve_gh_path_from_path(Some(temp.path().as_os_str()));
 
-        assert_eq!(resolved, Some(gh));
+        assert_eq!(
+            resolved,
+            Some(gh.canonicalize().expect("canonical gh path"))
+        );
+    }
+
+    #[test]
+    fn ignores_relative_path_entries() {
+        let resolved = resolve_gh_path_from_path(Some(OsStr::new("relative/bin")));
+
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn ignores_empty_path_entries() {
+        let resolved = resolve_gh_path_from_path(Some(OsStr::new("")));
+
+        assert_eq!(resolved, None);
     }
 }
