@@ -851,6 +851,12 @@ server_request_definitions! {
         response: v2::PermissionsRequestApprovalResponse,
     },
 
+    /// Request the client to open its permission preset picker.
+    PermissionPresetRequestApproval => "item/permissionPreset/requestApproval" {
+        params: v2::PermissionPresetRequestApprovalParams,
+        response: v2::PermissionPresetRequestApprovalResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,

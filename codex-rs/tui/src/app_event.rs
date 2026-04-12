@@ -39,6 +39,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::request_permission_preset::PermissionPresetId;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
@@ -69,6 +70,12 @@ impl RealtimeAudioDeviceKind {
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
     Legacy,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PermissionPresetSelectionContext {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) call_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -377,6 +384,7 @@ pub(crate) enum AppEvent {
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,
         return_to_permissions: bool,
+        permission_preset_context: Option<PermissionPresetSelectionContext>,
     },
 
     /// Open the Windows world-writable directories warning.
@@ -517,6 +525,12 @@ pub(crate) enum AppEvent {
 
     /// Re-open the permissions presets popup.
     OpenPermissionsPopup,
+
+    /// Open the permissions presets popup for a model-requested change.
+    OpenPermissionsPopupForRequest {
+        preset: PermissionPresetId,
+        response_context: PermissionPresetSelectionContext,
+    },
 
     /// Live update for the in-progress voice recording placeholder. Carries
     /// the placeholder `id` and the text to display (e.g., an ASCII meter).

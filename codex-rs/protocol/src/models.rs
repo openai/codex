@@ -391,6 +391,7 @@ struct PermissionsPromptConfig<'a> {
     exec_policy: &'a Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
+    request_permission_preset_tool_enabled: bool,
 }
 
 impl DeveloperInstructions {
@@ -404,13 +405,17 @@ impl DeveloperInstructions {
         exec_policy: &Policy,
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
+        request_permission_preset_tool_enabled: bool,
     ) -> DeveloperInstructions {
-        let with_request_permissions_tool = |text: &str| {
+        let append_permission_tool_sections = |text: &str| {
+            let mut sections = vec![text.to_string()];
             if request_permissions_tool_enabled {
-                format!("{text}\n\n{}", request_permissions_tool_prompt_section())
-            } else {
-                text.to_string()
+                sections.push(request_permissions_tool_prompt_section().to_string());
             }
+            if request_permission_preset_tool_enabled {
+                sections.push(request_permission_preset_tool_prompt_section().to_string());
+            }
+            sections.join("\n\n")
         };
         let on_request_instructions = || {
             let on_request_rule = if exec_permission_approvals_enabled {
@@ -422,6 +427,9 @@ impl DeveloperInstructions {
             if request_permissions_tool_enabled {
                 sections.push(request_permissions_tool_prompt_section().to_string());
             }
+            if request_permission_preset_tool_enabled {
+                sections.push(request_permission_preset_tool_prompt_section().to_string());
+            }
             if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
                 sections.push(format!(
                     "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
@@ -432,15 +440,18 @@ impl DeveloperInstructions {
         let text = match approval_policy {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
             AskForApproval::UnlessTrusted => {
-                with_request_permissions_tool(APPROVAL_POLICY_UNLESS_TRUSTED)
+                append_permission_tool_sections(APPROVAL_POLICY_UNLESS_TRUSTED)
             }
-            AskForApproval::OnFailure => with_request_permissions_tool(APPROVAL_POLICY_ON_FAILURE),
+            AskForApproval::OnFailure => {
+                append_permission_tool_sections(APPROVAL_POLICY_ON_FAILURE)
+            }
             AskForApproval::OnRequest => on_request_instructions(),
             AskForApproval::Granular(granular_config) => granular_instructions(
                 granular_config,
                 exec_policy,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
+                request_permission_preset_tool_enabled,
             ),
         };
 
@@ -506,6 +517,7 @@ impl DeveloperInstructions {
         cwd: &Path,
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
+        request_permission_preset_tool_enabled: bool,
     ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
             NetworkAccess::Enabled
@@ -532,6 +544,7 @@ impl DeveloperInstructions {
                 exec_policy,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
+                request_permission_preset_tool_enabled,
             },
             writable_roots,
         )
@@ -570,6 +583,7 @@ impl DeveloperInstructions {
                 config.exec_policy,
                 config.exec_permission_approvals_enabled,
                 config.request_permissions_tool_enabled,
+                config.request_permission_preset_tool_enabled,
             ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
@@ -624,17 +638,24 @@ fn request_permissions_tool_prompt_section() -> &'static str {
     "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."
 }
 
+fn request_permission_preset_tool_prompt_section() -> &'static str {
+    "# request_permission_preset Tool\n\nThe built-in `request_permission_preset` tool is available in this session. Invoke it immediately when the user asks conversationally to change sandboxing, approval, or permission mode, for example \"make this session full access\", \"switch to full access\", \"make the session read-only\", or \"use guardian approvals\". The tool opens the permission-mode picker with the requested preset pre-selected; the session only changes if the user selects a mode there. Do not claim the mode changed until the tool returns an accepted decision. Use `request_permissions` instead for narrow filesystem or network grants required by later shell-like commands."
+}
+
 fn granular_instructions(
     granular_config: GranularApprovalConfig,
     exec_policy: &Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
+    request_permission_preset_tool_enabled: bool,
 ) -> String {
     let sandbox_approval_prompts_allowed = granular_config.allows_sandbox_approval();
     let shell_permission_requests_available =
         exec_permission_approvals_enabled && sandbox_approval_prompts_allowed;
     let request_permissions_tool_prompts_allowed =
         request_permissions_tool_enabled && granular_config.allows_request_permissions();
+    let request_permission_preset_tool_prompts_allowed =
+        request_permission_preset_tool_enabled && granular_config.allows_request_permissions();
     let categories = [
         Some((
             granular_config.allows_sandbox_approval(),
@@ -645,6 +666,10 @@ fn granular_instructions(
         request_permissions_tool_enabled.then_some((
             granular_config.allows_request_permissions(),
             "`request_permissions`",
+        )),
+        request_permission_preset_tool_enabled.then_some((
+            granular_config.allows_request_permissions(),
+            "`request_permission_preset`",
         )),
         Some((
             granular_config.allows_mcp_elicitations(),
@@ -685,6 +710,9 @@ fn granular_instructions(
 
     if request_permissions_tool_prompts_allowed {
         sections.push(request_permissions_tool_prompt_section().to_string());
+    }
+    if request_permission_preset_tool_prompts_allowed {
+        sections.push(request_permission_preset_tool_prompt_section().to_string());
     }
 
     if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
@@ -1693,6 +1721,7 @@ mod tests {
                 exec_policy: &Policy::empty(),
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: false,
+                request_permission_preset_tool_enabled: false,
             },
             /*writable_roots*/ None,
         );
@@ -1726,6 +1755,7 @@ mod tests {
             &PathBuf::from("/tmp"),
             /*exec_permission_approvals_enabled*/ false,
             /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ false,
         );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
@@ -1750,6 +1780,7 @@ mod tests {
                 exec_policy: &exec_policy,
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: false,
+                request_permission_preset_tool_enabled: false,
             },
             /*writable_roots*/ None,
         );
@@ -1771,6 +1802,7 @@ mod tests {
                 exec_policy: &Policy::empty(),
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
+                request_permission_preset_tool_enabled: false,
             },
             /*writable_roots*/ None,
         );
@@ -1791,6 +1823,7 @@ mod tests {
                 exec_policy: &Policy::empty(),
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
+                request_permission_preset_tool_enabled: false,
             },
             /*writable_roots*/ None,
         );
@@ -1811,6 +1844,7 @@ mod tests {
                 exec_policy: &Policy::empty(),
                 exec_permission_approvals_enabled: true,
                 request_permissions_tool_enabled: false,
+                request_permission_preset_tool_enabled: false,
             },
             /*writable_roots*/ None,
         );
@@ -1831,6 +1865,7 @@ mod tests {
                 exec_policy: &Policy::empty(),
                 exec_permission_approvals_enabled: false,
                 request_permissions_tool_enabled: true,
+                request_permission_preset_tool_enabled: false,
             },
             /*writable_roots*/ None,
         );
@@ -1840,6 +1875,29 @@ mod tests {
         assert!(
             text.contains("The built-in `request_permissions` tool is available in this session.")
         );
+    }
+
+    #[test]
+    fn includes_request_permission_preset_tool_instructions_when_enabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: false,
+                request_permission_preset_tool_enabled: true,
+            },
+            /*writable_roots*/ None,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("# request_permission_preset Tool"));
+        assert!(text.contains(
+            "Invoke it immediately when the user asks conversationally to change sandboxing"
+        ));
     }
 
     #[test]
@@ -1853,6 +1911,7 @@ mod tests {
                 exec_policy: &Policy::empty(),
                 exec_permission_approvals_enabled: true,
                 request_permissions_tool_enabled: true,
+                request_permission_preset_tool_enabled: false,
             },
             /*writable_roots*/ None,
         );
@@ -1870,6 +1929,7 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ false,
             /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1885,6 +1945,7 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ false,
             /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1900,6 +1961,7 @@ mod tests {
         rejected_categories: &[&str],
         include_shell_permission_request_instructions: bool,
         include_request_permissions_tool_section: bool,
+        include_request_permission_preset_tool_section: bool,
     ) -> String {
         let mut sections = vec![granular_prompt_intro_text().to_string()];
         if !prompted_categories.is_empty() {
@@ -1920,6 +1982,9 @@ mod tests {
         if include_request_permissions_tool_section {
             sections.push(request_permissions_tool_prompt_section().to_string());
         }
+        if include_request_permission_preset_tool_section {
+            sections.push(request_permission_preset_tool_prompt_section().to_string());
+        }
         sections.join("\n\n")
     }
 
@@ -1937,6 +2002,7 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ true,
             /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1971,6 +2037,7 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ true,
             /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
 
@@ -1986,6 +2053,7 @@ mod tests {
                 &[],
                 /*include_shell_permission_request_instructions*/ true,
                 /*include_request_permissions_tool_section*/ false,
+                /*include_request_permission_preset_tool_section*/ false,
             )
         );
     }
@@ -2004,6 +2072,7 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ false,
             /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
 
@@ -2019,6 +2088,7 @@ mod tests {
                 &[],
                 /*include_shell_permission_request_instructions*/ false,
                 /*include_request_permissions_tool_section*/ false,
+                /*include_request_permission_preset_tool_section*/ false,
             )
         );
     }
@@ -2037,6 +2107,7 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ true,
             /*request_permissions_tool_enabled*/ true,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
         assert!(allowed.contains("# request_permissions Tool"));
@@ -2053,9 +2124,49 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ true,
             /*request_permissions_tool_enabled*/ true,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
         assert!(!rejected.contains("# request_permissions Tool"));
+    }
+
+    #[test]
+    fn granular_policy_includes_request_permission_preset_tool_only_when_that_prompt_can_still_fire()
+     {
+        let allowed = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ true,
+        )
+        .into_text();
+        assert!(allowed.contains("# request_permission_preset Tool"));
+
+        let rejected = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: false,
+                mcp_elicitations: true,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ true,
+        )
+        .into_text();
+        assert!(!rejected.contains("# request_permission_preset Tool"));
+        assert!(rejected.contains("- `request_permission_preset`"));
     }
 
     #[test]
@@ -2073,6 +2184,7 @@ mod tests {
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ true,
             /*request_permissions_tool_enabled*/ false,
+            /*request_permission_preset_tool_enabled*/ false,
         )
         .into_text();
 

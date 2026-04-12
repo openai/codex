@@ -34,6 +34,7 @@ use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
+use crate::create_request_permission_preset_tool;
 use crate::create_request_permissions_tool;
 use crate::create_request_user_input_tool;
 use crate::create_resume_agent_tool;
@@ -61,6 +62,7 @@ use crate::request_user_input_tool_description;
 use crate::tool_registry_plan_types::agent_type_description;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_utils_approval_presets::builtin_permission_presets;
 use rmcp::model::Tool as McpTool;
 use std::collections::BTreeMap;
 
@@ -245,6 +247,25 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
+    }
+
+    if config.request_permission_preset_tool_enabled {
+        let available_preset_ids = builtin_permission_presets(
+            cfg!(target_os = "windows"),
+            config.guardian_approval_enabled,
+        )
+        .into_iter()
+        .map(|preset| preset.id)
+        .collect();
+        plan.push_spec(
+            create_request_permission_preset_tool(available_preset_ids),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler(
+            "request_permission_preset",
+            ToolHandlerKind::RequestPermissionPreset,
+        );
     }
 
     if config.search_tool

@@ -45,6 +45,8 @@ use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+use crate::request_permission_preset::RequestPermissionPresetEvent;
+use crate::request_permission_preset::RequestPermissionPresetResponse;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
@@ -574,6 +576,14 @@ pub enum Op {
         response: RequestPermissionsResponse,
     },
 
+    /// Resolve a request_permission_preset tool call.
+    RequestPermissionPresetResponse {
+        /// Call id for the in-flight request.
+        id: String,
+        /// User decision for the requested permission preset.
+        response: RequestPermissionPresetResponse,
+    },
+
     /// Resolve a dynamic tool call request.
     DynamicToolResponse {
         /// Call id for the in-flight request.
@@ -744,6 +754,7 @@ impl Op {
             Self::ResolveElicitation { .. } => "resolve_elicitation",
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
+            Self::RequestPermissionPresetResponse { .. } => "request_permission_preset_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
             Self::AddToHistory { .. } => "add_to_history",
             Self::GetHistoryEntryRequest { .. } => "get_history_entry_request",
@@ -1470,6 +1481,8 @@ pub enum EventMsg {
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     RequestPermissions(RequestPermissionsEvent),
+
+    RequestPermissionPreset(RequestPermissionPresetEvent),
 
     RequestUserInput(RequestUserInputEvent),
 

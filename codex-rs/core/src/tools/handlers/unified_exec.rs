@@ -178,6 +178,12 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
+        let effective_permissions = session.effective_permission_settings(turn.as_ref()).await;
+        let turn = Arc::new(
+            turn.with_effective_permission_settings(effective_permissions)
+                .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?,
+        );
+
         let Some(environment) = turn.environment.as_ref() else {
             return Err(FunctionCallError::RespondToModel(
                 "unified exec is unavailable in this session".to_string(),

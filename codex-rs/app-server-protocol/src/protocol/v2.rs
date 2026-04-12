@@ -87,6 +87,8 @@ use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::request_permission_preset::PermissionPresetId as CorePermissionPresetId;
+use codex_protocol::request_permission_preset::RequestPermissionPresetDecision as CoreRequestPermissionPresetDecision;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -6237,6 +6239,69 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum PermissionPresetId {
+    Auto,
+    FullAccess,
+    ReadOnly,
+    GuardianApprovals,
+}
+
+impl PermissionPresetId {
+    pub fn to_core(self) -> CorePermissionPresetId {
+        match self {
+            Self::Auto => CorePermissionPresetId::Auto,
+            Self::FullAccess => CorePermissionPresetId::FullAccess,
+            Self::ReadOnly => CorePermissionPresetId::ReadOnly,
+            Self::GuardianApprovals => CorePermissionPresetId::GuardianApprovals,
+        }
+    }
+}
+
+impl From<CorePermissionPresetId> for PermissionPresetId {
+    fn from(value: CorePermissionPresetId) -> Self {
+        match value {
+            CorePermissionPresetId::Auto => Self::Auto,
+            CorePermissionPresetId::FullAccess => Self::FullAccess,
+            CorePermissionPresetId::ReadOnly => Self::ReadOnly,
+            CorePermissionPresetId::GuardianApprovals => Self::GuardianApprovals,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub preset: PermissionPresetId,
+    pub label: String,
+    pub description: String,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_policy: SandboxPolicy,
+    pub reason: Option<String>,
+}
+
+v2_enum_from_core!(
+    pub enum PermissionPresetApprovalDecision from CoreRequestPermissionPresetDecision {
+        Accepted,
+        Declined
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetRequestApprovalResponse {
+    pub decision: PermissionPresetApprovalDecision,
+    pub preset: PermissionPresetId,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

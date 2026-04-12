@@ -116,6 +116,12 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn request_permission_preset_tool_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::RequestPermissionPresetTool.stage(), Stage::Stable);
+    assert_eq!(Feature::RequestPermissionPresetTool.default_enabled(), true);
+}
+
+#[test]
 fn tool_suggest_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSuggest.stage(), Stage::Stable);
     assert_eq!(Feature::ToolSuggest.default_enabled(), true);

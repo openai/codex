@@ -125,6 +125,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::request_permission_preset::RequestPermissionPresetEvent;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -174,6 +175,7 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
+    PermissionPreset(RequestPermissionPresetEvent),
 }
 
 fn app_server_request_id_to_mcp_request_id(
@@ -1842,6 +1844,19 @@ impl App {
                     permissions: params.permissions.clone().into(),
                 }),
             ),
+            ServerRequest::PermissionPresetRequestApproval { params, .. } => Some(
+                ThreadInteractiveRequest::PermissionPreset(RequestPermissionPresetEvent {
+                    turn_id: params.turn_id.clone(),
+                    call_id: params.item_id.clone(),
+                    reason: params.reason.clone(),
+                    preset: params.preset.to_core(),
+                    label: params.label.clone(),
+                    description: params.description.clone(),
+                    approval_policy: params.approval_policy.to_core(),
+                    approvals_reviewer: params.approvals_reviewer.to_core(),
+                    sandbox_policy: params.sandbox_policy.to_core(),
+                }),
+            ),
             _ => None,
         }
     }
@@ -2682,6 +2697,10 @@ impl App {
                 ThreadInteractiveRequest::McpServerElicitation(request) => {
                     self.chat_widget
                         .push_mcp_server_elicitation_request(request);
+                }
+                ThreadInteractiveRequest::PermissionPreset(request) => {
+                    self.chat_widget
+                        .handle_request_permission_preset_now(request);
                 }
             }
         }
@@ -4610,9 +4629,13 @@ impl App {
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,
+                permission_preset_context,
             } => {
-                self.chat_widget
-                    .open_full_access_confirmation(preset, return_to_permissions);
+                self.chat_widget.open_full_access_confirmation(
+                    preset,
+                    return_to_permissions,
+                    permission_preset_context,
+                );
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
@@ -5485,6 +5508,13 @@ impl App {
             }
             AppEvent::OpenPermissionsPopup => {
                 self.chat_widget.open_permissions_popup();
+            }
+            AppEvent::OpenPermissionsPopupForRequest {
+                preset,
+                response_context,
+            } => {
+                self.chat_widget
+                    .open_permissions_popup_for_request(preset, response_context);
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;

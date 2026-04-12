@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PermissionPresetApprovalDecision": {
+      "enum": [
+        "accepted",
+        "declined"
+      ],
+      "type": "string"
+    },
+    "PermissionPresetId": {
+      "enum": [
+        "auto",
+        "full-access",
+        "read-only",
+        "guardian-approvals"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/PermissionPresetApprovalDecision"
+    },
+    "preset": {
+      "$ref": "#/definitions/PermissionPresetId"
+    }
+  },
+  "required": [
+    "decision",
+    "preset"
+  ],
+  "title": "PermissionPresetRequestApprovalResponse",
+  "type": "object"
+}

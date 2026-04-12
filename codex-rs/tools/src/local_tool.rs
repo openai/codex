@@ -296,6 +296,45 @@ pub fn request_permissions_tool_description() -> String {
         .to_string()
 }
 
+pub fn create_request_permission_preset_tool(available_preset_ids: Vec<&'static str>) -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "preset".to_string(),
+            JsonSchema::string_enum(
+                available_preset_ids
+                    .into_iter()
+                    .map(|id| json!(id))
+                    .collect(),
+                Some("Built-in permission preset to request from the user.".to_string()),
+            ),
+        ),
+        (
+            "reason".to_string(),
+            JsonSchema::string(Some(
+                "Optional short explanation for why the permission mode should change.".to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "request_permission_preset".to_string(),
+        description: request_permission_preset_tool_description(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["preset".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn request_permission_preset_tool_description() -> String {
+    "Open the permission-mode picker with a built-in preset such as Default or Full Access pre-selected. Use this immediately when the user says things like \"make this session full access\", \"switch to read-only\", or otherwise conversationally asks to change sandboxing, approval, or permission mode. The session only changes if the user selects a permission mode in the picker."
+        .to_string()
+}
+
 fn unified_exec_output_schema() -> Value {
     json!({
         "type": "object",

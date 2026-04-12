@@ -2,6 +2,10 @@
 //! to keep the primary module under blob-size policy limits.
 
 use super::*;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::request_permission_preset::PermissionPresetId;
+use codex_protocol::request_permission_preset::RequestPermissionPresetEvent;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -48,6 +52,72 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     assert_snapshot!(
         "exec_approval_history_decision_approved_short",
         lines_to_single_string(&decision)
+    );
+}
+
+#[tokio::test]
+async fn permission_preset_request_opens_permissions_picker_with_requested_preset_selected() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
+
+    let ev = RequestPermissionPresetEvent {
+        call_id: "preset-call".into(),
+        turn_id: "preset-turn".into(),
+        preset: PermissionPresetId::FullAccess,
+        label: "Full access".into(),
+        description: "Run commands without filesystem sandboxing; network access enabled.".into(),
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        reason: Some("the user asked to switch into full access mode".into()),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-preset".into(),
+        msg: EventMsg::RequestPermissionPreset(ev),
+    });
+
+    let proposed_cells = drain_insert_history(&mut rx);
+    assert!(
+        proposed_cells.is_empty(),
+        "expected preset request to open the picker without emitting history cells"
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains('›') && line.contains("Full Access")),
+        "expected Full Access to be pre-selected in the permissions picker: {popup}"
+    );
+    assert_snapshot!("permission_preset_request_picker", popup);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::OpenFullAccessConfirmation {
+                permission_preset_context: Some(_),
+                ..
+            }
+        )),
+        "expected selecting Full Access to invoke the existing confirmation flow: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AppEvent::SubmitThreadOp {
+                op: Op::RequestPermissionPresetResponse { .. },
+                ..
+            }
+        )),
+        "expected no permission preset response until the user confirms Full Access: {events:?}"
     );
 }
 
