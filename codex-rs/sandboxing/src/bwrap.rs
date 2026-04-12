@@ -14,6 +14,11 @@ const MISSING_BWRAP_WARNING: &str = concat!(
 );
 const USER_NAMESPACE_WARNING: &str =
     "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.";
+pub(crate) const WSL1_BWRAP_WARNING: &str = concat!(
+    "Codex's Linux sandbox uses bubblewrap, which is not supported on WSL1 ",
+    "because WSL1 cannot create the required user namespaces. ",
+    "Use WSL2 for sandboxed shell commands."
+);
 const USER_NAMESPACE_FAILURES: [&str; 4] = [
     "loopback: Failed RTM_NEWADDR",
     "loopback: Failed RTM_NEWLINK",
@@ -38,6 +43,17 @@ fn should_warn_about_system_bwrap(sandbox_policy: &SandboxPolicy) -> bool {
 }
 
 fn system_bwrap_warning_for_path(system_bwrap_path: Option<&Path>) -> Option<String> {
+    system_bwrap_warning_for_path_with_wsl1(system_bwrap_path, is_wsl1())
+}
+
+fn system_bwrap_warning_for_path_with_wsl1(
+    system_bwrap_path: Option<&Path>,
+    is_wsl1: bool,
+) -> Option<String> {
+    if is_wsl1 {
+        return Some(WSL1_BWRAP_WARNING.to_string());
+    }
+
     let Some(system_bwrap_path) = system_bwrap_path else {
         return Some(MISSING_BWRAP_WARNING.to_string());
     };
@@ -66,6 +82,27 @@ fn system_bwrap_has_user_namespace_access(system_bwrap_path: &Path) -> bool {
     };
 
     output.status.success() || !is_user_namespace_failure(&output)
+}
+
+pub(crate) fn is_wsl1() -> bool {
+    std::fs::read_to_string("/proc/version")
+        .is_ok_and(|proc_version| proc_version_indicates_wsl1(&proc_version))
+}
+
+fn proc_version_indicates_wsl1(proc_version: &str) -> bool {
+    let proc_version = proc_version.to_ascii_lowercase();
+    if let Some(marker) = proc_version.find("wsl") {
+        let version_start = marker + "wsl".len();
+        let version_digits: String = proc_version[version_start..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if let Ok(version) = version_digits.parse::<u32>() {
+            return version == 1;
+        }
+    }
+
+    proc_version.contains("microsoft")
 }
 
 fn is_user_namespace_failure(output: &Output) -> bool {

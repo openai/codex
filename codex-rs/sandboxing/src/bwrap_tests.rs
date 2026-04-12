@@ -13,6 +13,22 @@ fn system_bwrap_warning_reports_missing_system_bwrap() {
 }
 
 #[test]
+fn system_bwrap_warning_reports_wsl1_before_bwrap_probe() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+echo 'bwrap: Unknown option --argv0' >&2
+exit 1
+"#,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+    assert_eq!(
+        system_bwrap_warning_for_path_with_wsl1(Some(fake_bwrap_path), /*is_wsl1*/ true),
+        Some(WSL1_BWRAP_WARNING.to_string())
+    );
+}
+
+#[test]
 fn system_bwrap_warning_reports_user_namespace_failures() {
     for failure in USER_NAMESPACE_FAILURES {
         let fake_bwrap = write_fake_bwrap(&format!(
@@ -42,6 +58,27 @@ exit 1
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
 
     assert_eq!(system_bwrap_warning_for_path(Some(fake_bwrap_path)), None);
+}
+
+#[test]
+fn detects_wsl1_proc_version_formats() {
+    assert!(proc_version_indicates_wsl1(
+        "Linux version 4.4.0-22621-Microsoft"
+    ));
+    assert!(proc_version_indicates_wsl1(
+        "Linux version 5.15.0-microsoft-standard-WSL1"
+    ));
+}
+
+#[test]
+fn does_not_treat_wsl2_or_native_linux_as_wsl1() {
+    assert!(!proc_version_indicates_wsl1(
+        "Linux version 6.6.87.2-microsoft-standard-WSL2"
+    ));
+    assert!(!proc_version_indicates_wsl1(
+        "Linux version 6.6.87.2-microsoft-standard-WSL3"
+    ));
+    assert!(!proc_version_indicates_wsl1("Linux version 6.8.0"));
 }
 
 #[test]
