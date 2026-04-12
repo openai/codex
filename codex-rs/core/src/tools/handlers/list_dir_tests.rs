@@ -305,9 +305,15 @@ async fn hides_denied_entries_and_prunes_denied_subtrees() {
     ]);
 
     let read_deny_matcher = ReadDenyMatcher::new(&policy, dir_path);
-    let entries = list_dir_slice_with_policy(dir_path, 1, 20, 3, read_deny_matcher.as_ref())
-        .await
-        .expect("list directory");
+    let entries = list_dir_slice_with_policy(
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 20,
+        /*depth*/ 3,
+        read_deny_matcher.as_ref(),
+    )
+    .await
+    .expect("list directory");
 
     assert_eq!(
         entries,
