@@ -1664,7 +1664,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         (true, Vec::<(String, usize)>::new()),
     );
 
-    api_server.shutdown().await;
     realtime_server.shutdown().await;
     Ok(())
 }
