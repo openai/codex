@@ -4,6 +4,27 @@
 //! in-memory timer scheduler reconciled with cross-instance changes, and
 //! converts claimed timers/messages into generated model input plus
 //! transcript-safe delivery events.
+//!
+//! Timer and queued-message delivery must be single-consumer across all harness
+//! instances for a thread, even though those instances share the same SQLite
+//! state database. In other words, if two app or CLI processes are attached to
+//! the same thread, a due timer or queued message should be injected by at most
+//! one of them.
+//!
+//! The database is the authority for that guarantee. Before this module
+//! delivers a queued message, it calls into the state layer to atomically claim
+//! and remove the next eligible row. Timers are first selected from local
+//! memory, but delivery proceeds only if the matching SQLite claim also wins:
+//! one-shot timers are deleted as part of the claim, and recurring timers are
+//! updated with the expected previous run timestamp so competing instances
+//! cannot both observe and persist the same run. If another instance wins the
+//! database race, this runtime refreshes its local timer view from SQLite and
+//! skips delivery.
+//!
+//! The local `timer_start_in_progress` flag is still useful, but only as an
+//! in-process guard. It prevents this [`Session`] from starting multiple pending
+//! timer/message deliveries concurrently; cross-process exclusivity comes from
+//! the SQLite claim operations above.
 
 use super::BackgroundEventEvent;
 use super::Event;
