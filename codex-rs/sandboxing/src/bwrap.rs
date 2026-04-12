@@ -91,15 +91,17 @@ pub(crate) fn is_wsl1() -> bool {
 
 fn proc_version_indicates_wsl1(proc_version: &str) -> bool {
     let proc_version = proc_version.to_ascii_lowercase();
-    if let Some(marker) = proc_version.find("wsl") {
+    let mut remaining = proc_version.as_str();
+    while let Some(marker) = remaining.find("wsl") {
         let version_start = marker + "wsl".len();
-        let version_digits: String = proc_version[version_start..]
+        let version_digits: String = remaining[version_start..]
             .chars()
             .take_while(char::is_ascii_digit)
             .collect();
         if let Ok(version) = version_digits.parse::<u32>() {
             return version == 1;
         }
+        remaining = &remaining[version_start..];
     }
 
     proc_version.contains("microsoft")

@@ -68,12 +68,18 @@ fn detects_wsl1_proc_version_formats() {
     assert!(proc_version_indicates_wsl1(
         "Linux version 5.15.0-microsoft-standard-WSL1"
     ));
+    assert!(proc_version_indicates_wsl1(
+        "Linux version 5.15.0-wsl-microsoft-standard-WSL1"
+    ));
 }
 
 #[test]
 fn does_not_treat_wsl2_or_native_linux_as_wsl1() {
     assert!(!proc_version_indicates_wsl1(
         "Linux version 6.6.87.2-microsoft-standard-WSL2"
+    ));
+    assert!(!proc_version_indicates_wsl1(
+        "Linux version 6.6.87.2-wsl-microsoft-standard-WSL2"
     ));
     assert!(!proc_version_indicates_wsl1(
         "Linux version 6.6.87.2-microsoft-standard-WSL3"
