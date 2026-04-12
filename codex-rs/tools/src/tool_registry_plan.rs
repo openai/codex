@@ -270,13 +270,6 @@ pub fn build_tool_registry_plan(
                 ToolName::namespaced(tool.tool_namespace, tool.tool_name),
                 ToolHandlerKind::Mcp,
             );
-            let qualified_name = format!("{}{}", tool.tool_namespace, tool.tool_name);
-            if !params
-                .mcp_tools
-                .is_some_and(|tools| tools.contains_key(&qualified_name))
-            {
-                plan.register_handler(qualified_name, ToolHandlerKind::Mcp);
-            }
         }
     }
 
