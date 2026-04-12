@@ -15,7 +15,7 @@ Use `devcontainer.secure.json` when you want a stricter runtime profile for runn
 
 - installs the Codex CLI plus common build tools
 - installs bubblewrap in setuid mode for Codex's Linux sandbox
-- uses `.devcontainer/seccomp-bubblewrap.json`, a Docker seccomp profile based on Docker's default profile with the namespace and mount syscalls bubblewrap needs
+- disables Docker's outer seccomp and AppArmor profiles so bubblewrap can construct Codex's inner sandbox
 - enables firewall startup with an allowlist-driven outbound policy
 - blocks IPv6 by default so the allowlist cannot be bypassed over AAAA routes
 - requires `NET_ADMIN` and `NET_RAW` so the firewall can be installed at startup
@@ -46,4 +46,4 @@ For arm64, specify `--platform=linux/arm64` instead for both `docker build` and 
 
 Currently, the contributor `Dockerfile` works for both x64 and arm64 Linux, though you need to run `rustup target add x86_64-unknown-linux-musl` yourself to install the musl toolchain for x64.
 
-The secure profile's capability, seccomp, and AppArmor options are required when you want Codex's bubblewrap sandbox to run inside Docker as the non-root devcontainer user. Without them, Docker's default runtime profile can block bubblewrap's namespace setup before Codex's own seccomp filter is installed.
+The secure profile's capability, seccomp, and AppArmor options are required when you want Codex's bubblewrap sandbox to run inside Docker as the non-root devcontainer user. Without them, Docker's default runtime profile can block bubblewrap's namespace setup before Codex's own seccomp filter is installed. This keeps the Docker relaxation explicit in the profile that is meant to run Codex inside a project container, while the default contributor profile stays lightweight.
