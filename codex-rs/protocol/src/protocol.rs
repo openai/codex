@@ -2286,9 +2286,16 @@ pub struct UserMessageEvent {
     pub text_elements: Vec<crate::user_input::TextElement>,
 }
 
+/// Display-only event for a timer-fired or external queued message.
+///
+/// The corresponding model-visible XML is recorded separately as a raw response
+/// item. Clients should render this event's content instead of parsing or
+/// hiding that XML themselves.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
 pub struct InjectedMessageEvent {
+    /// Human-facing message text to show in transcript views.
     pub content: String,
+    /// Origin label for the injected input, such as "external" or "timer <id>".
     pub source: String,
 }
 
