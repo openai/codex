@@ -126,11 +126,17 @@ impl ChatComposer {
 
     /// Opens footer-owned reverse history search without previewing history yet.
     ///
-    /// Entering search mode snapshots the full composer draft, clears any file/search popup state,
-    /// and resets history traversal. The first visible match is produced only after the footer
-    /// query becomes non-empty, which keeps Ctrl+R from replacing an empty composer with the latest
-    /// prompt before the user has searched for anything.
+    /// Entering search mode first flushes pending paste-burst text, then snapshots the full
+    /// composer draft, clears any file/search popup state, and resets history traversal. The first
+    /// visible match is produced only after the footer query becomes non-empty, which keeps Ctrl+R
+    /// from replacing an empty composer with the latest prompt before the user has searched for
+    /// anything.
     pub(super) fn begin_history_search(&mut self) -> (InputResult, bool) {
+        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            self.handle_paste(pasted);
+        }
+        self.paste_burst.clear_window_after_non_char();
+
         if self.current_file_query.is_some() {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(String::new()));
@@ -823,6 +829,72 @@ mod tests {
             assert_eq!(composer.textarea.text(), "draft");
             assert_eq!(composer.textarea.cursor(), 2);
         }
+    }
+
+    #[test]
+    fn history_search_flushes_pending_first_char_before_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(composer.is_in_paste_burst());
+        assert_eq!(composer.textarea.text(), "");
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+
+        assert!(composer.history_search_active());
+        assert!(!composer.is_in_paste_burst());
+        assert_eq!(composer.textarea.text(), "h");
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(!composer.history_search_active());
+        assert_eq!(composer.textarea.text(), "h");
+    }
+
+    #[test]
+    fn history_search_flushes_buffered_paste_before_snapshot() {
+        use std::time::Duration;
+        use std::time::Instant;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let mut now = Instant::now();
+        for ch in ['p', 'a', 's', 't', 'e'] {
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                now,
+            );
+            now += Duration::from_millis(1);
+        }
+        assert!(composer.is_in_paste_burst());
+        assert_eq!(composer.textarea.text(), "");
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+
+        assert!(composer.history_search_active());
+        assert!(!composer.is_in_paste_burst());
+        assert_eq!(composer.textarea.text(), "paste");
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(!composer.history_search_active());
+        assert_eq!(composer.textarea.text(), "paste");
     }
 
     #[test]
