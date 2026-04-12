@@ -66,6 +66,9 @@ fn does_not_treat_wsl2_or_native_linux_as_wsl1() {
         "Linux version 6.6.87.2-wsl-microsoft-standard-WSL2"
     ));
     assert!(!proc_version_indicates_wsl1(
+        "Linux version 4.19.104-microsoft-standard"
+    ));
+    assert!(!proc_version_indicates_wsl1(
         "Linux version 6.6.87.2-microsoft-standard-WSL3"
     ));
     assert!(!proc_version_indicates_wsl1("Linux version 6.8.0"));

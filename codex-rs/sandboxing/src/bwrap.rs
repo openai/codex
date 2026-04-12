@@ -97,7 +97,7 @@ fn proc_version_indicates_wsl1(proc_version: &str) -> bool {
         remaining = &remaining[version_start..];
     }
 
-    proc_version.contains("microsoft")
+    proc_version.contains("microsoft") && !proc_version.contains("microsoft-standard")
 }
 
 fn is_user_namespace_failure(output: &Output) -> bool {
