@@ -10,4 +10,4 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  reverse-i-search: c  enter accept  esc cancel                                                     "
+"  reverse-i-search: c  enter accept · esc cancel                                                    "

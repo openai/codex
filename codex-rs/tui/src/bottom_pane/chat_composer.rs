@@ -3233,15 +3233,20 @@ impl ChatComposer {
             HistorySearchStatus::Idle => {}
             HistorySearchStatus::Searching => line.push_span("  searching".dim()),
             HistorySearchStatus::Match => {
-                line.push_span("  ");
-                line.push_span(key_hint::plain(KeyCode::Enter));
-                line.push_span(" accept  ".dim());
-                line.push_span(key_hint::plain(KeyCode::Esc));
+                line.push_span("  ".dim());
+                line.push_span(Self::history_search_action_key_span(KeyCode::Enter));
+                line.push_span(" accept".dim());
+                line.push_span(" · ".dim());
+                line.push_span(Self::history_search_action_key_span(KeyCode::Esc));
                 line.push_span(" cancel".dim());
             }
             HistorySearchStatus::NoMatch => line.push_span("  no match".red()),
         }
         Some(line)
+    }
+
+    fn history_search_action_key_span(key: KeyCode) -> Span<'static> {
+        Span::from(key_hint::plain(key)).cyan().bold().not_dim()
     }
 
     fn history_search_highlight_ranges(&self) -> Vec<Range<usize>> {
@@ -7735,6 +7740,67 @@ mod tests {
         assert!(!composer.history_search_active());
         assert_eq!(composer.textarea.text(), "git status");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn history_search_footer_action_hints_are_emphasized() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("cargo test".to_string()));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        let line = composer
+            .history_search_footer_line()
+            .expect("expected history search footer line");
+        assert_eq!(
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<Vec<_>>(),
+            vec![
+                "reverse-i-search: ",
+                "c",
+                "  ",
+                "enter",
+                " accept",
+                " · ",
+                "esc",
+                " cancel"
+            ]
+        );
+
+        let query_style = line.spans[1].style;
+        assert_eq!(query_style.fg, Some(ratatui::style::Color::Cyan));
+
+        let enter_style = line.spans[3].style;
+        assert_eq!(enter_style.fg, Some(ratatui::style::Color::Cyan));
+        assert!(enter_style.add_modifier.contains(Modifier::BOLD));
+        assert!(enter_style.sub_modifier.contains(Modifier::DIM));
+
+        let accept_style = line.spans[4].style;
+        assert!(accept_style.add_modifier.contains(Modifier::DIM));
+
+        let separator_style = line.spans[5].style;
+        assert!(separator_style.add_modifier.contains(Modifier::DIM));
+
+        let esc_style = line.spans[6].style;
+        assert_eq!(esc_style.fg, Some(ratatui::style::Color::Cyan));
+        assert!(esc_style.add_modifier.contains(Modifier::BOLD));
+        assert!(esc_style.sub_modifier.contains(Modifier::DIM));
+
+        let cancel_style = line.spans[7].style;
+        assert!(cancel_style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
