@@ -2265,7 +2265,7 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        let _ = handlers::user_input_or_turn_without_realtime_text_mirror(
+        handlers::user_input_or_turn_inner(
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
@@ -2276,6 +2276,7 @@ impl Session {
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
             },
+            /*mirror_user_text_to_realtime*/ None,
         )
         .await;
     }
@@ -4960,18 +4961,21 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let accepted_items =
-            user_input_or_turn_without_realtime_text_mirror(sess, sub_id, op).await;
-        if let Some(items) = accepted_items {
-            mirror_user_text_to_realtime(sess, &items).await;
-        }
+        user_input_or_turn_inner(
+            sess,
+            sub_id,
+            op,
+            /*mirror_user_text_to_realtime*/ Some(()),
+        )
+        .await;
     }
 
-    pub(super) async fn user_input_or_turn_without_realtime_text_mirror(
+    pub(super) async fn user_input_or_turn_inner(
         sess: &Arc<Session>,
         sub_id: String,
         op: Op,
-    ) -> Option<Vec<UserInput>> {
+        mirror_user_text_to_realtime: Option<()>,
+    ) {
         let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
@@ -5033,11 +5037,11 @@ mod handlers {
 
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.
-            return None;
+            return;
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
-        match sess
+        let accepted_items = match sess
             .steer_input(
                 items.clone(),
                 /*expected_turn_id*/ None,
@@ -5075,6 +5079,9 @@ mod handlers {
                 .await;
                 None
             }
+        };
+        if let (Some(items), Some(())) = (accepted_items, mirror_user_text_to_realtime) {
+            self::mirror_user_text_to_realtime(sess, &items).await;
         }
     }
 
