@@ -269,10 +269,10 @@ fn plan_implementation_clear_context_message(plan_markdown: &str) -> String {
     format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}")
 }
 
-fn plan_implementation_clear_context_plan<'a>(
+fn plan_implementation_clear_context_plan(
     default_mask_available: bool,
-    plan_markdown: Option<&'a str>,
-) -> Result<&'a str, &'static str> {
+    plan_markdown: Option<&str>,
+) -> Result<&str, &'static str> {
     if !default_mask_available {
         return Err(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE);
     }
