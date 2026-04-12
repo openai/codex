@@ -240,7 +240,7 @@ impl ToolHandler for ShellHandler {
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
                 Self::run_exec_like(RunExecLikeArgs {
-                    tool_name: tool_name.clone(),
+                    tool_name: tool_name.display(),
                     exec_params,
                     hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
                     additional_permissions: params.additional_permissions.clone(),
@@ -258,7 +258,7 @@ impl ToolHandler for ShellHandler {
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
                 Self::run_exec_like(RunExecLikeArgs {
-                    tool_name: tool_name.clone(),
+                    tool_name: tool_name.display(),
                     exec_params,
                     hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
                     additional_permissions: None,
@@ -273,7 +273,8 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
-                "unsupported payload for shell handler: {tool_name}"
+                "unsupported payload for shell handler: {}",
+                tool_name.display()
             ))),
         }
     }
@@ -342,7 +343,8 @@ impl ToolHandler for ShellCommandHandler {
 
         let ToolPayload::Function { arguments } = payload else {
             return Err(FunctionCallError::RespondToModel(format!(
-                "unsupported payload for shell_command handler: {tool_name}"
+                "unsupported payload for shell_command handler: {}",
+                tool_name.display()
             )));
         };
 
@@ -365,7 +367,7 @@ impl ToolHandler for ShellCommandHandler {
             turn.tools_config.allow_login_shell,
         )?;
         ShellHandler::run_exec_like(RunExecLikeArgs {
-            tool_name,
+            tool_name: tool_name.display(),
             exec_params,
             hook_command: params.command,
             additional_permissions: params.additional_permissions.clone(),

@@ -1,6 +1,7 @@
 use crate::codex::Session;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -502,6 +503,16 @@ impl NetworkApprovalService {
                     self.record_call_outcome(
                         &owner_call.registration_id,
                         NetworkApprovalOutcome::DeniedByUser,
+                    )
+                    .await;
+                }
+                PendingApprovalDecision::Deny
+            }
+            ReviewDecision::TimedOut => {
+                if let Some(owner_call) = owner_call.as_ref() {
+                    self.record_call_outcome(
+                        &owner_call.registration_id,
+                        NetworkApprovalOutcome::DeniedByPolicy(guardian_timeout_message()),
                     )
                     .await;
                 }

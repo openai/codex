@@ -1814,6 +1814,30 @@
             },
             "method": {
               "enum": [
+                "mcpServer/tool/call"
+              ],
+              "title": "McpServer/tool/callRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/McpServerToolCallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "McpServer/tool/callRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "windowsSandbox/setupStart"
               ],
               "title": "WindowsSandbox/setupStartRequestMethod",
@@ -4096,6 +4120,15 @@
             "null"
           ]
         },
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "threadId": {
           "type": [
             "string",
@@ -5056,6 +5089,7 @@
         "inProgress",
         "approved",
         "denied",
+        "timedOut",
         "aborted"
       ],
       "type": "string"
@@ -6010,6 +6044,51 @@
       "title": "McpServerStatusUpdatedNotification",
       "type": "object"
     },
+    "McpServerToolCallParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "_meta": true,
+        "arguments": true,
+        "server": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "threadId",
+        "tool"
+      ],
+      "title": "McpServerToolCallParams",
+      "type": "object"
+    },
+    "McpServerToolCallResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "_meta": true,
+        "content": {
+          "items": true,
+          "type": "array"
+        },
+        "isError": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structuredContent": true
+      },
+      "required": [
+        "content"
+      ],
+      "title": "McpServerToolCallResponse",
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -6642,6 +6721,7 @@
         "go",
         "plus",
         "pro",
+        "prolite",
         "team",
         "self_serve_business_usage_based",
         "business",

@@ -11,6 +11,7 @@ use crate::guardian::GuardianApprovalReviewResult;
 use crate::guardian::GuardianApprovalReviewStatus;
 use crate::guardian::GuardianAssessmentOutcome;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request_with_review;
 use crate::guardian::routes_approval_to_guardian;
@@ -173,6 +174,9 @@ impl ToolOrchestrator {
                         };
                         return Err(ToolError::Rejected(reason));
                     }
+                    ReviewDecision::TimedOut => {
+                        return Err(ToolError::Rejected(guardian_timeout_message()));
+                    }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                     | ReviewDecision::ApprovedForSession => {}
@@ -330,6 +334,9 @@ impl ToolOrchestrator {
                                 "rejected by user".to_string()
                             };
                             return Err(ToolError::Rejected(reason));
+                        }
+                        ReviewDecision::TimedOut => {
+                            return Err(ToolError::Rejected(guardian_timeout_message()));
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }

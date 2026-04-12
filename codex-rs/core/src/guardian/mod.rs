@@ -29,6 +29,7 @@ pub(crate) use review::GuardianApprovalReview;
 pub(crate) use review::GuardianApprovalReviewResult;
 pub(crate) use review::GuardianApprovalReviewStatus;
 pub(crate) use review::guardian_rejection_message;
+pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::review_approval_request;
