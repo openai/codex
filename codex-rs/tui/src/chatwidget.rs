@@ -5050,11 +5050,6 @@ impl ChatWidget {
                     {
                         return;
                     }
-                    let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
-                    else {
-                        return;
-                    };
                     let should_submit_now =
                         self.is_session_configured() && !self.is_plan_streaming_in_tui();
                     if should_submit_now {
@@ -5084,11 +5079,6 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
-                    };
-                    let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
-                    else {
-                        return;
                     };
                     self.queue_user_message(user_message);
                 }

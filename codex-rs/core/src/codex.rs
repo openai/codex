@@ -2265,7 +2265,7 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        handlers::user_input_or_turn(
+        handlers::user_input_or_turn_with_realtime_text_mirror(
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
@@ -2276,6 +2276,7 @@ impl Session {
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
             },
+            handlers::RealtimeTextMirror::Disabled,
         )
         .await;
     }
@@ -4910,6 +4911,7 @@ mod handlers {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::items::UserMessageItem;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
@@ -4917,6 +4919,7 @@ mod handlers {
     use serde_json::Value;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use tracing::debug;
     use tracing::info;
     use tracing::warn;
 
@@ -4957,7 +4960,22 @@ mod handlers {
         }
     }
 
+    pub(super) enum RealtimeTextMirror {
+        Enabled,
+        Disabled,
+    }
+
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
+        user_input_or_turn_with_realtime_text_mirror(sess, sub_id, op, RealtimeTextMirror::Enabled)
+            .await;
+    }
+
+    pub(super) async fn user_input_or_turn_with_realtime_text_mirror(
+        sess: &Arc<Session>,
+        sub_id: String,
+        op: Op,
+        realtime_text_mirror: RealtimeTextMirror,
+    ) {
         let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
@@ -5016,6 +5034,13 @@ mod handlers {
             ),
             _ => unreachable!(),
         };
+        let realtime_text = match realtime_text_mirror {
+            RealtimeTextMirror::Enabled => {
+                let text = UserMessageItem::new(&items).message();
+                (!text.is_empty()).then_some(text)
+            }
+            RealtimeTextMirror::Disabled => None,
+        };
 
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.
@@ -5031,7 +5056,10 @@ mod handlers {
             )
             .await
         {
-            Ok(_) => current_context.session_telemetry.user_prompt(&items),
+            Ok(_) => {
+                current_context.session_telemetry.user_prompt(&items);
+                mirror_user_text_to_realtime(sess, realtime_text).await;
+            }
             Err(SteerInputError::NoActiveTurn(items)) => {
                 if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                     current_context
@@ -5047,6 +5075,7 @@ mod handlers {
                     crate::tasks::RegularTask::new(),
                 )
                 .await;
+                mirror_user_text_to_realtime(sess, realtime_text).await;
             }
             Err(err) => {
                 sess.send_event_raw(Event {
@@ -5055,6 +5084,18 @@ mod handlers {
                 })
                 .await;
             }
+        }
+    }
+
+    async fn mirror_user_text_to_realtime(sess: &Arc<Session>, realtime_text: Option<String>) {
+        let Some(text) = realtime_text else {
+            return;
+        };
+        if sess.conversation.running_state().await.is_none() {
+            return;
+        }
+        if let Err(err) = sess.conversation.text_in(text).await {
+            debug!("failed to mirror user text to realtime conversation: {err}");
         }
     }
 
