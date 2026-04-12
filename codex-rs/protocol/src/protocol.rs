@@ -1412,7 +1412,7 @@ pub enum EventMsg {
     /// User/system input message (what was sent to the model)
     UserMessage(UserMessageEvent),
 
-    /// Transcript-safe display text for a runtime-injected message.
+    /// Transcript-safe display text for a timer-fired or external queued message.
     InjectedMessage(InjectedMessageEvent),
 
     /// Agent text output delta message
