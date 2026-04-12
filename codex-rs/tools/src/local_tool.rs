@@ -341,7 +341,7 @@ pub fn create_request_permission_preset_tool(available_preset_ids: Vec<&'static 
 }
 
 pub fn request_permission_preset_tool_description() -> String {
-    "Open the permission-mode picker with a built-in preset such as Default or Full Access pre-selected. Use this immediately when the user says things like \"make this session full access\", \"switch to read-only\", or otherwise conversationally asks to change sandboxing, approval, or permission mode. The session only changes if the user selects a permission mode in the picker."
+    "Open the permission-mode picker with a built-in preset such as Default or Full Access preselected. Use this immediately when the user says things like \"make this session full access\", \"switch to read-only\", or otherwise conversationally asks to change sandboxing, approval, or permission mode. The session only changes if the user selects a permission mode in the picker."
         .to_string()
 }
 

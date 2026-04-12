@@ -92,7 +92,7 @@ async fn permission_preset_request_opens_permissions_picker_with_requested_prese
         popup
             .lines()
             .any(|line| line.contains('›') && line.contains("Full Access")),
-        "expected Full Access to be pre-selected in the permissions picker: {popup}"
+        "expected Full Access to be preselected in the permissions picker: {popup}"
     );
     assert_snapshot!("permission_preset_request_picker", popup);
 

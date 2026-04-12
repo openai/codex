@@ -640,7 +640,7 @@ fn request_permissions_tool_prompt_section() -> &'static str {
 }
 
 fn request_permission_preset_tool_prompt_section() -> &'static str {
-    "# request_permission_preset Tool\n\nThe built-in `request_permission_preset` tool is available in this session. Invoke it immediately when the user asks conversationally to change the broad sandboxing, approval, or permission mode, for example \"make this session full access\", \"switch to full access\", \"make the session read-only\", or \"use guardian approvals\". The tool opens the permission-mode picker with the requested preset pre-selected; the session only changes if the user selects a mode there. Do not claim the mode changed until the tool returns an accepted decision. Use `request_permissions` instead for named paths or narrow filesystem/network grants; never use the preset picker for requests like \"allow writing to ~/Downloads\"."
+    "# request_permission_preset Tool\n\nThe built-in `request_permission_preset` tool is available in this session. Invoke it immediately when the user asks conversationally to change the broad sandboxing, approval, or permission mode, for example \"make this session full access\", \"switch to full access\", \"make the session read-only\", or \"use guardian approvals\". The tool opens the permission-mode picker with the requested preset preselected; the session only changes if the user selects a mode there. Do not claim the mode changed until the tool returns an accepted decision. Use `request_permissions` instead for named paths or narrow filesystem/network grants; never use the preset picker for requests like \"allow writing to ~/Downloads\"."
 }
 
 fn granular_instructions(
