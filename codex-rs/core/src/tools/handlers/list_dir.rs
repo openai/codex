@@ -8,6 +8,8 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
 
+use crate::filesystem_deny_read::ReadDenyMatcher;
+use crate::filesystem_deny_read::ensure_read_allowed;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -52,7 +54,7 @@ impl ToolHandler for ListDirHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -96,8 +98,12 @@ impl ToolHandler for ListDirHandler {
                 "dir_path must be an absolute path".to_string(),
             ));
         }
+        ensure_read_allowed(&path, &turn.file_system_sandbox_policy, &turn.cwd)?;
+        let read_deny_matcher = ReadDenyMatcher::new(&turn.file_system_sandbox_policy, &turn.cwd);
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        let entries =
+            list_dir_slice_with_policy(&path, offset, limit, depth, read_deny_matcher.as_ref())
+                .await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -105,14 +111,25 @@ impl ToolHandler for ListDirHandler {
     }
 }
 
+#[cfg(test)]
 async fn list_dir_slice(
     path: &Path,
     offset: usize,
     limit: usize,
     depth: usize,
 ) -> Result<Vec<String>, FunctionCallError> {
+    list_dir_slice_with_policy(path, offset, limit, depth, /*read_deny_matcher*/ None).await
+}
+
+async fn list_dir_slice_with_policy(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+    depth: usize,
+    read_deny_matcher: Option<&ReadDenyMatcher>,
+) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, &mut entries).await?;
+    collect_entries(path, Path::new(""), depth, read_deny_matcher, &mut entries).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -148,6 +165,7 @@ async fn collect_entries(
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
+    read_deny_matcher: Option<&ReadDenyMatcher>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
@@ -163,6 +181,13 @@ async fn collect_entries(
         while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })? {
+            let entry_path = entry.path();
+            if let Some(read_deny_matcher) = read_deny_matcher
+                && read_deny_matcher.is_read_denied(&entry_path)
+            {
+                continue;
+            }
+
             let file_type = entry.file_type().await.map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
             })?;
@@ -179,7 +204,7 @@ async fn collect_entries(
             let sort_key = format_entry_name(&relative_path);
             let kind = DirEntryKind::from(&file_type);
             dir_entries.push((
-                entry.path(),
+                entry_path,
                 relative_path,
                 kind,
                 DirEntry {

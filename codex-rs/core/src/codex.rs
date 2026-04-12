@@ -1251,7 +1251,14 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
-        if sandbox_policy_changed || (cwd_changed && file_system_policy_matches_legacy) {
+        if sandbox_policy_changed {
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_read_denies(
+                    next_configuration.sandbox_policy.get(),
+                    &next_configuration.cwd,
+                    &next_configuration.file_system_sandbox_policy,
+                );
+        } else if cwd_changed && file_system_policy_matches_legacy {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
             next_configuration.file_system_sandbox_policy =

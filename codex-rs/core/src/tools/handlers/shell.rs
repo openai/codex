@@ -24,6 +24,7 @@ use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::reject_explicit_escalation_if_deny_read_present;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -463,6 +464,10 @@ impl ShellHandler {
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
         }
+        reject_explicit_escalation_if_deny_read_present(
+            effective_additional_permissions.sandbox_permissions,
+            &turn.file_system_sandbox_policy,
+        )?;
 
         // Intercept apply_patch if present.
         if let Some(output) = intercept_apply_patch(
