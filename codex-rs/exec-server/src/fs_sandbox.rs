@@ -55,8 +55,10 @@ impl FileSystemSandboxRunner {
         let cwd = current_sandbox_cwd().map_err(io_error)?;
         let cwd = AbsolutePathBuf::from_absolute_path(cwd.as_path())
             .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))?;
-        let request_file_system_policy =
-            request_file_system_policy(&sandbox.sandbox_policy, cwd.as_path());
+        let request_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            &sandbox.sandbox_policy,
+            cwd.as_path(),
+        );
         let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
             &helper_sandbox_policy,
             cwd.as_path(),
@@ -128,25 +130,6 @@ impl FileSystemSandboxRunner {
                 .and_then(|permissions| permissions.file_system.clone()),
         }
     }
-}
-
-fn request_file_system_policy(
-    sandbox_policy: &SandboxPolicy,
-    cwd: &std::path::Path,
-) -> FileSystemSandboxPolicy {
-    let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, cwd);
-    if let codex_protocol::permissions::FileSystemSandboxKind::Restricted = policy.kind {
-        policy.entries.retain(|entry| {
-            !matches!(
-                entry.path,
-                codex_protocol::permissions::FileSystemPath::Special {
-                    value:
-                        codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory
-                }
-            )
-        });
-    }
-    policy
 }
 
 fn resolve_request_paths(
@@ -396,12 +379,6 @@ mod tests {
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
-    use codex_protocol::permissions::FileSystemAccessMode;
-    use codex_protocol::permissions::FileSystemPath;
-    use codex_protocol::permissions::FileSystemSandboxEntry;
-    use codex_protocol::permissions::FileSystemSandboxKind;
-    use codex_protocol::permissions::FileSystemSandboxPolicy;
-    use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -410,7 +387,6 @@ mod tests {
     use crate::ExecServerRuntimePaths;
 
     use super::FileSystemSandboxRunner;
-    use super::request_file_system_policy;
     use super::sandbox_policy_with_helper_runtime_defaults;
 
     #[test]
@@ -508,87 +484,5 @@ mod tests {
                 .and_then(|fs| fs.read.clone()),
             Some(vec![readable])
         );
-    }
-
-    #[test]
-    fn request_policy_does_not_grant_implicit_cwd_access() {
-        let cwd = tempfile::TempDir::new().expect("tempdir");
-        let policy = request_file_system_policy(
-            &SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::Restricted {
-                    include_platform_defaults: false,
-                    readable_roots: Vec::new(),
-                },
-                network_access: false,
-            },
-            cwd.path(),
-        );
-
-        assert_eq!(
-            policy,
-            FileSystemSandboxPolicy {
-                kind: FileSystemSandboxKind::Restricted,
-                entries: Vec::new(),
-            }
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn request_policy_denies_symlink_parent_dotdot_escape_when_cwd_contains_tempdir() {
-        use std::os::unix::fs::symlink;
-
-        let cwd = tempfile::TempDir::new().expect("tempdir");
-        let allowed_dir = cwd.path().join("allowed");
-        let outside_dir = cwd.path().join("outside");
-        std::fs::create_dir_all(&allowed_dir).expect("create allowed");
-        std::fs::create_dir_all(&outside_dir).expect("create outside");
-        std::fs::write(cwd.path().join("secret.txt"), "nope").expect("write secret");
-        symlink(&outside_dir, allowed_dir.join("link")).expect("create link");
-
-        let policy = request_file_system_policy(
-            &SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::Restricted {
-                    include_platform_defaults: false,
-                    readable_roots: vec![
-                        AbsolutePathBuf::from_absolute_path(&allowed_dir)
-                            .expect("absolute allowed"),
-                    ],
-                },
-                network_access: false,
-            },
-            cwd.path(),
-        );
-        let escaped_path = AbsolutePathBuf::from_absolute_path(
-            cwd.path()
-                .join("allowed")
-                .join("link")
-                .join("..")
-                .join("secret.txt")
-                .canonicalize()
-                .expect("canonicalize escaped path"),
-        )
-        .expect("absolute escaped path");
-
-        assert_eq!(
-            policy.resolve_access_with_cwd(escaped_path.as_path(), cwd.path()),
-            FileSystemAccessMode::None
-        );
-        assert_eq!(
-            policy.entries,
-            vec![FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: AbsolutePathBuf::from_absolute_path(&allowed_dir)
-                        .expect("absolute allowed")
-                },
-                access: FileSystemAccessMode::Read,
-            }]
-        );
-        assert!(!policy.entries.iter().any(|entry| matches!(
-            entry.path,
-            FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory
-            }
-        )));
     }
 }
