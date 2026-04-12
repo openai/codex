@@ -15,6 +15,7 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
+const PID_FILENAME: &str = ".pid";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -296,6 +297,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         .prefix("codex-arg0")
         .tempdir_in(&temp_root)?;
     let path = temp_dir.path();
+    write_owner_pid(path)?;
 
     let lock_path = path.join(LOCK_FILENAME);
     let lock_file = File::options()
@@ -399,6 +401,10 @@ fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
             continue;
         }
 
+        if dir_belongs_to_running_process(&path) {
+            continue;
+        }
+
         // Skip the directory if locking fails or the lock is currently held.
         let Some(_lock_file) = try_lock_dir(&path)? else {
             continue;
@@ -413,6 +419,36 @@ fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn write_owner_pid(dir: &Path) -> std::io::Result<()> {
+    std::fs::write(dir.join(PID_FILENAME), format!("{}\n", std::process::id()))
+}
+
+fn dir_belongs_to_running_process(dir: &Path) -> bool {
+    let Ok(pid) = std::fs::read_to_string(dir.join(PID_FILENAME)) else {
+        return false;
+    };
+    let Ok(pid) = pid.trim().parse::<u32>() else {
+        return false;
+    };
+    owner_pid_is_running(pid)
+}
+
+fn owner_pid_is_running(pid: u32) -> bool {
+    if pid == std::process::id() {
+        return true;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Path::new("/proc").join(pid.to_string()).exists()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
 fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
@@ -435,6 +471,7 @@ mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::PID_FILENAME;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
     use std::fs;
@@ -451,6 +488,10 @@ mod tests {
             .create(true)
             .truncate(false)
             .open(lock_path)
+    }
+
+    fn write_pid(dir: &Path, pid: u32) -> std::io::Result<()> {
+        fs::write(dir.join(PID_FILENAME), format!("{pid}\n"))
     }
 
     #[test]
@@ -498,6 +539,34 @@ mod tests {
         janitor_cleanup(root.path())?;
 
         assert!(dir.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn janitor_skips_dirs_owned_by_running_process() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let dir = root.path().join("active-pid");
+        fs::create_dir(&dir)?;
+        create_lock(&dir)?;
+        write_pid(&dir, std::process::id())?;
+
+        janitor_cleanup(root.path())?;
+
+        assert!(dir.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn janitor_removes_dirs_with_stale_pid_and_unlocked_lock() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let dir = root.path().join("stale-pid");
+        fs::create_dir(&dir)?;
+        create_lock(&dir)?;
+        write_pid(&dir, u32::MAX)?;
+
+        janitor_cleanup(root.path())?;
+
+        assert!(!dir.exists());
         Ok(())
     }
 
