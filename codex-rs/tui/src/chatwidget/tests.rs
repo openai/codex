@@ -266,7 +266,6 @@ mod review_mode;
 mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
-mod timers;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;
