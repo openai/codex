@@ -33,7 +33,6 @@ use super::INITIAL_SUBMIT_ID;
 use super::Session;
 use crate::injected_message::InjectedMessage;
 use crate::injected_message::MessagePayload;
-use crate::pending_input::GeneratedMessageInput;
 use crate::pending_input::PendingInputItem;
 use crate::timers::ClaimedTimer;
 use crate::timers::CreateTimer;
@@ -256,10 +255,7 @@ impl Session {
             self.emit_timer_updated_notification().await;
         }
         let message = timer_injected_message(&context);
-        let input_item = PendingInputItem::GeneratedMessage(GeneratedMessageInput {
-            item: message.prompt_input_item(),
-            injected_event: message.event(),
-        });
+        let input_item = PendingInputItem::injected(message.prompt_input_item(), message.event());
         match context.delivery {
             TimerDelivery::SteerCurrentTurn => {
                 if !self.inject_timer_into_active_turn(input_item.clone()).await {
@@ -367,10 +363,8 @@ impl Session {
                             continue;
                         }
                     };
-                    let input_item = PendingInputItem::GeneratedMessage(GeneratedMessageInput {
-                        item: message.prompt_input_item(),
-                        injected_event: message.event(),
-                    });
+                    let input_item =
+                        PendingInputItem::injected(message.prompt_input_item(), message.event());
                     return Some(PendingMessageClaim::Claimed(Box::new(input_item), delivery));
                 }
                 Some(codex_state::ThreadMessageClaim::Invalid { id, reason }) => {

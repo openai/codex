@@ -203,13 +203,8 @@ pub(crate) async fn inspect_pending_input(
     turn_context: &Arc<TurnContext>,
     pending_input_item: PendingInputItem,
 ) -> PendingInputHookDisposition {
-    let (response_item, injected_event) = match pending_input_item {
-        PendingInputItem::Plain(item) => (ResponseItem::from(item), None),
-        PendingInputItem::GeneratedMessage(generated) => (
-            ResponseItem::from(generated.item),
-            Some(generated.injected_event),
-        ),
-    };
+    let (input_item, injected_event) = pending_input_item.into_parts();
+    let response_item = ResponseItem::from(input_item);
     if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
         let user_prompt_submit_outcome =
             run_user_prompt_submit_hooks(sess, turn_context, user_message.message()).await;

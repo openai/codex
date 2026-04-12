@@ -4423,10 +4423,10 @@ impl Session {
 
         let mut idle_pending_input = self.idle_pending_input.lock().await;
         for item in items {
-            if let Some(timer_source) = item.generated_timer_source()
+            if let Some(timer_source) = item.timer_source()
                 && idle_pending_input
                     .iter()
-                    .any(|queued| queued.generated_timer_source() == Some(timer_source))
+                    .any(|queued| queued.timer_source() == Some(timer_source))
             {
                 continue;
             }
