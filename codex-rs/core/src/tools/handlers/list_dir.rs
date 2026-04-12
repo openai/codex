@@ -118,7 +118,7 @@ async fn list_dir_slice(
     limit: usize,
     depth: usize,
 ) -> Result<Vec<String>, FunctionCallError> {
-    list_dir_slice_with_policy(path, offset, limit, depth, None).await
+    list_dir_slice_with_policy(path, offset, limit, depth, /*read_deny_matcher*/ None).await
 }
 
 async fn list_dir_slice_with_policy(
