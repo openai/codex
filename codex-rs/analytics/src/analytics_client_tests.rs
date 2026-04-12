@@ -455,6 +455,18 @@ async fn ingest_turn_prerequisites(
 ) {
     if include_initialize {
         ingest_initialize(reducer, out).await;
+        reducer
+            .ingest(
+                AnalyticsFact::Response {
+                    connection_id: 7,
+                    response: Box::new(sample_thread_start_response(
+                        "thread-2", /*ephemeral*/ false, "gpt-5",
+                    )),
+                },
+                out,
+            )
+            .await;
+        out.clear();
     }
 
     reducer
@@ -1442,6 +1454,10 @@ fn turn_event_serializes_expected_shape() {
             runtime: sample_runtime_metadata(),
             submission_type: None,
             ephemeral: false,
+            thread_source: Some("user".to_string()),
+            initialization_mode: ThreadInitializationMode::New,
+            subagent_source: None,
+            parent_thread_id: None,
             model: Some("gpt-5".to_string()),
             model_provider: "openai".to_string(),
             sandbox_policy: Some("read_only"),
@@ -1499,6 +1515,10 @@ fn turn_event_serializes_expected_shape() {
                     "runtime_arch": "aarch64"
                 },
                 "ephemeral": false,
+                "thread_source": "user",
+                "initialization_mode": "new",
+                "subagent_source": null,
+                "parent_thread_id": null,
                 "model": "gpt-5",
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",
@@ -1598,6 +1618,10 @@ async fn accepted_turn_steer_emits_expected_event() {
         payload["event_params"]["runtime"]["codex_rs_version"],
         json!("0.1.0")
     );
+    assert_eq!(payload["event_params"]["thread_source"], json!("user"));
+    assert_eq!(payload["event_params"]["initialization_mode"], json!("new"));
+    assert_eq!(payload["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
     assert!(payload["event_params"].get("product_client_id").is_none());
 }
 
@@ -1626,6 +1650,10 @@ async fn rejected_turn_steer_uses_request_connection_metadata() {
         payload["event_params"]["runtime"]["codex_rs_version"],
         json!("0.1.0")
     );
+    assert_eq!(payload["event_params"]["thread_source"], json!("user"));
+    assert_eq!(payload["event_params"]["initialization_mode"], json!("new"));
+    assert_eq!(payload["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
     assert_eq!(payload["event_params"]["result"], json!("rejected"));
     assert_eq!(
         payload["event_params"]["rejection_reason"],
