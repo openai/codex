@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::filter_non_codex_apps_mcp_tools_only;
+use codex_tools::ToolName;
 use codex_tools::ToolsConfig;
 
 use crate::config::Config;
@@ -12,12 +13,12 @@ use crate::connectors;
 pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 
 pub(crate) struct McpToolExposure {
-    pub(crate) direct_tools: HashMap<String, McpToolInfo>,
-    pub(crate) deferred_tools: Option<HashMap<String, McpToolInfo>>,
+    pub(crate) direct_tools: HashMap<ToolName, McpToolInfo>,
+    pub(crate) deferred_tools: Option<HashMap<ToolName, McpToolInfo>>,
 }
 
 pub(crate) fn build_mcp_tool_exposure(
-    all_mcp_tools: &HashMap<String, McpToolInfo>,
+    all_mcp_tools: &HashMap<ToolName, McpToolInfo>,
     connectors: Option<&[connectors::AppInfo]>,
     explicitly_enabled_connectors: &[connectors::AppInfo],
     config: &Config,
@@ -48,10 +49,10 @@ pub(crate) fn build_mcp_tool_exposure(
 }
 
 fn filter_codex_apps_mcp_tools(
-    mcp_tools: &HashMap<String, McpToolInfo>,
+    mcp_tools: &HashMap<ToolName, McpToolInfo>,
     connectors: &[connectors::AppInfo],
     config: &Config,
-) -> HashMap<String, McpToolInfo> {
+) -> HashMap<ToolName, McpToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
         .map(|connector| connector.id.as_str())
