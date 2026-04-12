@@ -28,6 +28,7 @@
         "go",
         "plus",
         "pro",
+        "prolite",
         "team",
         "self_serve_business_usage_based",
         "business",
@@ -91,16 +92,6 @@
               "type": "null"
             }
           ]
-        },
-        "spendControl": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SpendControlSnapshot"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "type": "object"
@@ -128,17 +119,6 @@
       },
       "required": [
         "usedPercent"
-      ],
-      "type": "object"
-    },
-    "SpendControlSnapshot": {
-      "properties": {
-        "reached": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "reached"
       ],
       "type": "object"
     }

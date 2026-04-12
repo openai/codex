@@ -1342,13 +1342,7 @@ async fn select_resume_path_from_db_page(
 }
 
 fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(session_cwd),
-        path_utils::normalize_for_path_comparison(cwd),
-    ) {
-        return ca == cb;
-    }
-    session_cwd == cwd
+    path_utils::paths_match_after_normalization(session_cwd, cwd)
 }
 
 #[cfg(test)]

@@ -22,13 +22,13 @@ use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::legacy_core::plugins::PluginCapabilitySummary;
+use crate::legacy_core::skills::model::SkillMetadata;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
-use codex_core::plugins::PluginCapabilitySummary;
-use codex_core::skills::model::SkillMetadata;
 use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -278,6 +278,14 @@ impl BottomPane {
 
     pub fn take_recent_submission_mention_bindings(&mut self) -> Vec<MentionBinding> {
         self.composer.take_recent_submission_mention_bindings()
+    }
+
+    /// Add a staged slash-command draft to the composer's local recall list.
+    ///
+    /// This should be called exactly once after `ChatWidget` dispatches a recognized command.
+    /// Slash recall records the submitted command text regardless of whether the command succeeds.
+    pub(crate) fn record_pending_slash_command_history(&mut self) {
+        self.composer.record_pending_slash_command_history();
     }
 
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.

@@ -6,6 +6,7 @@ use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
 use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
+use crate::ToolName;
 use crate::ToolRegistryPlan;
 use crate::ToolRegistryPlanParams;
 use crate::ToolSearchSource;
@@ -266,7 +267,7 @@ pub fn build_tool_registry_plan(
 
         for tool in deferred_mcp_tools {
             plan.register_handler(
-                format!("{}:{}", tool.tool_namespace, tool.tool_name),
+                ToolName::namespaced(tool.tool_namespace, tool.tool_name),
                 ToolHandlerKind::Mcp,
             );
         }

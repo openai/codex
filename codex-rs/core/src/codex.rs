@@ -52,6 +52,8 @@ use chrono::Local;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::build_track_events_context;
@@ -76,6 +78,7 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
+use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -438,6 +441,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
+    pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -490,6 +494,7 @@ impl Codex {
             user_shell_override,
             inherited_exec_policy,
             parent_trace: _,
+            analytics_events_client,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -599,7 +604,7 @@ impl Codex {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
-                InitialHistory::New => None,
+                InitialHistory::New | InitialHistory::Cleared => None,
             };
             match thread_id {
                 Some(thread_id) => {
@@ -680,6 +685,7 @@ impl Codex {
             skills_watcher,
             agent_control,
             environment,
+            analytics_events_client,
         )
         .await
         .map_err(|e| {
@@ -1608,6 +1614,7 @@ impl Session {
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1617,7 +1624,7 @@ impl Session {
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
@@ -1658,14 +1665,14 @@ impl Session {
                     .count(),
             )
             .unwrap_or(u64::MAX),
-            InitialHistory::New | InitialHistory::Forked(_) => 0,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
                 resumed.history.as_slice(),
                 resumed.rollout_path.as_path(),
             ),
-            InitialHistory::New | InitialHistory::Forked(_) => None,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
         };
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
@@ -1988,6 +1995,13 @@ impl Session {
         }
 
         let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
+            AnalyticsEventsClient::new(
+                Arc::clone(&auth_manager),
+                config.chatgpt_base_url.trim_end_matches('/').to_string(),
+                config.analytics_enabled,
+            )
+        });
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -2006,11 +2020,7 @@ impl Session {
             ),
             shell_zsh_path: config.zsh_path.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-            analytics_events_client: AnalyticsEventsClient::new(
-                Arc::clone(&auth_manager),
-                config.chatgpt_base_url.trim_end_matches('/').to_string(),
-                config.analytics_enabled,
-            ),
+            analytics_events_client,
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
@@ -2021,7 +2031,7 @@ impl Session {
             session_telemetry,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            guardian_rejection_rationales: Mutex::new(HashMap::new()),
+            guardian_rejections: Mutex::new(HashMap::new()),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager: Arc::clone(&mcp_manager),
@@ -2194,6 +2204,7 @@ impl Session {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 codex_hooks::SessionStartSource::Startup
             }
+            InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
         };
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
@@ -2334,7 +2345,7 @@ impl Session {
             )
         };
         match conversation_history {
-            InitialHistory::New => {
+            InitialHistory::New | InitialHistory::Cleared => {
                 // Defer initial context insertion until the first real turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
@@ -4437,25 +4448,16 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn parse_mcp_tool_name(
+    pub(crate) async fn resolve_mcp_tool_info(
         &self,
         name: &str,
-        namespace: &Option<String>,
-    ) -> Option<(String, String)> {
-        let tool_name = if let Some(namespace) = namespace {
-            if name.starts_with(namespace.as_str()) {
-                name
-            } else {
-                &format!("{namespace}{name}")
-            }
-        } else {
-            name
-        };
+        namespace: Option<&str>,
+    ) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .parse_tool_name(tool_name)
+            .resolve_tool_info(name, namespace)
             .await
     }
 
@@ -4821,10 +4823,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::set_thread_name(&sess, sub.id.clone(), name).await;
                     false
                 }
-                Op::SendAddCreditsNudgeEmail => {
-                    handlers::send_add_credits_nudge_email(&sess, &config, sub.id.clone()).await;
-                    false
-                }
                 Op::RunUserShellCommand { command } => {
                     handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
                     false
@@ -4921,8 +4919,6 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_mcp::collect_mcp_snapshot_from_manager;
     use codex_mcp::compute_auth_statuses;
-    use codex_protocol::protocol::AddCreditsNudgeEmailResponseEvent;
-    use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -4965,48 +4961,6 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
-    }
-
-    pub async fn send_add_credits_nudge_email(
-        sess: &Arc<Session>,
-        config: &Config,
-        sub_id: String,
-    ) {
-        match crate::send_add_credits_nudge_email(config, &sess.services.auth_manager).await {
-            Ok(status) => {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::AddCreditsNudgeEmailResponse(
-                        AddCreditsNudgeEmailResponseEvent {
-                            result: Ok(add_credits_nudge_email_status_to_event(status)),
-                        },
-                    ),
-                })
-                .await;
-            }
-            Err(err) => {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::AddCreditsNudgeEmailResponse(
-                        AddCreditsNudgeEmailResponseEvent {
-                            result: Err(err.to_string()),
-                        },
-                    ),
-                })
-                .await;
-            }
-        }
-    }
-
-    fn add_credits_nudge_email_status_to_event(
-        status: crate::AddCreditsNudgeEmailStatus,
-    ) -> AddCreditsNudgeEmailStatus {
-        match status {
-            crate::AddCreditsNudgeEmailStatus::Sent => AddCreditsNudgeEmailStatus::Sent,
-            crate::AddCreditsNudgeEmailStatus::CooldownActive => {
-                AddCreditsNudgeEmailStatus::CooldownActive
-            }
-        }
     }
 
     pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
@@ -6403,6 +6357,8 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         InitialContextInjection::BeforeLastUserMessage,
+                        CompactionReason::ContextLimit,
+                        CompactionPhase::MidTurn,
                     )
                     .await
                     .is_err()
@@ -6594,7 +6550,14 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
+        run_auto_compact(
+            sess,
+            turn_context,
+            InitialContextInjection::DoNotInject,
+            CompactionReason::ContextLimit,
+            CompactionPhase::PreTurn,
+        )
+        .await?;
         pre_sampling_compacted = true;
     }
     Ok(pre_sampling_compacted)
@@ -6638,6 +6601,8 @@ async fn maybe_run_previous_model_inline_compact(
             sess,
             &previous_model_turn_context,
             InitialContextInjection::DoNotInject,
+            CompactionReason::ModelDownshift,
+            CompactionPhase::PreTurn,
         )
         .await?;
         return Ok(true);
@@ -6649,6 +6614,8 @@ async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
     let prefix_candidate = sess
         .take_ready_prefix_compact(&turn_context.model_info.slug)
@@ -6677,6 +6644,8 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            reason,
+            phase,
         )
         .await?;
     } else {
@@ -6684,6 +6653,8 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            reason,
+            phase,
         )
         .await?;
     }
@@ -7526,7 +7497,6 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListSkillsResponse(_)
-        | EventMsg::AddCreditsNudgeEmailResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)

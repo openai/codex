@@ -19,6 +19,12 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+#[cfg(test)]
+use crate::legacy_core::McpManager;
+use crate::legacy_core::config::Config;
+#[cfg(test)]
+use crate::legacy_core::plugins::PluginsManager;
+use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -42,12 +48,6 @@ use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_config::types::McpServerTransportConfig;
-#[cfg(test)]
-use codex_core::McpManager;
-use codex_core::config::Config;
-#[cfg(test)]
-use codex_core::plugins::PluginsManager;
-use codex_core::web_search_detail;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
@@ -93,6 +93,12 @@ use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+mod hook_cell;
+
+pub(crate) use hook_cell::HookCell;
+pub(crate) use hook_cell::new_active_hook_cell;
+pub(crate) use hook_cell::new_completed_hook_cell;
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -891,6 +897,18 @@ pub fn new_approval_decision_cell(
                 ],
             };
             ("✗ ".red(), summary)
+        }
+        TimedOut => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "Review ".into(),
+                    "timed out".bold(),
+                    " before codex could run ".into(),
+                    snippet,
+                ],
+            )
         }
         Abort => {
             let snippet = Span::from(exec_snippet(&command)).dim();
@@ -2160,17 +2178,10 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
-    new_error_event_with_hint(message, /*hint*/ None)
-}
-
-pub(crate) fn new_error_event_with_hint(message: String, hint: Option<String>) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let mut lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
-    if let Some(hint) = hint {
-        lines.push(vec!["  ".into(), hint.dark_gray()].into());
-    }
+    let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
     PlainHistoryCell { lines }
 }
 
@@ -2780,10 +2791,10 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::legacy_core::config::Config;
+    use crate::legacy_core::config::ConfigBuilder;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigBuilder;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;

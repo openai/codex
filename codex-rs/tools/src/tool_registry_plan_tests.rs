@@ -1285,11 +1285,11 @@ fn search_tool_description_lists_each_mcp_source_once() {
     assert!(!description.contains("mcp__rmcp__echo"));
 
     assert!(handlers.contains(&ToolHandlerSpec {
-        name: "mcp__codex_apps__calendar:_create_event".to_string(),
+        name: ToolName::namespaced("mcp__codex_apps__calendar", "_create_event"),
         kind: ToolHandlerKind::Mcp,
     }));
     assert!(handlers.contains(&ToolHandlerSpec {
-        name: "mcp__rmcp__:echo".to_string(),
+        name: ToolName::namespaced("mcp__rmcp__", "echo"),
         kind: ToolHandlerKind::Mcp,
     }));
 }

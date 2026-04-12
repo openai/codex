@@ -84,6 +84,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -278,7 +279,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let resolved_cwd = cwd.clone();
     let config_cwd = match resolved_cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+        Some(path) => {
+            AbsolutePathBuf::from_absolute_path(canonicalize_existing_preserving_symlinks(path)?)?
+        }
         None => AbsolutePathBuf::current_dir()?,
     };
 
@@ -1202,13 +1205,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
 }
 
 fn cwds_match(current_cwd: &Path, session_cwd: &Path) -> bool {
-    match (
-        path_utils::normalize_for_path_comparison(current_cwd),
-        path_utils::normalize_for_path_comparison(session_cwd),
-    ) {
-        (Ok(current), Ok(session)) => current == session,
-        _ => current_cwd == session_cwd,
-    }
+    path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 async fn resolve_resume_thread_id(

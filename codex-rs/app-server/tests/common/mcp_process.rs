@@ -48,6 +48,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::McpResourceReadParams;
+use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::PluginInstallParams;
@@ -58,7 +59,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
-use codex_app_server_protocol::ThreadAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
@@ -415,16 +415,6 @@ impl McpProcess {
         self.send_request("thread/shellCommand", params).await
     }
 
-    /// Send a `thread/addCreditsNudgeEmail` JSON-RPC request.
-    pub async fn send_thread_add_credits_nudge_email_request(
-        &mut self,
-        params: ThreadAddCreditsNudgeEmailParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/addCreditsNudgeEmail", params)
-            .await
-    }
-
     /// Send a `thread/rollback` JSON-RPC request.
     pub async fn send_thread_rollback_request(
         &mut self,
@@ -502,6 +492,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("mcpServer/resource/read", params).await
+    }
+
+    /// Send an `mcpServer/tool/call` JSON-RPC request.
+    pub async fn send_mcp_server_tool_call_request(
+        &mut self,
+        params: McpServerToolCallParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("mcpServer/tool/call", params).await
     }
 
     /// Send a `skills/list` JSON-RPC request.

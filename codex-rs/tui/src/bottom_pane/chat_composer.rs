@@ -29,6 +29,10 @@
 //! Recalled entries move the cursor to end-of-line so repeated Up/Down presses keep shell-like
 //! history traversal semantics instead of dropping to column 0.
 //!
+//! Slash commands are staged for local history instead of being recorded immediately. Command
+//! recall is a two-phase handoff: stage the submitted slash text here, then record it after
+//! `ChatWidget` dispatches the command.
+//!
 //! # Submission and Prompt Expansion
 //!
 //! `Enter` submits immediately. `Tab` requests queuing while a task is running; if no task is
@@ -192,12 +196,12 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
+use crate::legacy_core::plugins::PluginCapabilitySummary;
+use crate::legacy_core::skills::model::SkillMetadata;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_chatgpt::connectors;
 use codex_chatgpt::connectors::AppInfo;
-use codex_core::plugins::PluginCapabilitySummary;
-use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -228,7 +232,16 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
     },
+    /// A bare slash command parsed by the composer.
+    ///
+    /// Callers that dispatch this variant are also responsible for resolving any pending local
+    /// command-history entry that the composer staged before clearing the visible input.
     Command(SlashCommand),
+    /// An inline slash command and its trimmed argument text.
+    ///
+    /// The `TextElement` ranges are rebased into the argument string, while any pending local
+    /// command-history entry still represents the original command invocation that should be
+    /// committed only if dispatch accepts it.
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
     None,
 }
@@ -311,6 +324,11 @@ pub(crate) struct ChatComposer {
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
     selected_remote_image_index: Option<usize>,
+    /// Slash-command draft staged for local recall after application-level dispatch.
+    ///
+    /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
+    /// prepare their argument text without also double-recording the full command invocation.
+    pending_slash_command_history: Option<HistoryEntry>,
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     // Monotonically increasing identifier for textarea elements we insert.
@@ -434,6 +452,7 @@ impl ChatComposer {
             footer_hint_override: None,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
+            pending_slash_command_history: None,
             footer_flash: None,
             context_window_percent: None,
             #[cfg(not(target_os = "linux"))]
@@ -1063,6 +1082,16 @@ impl ChatComposer {
         std::mem::take(&mut self.recent_submission_mention_bindings)
     }
 
+    /// Commit the staged slash-command draft to local Up-arrow recall.
+    ///
+    /// Call this after command dispatch. Calling it more than once is harmless because the pending
+    /// slot is consumed on the first call.
+    pub(crate) fn record_pending_slash_command_history(&mut self) {
+        if let Some(entry) = self.pending_slash_command_history.take() {
+            self.history.record_local_submission(entry);
+        }
+    }
+
     fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
         if self.attached_images.is_empty() {
             return;
@@ -1281,6 +1310,7 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     let CommandItem::Builtin(cmd) = sel;
                     if cmd == SlashCommand::Skills {
+                        self.stage_selected_slash_command_history(cmd);
                         self.textarea.set_text_clearing_elements("");
                         return (InputResult::Command(cmd), true);
                     }
@@ -1305,6 +1335,7 @@ impl ChatComposer {
             } => {
                 if let Some(sel) = popup.selected_item() {
                     let CommandItem::Builtin(cmd) = sel;
+                    self.stage_selected_slash_command_history(cmd);
                     self.textarea.set_text_clearing_elements("");
                     return (InputResult::Command(cmd), true);
                 }
@@ -2272,8 +2303,11 @@ impl ChatComposer {
                 slash_commands::find_builtin_command(name, self.builtin_command_flags())
         {
             if self.reject_slash_command_if_unavailable(cmd) {
+                self.stage_slash_command_history();
+                self.record_pending_slash_command_history();
                 return Some(InputResult::None);
             }
+            self.stage_slash_command_history();
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
         } else {
@@ -2303,8 +2337,12 @@ impl ChatComposer {
             return None;
         }
         if self.reject_slash_command_if_unavailable(cmd) {
+            self.stage_slash_command_history();
+            self.record_pending_slash_command_history();
             return Some(InputResult::None);
         }
+
+        self.stage_slash_command_history();
 
         let mut args_elements =
             Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
@@ -2320,9 +2358,13 @@ impl ChatComposer {
     /// Expand pending placeholders and extract normalized inline-command args.
     ///
     /// Inline-arg commands are initially dispatched using the raw draft so command rejection does
-    /// not consume user input. Once a command is accepted, this helper performs the usual
+    /// not consume user input. Once a command needs its args, this helper performs the usual
     /// submission preparation (paste expansion, element trimming) and rebases element ranges from
     /// full-text offsets to command-arg offsets.
+    ///
+    /// Callers that already staged slash-command history should normally pass `false` for
+    /// `record_history`; otherwise a command such as `/plan investigate` would be entered into
+    /// local recall through both the slash-command path and the message-submission path.
     pub(crate) fn prepare_inline_args_submission(
         &mut self,
         record_history: bool,
@@ -2351,6 +2393,43 @@ impl ChatComposer {
             history_cell::new_error_event(message),
         )));
         true
+    }
+
+    /// Stage the current slash-command text for later local recall.
+    ///
+    /// Staging snapshots the rich composer state before the textarea is cleared. `ChatWidget`
+    /// commits the staged entry after dispatch so command recall follows the submitted text, not
+    /// the command outcome.
+    fn stage_slash_command_history(&mut self) {
+        self.stage_slash_command_history_text(self.textarea.text().trim().to_string());
+    }
+
+    /// Stage a popup-selected command using its canonical command text.
+    ///
+    /// Popup filtering text can be partial, so recording the selected command avoids recalling
+    /// `/di` after the user actually accepted `/diff`.
+    fn stage_selected_slash_command_history(&mut self, cmd: SlashCommand) {
+        self.stage_slash_command_history_text(format!("/{}", cmd.command()));
+    }
+
+    /// Store the provided command text and the current composer adornments in the pending slot.
+    ///
+    /// The pending entry intentionally has the same shape as other local history entries so recall
+    /// can rehydrate attachments, mention bindings, and pending paste placeholders if command
+    /// workflows start carrying those through in the future.
+    fn stage_slash_command_history_text(&mut self, text: String) {
+        self.pending_slash_command_history = Some(HistoryEntry {
+            text,
+            text_elements: self.textarea.text_elements(),
+            local_image_paths: self
+                .attached_images
+                .iter()
+                .map(|img| img.path.clone())
+                .collect(),
+            remote_image_urls: self.remote_image_urls.clone(),
+            mention_bindings: self.snapshot_mention_bindings(),
+            pending_pastes: self.pending_pastes.clone(),
+        });
     }
 
     /// Translate full-text element ranges into command-argument ranges.
@@ -3241,7 +3320,7 @@ impl ChatComposer {
                 }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
-                let slug = codex_core::connectors::connector_mention_slug(connector);
+                let slug = crate::legacy_core::connectors::connector_mention_slug(connector);
                 let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
                 let connector_id = connector.id.as_str();
                 mentions.push(MentionItem {
@@ -4830,7 +4909,7 @@ mod tests {
             name: "google-calendar:availability".to_string(),
             description: "Find availability and plan event changes".to_string(),
             short_description: None,
-            interface: Some(codex_core::skills::model::SkillInterface {
+            interface: Some(crate::legacy_core::skills::model::SkillInterface {
                 display_name: Some("Google Calendar".to_string()),
                 short_description: None,
                 icon_small: None,
@@ -4852,7 +4931,7 @@ mod tests {
             ),
             has_skills: true,
             mcp_server_names: vec!["google-calendar".to_string()],
-            app_connector_ids: vec![codex_core::plugins::AppConnectorId(
+            app_connector_ids: vec![crate::legacy_core::plugins::AppConnectorId(
                 "google_calendar".to_string(),
             )],
         }]));
@@ -4907,7 +4986,7 @@ mod tests {
                     ),
                     has_skills: true,
                     mcp_server_names: vec!["sample".to_string()],
-                    app_connector_ids: vec![codex_core::plugins::AppConnectorId(
+                    app_connector_ids: vec![crate::legacy_core::plugins::AppConnectorId(
                         "calendar".to_string(),
                     )],
                 }]));
@@ -4928,7 +5007,7 @@ mod tests {
                     name: "google-calendar-skill".to_string(),
                     description: "Find availability and plan event changes".to_string(),
                     short_description: None,
-                    interface: Some(codex_core::skills::model::SkillInterface {
+                    interface: Some(crate::legacy_core::skills::model::SkillInterface {
                         display_name: Some("Google Calendar".to_string()),
                         short_description: None,
                         icon_small: None,
@@ -7861,6 +7940,90 @@ mod tests {
             matches!(composer.active_popup, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
         );
+    }
+
+    #[test]
+    fn bare_slash_command_can_be_recalled_after_recording_pending_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content("/diff".to_string(), Vec::new(), Vec::new());
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::Command(SlashCommand::Diff));
+        composer.record_pending_slash_command_history();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "/diff");
+    }
+
+    #[test]
+    fn popup_selected_slash_command_records_canonical_command_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content("/di".to_string(), Vec::new(), Vec::new());
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::Command(SlashCommand::Diff));
+        composer.record_pending_slash_command_history();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "/diff");
+    }
+
+    #[test]
+    fn inline_slash_command_can_be_recalled_after_recording_pending_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_collaboration_modes_enabled(/*enabled*/ true);
+
+        composer.set_text_content("/plan investigate this".to_string(), Vec::new(), Vec::new());
+        composer.active_popup = ActivePopup::None;
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                assert_eq!(cmd, SlashCommand::Plan);
+                assert_eq!(args, "investigate this");
+                assert!(text_elements.is_empty());
+            }
+            other => panic!("expected inline /plan command, got {other:?}"),
+        }
+        composer.record_pending_slash_command_history();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "/plan investigate this");
     }
 
     #[test]

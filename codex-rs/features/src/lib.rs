@@ -190,6 +190,8 @@ pub enum Feature {
     /// Precompute prefix compaction in the background before the foreground
     /// auto-compaction threshold is reached.
     PrefixCompaction,
+    /// Use the agent identity registration flow for ChatGPT-authenticated sessions.
+    UseAgentIdentity,
 }
 
 impl Feature {
@@ -930,6 +932,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Precompute history compaction in the background before the normal context compaction threshold is reached.",
             announcement: "",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseAgentIdentity,
+        key: "use_agent_identity",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];

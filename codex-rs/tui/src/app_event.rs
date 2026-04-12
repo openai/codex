@@ -170,10 +170,6 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
-    /// Ask Codex to notify the current workspace owner that credits need to be
-    /// added.
-    NotifyWorkspaceOwner,
-
     /// Result of prefetching connectors.
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
@@ -563,6 +559,7 @@ pub(crate) enum AppEvent {
     SubmitFeedback {
         category: FeedbackCategory,
         reason: Option<String>,
+        turn_id: Option<String>,
         include_logs: bool,
     },
 
