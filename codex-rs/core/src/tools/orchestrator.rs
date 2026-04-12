@@ -54,6 +54,12 @@ pub(crate) struct OrchestratorRunResult<Out> {
     pub deferred_network_approval: Option<DeferredNetworkApproval>,
 }
 
+#[derive(Clone, Copy)]
+enum ApprovalAttempt {
+    Initial,
+    Retry,
+}
+
 impl ToolOrchestrator {
     pub fn new() -> Self {
         Self {
@@ -157,6 +163,7 @@ impl ToolOrchestrator {
                 let decision = Self::request_approval(
                     tool,
                     req,
+                    ApprovalAttempt::Initial,
                     approval_ctx,
                     turn_ctx,
                     &otel,
@@ -317,6 +324,7 @@ impl ToolOrchestrator {
                     let decision = Self::request_approval(
                         tool,
                         req,
+                        ApprovalAttempt::Retry,
                         approval_ctx,
                         turn_ctx,
                         &otel,
@@ -396,6 +404,7 @@ impl ToolOrchestrator {
     async fn request_approval<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,
+        approval_attempt: ApprovalAttempt,
         approval_ctx: ApprovalCtx<'_>,
         turn_ctx: &crate::codex::TurnContext,
         otel: &SessionTelemetry,
@@ -427,10 +436,14 @@ impl ToolOrchestrator {
         };
 
         if let Some(permission_request) = tool.permission_request_payload(req) {
+            let run_id_suffix = match approval_attempt {
+                ApprovalAttempt::Initial => format!("{}:initial", approval_ctx.call_id),
+                ApprovalAttempt::Retry => format!("{}:retry", approval_ctx.call_id),
+            };
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
-                approval_ctx.call_id.to_string(),
+                run_id_suffix,
                 permission_request.tool_name,
                 permission_request.command,
                 permission_request.sandbox_permissions,
