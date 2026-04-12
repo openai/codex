@@ -242,14 +242,6 @@ use tracing::debug;
 use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
-const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
-const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
-const PLAN_IMPLEMENTATION_CLEAR_CONTEXT: &str = "Yes, clear context and implement";
-const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
-const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
-const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX: &str = "Implement the approved plan below in a fresh context. Treat the plan as the\nsource of user intent, re-read files as needed, and carry the work through\nimplementation and verification.";
-const PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE: &str = "Default mode unavailable";
-const PLAN_IMPLEMENTATION_NO_APPROVED_PLAN: &str = "No approved plan available";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
@@ -259,28 +251,6 @@ const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
-
-/// Builds the first prompt for implementing an approved plan in a fresh thread.
-///
-/// The prompt deliberately carries only the approved plan, not a compacted transcript. Adding
-/// planning-session history here would make the option behave like a partial resume instead of a
-/// context clear, which can reintroduce rejected approaches into the implementation turn.
-fn plan_implementation_clear_context_message(plan_markdown: &str) -> String {
-    format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}")
-}
-
-fn plan_implementation_clear_context_plan(
-    default_mask_available: bool,
-    plan_markdown: Option<&str>,
-) -> Result<&str, &'static str> {
-    if !default_mask_available {
-        return Err(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE);
-    }
-    match plan_markdown {
-        Some(plan_markdown) if !plan_markdown.trim().is_empty() => Ok(plan_markdown),
-        _ => Err(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN),
-    }
-}
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -386,6 +356,8 @@ use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 mod plugins;
 use self::plugins::PluginsCacheState;
+mod plan_implementation;
+use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
@@ -2499,78 +2471,12 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
-        let default_mask_available = default_mask.is_some();
-        let (implement_actions, implement_disabled_reason) = match default_mask {
-            Some(mask) => {
-                let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::SubmitUserMessageWithMode {
-                        text: user_text.clone(),
-                        collaboration_mode: mask.clone(),
-                    });
-                })];
-                (actions, None)
-            }
-            None => (
-                Vec::new(),
-                Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
-            ),
-        };
-        let (clear_context_actions, clear_context_disabled_reason) =
-            match plan_implementation_clear_context_plan(
-                default_mask_available,
-                self.latest_proposed_plan_markdown.as_deref(),
-            ) {
-                Ok(plan_markdown) => {
-                    let user_text = plan_implementation_clear_context_message(plan_markdown);
-                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                        tx.send(AppEvent::ClearUiAndSubmitUserMessage {
-                            text: user_text.clone(),
-                        });
-                    })];
-                    (actions, None)
-                }
-                Err(reason) => (Vec::new(), Some(reason.to_string())),
-            };
-        let items = vec![
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Default and start coding.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: implement_actions,
-                disabled_reason: implement_disabled_reason,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_CLEAR_CONTEXT.to_string(),
-                description: Some("Fresh thread with this plan.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: clear_context_actions,
-                disabled_reason: clear_context_disabled_reason,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Continue planning with the model.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: Vec::new(),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
-            subtitle: None,
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+        self.bottom_pane
+            .show_selection_view(plan_implementation::selection_view_params(
+                default_mask,
+                self.latest_proposed_plan_markdown.as_deref(),
+            ));
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });

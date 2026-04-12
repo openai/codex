@@ -37,7 +37,10 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     else {
         panic!("expected SubmitUserMessageWithMode, got {event:?}");
     };
-    assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
+    assert_eq!(
+        text,
+        plan_implementation::PLAN_IMPLEMENTATION_CODING_MESSAGE
+    );
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
 }
 
@@ -58,36 +61,45 @@ async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
     };
     assert_eq!(
         text,
-        plan_implementation_clear_context_message(plan_markdown)
+        format!(
+            "{prefix}\n\n{plan_markdown}",
+            prefix = plan_implementation::PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX
+        )
     );
 }
 
-#[test]
-fn plan_implementation_clear_context_requires_default_mode_and_plan() {
+#[tokio::test]
+async fn plan_implementation_clear_context_requires_default_mode_and_plan() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let default_mask = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+
+    let params =
+        plan_implementation::selection_view_params(/*default_mask*/ None, Some("- Step\n"));
     assert_eq!(
-        plan_implementation_clear_context_plan(
-            /*default_mask_available*/ false,
-            Some("- Step\n")
-        ),
-        Err(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE)
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE)
+    );
+
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask.clone()),
+        /*plan_markdown*/ None,
     );
     assert_eq!(
-        plan_implementation_clear_context_plan(
-            /*default_mask_available*/ true, /*plan_markdown*/ None
-        ),
-        Err(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
     );
+
+    let params =
+        plan_implementation::selection_view_params(Some(default_mask.clone()), Some("  \n"));
     assert_eq!(
-        plan_implementation_clear_context_plan(/*default_mask_available*/ true, Some("  \n")),
-        Err(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
     );
-    assert_eq!(
-        plan_implementation_clear_context_plan(
-            /*default_mask_available*/ true,
-            Some("- Step\n")
-        ),
-        Ok("- Step\n")
-    );
+
+    let params = plan_implementation::selection_view_params(Some(default_mask), Some("- Step\n"));
+    assert_eq!(params.items[1].disabled_reason, None);
+    assert!(!params.items[1].actions.is_empty());
 }
 
 #[tokio::test]
