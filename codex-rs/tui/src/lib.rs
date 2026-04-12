@@ -33,6 +33,7 @@ use codex_app_server_client::RemoteAppServerConnectArgs;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
@@ -351,6 +352,7 @@ async fn connect_remote_app_server(
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
+        supported_server_requests: tui_supported_server_requests(),
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
@@ -459,12 +461,20 @@ where
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
+        supported_server_requests: tui_supported_server_requests(),
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
     .await
     .wrap_err("failed to start embedded app server")?;
     Ok(client)
+}
+
+fn tui_supported_server_requests() -> Vec<SupportedServerRequestMethod> {
+    vec![
+        SupportedServerRequestMethod::PermissionsRequestApproval,
+        SupportedServerRequestMethod::PermissionPresetRequestApproval,
+    ]
 }
 
 async fn shutdown_app_server_if_present(app_server: Option<AppServerSession>) {
@@ -1812,6 +1822,18 @@ mod tests {
                     .contains("expected `ws://host:port` or `wss://host:port`")
             );
         }
+    }
+
+    #[test]
+    fn tui_advertises_permission_confirmation_server_requests() {
+        let supported = tui_supported_server_requests();
+        assert_eq!(
+            supported,
+            vec![
+                SupportedServerRequestMethod::PermissionsRequestApproval,
+                SupportedServerRequestMethod::PermissionPresetRequestApproval,
+            ]
+        );
     }
 
     #[test]
