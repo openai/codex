@@ -535,14 +535,14 @@ impl Session {
         });
         self.send_event(turn_context.as_ref(), event).await;
         let session = Arc::clone(self);
-        let _scheduler = tokio::task::spawn_blocking(move || {
+        drop(tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
                 session.maybe_start_pending_timer().await;
                 if should_clear_active_turn {
                     session.maybe_start_turn_for_pending_work().await;
                 }
             });
-        });
+        }));
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
