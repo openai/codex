@@ -103,7 +103,7 @@ async fn assert_after_turn_timer_starts_and_emits_fired_event() -> Result<()> {
     let payload = event
         .message
         .strip_prefix(TIMER_FIRED_BACKGROUND_EVENT_PREFIX)
-        .expect("event predicate matched timer fired prefix");
+        .ok_or_else(|| anyhow!("timer fired event prefix missing"))?;
     let fired: ThreadTimer = serde_json::from_str(payload)?;
     assert_eq!(fired, created);
 
