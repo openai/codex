@@ -7,8 +7,18 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -29,6 +39,58 @@ pub fn build_track_events_context(
         thread_id,
         turn_id,
     }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSubmissionType {
+    Default,
+    Queued,
+}
+
+#[derive(Clone)]
+pub struct TurnResolvedConfigFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub num_input_images: usize,
+    pub submission_type: Option<TurnSubmissionType>,
+    pub ephemeral: bool,
+    pub session_source: SessionSource,
+    pub model: String,
+    pub model_provider: String,
+    pub sandbox_policy: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
+    pub service_tier: Option<ServiceTier>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_network_access: bool,
+    pub collaboration_mode: ModeKind,
+    pub personality: Option<Personality>,
+    pub is_first_turn: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadInitializationMode {
+    New,
+    Forked,
+    Resumed,
+}
+
+#[derive(Clone)]
+pub struct TurnTokenUsageFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub token_usage: TokenUsage,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStatus {
+    Completed,
+    Failed,
+    Interrupted,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +218,8 @@ pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
+    TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnTokenUsage(Box<TurnTokenUsageFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

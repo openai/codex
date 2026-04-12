@@ -27,7 +27,11 @@ pub use facts::CompactionTrigger;
 pub use facts::InvocationType;
 pub use facts::SkillInvocation;
 pub use facts::SubAgentThreadStartedInput;
+pub use facts::ThreadInitializationMode;
 pub use facts::TrackEventsContext;
+pub use facts::TurnResolvedConfigFact;
+pub use facts::TurnStatus;
+pub use facts::TurnTokenUsageFact;
 pub use facts::build_track_events_context;
 
 #[cfg(test)]
