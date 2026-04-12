@@ -9,6 +9,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolHandlerKind;
+use codex_tools::ToolName;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanDeferredTool;
 use codex_tools::ToolRegistryPlanMcpTool;
@@ -32,25 +33,23 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
 
 struct McpToolPlanInputs<'a> {
     mcp_tools: Vec<ToolRegistryPlanMcpTool<'a>>,
-    tool_namespaces: HashMap<String, ToolNamespace>,
+    tool_namespaces: HashMap<ToolName, ToolNamespace>,
 }
 
 fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
     McpToolPlanInputs {
         mcp_tools: mcp_tools
-            .iter()
-            .map(|(qualified_name, tool)| ToolRegistryPlanMcpTool {
-                qualified_name: qualified_name.clone(),
-                callable_name: tool.callable_name.clone(),
-                callable_namespace: tool.callable_namespace.clone(),
+            .values()
+            .map(|tool| ToolRegistryPlanMcpTool {
+                name: tool.callable_tool_name(),
                 tool: &tool.tool,
             })
             .collect(),
         tool_namespaces: mcp_tools
-            .iter()
-            .map(|(name, tool)| {
+            .values()
+            .map(|tool| {
                 (
-                    name.clone(),
+                    tool.callable_tool_name(),
                     ToolNamespace {
                         name: tool.callable_namespace.clone(),
                         description: tool.server_instructions.clone(),
@@ -105,8 +104,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         tools
             .values()
             .map(|tool| ToolRegistryPlanDeferredTool {
-                tool_name: tool.callable_name.as_str(),
-                tool_namespace: tool.callable_namespace.as_str(),
+                name: tool.callable_tool_name(),
                 server_name: tool.server_name.as_str(),
                 connector_name: tool.connector_name.as_deref(),
                 connector_description: tool.connector_description.as_deref(),

@@ -36,6 +36,7 @@ use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
@@ -153,6 +154,12 @@ pub struct ToolInfo {
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
     pub connector_description: Option<String>,
+}
+
+impl ToolInfo {
+    pub fn callable_tool_name(&self) -> ToolName {
+        ToolName::namespaced(self.callable_namespace.clone(), self.callable_name.clone())
+    }
 }
 
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
@@ -1206,25 +1213,16 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub async fn resolve_tool_info(&self, name: &str, namespace: Option<&str>) -> Option<ToolInfo> {
+    pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         let all_tools = self.list_all_tools().await;
-        if let Some(namespace) = namespace {
-            let qualified_name = format!("{namespace}{name}");
-            if let Some(tool) = all_tools.get(&qualified_name)
-                && tool.callable_namespace == namespace
-                && tool.callable_name == name
-            {
-                return Some(tool.clone());
-            }
-            if let Some(tool) = all_tools.get(name)
-                && tool.callable_namespace == namespace
-                && format!("{namespace}{}", tool.callable_name) == name
-            {
-                return Some(tool.clone());
-            }
-            None
+        if tool_name.namespace.is_some() {
+            let tools_by_name = all_tools
+                .into_values()
+                .map(|tool| (tool.callable_tool_name(), tool))
+                .collect::<HashMap<_, _>>();
+            tools_by_name.get(tool_name).cloned()
         } else {
-            all_tools.get(name).cloned()
+            all_tools.get(&tool_name.name).cloned()
         }
     }
 

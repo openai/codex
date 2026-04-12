@@ -7,6 +7,13 @@ pub struct ToolName {
 }
 
 impl ToolName {
+    pub fn new(namespace: Option<String>, name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            namespace,
+        }
+    }
+
     pub fn plain(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),

@@ -11,6 +11,7 @@ use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
+use crate::ToolName;
 use crate::ToolNamespace;
 use crate::ToolRegistryPlanDeferredTool;
 use crate::ToolRegistryPlanMcpTool;
@@ -1169,15 +1170,15 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
     let tools_map = HashMap::from([
         (
             "test_server/do".to_string(),
-            mcp_tool("a", "a", serde_json::json!({"type": "object"})),
+            mcp_tool("do", "a", serde_json::json!({"type": "object"})),
         ),
         (
             "test_server/something".to_string(),
-            mcp_tool("b", "b", serde_json::json!({"type": "object"})),
+            mcp_tool("something", "b", serde_json::json!({"type": "object"})),
         ),
         (
             "test_server/cool".to_string(),
-            mcp_tool("c", "c", serde_json::json!({"type": "object"})),
+            mcp_tool("cool", "c", serde_json::json!({"type": "object"})),
         ),
     ]);
 
@@ -1886,7 +1887,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
-    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
+    tool_namespaces: Option<HashMap<ToolName, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
@@ -1901,9 +1902,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
                     .unwrap_or("mcp__test_server__");
 
                 ToolRegistryPlanMcpTool {
-                    qualified_name: qualified_name.clone(),
-                    callable_name: raw_tool_name.to_string(),
-                    callable_namespace: callable_namespace.to_string(),
+                    name: ToolName::namespaced(callable_namespace.to_string(), raw_tool_name),
                     tool,
                 }
             })
@@ -2037,8 +2036,7 @@ fn deferred_mcp_tool<'a>(
     connector_description: Option<&'a str>,
 ) -> ToolRegistryPlanDeferredTool<'a> {
     ToolRegistryPlanDeferredTool {
-        tool_name,
-        tool_namespace,
+        name: ToolName::namespaced(tool_namespace, tool_name),
         server_name,
         connector_name,
         connector_description,
