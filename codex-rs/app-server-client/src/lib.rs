@@ -378,6 +378,7 @@ impl InProcessClientStartArgs {
     pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
+            supported_server_requests: None,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
                 None
             } else {

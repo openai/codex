@@ -89,6 +89,8 @@ Clients must send a single `initialize` request per transport connection before 
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
+Clients can also opt into specific server-initiated request methods through `supportedServerRequests`. This is required for conversational permission confirmations such as `item/permissions/requestApproval` and `item/permissionPreset/requestApproval`: if a connection omits the matching method, app-server does not send that request to the client and the permission change is rejected without changing the session.
+
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
@@ -111,7 +113,7 @@ Example (from OpenAI's official VSCode extension):
 }
 ```
 
-Example with notification opt-out:
+Example with notification opt-out and permission request support:
 
 ```json
 {
@@ -125,6 +127,10 @@ Example with notification opt-out:
     },
     "capabilities": {
       "experimentalApi": true,
+      "supportedServerRequests": [
+        "item/permissions/requestApproval",
+        "item/permissionPreset/requestApproval"
+      ],
       "optOutNotificationMethods": ["thread/started", "item/agentMessage/delta"]
     }
   }
@@ -1071,6 +1077,8 @@ the client can offer session-scoped and/or persistent approval choices.
 
 ### Permission requests
 
+Clients must opt into each conversational permission request method by listing it in `initialize.params.capabilities.supportedServerRequests`. The opt-in is per connection and per method. Existing clients that do not advertise support keep their current behavior: app-server does not emit an unsupported approval request, no permissions are changed, and the model receives a denial-style result.
+
 The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access.
 
 ```json
@@ -1112,6 +1120,8 @@ Only the granted subset matters on the wire. Any permissions omitted from `resul
 Within the same turn, granted permissions are sticky: later shell-like tool calls can automatically reuse the granted subset without reissuing a separate permission request.
 
 If the session approval policy uses `Granular` with `request_permissions: false`, standalone `request_permissions` tool calls are auto-denied and no `item/permissions/requestApproval` prompt is sent. Inline `with_additional_permissions` command requests remain controlled by `sandbox_approval`, and any previously granted permissions remain sticky for later shell-like calls in the same turn.
+
+The built-in `request_permission_preset` tool sends an `item/permissionPreset/requestApproval` JSON-RPC request when a model asks the client to open the permission preset picker. The request includes the resolved preset id, label, description, approval policy, approvals reviewer, sandbox policy, and optional reason so clients can show their native picker with the requested option already selected. Clients respond with `{ "decision": "accepted", "preset": "full-access" }` or `{ "decision": "declined", "preset": "full-access" }`. When the client omits `item/permissionPreset/requestApproval` from `supportedServerRequests`, app-server declines the preset request and leaves the active permissions unchanged.
 
 ### Dynamic tool calls (experimental)
 

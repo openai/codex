@@ -33,6 +33,7 @@ async fn mock_experimental_method_requires_experimental_api_capability() -> Resu
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                supported_server_requests: None,
                 opt_out_notification_methods: None,
             }),
         )
@@ -63,6 +64,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                supported_server_requests: None,
                 opt_out_notification_methods: None,
             }),
         )
@@ -99,6 +101,7 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                supported_server_requests: None,
                 opt_out_notification_methods: None,
             }),
         )
@@ -139,6 +142,7 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                supported_server_requests: None,
                 opt_out_notification_methods: None,
             }),
         )
@@ -176,6 +180,7 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                supported_server_requests: None,
                 opt_out_notification_methods: None,
             }),
         )
@@ -212,6 +217,7 @@ async fn thread_start_granular_approval_policy_requires_experimental_api_capabil
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                supported_server_requests: None,
                 opt_out_notification_methods: None,
             }),
         )

@@ -4,4 +4,7 @@
 import type { PermissionPresetApprovalDecision } from "./PermissionPresetApprovalDecision";
 import type { PermissionPresetId } from "./PermissionPresetId";
 
+/**
+ * Response from an app client after the permission preset picker resolves.
+ */
 export type PermissionPresetRequestApprovalResponse = { decision: PermissionPresetApprovalDecision, preset: PermissionPresetId, };

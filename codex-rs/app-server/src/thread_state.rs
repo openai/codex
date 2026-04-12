@@ -1,6 +1,7 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -173,6 +174,8 @@ impl Default for ThreadEntry {
 #[derive(Default)]
 struct ThreadStateManagerInner {
     live_connections: HashSet<ConnectionId>,
+    supported_server_requests_by_connection:
+        HashMap<ConnectionId, HashSet<SupportedServerRequestMethod>>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
@@ -187,21 +190,57 @@ impl ThreadStateManager {
         Self::default()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
-        self.state
-            .lock()
-            .await
-            .live_connections
-            .insert(connection_id);
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        supported_server_requests: HashSet<SupportedServerRequestMethod>,
+    ) {
+        let mut state = self.state.lock().await;
+        state.live_connections.insert(connection_id);
+        state
+            .supported_server_requests_by_connection
+            .insert(connection_id, supported_server_requests);
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
         let state = self.state.lock().await;
-        state
+        let mut connection_ids = state
             .threads
             .get(&thread_id)
-            .map(|thread_entry| thread_entry.connection_ids.iter().copied().collect())
-            .unwrap_or_default()
+            .map(|thread_entry| {
+                thread_entry
+                    .connection_ids
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        sort_connection_ids(&mut connection_ids);
+        connection_ids
+    }
+
+    pub(crate) async fn subscribed_connection_ids_supporting(
+        &self,
+        thread_id: ThreadId,
+        method: SupportedServerRequestMethod,
+    ) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        let Some(thread_entry) = state.threads.get(&thread_id) else {
+            return Vec::new();
+        };
+        let mut connection_ids = thread_entry
+            .connection_ids
+            .iter()
+            .filter(|connection_id| {
+                state
+                    .supported_server_requests_by_connection
+                    .get(connection_id)
+                    .is_some_and(|supported| supported.contains(&method))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        sort_connection_ids(&mut connection_ids);
+        connection_ids
     }
 
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
@@ -357,6 +396,9 @@ impl ThreadStateManager {
         {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
+            state
+                .supported_server_requests_by_connection
+                .remove(&connection_id);
             let thread_ids = state
                 .thread_ids_by_connection
                 .remove(&connection_id)
@@ -377,4 +419,8 @@ impl ThreadStateManager {
                 .collect::<Vec<_>>()
         }
     }
+}
+
+fn sort_connection_ids(connection_ids: &mut [ConnectionId]) {
+    connection_ids.sort_by_key(|connection_id| connection_id.0);
 }

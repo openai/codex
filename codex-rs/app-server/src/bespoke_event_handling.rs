@@ -172,6 +172,8 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation: Arc<CodexThread>,
     thread_manager: Arc<ThreadManager>,
     outgoing: ThreadScopedOutgoingMessageSender,
+    request_permissions_outgoing: ThreadScopedOutgoingMessageSender,
+    request_permission_preset_outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
     api_version: ApiVersion,
@@ -858,7 +860,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::RequestPermissions(request) => {
-            if matches!(api_version, ApiVersion::V2) {
+            if matches!(api_version, ApiVersion::V2) && !request_permissions_outgoing.is_empty() {
                 let permission_guard = thread_watch_manager
                     .note_permission_requested(&conversation_id.to_string())
                     .await;
@@ -871,7 +873,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     permissions: request.permissions.into(),
                     suggested_scope: request.suggested_scope.into(),
                 };
-                let (pending_request_id, rx) = outgoing
+                let (pending_request_id, rx) = request_permissions_outgoing
                     .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
                     .await;
                 tokio::spawn(async move {
@@ -887,8 +889,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 });
             } else {
-                error!(
-                    "request_permissions is only supported on api v2 (call_id: {})",
+                // App-server clients must advertise support before receiving
+                // permission confirmation requests. Fail closed instead of
+                // emitting a request that existing clients cannot answer.
+                warn!(
+                    "request_permissions is not supported by this app-server client (call_id: {})",
                     request.call_id
                 );
                 let empty = CoreRequestPermissionsResponse {
@@ -907,7 +912,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::RequestPermissionPreset(request) => {
-            if matches!(api_version, ApiVersion::V2) {
+            if matches!(api_version, ApiVersion::V2)
+                && !request_permission_preset_outgoing.is_empty()
+            {
                 let params = PermissionPresetRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id.clone(),
@@ -920,7 +927,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     sandbox_policy: request.sandbox_policy.into(),
                     reason: request.reason,
                 };
-                let (pending_request_id, rx) = outgoing
+                let (pending_request_id, rx) = request_permission_preset_outgoing
                     .send_request(ServerRequestPayload::PermissionPresetRequestApproval(
                         params,
                     ))
@@ -937,14 +944,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 });
             } else {
-                error!(
-                    "request_permission_preset is only supported on api v2 (call_id: {})",
+                // App-server clients must advertise support before receiving
+                // permission confirmation requests. Fail closed instead of
+                // emitting a request that existing clients cannot answer.
+                warn!(
+                    "request_permission_preset is not supported by this app-server client (call_id: {})",
                     request.call_id
                 );
                 let declined = CoreRequestPermissionPresetResponse {
                     decision: CoreRequestPermissionPresetDecision::Declined,
                     preset: request.preset,
-                    message: "request_permission_preset is only supported on api v2".to_string(),
+                    message: "permission confirmation UI is not available in this client; no permissions were changed".to_string(),
                 };
                 if let Err(err) = conversation
                     .submit(Op::RequestPermissionPresetResponse {
@@ -3192,6 +3202,8 @@ mod tests {
                 self.conversation_id,
                 self.conversation.clone(),
                 self.thread_manager.clone(),
+                self.outgoing.clone(),
+                self.outgoing.clone(),
                 self.outgoing.clone(),
                 self.thread_state.clone(),
                 self.thread_watch_manager.clone(),

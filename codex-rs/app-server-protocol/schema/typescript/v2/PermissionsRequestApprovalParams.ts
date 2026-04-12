@@ -4,4 +4,11 @@
 import type { PermissionGrantScope } from "./PermissionGrantScope";
 import type { RequestPermissionProfile } from "./RequestPermissionProfile";
 
+/**
+ * Request sent to app clients when a model asks for a narrow permission grant.
+ *
+ * The client owns the confirmation UI and may return fewer permissions than
+ * requested. Treat `suggested_scope` as the model's requested lifetime, not as
+ * an already-approved scope.
+ */
 export type PermissionsRequestApprovalParams = { threadId: string, turnId: string, itemId: string, reason: string | null, permissions: RequestPermissionProfile, suggestedScope: PermissionGrantScope, };

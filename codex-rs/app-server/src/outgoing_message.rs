@@ -145,6 +145,18 @@ impl ThreadScopedOutgoingMessageSender {
         }
     }
 
+    pub(crate) fn with_connection_ids(&self, connection_ids: Vec<ConnectionId>) -> Self {
+        Self {
+            outgoing: Arc::clone(&self.outgoing),
+            connection_ids: Arc::new(connection_ids),
+            thread_id: self.thread_id,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.connection_ids.is_empty()
+    }
+
     pub(crate) async fn send_request(
         &self,
         payload: ServerRequestPayload,

@@ -9,6 +9,7 @@
       "type": "string"
     },
     "PermissionPresetId": {
+      "description": "A built-in permission-mode preset that app clients can confirm.",
       "enum": [
         "auto",
         "full-access",
@@ -18,6 +19,7 @@
       "type": "string"
     }
   },
+  "description": "Response from an app client after the permission preset picker resolves.",
   "properties": {
     "decision": {
       "$ref": "#/definitions/PermissionPresetApprovalDecision"

@@ -71,6 +71,7 @@
       "type": "string"
     },
     "PermissionPresetId": {
+      "description": "A built-in permission-mode preset that app clients can confirm.",
       "enum": [
         "auto",
         "full-access",
@@ -246,6 +247,7 @@
       ]
     }
   },
+  "description": "Request sent to app clients when a model asks to switch permission modes.\n\nCore resolves the requested preset before emitting this payload, so clients should render the provided settings and label rather than recomputing policy choices from the preset id.",
   "properties": {
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"

@@ -73,6 +73,7 @@
       "type": "object"
     }
   },
+  "description": "Request sent to app clients when a model asks for a narrow permission grant.\n\nThe client owns the confirmation UI and may return fewer permissions than requested. Treat `suggested_scope` as the model's requested lifetime, not as an already-approved scope.",
   "properties": {
     "itemId": {
       "type": "string"

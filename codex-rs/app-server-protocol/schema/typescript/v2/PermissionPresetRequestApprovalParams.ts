@@ -6,4 +6,11 @@ import type { AskForApproval } from "./AskForApproval";
 import type { PermissionPresetId } from "./PermissionPresetId";
 import type { SandboxPolicy } from "./SandboxPolicy";
 
+/**
+ * Request sent to app clients when a model asks to switch permission modes.
+ *
+ * Core resolves the requested preset before emitting this payload, so clients
+ * should render the provided settings and label rather than recomputing policy
+ * choices from the preset id.
+ */
 export type PermissionPresetRequestApprovalParams = { threadId: string, turnId: string, itemId: string, preset: PermissionPresetId, label: string, description: string, approvalPolicy: AskForApproval, approvalsReviewer: ApprovalsReviewer, sandboxPolicy: SandboxPolicy, reason: string | null, };

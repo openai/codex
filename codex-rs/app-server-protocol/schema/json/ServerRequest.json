@@ -1417,6 +1417,7 @@
       "type": "string"
     },
     "PermissionPresetId": {
+      "description": "A built-in permission-mode preset that app clients can confirm.",
       "enum": [
         "auto",
         "full-access",
@@ -1426,6 +1427,7 @@
       "type": "string"
     },
     "PermissionPresetRequestApprovalParams": {
+      "description": "Request sent to app clients when a model asks to switch permission modes.\n\nCore resolves the requested preset before emitting this payload, so clients should render the provided settings and label rather than recomputing policy choices from the preset id.",
       "properties": {
         "approvalPolicy": {
           "$ref": "#/definitions/AskForApproval"
@@ -1475,6 +1477,7 @@
       "type": "object"
     },
     "PermissionsRequestApprovalParams": {
+      "description": "Request sent to app clients when a model asks for a narrow permission grant.\n\nThe client owns the confirmation UI and may return fewer permissions than requested. Treat `suggested_scope` as the model's requested lifetime, not as an already-approved scope.",
       "properties": {
         "itemId": {
           "type": "string"

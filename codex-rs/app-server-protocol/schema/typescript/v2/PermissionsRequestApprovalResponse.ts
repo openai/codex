@@ -4,4 +4,11 @@
 import type { GrantedPermissionProfile } from "./GrantedPermissionProfile";
 import type { PermissionGrantScope } from "./PermissionGrantScope";
 
+/**
+ * Response from an app client after the narrow permission grant UI resolves.
+ *
+ * Returning an empty permission profile is a denial. Returning a non-empty
+ * profile grants only those permissions, and core applies them for the
+ * specified scope.
+ */
 export type PermissionsRequestApprovalResponse = { permissions: GrantedPermissionProfile, scope: PermissionGrantScope, };

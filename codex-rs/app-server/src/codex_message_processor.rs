@@ -117,6 +117,7 @@ use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -3738,9 +3739,13 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        supported_server_requests: HashSet<SupportedServerRequestMethod>,
+    ) {
         self.thread_state_manager
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, supported_server_requests)
             .await;
     }
 
@@ -7534,11 +7539,27 @@ impl CodexMessageProcessor {
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
                             .await;
+                        let request_permissions_connection_ids = thread_state_manager
+                            .subscribed_connection_ids_supporting(
+                                conversation_id,
+                                SupportedServerRequestMethod::PermissionsRequestApproval,
+                            )
+                            .await;
+                        let request_permission_preset_connection_ids = thread_state_manager
+                            .subscribed_connection_ids_supporting(
+                                conversation_id,
+                                SupportedServerRequestMethod::PermissionPresetRequestApproval,
+                            )
+                            .await;
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                             outgoing_for_task.clone(),
                             subscribed_connection_ids,
                             conversation_id,
                         );
+                        let request_permissions_outgoing = thread_outgoing
+                            .with_connection_ids(request_permissions_connection_ids);
+                        let request_permission_preset_outgoing = thread_outgoing
+                            .with_connection_ids(request_permission_preset_connection_ids);
 
                         if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
                             && !raw_events_enabled
@@ -7560,6 +7581,8 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             thread_manager.clone(),
                             thread_outgoing,
+                            request_permissions_outgoing,
+                            request_permission_preset_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
                             api_version,
@@ -9917,7 +9940,9 @@ mod tests {
         let connection = ConnectionId(1);
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
-        manager.connection_initialized(connection).await;
+        manager
+            .connection_initialized(connection, HashSet::new())
+            .await;
         manager
             .try_ensure_connection_subscribed(
                 thread_id, connection, /*experimental_raw_events*/ false,
@@ -9963,8 +9988,12 @@ mod tests {
         let connection_b = ConnectionId(2);
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
-        manager.connection_initialized(connection_a).await;
-        manager.connection_initialized(connection_b).await;
+        manager
+            .connection_initialized(connection_a, HashSet::new())
+            .await;
+        manager
+            .connection_initialized(connection_b, HashSet::new())
+            .await;
         manager
             .try_ensure_connection_subscribed(
                 thread_id,
@@ -10007,7 +10036,9 @@ mod tests {
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let connection = ConnectionId(1);
 
-        manager.connection_initialized(connection).await;
+        manager
+            .connection_initialized(connection, HashSet::new())
+            .await;
         let threads_to_unload = manager.remove_connection(connection).await;
         assert_eq!(threads_to_unload, Vec::<ThreadId>::new());
 
