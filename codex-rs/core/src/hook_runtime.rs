@@ -10,19 +10,20 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::protocol::InjectedMessageEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
+use crate::pending_input::PendingInputItem;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -38,6 +39,7 @@ pub(crate) enum PendingInputRecord {
     UserMessage {
         content: Vec<UserInput>,
         response_item: ResponseItem,
+        injected_event: Option<InjectedMessageEvent>,
         additional_contexts: Vec<String>,
     },
     ConversationItem {
@@ -199,9 +201,10 @@ pub(crate) async fn run_user_prompt_submit_hooks(
 pub(crate) async fn inspect_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    pending_input_item: ResponseInputItem,
+    pending_input_item: PendingInputItem,
 ) -> PendingInputHookDisposition {
-    let response_item = ResponseItem::from(pending_input_item);
+    let (input_item, injected_event) = pending_input_item.into_parts();
+    let response_item = ResponseItem::from(input_item);
     if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
         let user_prompt_submit_outcome =
             run_user_prompt_submit_hooks(sess, turn_context, user_message.message()).await;
@@ -213,6 +216,7 @@ pub(crate) async fn inspect_pending_input(
             PendingInputHookDisposition::Accepted(Box::new(PendingInputRecord::UserMessage {
                 content: user_message.content,
                 response_item,
+                injected_event,
                 additional_contexts: user_prompt_submit_outcome.additional_contexts,
             }))
         }
@@ -232,14 +236,24 @@ pub(crate) async fn record_pending_input(
         PendingInputRecord::UserMessage {
             content,
             response_item,
+            injected_event,
             additional_contexts,
         } => {
-            sess.record_user_prompt_and_emit_turn_item(
-                turn_context.as_ref(),
-                content.as_slice(),
-                response_item,
-            )
-            .await;
+            if let Some(injected_event) = injected_event {
+                sess.record_generated_message_and_emit_display(
+                    turn_context.as_ref(),
+                    response_item,
+                    injected_event,
+                )
+                .await;
+            } else {
+                sess.record_user_prompt_and_emit_turn_item(
+                    turn_context.as_ref(),
+                    content.as_slice(),
+                    response_item,
+                )
+                .await;
+            }
             record_additional_contexts(sess, turn_context, additional_contexts).await;
         }
         PendingInputRecord::ConversationItem { response_item } => {

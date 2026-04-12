@@ -1412,6 +1412,9 @@ pub enum EventMsg {
     /// User/system input message (what was sent to the model)
     UserMessage(UserMessageEvent),
 
+    /// Transcript-safe display text for a timer-fired or external queued message.
+    InjectedMessage(InjectedMessageEvent),
+
     /// Agent text output delta message
     AgentMessageDelta(AgentMessageDeltaEvent),
 
@@ -2281,6 +2284,19 @@ pub struct UserMessageEvent {
     /// UI-defined spans within `message` used to render or persist special elements.
     #[serde(default)]
     pub text_elements: Vec<crate::user_input::TextElement>,
+}
+
+/// Display-only event for a timer-fired or external queued message.
+///
+/// The corresponding model-visible XML is recorded separately as a raw response
+/// item. Clients should render this event's content instead of parsing or
+/// hiding that XML themselves.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct InjectedMessageEvent {
+    /// Human-facing message text to show in transcript views.
+    pub content: String,
+    /// Origin label for the injected input, such as "external" or "timer <id>".
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

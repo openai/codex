@@ -37,6 +37,7 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
+use codex_protocol::protocol::InjectedMessageEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -207,6 +208,7 @@ impl ThreadHistoryBuilder {
             EventMsg::TurnAborted(payload) => self.handle_turn_aborted(payload),
             EventMsg::TurnStarted(payload) => self.handle_turn_started(payload),
             EventMsg::TurnComplete(payload) => self.handle_turn_complete(payload),
+            EventMsg::InjectedMessage(payload) => self.handle_injected_message(payload),
             _ => {}
         }
     }
@@ -266,6 +268,21 @@ impl ThreadHistoryBuilder {
         let content = self.build_user_inputs(payload);
         turn.items.push(ThreadItem::UserMessage { id, content });
         self.current_turn = Some(turn);
+    }
+
+    fn handle_injected_message(&mut self, payload: &InjectedMessageEvent) {
+        if payload.content.trim().is_empty() {
+            return;
+        }
+
+        let id = self.next_item_id();
+        self.ensure_turn().items.push(ThreadItem::UserMessage {
+            id,
+            content: vec![UserInput::Text {
+                text: payload.content.clone(),
+                text_elements: Vec::new(),
+            }],
+        });
     }
 
     fn handle_agent_message(
