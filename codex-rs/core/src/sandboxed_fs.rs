@@ -24,7 +24,6 @@ use std::time::Duration;
 /// FILE`, this function verifies that FILE is a regular file before reading,
 /// which means that if you pass `/dev/zero` as the path, it will error (rather
 /// than hang forever).
-#[allow(dead_code)]
 pub(crate) async fn read_file(
     path: &AbsolutePathBuf,
     session: &Arc<Session>,
