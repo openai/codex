@@ -117,14 +117,13 @@ async fn assert_after_turn_timer_starts_and_emits_fired_event() -> Result<()> {
     let user_messages = mock.single_request().message_input_texts("user");
     let timer_messages = user_messages
         .iter()
-        .filter(|message| message.contains("<codex_message>"))
+        .filter(|message| message.contains("<timer_message>"))
         .collect::<Vec<_>>();
     assert_eq!(timer_messages.len(), 1);
     let timer_message = timer_messages[0];
-    assert!(timer_message.contains(&format!("<source>timer {}</source>", created.id)));
+    assert!(timer_message.contains(&format!("<timer_id>{}</timer_id>", created.id)));
     assert!(timer_message.contains("<content>\nTimer fired: run timer\n</content>"));
     assert!(timer_message.contains("<instructions>\nrun timer\n\nThis one-shot timer"));
-    assert!(timer_message.contains("<meta />"));
 
     Ok(())
 }

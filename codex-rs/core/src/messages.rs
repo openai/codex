@@ -8,8 +8,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub const CODEX_MESSAGE_OPEN_TAG: &str = "<codex_message>";
-pub const CODEX_MESSAGE_CLOSE_TAG: &str = "</codex_message>";
+const EXTERNAL_MESSAGE_OPEN_TAG: &str = "<external_message>";
+const EXTERNAL_MESSAGE_CLOSE_TAG: &str = "</external_message>";
+const TIMER_MESSAGE_OPEN_TAG: &str = "<timer_message>";
+const TIMER_MESSAGE_CLOSE_TAG: &str = "</timer_message>";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessagePayload {
@@ -33,12 +35,17 @@ pub struct ThreadMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MessageInvocationKind {
+    External,
+    Timer { timer_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MessageInvocationContext {
+    pub(crate) kind: MessageInvocationKind,
     pub(crate) source: String,
     pub(crate) content: String,
     pub(crate) instructions: Option<String>,
-    pub(crate) meta: BTreeMap<String, String>,
-    pub(crate) queued_at: i64,
 }
 
 pub fn validate_meta_key(key: &str) -> Result<(), String> {
@@ -81,28 +88,24 @@ pub(crate) fn injected_message_event(message: &MessageInvocationContext) -> Inje
 
 pub(crate) fn render_message_prompt(message: &MessageInvocationContext) -> String {
     let mut rendered = String::new();
-    rendered.push_str(CODEX_MESSAGE_OPEN_TAG);
-    rendered.push('\n');
-    push_tag(&mut rendered, "source", &message.source);
-    push_tag(&mut rendered, "queued_at", &message.queued_at.to_string());
-    push_block_tag(&mut rendered, "content", &message.content);
-    if let Some(instructions) = message.instructions.as_deref() {
-        push_block_tag(&mut rendered, "instructions", instructions);
-    }
-    if message.meta.is_empty() {
-        rendered.push_str("<meta />\n");
-    } else {
-        rendered.push_str("<meta>\n");
-        for (key, value) in &message.meta {
-            rendered.push_str("  <entry id=\"");
-            rendered.push_str(&xml_escape(key));
-            rendered.push_str("\">");
-            rendered.push_str(&xml_escape(value));
-            rendered.push_str("</entry>\n");
+    match &message.kind {
+        MessageInvocationKind::External => {
+            rendered.push_str(EXTERNAL_MESSAGE_OPEN_TAG);
+            rendered.push('\n');
+            push_block_tag(&mut rendered, "content", &message.content);
+            rendered.push_str(EXTERNAL_MESSAGE_CLOSE_TAG);
         }
-        rendered.push_str("</meta>\n");
+        MessageInvocationKind::Timer { timer_id } => {
+            rendered.push_str(TIMER_MESSAGE_OPEN_TAG);
+            rendered.push('\n');
+            push_tag(&mut rendered, "timer_id", timer_id);
+            push_block_tag(&mut rendered, "content", &message.content);
+            if let Some(instructions) = message.instructions.as_deref() {
+                push_block_tag(&mut rendered, "instructions", instructions);
+            }
+            rendered.push_str(TIMER_MESSAGE_CLOSE_TAG);
+        }
     }
-    rendered.push_str(CODEX_MESSAGE_CLOSE_TAG);
     rendered
 }
 
@@ -162,18 +165,34 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn renders_message_prompt_with_escaped_metadata() {
+    fn renders_external_message_prompt_with_only_content() {
         let message = MessageInvocationContext {
-            source: "timer timer-1".to_string(),
+            kind: MessageInvocationKind::External,
+            source: "external".to_string(),
             content: "run <tests>".to_string(),
             instructions: Some("stay \"brief\"".to_string()),
-            meta: BTreeMap::from([("ticket".to_string(), "ABC&123".to_string())]),
-            queued_at: 100,
         };
 
         assert_eq!(
             render_message_prompt(&message),
-            "<codex_message>\n<source>timer timer-1</source>\n<queued_at>100</queued_at>\n<content>\nrun &lt;tests&gt;\n</content>\n<instructions>\nstay &quot;brief&quot;\n</instructions>\n<meta>\n  <entry id=\"ticket\">ABC&amp;123</entry>\n</meta>\n</codex_message>"
+            "<external_message>\n<content>\nrun &lt;tests&gt;\n</content>\n</external_message>"
+        );
+    }
+
+    #[test]
+    fn renders_timer_message_prompt_with_timer_id_and_no_metadata() {
+        let message = MessageInvocationContext {
+            kind: MessageInvocationKind::Timer {
+                timer_id: "timer-1".to_string(),
+            },
+            source: "timer timer-1".to_string(),
+            content: "run <tests>".to_string(),
+            instructions: Some("stay \"brief\"".to_string()),
+        };
+
+        assert_eq!(
+            render_message_prompt(&message),
+            "<timer_message>\n<timer_id>timer-1</timer_id>\n<content>\nrun &lt;tests&gt;\n</content>\n<instructions>\nstay &quot;brief&quot;\n</instructions>\n</timer_message>"
         );
     }
 

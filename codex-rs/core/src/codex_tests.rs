@@ -5067,7 +5067,8 @@ async fn generated_message_records_raw_item_and_emits_injected_event() {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
-            text: "<codex_message><content>hidden wrapper</content></codex_message>".to_string(),
+            text: "<external_message><content>hidden wrapper</content></external_message>"
+                .to_string(),
         }],
         end_turn: None,
         phase: None,

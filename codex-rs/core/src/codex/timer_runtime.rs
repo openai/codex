@@ -32,6 +32,7 @@ use super::EventMsg;
 use super::INITIAL_SUBMIT_ID;
 use super::Session;
 use crate::messages::MessageInvocationContext;
+use crate::messages::MessageInvocationKind;
 use crate::messages::MessagePayload;
 use crate::messages::db_message_to_thread_message;
 use crate::messages::injected_message_event;
@@ -381,11 +382,10 @@ impl Session {
                     };
                     let delivery = message.delivery;
                     let message_context = MessageInvocationContext {
+                        kind: MessageInvocationKind::External,
                         source: message.source.clone(),
-                        content: message.content.clone(),
-                        instructions: message.instructions.clone(),
-                        meta: message.meta.clone(),
-                        queued_at: message.queued_at,
+                        content: message.content,
+                        instructions: None,
                     };
                     let input_item = PendingInputItem::GeneratedMessage(GeneratedMessageInput {
                         item: message_prompt_input_item(&message_context),

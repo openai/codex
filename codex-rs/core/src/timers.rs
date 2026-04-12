@@ -5,6 +5,7 @@
 //! restore timers after a harness restart.
 
 use crate::messages::MessageInvocationContext;
+use crate::messages::MessageInvocationKind;
 use crate::messages::MessagePayload;
 use crate::messages::validate_meta;
 use crate::timer_trigger::TimerTrigger;
@@ -488,11 +489,12 @@ pub(crate) fn timer_message_invocation_context(
     timer: &TimerInvocationContext,
 ) -> MessageInvocationContext {
     MessageInvocationContext {
+        kind: MessageInvocationKind::Timer {
+            timer_id: timer.current_timer_id.clone(),
+        },
         source: format!("timer {}", timer.current_timer_id),
         content: timer_message_content(timer),
         instructions: timer_message_instructions(timer),
-        meta: timer.meta.clone(),
-        queued_at: timer.queued_at,
     }
 }
 
@@ -947,7 +949,7 @@ mod tests {
             ResponseInputItem::Message {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<codex_message>\n<source>timer timer-1</source>\n<queued_at>100</queued_at>\n<content>\nTimer fired: run tests\n</content>\n<instructions>\nrun tests\n\nThis timer should keep running on its schedule after this invocation.\nDo not call delete_timer just because you completed this invocation.\nCall delete_timer with {&quot;id&quot;:&quot;timer-1&quot;} only if the user's timer message included an explicit stop condition, such as &quot;until&quot;, &quot;stop when&quot;, or &quot;while&quot;, and that condition is now satisfied.\nDo not expose scheduler internals unless they matter to the user.\n</instructions>\n<meta />\n</codex_message>".to_string(),
+                    text: "<timer_message>\n<timer_id>timer-1</timer_id>\n<content>\nTimer fired: run tests\n</content>\n<instructions>\nrun tests\n\nThis timer should keep running on its schedule after this invocation.\nDo not call delete_timer just because you completed this invocation.\nCall delete_timer with {&quot;id&quot;:&quot;timer-1&quot;} only if the user's timer message included an explicit stop condition, such as &quot;until&quot;, &quot;stop when&quot;, or &quot;while&quot;, and that condition is now satisfied.\nDo not expose scheduler internals unless they matter to the user.\n</instructions>\n</timer_message>".to_string(),
                 }],
             }
         );
@@ -969,7 +971,7 @@ mod tests {
             ResponseInputItem::Message {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<codex_message>\n<source>timer timer-1</source>\n<queued_at>101</queued_at>\n<content>\nTimer fired: run tests once\n</content>\n<instructions>\nrun tests once\n\nuser-specific instruction\n\nThis one-shot timer has already been removed from the schedule, so you do not need to call delete_timer.\nDo not expose scheduler internals unless they matter to the user.\n</instructions>\n<meta>\n  <entry id=\"ticket\">ABC_123</entry>\n</meta>\n</codex_message>".to_string(),
+                    text: "<timer_message>\n<timer_id>timer-1</timer_id>\n<content>\nTimer fired: run tests once\n</content>\n<instructions>\nrun tests once\n\nuser-specific instruction\n\nThis one-shot timer has already been removed from the schedule, so you do not need to call delete_timer.\nDo not expose scheduler internals unless they matter to the user.\n</instructions>\n</timer_message>".to_string(),
                 }],
             }
         );
