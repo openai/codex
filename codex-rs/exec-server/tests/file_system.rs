@@ -107,6 +107,25 @@ fn assert_sandbox_denied(error: &std::io::Error) {
     );
 }
 
+fn assert_normalized_path_rejected(error: &std::io::Error) {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => assert!(
+            error.to_string().contains("No such file or directory"),
+            "unexpected not-found message: {error}",
+        ),
+        std::io::ErrorKind::InvalidInput | std::io::ErrorKind::PermissionDenied => {
+            let message = error.to_string();
+            assert!(
+                message.contains("is not permitted")
+                    || message.contains("Operation not permitted")
+                    || message.contains("Permission denied"),
+                "unexpected rejection message: {message}",
+            );
+        }
+        other => panic!("unexpected normalized-path error kind: {other:?}: {error:?}"),
+    }
+}
+
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -382,7 +401,12 @@ async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape(
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
         Err(error) => error,
     };
-    assert_sandbox_denied(&error);
+    // AbsolutePathBuf normalizes `link/../secret.txt` to `allowed/secret.txt`
+    // before the request reaches the filesystem layer. Depending on whether
+    // the platform/runtime resolves that normalized path through a top-level
+    // symlink alias, the request can surface as either "missing file" or an
+    // upfront sandbox rejection.
+    assert_normalized_path_rejected(&error);
 
     Ok(())
 }
