@@ -15,8 +15,8 @@
 //! A search session starts idle with an empty footer query, so opening Ctrl+R never previews the
 //! latest history entry by itself. Typing a query restarts traversal from newest to oldest,
 //! repeated Ctrl+R/Up and Ctrl+S/Down move between unique matches, `Enter` accepts the current
-//! preview as an editable draft, and `Esc` restores the exact draft that existed before search
-//! started.
+//! preview as an editable draft, and `Esc` or Ctrl+C restores the exact draft that existed before
+//! search started.
 
 use std::ops::Range;
 
@@ -150,7 +150,7 @@ impl ChatComposer {
     /// Handles every key while the footer is acting as the history search input.
     ///
     /// The method consumes search-mode keys before normal composer editing sees them. It guarantees
-    /// that `Esc` restores the original draft, `Enter` only accepts an actual match, plain
+    /// that `Esc` and Ctrl+C restore the original draft, `Enter` only accepts an actual match, plain
     /// characters edit the footer query, and navigation keys delegate traversal to
     /// `ChatComposerHistory`. Calling this when no search session exists is harmless for ignored
     /// keys but would make query-edit branches no-op, so route here only after
@@ -175,6 +175,22 @@ impl ChatComposer {
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
+            } => {
+                self.cancel_history_search();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
+                self.cancel_history_search();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Char('\u{0003}'),
+                modifiers: KeyModifiers::NONE,
+                ..
             } => {
                 self.cancel_history_search();
                 (InputResult::None, true)
@@ -291,12 +307,20 @@ impl ChatComposer {
         self.apply_history_search_result(result);
     }
 
-    fn cancel_history_search(&mut self) {
-        if let Some(search) = self.history_search.take() {
-            self.history.reset_navigation();
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-            self.restore_draft(search.original_draft);
-        }
+    /// Cancels active history search and restores the draft from before search mode opened.
+    ///
+    /// This clears normal history navigation as well as search traversal because previewing a match
+    /// temporarily updates the shared history cursor. Callers that handle global cancellation, such
+    /// as Ctrl+C, should use the boolean result to consume the key without also clearing the
+    /// restored draft or triggering quit/interrupt behavior.
+    pub(crate) fn cancel_history_search(&mut self) -> bool {
+        let Some(search) = self.history_search.take() else {
+            return false;
+        };
+        self.history.reset_navigation();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        self.restore_draft(search.original_draft);
+        true
     }
 
     /// Applies a traversal result to the composer preview and search status.
@@ -759,6 +783,46 @@ mod tests {
         assert!(!composer.history_search_active());
         assert_eq!(composer.textarea.text(), "draft");
         assert_eq!(composer.textarea.cursor(), 2);
+    }
+
+    #[test]
+    fn history_search_ctrl_c_restores_original_draft() {
+        fn composer_with_search_preview() -> ChatComposer {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer
+                .history
+                .record_local_submission(HistoryEntry::new("remembered command".to_string()));
+            composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
+            composer.textarea.set_cursor(/*pos*/ 2);
+
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+            assert_eq!(composer.textarea.text(), "remembered command");
+            composer
+        }
+
+        for cancel_key in [
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('\u{0003}'), KeyModifiers::NONE),
+        ] {
+            let mut composer = composer_with_search_preview();
+
+            let _ = composer.handle_key_event(cancel_key);
+
+            assert!(!composer.history_search_active());
+            assert_eq!(composer.textarea.text(), "draft");
+            assert_eq!(composer.textarea.cursor(), 2);
+        }
     }
 
     #[test]
