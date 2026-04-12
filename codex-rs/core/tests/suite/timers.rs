@@ -20,7 +20,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -86,20 +85,33 @@ async fn assert_after_turn_timer_starts_and_emits_fired_event() -> Result<()> {
         .await
         .map_err(|err| anyhow!("{err}"))?;
 
-    let payload = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::BackgroundEvent(event) => event
-            .message
-            .strip_prefix(TIMER_FIRED_BACKGROUND_EVENT_PREFIX)
-            .map(str::to_owned),
-        _ => None,
-    })
+    let payload = wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::BackgroundEvent(event) => event
+                .message
+                .strip_prefix(TIMER_FIRED_BACKGROUND_EVENT_PREFIX)
+                .is_some(),
+            _ => false,
+        },
+        TIMER_INTEGRATION_TIMEOUT,
+    )
     .await;
-    let fired: ThreadTimer = serde_json::from_str(&payload)?;
+    let EventMsg::BackgroundEvent(event) = payload else {
+        unreachable!("event predicate only matches timer fired background events");
+    };
+    let payload = event
+        .message
+        .strip_prefix(TIMER_FIRED_BACKGROUND_EVENT_PREFIX)
+        .expect("event predicate matched timer fired prefix");
+    let fired: ThreadTimer = serde_json::from_str(payload)?;
     assert_eq!(fired, created);
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        TIMER_INTEGRATION_TIMEOUT,
+    )
     .await;
 
     let user_messages = mock.single_request().message_input_texts("user");
