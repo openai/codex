@@ -4916,7 +4916,6 @@ mod handlers {
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
     use serde_json::Value;
-    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::debug;
@@ -4960,29 +4959,23 @@ mod handlers {
         }
     }
 
-    struct PreparedUserInputOrTurn {
-        items: Vec<UserInput>,
-        updates: SessionSettingsUpdate,
-        responsesapi_client_metadata: Option<HashMap<String, String>>,
-    }
-
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let prepared = prepare_user_input_or_turn(op);
-        let text = UserMessageItem::new(&prepared.items).message();
+        let items = match &op {
+            Op::UserTurn { items, .. } | Op::UserInput { items, .. } => items,
+            _ => unreachable!(),
+        };
+        let text = UserMessageItem::new(items).message();
         let realtime_text = (!text.is_empty()).then_some(text);
-        run_user_input_or_turn(sess, sub_id, prepared, realtime_text).await;
+        if user_input_or_turn_without_realtime_text_mirror(sess, sub_id, op).await {
+            mirror_user_text_to_realtime(sess, realtime_text).await;
+        }
     }
 
     pub(super) async fn user_input_or_turn_without_realtime_text_mirror(
         sess: &Arc<Session>,
         sub_id: String,
         op: Op,
-    ) {
-        let prepared = prepare_user_input_or_turn(op);
-        run_user_input_or_turn(sess, sub_id, prepared, /*realtime_text*/ None).await;
-    }
-
-    fn prepare_user_input_or_turn(op: Op) -> PreparedUserInputOrTurn {
+    ) -> bool {
         let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
@@ -5041,27 +5034,10 @@ mod handlers {
             ),
             _ => unreachable!(),
         };
-        PreparedUserInputOrTurn {
-            items,
-            updates,
-            responsesapi_client_metadata,
-        }
-    }
 
-    async fn run_user_input_or_turn(
-        sess: &Arc<Session>,
-        sub_id: String,
-        prepared: PreparedUserInputOrTurn,
-        realtime_text: Option<String>,
-    ) {
-        let PreparedUserInputOrTurn {
-            items,
-            updates,
-            responsesapi_client_metadata,
-        } = prepared;
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.
-            return;
+            return false;
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
@@ -5075,7 +5051,7 @@ mod handlers {
         {
             Ok(_) => {
                 current_context.session_telemetry.user_prompt(&items);
-                mirror_user_text_to_realtime(sess, realtime_text).await;
+                true
             }
             Err(SteerInputError::NoActiveTurn(items)) => {
                 if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
@@ -5092,7 +5068,7 @@ mod handlers {
                     crate::tasks::RegularTask::new(),
                 )
                 .await;
-                mirror_user_text_to_realtime(sess, realtime_text).await;
+                true
             }
             Err(err) => {
                 sess.send_event_raw(Event {
@@ -5100,6 +5076,7 @@ mod handlers {
                     msg: EventMsg::Error(err.to_error_event()),
                 })
                 .await;
+                false
             }
         }
     }
