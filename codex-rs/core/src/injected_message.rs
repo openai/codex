@@ -29,112 +29,86 @@ pub struct MessagePayload {
     pub meta: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ThreadMessage {
-    pub id: String,
-    pub thread_id: String,
-    pub source: String,
-    pub content: String,
-    pub instructions: Option<String>,
-    pub meta: BTreeMap<String, String>,
-    pub delivery: TimerDelivery,
-    pub queued_at: i64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum MessageInvocationKind {
-    External,
-    Timer { timer_id: String },
+pub(crate) enum InjectedMessage {
+    External {
+        source: String,
+        content: String,
+    },
+    Timer {
+        timer_id: String,
+        content: String,
+        instructions: Option<String>,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MessageInvocationContext {
-    pub(crate) kind: MessageInvocationKind,
-    pub(crate) source: String,
-    pub(crate) content: String,
-    pub(crate) instructions: Option<String>,
-}
-
-pub fn validate_meta_key(key: &str) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("message metadata keys cannot be empty".to_string());
+impl InjectedMessage {
+    pub(crate) fn from_external_row(
+        row: codex_state::ThreadMessage,
+    ) -> Result<(Self, TimerDelivery), String> {
+        let delivery = serde_json::from_value::<TimerDelivery>(serde_json::Value::String(
+            row.delivery.clone(),
+        ))
+        .map_err(|err| format!("invalid message delivery `{}`: {err}", row.delivery))?;
+        Ok((
+            Self::External {
+                source: row.source,
+                content: row.content,
+            },
+            delivery,
+        ))
     }
-    if key
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "message metadata key `{key}` must contain only letters, digits, and underscores"
-    ))
-}
 
-pub fn validate_meta(meta: &BTreeMap<String, String>) -> Result<(), String> {
-    for key in meta.keys() {
-        validate_meta_key(key)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn message_prompt_input_item(message: &MessageInvocationContext) -> ResponseInputItem {
-    ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: render_message_prompt(message),
-        }],
-    }
-}
-
-pub(crate) fn injected_message_event(message: &MessageInvocationContext) -> InjectedMessageEvent {
-    InjectedMessageEvent {
-        content: message.content.clone(),
-        source: message.source.clone(),
-    }
-}
-
-pub(crate) fn render_message_prompt(message: &MessageInvocationContext) -> String {
-    let mut rendered = String::new();
-    match &message.kind {
-        MessageInvocationKind::External => {
-            rendered.push_str(EXTERNAL_MESSAGE_OPEN_TAG);
-            rendered.push('\n');
-            push_block_tag(&mut rendered, "content", &message.content);
-            rendered.push_str(EXTERNAL_MESSAGE_CLOSE_TAG);
+    pub(crate) fn prompt_input_item(&self) -> ResponseInputItem {
+        ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: self.render_prompt(),
+            }],
         }
-        MessageInvocationKind::Timer { timer_id } => {
-            rendered.push_str(TIMER_MESSAGE_OPEN_TAG);
-            rendered.push('\n');
-            push_tag(&mut rendered, "timer_id", timer_id);
-            push_block_tag(&mut rendered, "content", &message.content);
-            if let Some(instructions) = message.instructions.as_deref() {
-                push_block_tag(&mut rendered, "instructions", instructions);
+    }
+
+    pub(crate) fn event(&self) -> InjectedMessageEvent {
+        match self {
+            Self::External { source, content } => InjectedMessageEvent {
+                content: content.clone(),
+                source: source.clone(),
+            },
+            Self::Timer {
+                timer_id, content, ..
+            } => InjectedMessageEvent {
+                content: content.clone(),
+                source: format!("timer {timer_id}"),
+            },
+        }
+    }
+
+    fn render_prompt(&self) -> String {
+        let mut rendered = String::new();
+        match self {
+            Self::External { content, .. } => {
+                rendered.push_str(EXTERNAL_MESSAGE_OPEN_TAG);
+                rendered.push('\n');
+                push_block_tag(&mut rendered, "content", content);
+                rendered.push_str(EXTERNAL_MESSAGE_CLOSE_TAG);
             }
-            rendered.push_str(TIMER_MESSAGE_CLOSE_TAG);
+            Self::Timer {
+                timer_id,
+                content,
+                instructions,
+            } => {
+                rendered.push_str(TIMER_MESSAGE_OPEN_TAG);
+                rendered.push('\n');
+                push_tag(&mut rendered, "timer_id", timer_id);
+                push_block_tag(&mut rendered, "content", content);
+                if let Some(instructions) = instructions.as_deref() {
+                    push_block_tag(&mut rendered, "instructions", instructions);
+                }
+                rendered.push_str(TIMER_MESSAGE_CLOSE_TAG);
+            }
         }
+        rendered
     }
-    rendered
-}
-
-pub(crate) fn db_message_to_thread_message(
-    row: codex_state::ThreadMessage,
-) -> Result<ThreadMessage, String> {
-    let delivery =
-        serde_json::from_value::<TimerDelivery>(serde_json::Value::String(row.delivery.clone()))
-            .map_err(|err| format!("invalid message delivery `{}`: {err}", row.delivery))?;
-    let meta = serde_json::from_str::<BTreeMap<String, String>>(&row.meta_json)
-        .map_err(|err| format!("invalid message metadata json for {}: {err}", row.id))?;
-    validate_meta(&meta)?;
-    Ok(ThreadMessage {
-        id: row.id,
-        thread_id: row.thread_id,
-        source: row.source,
-        content: row.content,
-        instructions: row.instructions,
-        meta,
-        delivery,
-        queued_at: row.queued_at,
-    })
 }
 
 fn push_tag(rendered: &mut String, tag: &str, value: &str) {
@@ -173,44 +147,28 @@ mod tests {
 
     #[test]
     fn renders_external_message_prompt_with_only_content() {
-        let message = MessageInvocationContext {
-            kind: MessageInvocationKind::External,
+        let message = InjectedMessage::External {
             source: "external".to_string(),
             content: "run <tests>".to_string(),
-            instructions: Some("stay \"brief\"".to_string()),
         };
 
         assert_eq!(
-            render_message_prompt(&message),
+            message.render_prompt(),
             "<external_message>\n<content>\nrun &lt;tests&gt;\n</content>\n</external_message>"
         );
     }
 
     #[test]
     fn renders_timer_message_prompt_with_timer_id_and_no_metadata() {
-        let message = MessageInvocationContext {
-            kind: MessageInvocationKind::Timer {
-                timer_id: "timer-1".to_string(),
-            },
-            source: "timer timer-1".to_string(),
+        let message = InjectedMessage::Timer {
+            timer_id: "timer-1".to_string(),
             content: "run <tests>".to_string(),
             instructions: Some("stay \"brief\"".to_string()),
         };
 
         assert_eq!(
-            render_message_prompt(&message),
+            message.render_prompt(),
             "<timer_message>\n<timer_id>timer-1</timer_id>\n<content>\nrun &lt;tests&gt;\n</content>\n<instructions>\nstay &quot;brief&quot;\n</instructions>\n</timer_message>"
-        );
-    }
-
-    #[test]
-    fn validate_meta_key_rejects_hyphens() {
-        assert_eq!(
-            validate_meta_key("bad-key"),
-            Err(
-                "message metadata key `bad-key` must contain only letters, digits, and underscores"
-                    .to_string()
-            )
         );
     }
 }

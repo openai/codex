@@ -31,13 +31,8 @@ use super::Event;
 use super::EventMsg;
 use super::INITIAL_SUBMIT_ID;
 use super::Session;
-use crate::injected_message::MessageInvocationContext;
-use crate::injected_message::MessageInvocationKind;
+use crate::injected_message::InjectedMessage;
 use crate::injected_message::MessagePayload;
-use crate::injected_message::db_message_to_thread_message;
-use crate::injected_message::injected_message_event;
-use crate::injected_message::message_prompt_input_item;
-use crate::injected_message::validate_meta;
 use crate::pending_input::GeneratedMessageInput;
 use crate::pending_input::PendingInputItem;
 use crate::timers::ClaimedTimer;
@@ -53,7 +48,7 @@ use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;
 use crate::timers::TimerTaskSpec;
 use crate::timers::TimersState;
-use crate::timers::timer_message_invocation_context;
+use crate::timers::timer_injected_message;
 use chrono::Utc;
 use codex_features::Feature;
 use codex_rollout::state_db;
@@ -108,13 +103,6 @@ fn db_timer_to_persisted_timer(row: codex_state::ThreadTimer) -> Option<Persiste
             return None;
         }
     };
-    if let Err(err) = validate_meta(&meta) {
-        warn!(
-            "skipping invalid persisted timer {} metadata: {err}",
-            row.id
-        );
-        return None;
-    }
     Some(PersistedTimer {
         timer: ThreadTimer {
             id: row.id,
@@ -153,7 +141,6 @@ impl Session {
         if !self.timers_feature_enabled() {
             return Err("timers feature is disabled".to_string());
         }
-        validate_meta(&payload.meta)?;
         self.ensure_rollout_materialized().await;
         let state_db = self.timer_state_db().await?;
         self.start_timer_db_sync_task(state_db.clone());
@@ -268,10 +255,10 @@ impl Session {
         if deleted_one_shot_timer {
             self.emit_timer_updated_notification().await;
         }
-        let message_context = timer_message_invocation_context(&context);
+        let message = timer_injected_message(&context);
         let input_item = PendingInputItem::GeneratedMessage(GeneratedMessageInput {
-            item: message_prompt_input_item(&message_context),
-            injected_event: injected_message_event(&message_context),
+            item: message.prompt_input_item(),
+            injected_event: message.event(),
         });
         match context.delivery {
             TimerDelivery::SteerCurrentTurn => {
@@ -373,23 +360,16 @@ impl Session {
             };
             match claim {
                 Some(codex_state::ThreadMessageClaim::Claimed(row)) => {
-                    let message = match db_message_to_thread_message(row) {
-                        Ok(message) => message,
+                    let (message, delivery) = match InjectedMessage::from_external_row(row) {
+                        Ok(parsed) => parsed,
                         Err(err) => {
                             warn!("{err}");
                             continue;
                         }
                     };
-                    let delivery = message.delivery;
-                    let message_context = MessageInvocationContext {
-                        kind: MessageInvocationKind::External,
-                        source: message.source.clone(),
-                        content: message.content,
-                        instructions: None,
-                    };
                     let input_item = PendingInputItem::GeneratedMessage(GeneratedMessageInput {
-                        item: message_prompt_input_item(&message_context),
-                        injected_event: injected_message_event(&message_context),
+                        item: message.prompt_input_item(),
+                        injected_event: message.event(),
                     });
                     return Some(PendingMessageClaim::Claimed(Box::new(input_item), delivery));
                 }

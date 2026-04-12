@@ -4,10 +4,8 @@
 //! message injected when a timer fires, and the persistent state shape used to
 //! restore timers after a harness restart.
 
-use crate::injected_message::MessageInvocationContext;
-use crate::injected_message::MessageInvocationKind;
+use crate::injected_message::InjectedMessage;
 use crate::injected_message::MessagePayload;
-use crate::injected_message::validate_meta;
 use crate::timer_trigger::TimerTrigger;
 use crate::timer_trigger::TriggerTiming;
 use crate::timer_trigger::next_run_after_due;
@@ -450,7 +448,6 @@ impl TimersState {
 pub fn build_thread_timer_create_params(
     params: ThreadTimerStorageCreateParams,
 ) -> Result<codex_state::ThreadTimerCreateParams, String> {
-    validate_meta(&params.payload.meta)?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
     let TriggerTiming {
@@ -482,17 +479,12 @@ pub fn build_thread_timer_create_params(
 pub(crate) fn timer_prompt_input_item(
     timer: &TimerInvocationContext,
 ) -> codex_protocol::models::ResponseInputItem {
-    crate::injected_message::message_prompt_input_item(&timer_message_invocation_context(timer))
+    timer_injected_message(timer).prompt_input_item()
 }
 
-pub(crate) fn timer_message_invocation_context(
-    timer: &TimerInvocationContext,
-) -> MessageInvocationContext {
-    MessageInvocationContext {
-        kind: MessageInvocationKind::Timer {
-            timer_id: timer.current_timer_id.clone(),
-        },
-        source: format!("timer {}", timer.current_timer_id),
+pub(crate) fn timer_injected_message(timer: &TimerInvocationContext) -> InjectedMessage {
+    InjectedMessage::Timer {
+        timer_id: timer.current_timer_id.clone(),
         content: timer_message_content(timer),
         instructions: timer_message_instructions(timer),
     }
