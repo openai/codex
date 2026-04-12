@@ -4,6 +4,19 @@
 //! the active search session because it has to snapshot/restore the editable draft, preview matches
 //! in the textarea, and render the footer prompt while the footer line is acting as the search
 //! input.
+//!
+//! This module is responsible for the UI-facing lifecycle of a search session: recognizing the
+//! keys that enter and drive search mode, keeping the footer query separate from the textarea
+//! preview, restoring the original draft on cancellation or misses, and translating history search
+//! results into composer-visible state. It deliberately does not decide which history entries
+//! match, how duplicate results are skipped, or when persistent history should be fetched; those
+//! traversal invariants stay with `ChatComposerHistory`.
+//!
+//! A search session starts idle with an empty footer query, so opening Ctrl+R never previews the
+//! latest history entry by itself. Typing a query restarts traversal from newest to oldest,
+//! repeated Ctrl+R/Up and Ctrl+S/Down move between unique matches, `Enter` accepts the current
+//! preview as an editable draft, and `Esc` restores the exact draft that existed before search
+//! started.
 
 use std::ops::Range;
 
@@ -31,6 +44,11 @@ use crate::key_hint;
 use crate::key_hint::has_ctrl_or_alt;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 
+/// Active composer-owned state for one Ctrl+R search interaction.
+///
+/// The session is created only by [`ChatComposer::begin_history_search`] and is cleared only by
+/// accepting, canceling, or replacing the search mode. It stores the original draft separately from
+/// the footer query so transient previews never destroy the user's in-progress composer content.
 #[derive(Clone, Debug)]
 pub(super) struct HistorySearchSession {
     /// Draft to restore when search is canceled or a query has no match.
@@ -60,6 +78,12 @@ impl ChatComposer {
         self.history_search.is_some()
     }
 
+    /// Returns whether a key event should open reverse history search or step to an older match.
+    ///
+    /// The check accepts both normal Ctrl+R reports and the raw control character variant that
+    /// some terminals emit. Callers should only use this before generic text handling; treating the
+    /// raw control character as ordinary input would insert an invisible byte into the search query
+    /// or composer draft.
     pub(super) fn is_history_search_key(key_event: &KeyEvent) -> bool {
         matches!(
             key_event,
@@ -100,6 +124,12 @@ impl ChatComposer {
         )
     }
 
+    /// Opens footer-owned reverse history search without previewing history yet.
+    ///
+    /// Entering search mode snapshots the full composer draft, clears any file/search popup state,
+    /// and resets history traversal. The first visible match is produced only after the footer
+    /// query becomes non-empty, which keeps Ctrl+R from replacing an empty composer with the latest
+    /// prompt before the user has searched for anything.
     pub(super) fn begin_history_search(&mut self) -> (InputResult, bool) {
         if self.current_file_query.is_some() {
             self.app_event_tx
@@ -117,6 +147,14 @@ impl ChatComposer {
         (InputResult::None, true)
     }
 
+    /// Handles every key while the footer is acting as the history search input.
+    ///
+    /// The method consumes search-mode keys before normal composer editing sees them. It guarantees
+    /// that `Esc` restores the original draft, `Enter` only accepts an actual match, plain
+    /// characters edit the footer query, and navigation keys delegate traversal to
+    /// `ChatComposerHistory`. Calling this when no search session exists is harmless for ignored
+    /// keys but would make query-edit branches no-op, so route here only after
+    /// `history_search.is_some()` has been established.
     pub(super) fn handle_history_search_key(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if key_event.kind == KeyEventKind::Release {
             return (InputResult::None, false);
@@ -261,6 +299,13 @@ impl ChatComposer {
         }
     }
 
+    /// Applies a traversal result to the composer preview and search status.
+    ///
+    /// `Found` previews the matching entry, `Pending` keeps the footer in a waiting state while an
+    /// async persistent entry lookup is outstanding, `AtBoundary` preserves the current match, and
+    /// `NotFound` restores the original draft while keeping the query available for further edits.
+    /// Treating `AtBoundary` like `NotFound` would produce the visible "no match" flicker at the
+    /// end of a one-result search and desynchronize Up/Down counts.
     pub(super) fn apply_history_search_result(&mut self, result: HistorySearchResult) {
         match result {
             HistorySearchResult::Found(entry) => {
@@ -294,6 +339,12 @@ impl ChatComposer {
         }
     }
 
+    /// Builds the footer line shown while reverse history search is active.
+    ///
+    /// The footer displays the query as the editable field and uses the status to decide whether
+    /// to show searching, match actions, or no-match feedback. The line is intentionally separate
+    /// from cursor placement so rendering can fall back to normal footer layout if a small terminal
+    /// cannot allocate a distinct hint row.
     pub(super) fn history_search_footer_line(&self) -> Option<Line<'static>> {
         let search = self.history_search.as_ref()?;
         let mut line = Line::from(vec![
@@ -320,6 +371,11 @@ impl ChatComposer {
         Span::from(key_hint::plain(key)).cyan().bold().not_dim()
     }
 
+    /// Returns byte ranges that should be highlighted in the current composer preview.
+    ///
+    /// Highlights are only exposed while a matched history entry is being previewed. Once the user
+    /// accepts with `Enter`, the search session is cleared and this returns an empty set so the
+    /// accepted text becomes an ordinary editable draft again.
     pub(super) fn history_search_highlight_ranges(&self) -> Vec<Range<usize>> {
         let Some(search) = self.history_search.as_ref() else {
             return Vec::new();
@@ -379,6 +435,11 @@ impl ChatComposer {
         ranges
     }
 
+    /// Returns the screen cursor position for the footer query when search mode is active.
+    ///
+    /// The cursor tracks the end of the footer query rather than the textarea preview. If the
+    /// footer area is collapsed or too narrow, the x coordinate is clamped inside the hint rect so
+    /// terminal backends do not receive an off-screen cursor position.
     pub(super) fn history_search_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let search = self.history_search.as_ref()?;
         let [_, _, _, popup_rect] = self.layout_areas(area);

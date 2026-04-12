@@ -40,6 +40,12 @@ pub(crate) struct HistoryEntry {
 }
 
 impl HistoryEntry {
+    /// Creates a text-only history entry and decodes persisted mention bindings.
+    ///
+    /// Persistent history does not store attachment payloads or text-element metadata, so this
+    /// constructor intentionally leaves those fields empty. Local in-session submissions should be
+    /// recorded with the full `HistoryEntry` value built by the composer; using `new` for a local
+    /// image or paste submission would make recall lose placeholder ownership.
     pub(crate) fn new(text: String) -> Self {
         let decoded = decode_history_mentions(&text);
         Self {
@@ -203,6 +209,11 @@ struct PendingHistorySearch {
 }
 
 impl ChatComposerHistory {
+    /// Creates an empty history state machine with no persistent metadata.
+    ///
+    /// The caller must provide session metadata before cross-session history can be fetched, but
+    /// local in-session entries can still be recorded and traversed. Keeping construction cheap and
+    /// metadata-free lets the composer reset and reuse this helper across session lifecycles.
     pub fn new() -> Self {
         Self {
             history_log_id: None,
@@ -215,7 +226,11 @@ impl ChatComposerHistory {
         }
     }
 
-    /// Update metadata when a new session is configured.
+    /// Updates persistent history metadata when a new session is configured.
+    ///
+    /// This clears fetched entries, local entries, navigation cursors, and active search state
+    /// because offsets only make sense within one history log snapshot. Reusing old offsets after a
+    /// log-id change would allow a stale async response to hydrate the wrong prompt.
     pub fn set_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.history_log_id = Some(log_id);
         self.history_entry_count = entry_count;
@@ -226,8 +241,10 @@ impl ChatComposerHistory {
         self.search = None;
     }
 
-    /// Record a message submitted by the user in the current session so it can
-    /// be recalled later.
+    /// Records a current-session submission so it can be recalled with full draft metadata.
+    ///
+    /// Empty submissions are ignored, adjacent duplicates are collapsed, and active navigation or
+    /// search state is reset because a new newest entry changes the combined history offset space.
     pub fn record_local_submission(&mut self, entry: HistoryEntry) {
         if entry.text.is_empty()
             && entry.text_elements.is_empty()
@@ -250,13 +267,22 @@ impl ChatComposerHistory {
         self.local_history.push(entry);
     }
 
-    /// Reset navigation tracking so the next Up key resumes from the latest entry.
+    /// Resets normal history navigation so the next Up key resumes from the newest entry.
+    ///
+    /// This also clears any active incremental search, since normal browsing and Ctrl+R search
+    /// maintain different cursor semantics. Failing to clear search here would let an old query
+    /// influence later Up/Down recall.
     pub fn reset_navigation(&mut self) {
         self.history_cursor = None;
         self.last_history_text = None;
         self.search = None;
     }
 
+    /// Clears only the active incremental search state.
+    ///
+    /// The normal Up/Down navigation cursor and cached persistent entries are left intact. Composer
+    /// search mode calls this when it accepts, cancels, or returns to an empty query so the next
+    /// search starts with a fresh unique-result cache.
     pub fn reset_search(&mut self) {
         self.search = None;
     }
@@ -291,8 +317,11 @@ impl ChatComposerHistory {
         matches!(&self.last_history_text, Some(prev) if prev == text)
     }
 
-    /// Handle <Up>. Returns true when the key was consumed and the caller
-    /// should request a redraw.
+    /// Handles Up by moving toward older entries in the combined history space.
+    ///
+    /// Local entries can be returned immediately, while missing persistent entries emit a
+    /// `GetHistoryEntryRequest` and return `None` until the response arrives. Calling this while
+    /// Ctrl+R search is active intentionally exits search traversal.
     pub fn navigate_up(&mut self, app_event_tx: &AppEventSender) -> Option<HistoryEntry> {
         self.search = None;
         let total_entries = self.history_entry_count + self.local_history.len();
@@ -310,7 +339,11 @@ impl ChatComposerHistory {
         self.populate_history_at_index(next_idx as usize, app_event_tx)
     }
 
-    /// Handle <Down>.
+    /// Handles Down by moving toward newer entries or clearing the composer past the newest entry.
+    ///
+    /// Returning an empty `HistoryEntry` means the user moved past the newest known entry and the
+    /// caller should clear the composer draft. As with Up, invoking this during Ctrl+R search clears
+    /// search state and resumes normal shell-style browsing.
     pub fn navigate_down(&mut self, app_event_tx: &AppEventSender) -> Option<HistoryEntry> {
         self.search = None;
         let total_entries = self.history_entry_count + self.local_history.len();
@@ -338,7 +371,13 @@ impl ChatComposerHistory {
         }
     }
 
-    /// Integrate a GetHistoryEntryResponse event.
+    /// Integrates a persistent history entry response into navigation or active search.
+    ///
+    /// Responses with a stale log id are ignored, matching responses update the persistent cache,
+    /// and pending Ctrl+R searches resume their scan from the returned offset. The caller should
+    /// route `HistoryEntryResponse::Search` back to the composer search session rather than normal
+    /// history recall; otherwise an async search hit could be accepted without updating footer
+    /// status or match highlighting.
     pub fn on_entry_response(
         &mut self,
         log_id: u64,
