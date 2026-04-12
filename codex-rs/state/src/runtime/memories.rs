@@ -127,10 +127,11 @@ WHERE thread_id = ?
     /// - excludes threads with `memory_mode != 'enabled'`
     /// - excludes the current thread id
     /// - keeps only threads in the age window:
-    ///   `updated_at >= now - max_age_days` and `updated_at <= now - min_rollout_idle_hours`
+    ///   `updated_at >= (now - max_age_days) * 1000` and
+    ///   `updated_at <= (now - min_rollout_idle_hours) * 1000`
     /// - keeps only threads whose memory is stale:
-    ///   `COALESCE(stage1_outputs.source_updated_at, -1) < threads.updated_at` and
-    ///   `COALESCE(jobs.last_success_watermark, -1) < threads.updated_at`
+    ///   `(COALESCE(stage1_outputs.source_updated_at, -1) + 1) * 1000 <= threads.updated_at` and
+    ///   `(COALESCE(jobs.last_success_watermark, -1) + 1) * 1000 <= threads.updated_at`
     /// - orders by `updated_at DESC, id DESC` and applies `scan_limit`
     ///
     /// For each selected thread, this function calls [`Self::try_claim_stage1_job`]
@@ -155,8 +156,9 @@ WHERE thread_id = ?
 
         let worker_id = current_thread_id;
         let current_thread_id = worker_id.to_string();
-        let max_age_cutoff = (Utc::now() - Duration::days(max_age_days.max(0))).timestamp();
-        let idle_cutoff = (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp();
+        let max_age_cutoff = (Utc::now() - Duration::days(max_age_days.max(0))).timestamp_millis();
+        let idle_cutoff =
+            (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp_millis();
 
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
@@ -213,8 +215,10 @@ LEFT JOIN jobs
             .push(" AND updated_at >= ")
             .push_bind(max_age_cutoff);
         builder.push(" AND updated_at <= ").push_bind(idle_cutoff);
-        builder.push(" AND COALESCE(stage1_outputs.source_updated_at, -1) < updated_at");
-        builder.push(" AND COALESCE(jobs.last_success_watermark, -1) < updated_at");
+        builder.push(
+            " AND ((COALESCE(stage1_outputs.source_updated_at, -1) + 1) * 1000) <= updated_at",
+        );
+        builder.push(" AND ((COALESCE(jobs.last_success_watermark, -1) + 1) * 1000) <= updated_at");
         push_thread_order_and_limit(&mut builder, SortKey::UpdatedAt, scan_limit);
 
         let items = builder
