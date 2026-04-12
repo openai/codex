@@ -18,7 +18,7 @@ runs:
   steps:
     - name: Set up Node.js for js_repl tests
       if: inputs.install-test-prereqs == 'true'
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
       with:
         node-version-file: codex-rs/node-version.txt
 
@@ -26,7 +26,7 @@ runs:
     # See https://github.com/openai/codex/pull/7617.
     - name: Install DotSlash
       if: inputs.install-test-prereqs == 'true'
-      uses: facebook/install-dotslash@v2
+      uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
 
     - name: Make DotSlash available in PATH (Unix)
       if: inputs.install-test-prereqs == 'true' && runner.os != 'Windows'
@@ -39,7 +39,7 @@ runs:
       run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
 
     - name: Set up Bazel
-      uses: bazelbuild/setup-bazelisk@v3
+      uses: bazelbuild/setup-bazelisk@6ecf4fd8b7d1f9721785f1dd656a689acf9add47 # v3
 
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache
