@@ -252,8 +252,8 @@ fn test_qualify_tools_short_non_duplicated_names() {
     let qualified_tools = qualify_tools(tools);
 
     assert_eq!(qualified_tools.len(), 2);
-    assert!(qualified_tools.contains_key("mcp__server1__tool1"));
-    assert!(qualified_tools.contains_key("mcp__server1__tool2"));
+    assert!(qualified_tools.contains_key(&ToolName::namespaced("mcp__server1__", "tool1")));
+    assert!(qualified_tools.contains_key(&ToolName::namespaced("mcp__server1__", "tool2")));
 }
 
 #[test]
@@ -267,7 +267,9 @@ fn test_qualify_tools_duplicated_names_skipped() {
 
     // Only the first tool should remain, the second is skipped
     assert_eq!(qualified_tools.len(), 1);
-    assert!(qualified_tools.contains_key("mcp__server1__duplicate_tool"));
+    assert!(
+        qualified_tools.contains_key(&ToolName::namespaced("mcp__server1__", "duplicate_tool"))
+    );
 }
 
 #[test]
@@ -289,7 +291,7 @@ fn test_qualify_tools_long_names_same_server() {
 
     assert_eq!(qualified_tools.len(), 2);
 
-    let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
+    let mut keys: Vec<_> = qualified_tools.keys().map(ToolName::display).collect();
     keys.sort();
 
     assert!(keys.iter().all(|key| key.len() == 64));
@@ -309,10 +311,13 @@ fn test_qualify_tools_sanitizes_invalid_characters() {
 
     assert_eq!(qualified_tools.len(), 1);
     let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
-    assert_eq!(qualified_name, "mcp__server_one__tool_two_three");
+    assert_eq!(
+        qualified_name,
+        ToolName::namespaced("mcp__server_one__", "tool_two_three")
+    );
     assert_eq!(
         format!("{}{}", tool.callable_namespace, tool.callable_name),
-        qualified_name
+        qualified_name.display()
     );
 
     // The key and callable parts are sanitized for model-visible tool calls, but
@@ -324,6 +329,7 @@ fn test_qualify_tools_sanitizes_invalid_characters() {
 
     assert!(
         qualified_name
+            .display()
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_'),
         "qualified name must be code-mode compatible: {qualified_name:?}"
@@ -338,7 +344,10 @@ fn test_qualify_tools_keeps_hyphenated_mcp_tools_callable() {
 
     assert_eq!(qualified_tools.len(), 1);
     let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
-    assert_eq!(qualified_name, "mcp__music_studio__get_strudel_guide");
+    assert_eq!(
+        qualified_name,
+        ToolName::namespaced("mcp__music_studio__", "get_strudel_guide")
+    );
     assert_eq!(tool.callable_namespace, "mcp__music_studio__");
     assert_eq!(tool.callable_name, "get_strudel_guide");
     assert_eq!(tool.tool.name, "get-strudel-guide");
@@ -368,9 +377,10 @@ fn test_qualify_tools_disambiguates_sanitized_namespace_collisions() {
         .collect::<HashSet<_>>();
     assert_eq!(raw_servers, HashSet::from(["basic-server", "basic_server"]));
     assert!(
-        qualified_tools
-            .keys()
-            .all(|key| key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')),
+        qualified_tools.keys().all(|key| key
+            .display()
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')),
         "qualified names must be code-mode compatible: {qualified_tools:?}"
     );
 }
@@ -641,7 +651,10 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 
     let tools = manager.list_all_tools().await;
     let tool = tools
-        .get("mcp__codex_apps__calendar_create_event")
+        .get(&ToolName::namespaced(
+            "mcp__codex_apps__",
+            "calendar_create_event",
+        ))
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
@@ -785,7 +798,10 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
 
     let tools = manager.list_all_tools().await;
     let tool = tools
-        .get("mcp__codex_apps__calendar_create_event")
+        .get(&ToolName::namespaced(
+            "mcp__codex_apps__",
+            "calendar_create_event",
+        ))
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");

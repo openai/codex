@@ -11,18 +11,19 @@ use bm25::SearchEngineBuilder;
 use codex_mcp::ToolInfo;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::ToolName;
 use codex_tools::ToolSearchResultSource;
 use codex_tools::collect_tool_search_output_tools;
 
 pub struct ToolSearchHandler {
-    entries: Vec<(String, ToolInfo)>,
+    entries: Vec<(ToolName, ToolInfo)>,
     search_engine: SearchEngine<usize>,
 }
 
 impl ToolSearchHandler {
-    pub fn new(tools: std::collections::HashMap<String, ToolInfo>) -> Self {
-        let mut entries: Vec<(String, ToolInfo)> = tools.into_iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+    pub fn new(tools: std::collections::HashMap<ToolName, ToolInfo>) -> Self {
+        let mut entries: Vec<(ToolName, ToolInfo)> = tools.into_iter().collect();
+        entries.sort_by_key(|entry| entry.0.display());
 
         let documents: Vec<Document<usize>> = entries
             .iter()
@@ -104,9 +105,9 @@ impl ToolHandler for ToolSearchHandler {
     }
 }
 
-fn build_search_text(name: &str, info: &ToolInfo) -> String {
+fn build_search_text(name: &ToolName, info: &ToolInfo) -> String {
     let mut parts = vec![
-        name.to_string(),
+        name.display(),
         info.callable_name.clone(),
         info.tool.name.to_string(),
         info.server_name.clone(),
