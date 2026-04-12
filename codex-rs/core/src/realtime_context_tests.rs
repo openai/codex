@@ -124,7 +124,7 @@ assistant turn 1"#
 
 #[test]
 fn current_thread_turn_truncation_preserves_start_and_end() {
-    let items = vec![user_message(long_turn_text(0))];
+    let items = vec![user_message(long_turn_text(/*index*/ 0))];
     let section = build_current_thread_section(&items).expect("current thread section");
 
     assert_eq!(
