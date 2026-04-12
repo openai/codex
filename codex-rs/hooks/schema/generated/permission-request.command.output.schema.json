@@ -28,6 +28,7 @@
         },
         "interrupt": {
           "default": false,
+          "description": "Reserved for future short-circuiting semantics.\n\nPermissionRequest hooks currently fail closed if this field is `true`.",
           "type": "boolean"
         },
         "message": {
@@ -35,10 +36,12 @@
           "type": "string"
         },
         "updatedInput": {
-          "default": null
+          "default": null,
+          "description": "Reserved for a future input-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
         },
         "updatedPermissions": {
-          "default": null
+          "default": null,
+          "description": "Reserved for a future permission-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
         }
       },
       "required": [

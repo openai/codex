@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_hooks::PermissionRequestApprovalAttempt;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -158,7 +159,7 @@ pub(crate) async fn run_permission_request_hooks(
     turn_context: &Arc<TurnContext>,
     run_id_suffix: String,
     payload: PermissionRequestPayload,
-    approval_attempt: String,
+    approval_attempt: PermissionRequestApprovalAttempt,
     retry_reason: Option<String>,
     network_approval_context: Option<NetworkApprovalContext>,
 ) -> Option<PermissionRequestDecision> {

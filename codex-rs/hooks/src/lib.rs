@@ -5,6 +5,7 @@ mod registry;
 mod schema;
 mod types;
 
+pub use events::permission_request::PermissionRequestApprovalAttempt;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;

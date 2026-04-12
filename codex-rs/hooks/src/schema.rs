@@ -16,6 +16,8 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 
+use crate::events::permission_request::PermissionRequestApprovalAttempt;
+
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
@@ -142,12 +144,21 @@ pub(crate) struct PermissionRequestHookSpecificOutputWire {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PermissionRequestDecisionWire {
     pub behavior: PermissionRequestBehaviorWire,
+    /// Reserved for a future input-rewrite capability.
+    ///
+    /// PermissionRequest hooks currently fail closed if this field is present.
     #[serde(default)]
     pub updated_input: Option<Value>,
+    /// Reserved for a future permission-rewrite capability.
+    ///
+    /// PermissionRequest hooks currently fail closed if this field is present.
     #[serde(default)]
     pub updated_permissions: Option<Value>,
     #[serde(default)]
     pub message: Option<String>,
+    /// Reserved for future short-circuiting semantics.
+    ///
+    /// PermissionRequest hooks currently fail closed if this field is `true`.
     #[serde(default)]
     pub interrupt: bool,
 }
@@ -245,8 +256,7 @@ pub(crate) struct PermissionRequestApprovalContext {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
-    #[schemars(schema_with = "permission_request_approval_attempt_schema")]
-    pub approval_attempt: String,
+    pub approval_attempt: PermissionRequestApprovalAttempt,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
 }
@@ -569,10 +579,6 @@ fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Bash")
-}
-
-fn permission_request_approval_attempt_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_enum_schema(&["initial", "retry"])
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

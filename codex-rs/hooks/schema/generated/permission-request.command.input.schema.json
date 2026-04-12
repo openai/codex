@@ -72,6 +72,13 @@
       },
       "type": "object"
     },
+    "PermissionRequestApprovalAttempt": {
+      "enum": [
+        "initial",
+        "retry"
+      ],
+      "type": "string"
+    },
     "PermissionRequestApprovalContext": {
       "additionalProperties": false,
       "properties": {
@@ -79,11 +86,7 @@
           "$ref": "#/definitions/PermissionProfile"
         },
         "approval_attempt": {
-          "enum": [
-            "initial",
-            "retry"
-          ],
-          "type": "string"
+          "$ref": "#/definitions/PermissionRequestApprovalAttempt"
         },
         "justification": {
           "type": "string"

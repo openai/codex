@@ -415,3 +415,80 @@ fn trimmed_reason(reason: &str) -> Option<String> {
         Some(trimmed.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::parse_permission_request;
+
+    #[test]
+    fn permission_request_rejects_reserved_updated_input_field() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                        "updatedInput": {}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.invalid_reason,
+            Some("PermissionRequest hook returned unsupported updatedInput".to_string())
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_reserved_updated_permissions_field() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                        "updatedPermissions": {}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.invalid_reason,
+            Some("PermissionRequest hook returned unsupported updatedPermissions".to_string())
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_reserved_interrupt_field() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                        "interrupt": true
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.invalid_reason,
+            Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
+        );
+    }
+}

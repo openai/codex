@@ -25,6 +25,9 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 
 use super::common;
 use crate::engine::CommandShell;
@@ -50,9 +53,25 @@ pub struct PermissionRequestRequest {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
-    pub approval_attempt: String,
+    pub approval_attempt: PermissionRequestApprovalAttempt,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionRequestApprovalAttempt {
+    Initial,
+    Retry,
+}
+
+impl PermissionRequestApprovalAttempt {
+    pub const fn as_wire_value(self) -> &'static str {
+        match self {
+            Self::Initial => "initial",
+            Self::Retry => "retry",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
