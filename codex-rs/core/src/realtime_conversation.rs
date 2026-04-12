@@ -114,18 +114,6 @@ enum HandoffOutput {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct RealtimeTextInput {
-    text: String,
-    response_mode: RealtimeTextResponseMode,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum RealtimeTextResponseMode {
-    AppendOnly,
-    RequestResponse,
-}
-
-#[derive(Debug, PartialEq, Eq)]
 struct OutputAudioState {
     item_id: String,
     audio_end_ms: u32,
@@ -196,7 +184,7 @@ impl RealtimeResponseCreateQueue {
 struct RealtimeInputTask {
     writer: RealtimeWebsocketWriter,
     events: RealtimeWebsocketEvents,
-    user_text_rx: Receiver<RealtimeTextInput>,
+    user_text_rx: Receiver<String>,
     handoff_output_rx: Receiver<HandoffOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
     events_tx: Sender<RealtimeEvent>,
@@ -219,7 +207,7 @@ impl RealtimeHandoffState {
 #[allow(dead_code)]
 struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
-    user_text_tx: Sender<RealtimeTextInput>,
+    user_text_tx: Sender<String>,
     writer: RealtimeWebsocketWriter,
     handoff: RealtimeHandoffState,
     input_task: JoinHandle<()>,
@@ -318,7 +306,7 @@ impl RealtimeConversationManager {
         let (audio_tx, audio_rx) =
             async_channel::bounded::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
         let (user_text_tx, user_text_rx) =
-            async_channel::bounded::<RealtimeTextInput>(USER_TEXT_IN_QUEUE_CAPACITY);
+            async_channel::bounded::<String>(USER_TEXT_IN_QUEUE_CAPACITY);
         let (handoff_output_tx, handoff_output_rx) =
             async_channel::bounded::<HandoffOutput>(HANDOFF_OUT_QUEUE_CAPACITY);
         let (events_tx, events_rx) =
@@ -415,22 +403,10 @@ impl RealtimeConversationManager {
     }
 
     pub(crate) async fn text_in(&self, text: String) -> CodexResult<()> {
-        self.queue_text_input(RealtimeTextInput {
-            text,
-            response_mode: RealtimeTextResponseMode::RequestResponse,
-        })
-        .await
+        self.queue_text_input(text).await
     }
 
-    pub(crate) async fn append_user_text(&self, text: String) -> CodexResult<()> {
-        self.queue_text_input(RealtimeTextInput {
-            text,
-            response_mode: RealtimeTextResponseMode::AppendOnly,
-        })
-        .await
-    }
-
-    async fn queue_text_input(&self, input: RealtimeTextInput) -> CodexResult<()> {
+    async fn queue_text_input(&self, text: String) -> CodexResult<()> {
         let sender = {
             let guard = self.state.lock().await;
             guard.as_ref().map(|state| state.user_text_tx.clone())
@@ -443,7 +419,7 @@ impl RealtimeConversationManager {
         };
 
         sender
-            .send(input)
+            .send(text)
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
@@ -973,8 +949,6 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                         user_text,
                         &writer,
                         &events_tx,
-                        session_kind,
-                        &mut response_create_queue,
                     )
                         .await
                 }
@@ -1017,32 +991,19 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
 }
 
 async fn handle_realtime_text_input(
-    input: Result<RealtimeTextInput, RecvError>,
+    input: Result<String, RecvError>,
     writer: &RealtimeWebsocketWriter,
     events_tx: &Sender<RealtimeEvent>,
-    session_kind: RealtimeSessionKind,
-    response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
-    let input = input.context("text input channel closed")?;
+    let text = input.context("text input channel closed")?;
 
-    if let Err(err) = writer.send_conversation_item_create(input.text).await {
+    if let Err(err) = writer.send_conversation_item_create(text).await {
         let mapped_error = map_api_error(err);
         warn!("failed to send input text: {mapped_error}");
         let _ = events_tx
             .send(RealtimeEvent::Error(mapped_error.to_string()))
             .await;
         return Err(mapped_error.into());
-    }
-    match session_kind {
-        RealtimeSessionKind::V1 => {}
-        RealtimeSessionKind::V2 => match input.response_mode {
-            RealtimeTextResponseMode::AppendOnly => {}
-            RealtimeTextResponseMode::RequestResponse => {
-                response_create_queue
-                    .request_create(writer, events_tx, "text")
-                    .await?;
-            }
-        },
     }
     Ok(())
 }
