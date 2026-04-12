@@ -6,7 +6,6 @@ use crate::ToolsConfig;
 use crate::WaitAgentTimeoutOptions;
 use crate::augment_tool_spec_for_code_mode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use rmcp::model::Tool as McpTool;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,9 +57,9 @@ pub struct ToolRegistryPlan {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ToolRegistryPlanParams<'a> {
-    pub mcp_tools: Option<&'a HashMap<String, McpTool>>,
+    pub mcp_tools: Option<&'a [ToolRegistryPlanMcpTool<'a>]>,
     pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
-    pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
+    pub tool_namespaces: Option<&'a HashMap<ToolName, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
     pub dynamic_tools: &'a [DynamicToolSpec],
     pub default_agent_type_description: &'a str,
@@ -73,10 +72,17 @@ pub struct ToolNamespace {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// Direct MCP tool metadata needed to expose the flat Responses API tool while
+/// registering its runtime handler with the canonical namespace/name identity.
+#[derive(Debug, Clone)]
+pub struct ToolRegistryPlanMcpTool<'a> {
+    pub name: ToolName,
+    pub tool: &'a rmcp::model::Tool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ToolRegistryPlanDeferredTool<'a> {
-    pub tool_name: &'a str,
-    pub tool_namespace: &'a str,
+    pub name: ToolName,
     pub server_name: &'a str,
     pub connector_name: Option<&'a str>,
     pub connector_description: Option<&'a str>,

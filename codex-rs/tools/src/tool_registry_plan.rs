@@ -6,7 +6,6 @@ use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
 use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
-use crate::ToolName;
 use crate::ToolRegistryPlan;
 use crate::ToolRegistryPlanParams;
 use crate::ToolSearchSource;
@@ -61,7 +60,6 @@ use crate::request_user_input_tool_description;
 use crate::tool_registry_plan_types::agent_type_description;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-use rmcp::model::Tool as McpTool;
 use std::collections::BTreeMap;
 
 pub fn build_tool_registry_plan(
@@ -76,9 +74,9 @@ pub fn build_tool_registry_plan(
             .tool_namespaces
             .into_iter()
             .flatten()
-            .map(|(name, detail)| {
+            .map(|(tool_name, detail)| {
                 (
-                    name.clone(),
+                    tool_name.display(),
                     codex_code_mode::ToolNamespaceDescription {
                         name: detail.name.clone(),
                         description: detail.description.clone().unwrap_or_default(),
@@ -266,10 +264,7 @@ pub fn build_tool_registry_plan(
         plan.register_handler(TOOL_SEARCH_TOOL_NAME, ToolHandlerKind::ToolSearch);
 
         for tool in deferred_mcp_tools {
-            plan.register_handler(
-                ToolName::namespaced(tool.tool_namespace, tool.tool_name),
-                ToolHandlerKind::Mcp,
-            );
+            plan.register_handler(tool.name.clone(), ToolHandlerKind::Mcp);
         }
     }
 
@@ -471,25 +466,23 @@ pub fn build_tool_registry_plan(
     }
 
     if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries: Vec<(String, &McpTool)> = mcp_tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool))
-            .collect();
-        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut entries = mcp_tools.to_vec();
+        entries.sort_by_key(|tool| tool.name.display());
 
-        for (name, tool) in entries {
-            match mcp_tool_to_responses_api_tool(name.clone(), tool) {
+        for tool in entries {
+            let display_name = tool.name.display();
+            match mcp_tool_to_responses_api_tool(display_name.clone(), tool.tool) {
                 Ok(converted_tool) => {
                     plan.push_spec(
                         ToolSpec::Function(converted_tool),
                         /*supports_parallel_tool_calls*/ false,
                         config.code_mode_enabled,
                     );
-                    plan.register_handler(name, ToolHandlerKind::Mcp);
+                    plan.register_handler(tool.name, ToolHandlerKind::Mcp);
                 }
                 Err(error) => {
                     tracing::error!(
-                        "Failed to convert {name:?} MCP tool to OpenAI tool: {error:?}"
+                        "Failed to convert {display_name:?} MCP tool to OpenAI tool: {error:?}"
                     );
                 }
             }

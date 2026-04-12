@@ -97,10 +97,11 @@ impl ToolRouter {
         self.model_visible_specs.clone()
     }
 
-    pub fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
+    pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
+        let display_name = tool_name.display();
         self.specs
             .iter()
-            .find(|config| config.name() == tool_name)
+            .find(|config| config.name() == display_name.as_str())
             .map(|config| config.spec.clone())
     }
 
@@ -126,16 +127,10 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let mcp_tool = session
-                    .resolve_mcp_tool_info(&name, namespace.as_deref())
-                    .await;
-                let tool_name = match namespace {
-                    Some(namespace) => ToolName::namespaced(namespace, name),
-                    None => ToolName::plain(name),
-                };
-                if let Some(tool_info) = mcp_tool {
+                let tool_name = ToolName::new(namespace, name);
+                if let Some(tool_info) = session.resolve_mcp_tool_info(&tool_name).await {
                     Ok(Some(ToolCall {
-                        tool_name,
+                        tool_name: tool_info.callable_tool_name(),
                         call_id,
                         payload: ToolPayload::Mcp {
                             server: tool_info.server_name,

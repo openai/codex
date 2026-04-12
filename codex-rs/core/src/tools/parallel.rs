@@ -48,7 +48,7 @@ impl ToolCallRuntime {
         }
     }
 
-    pub(crate) fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
+    pub(crate) fn find_spec(&self, tool_name: &codex_tools::ToolName) -> Option<ToolSpec> {
         self.router.find_spec(tool_name)
     }
 

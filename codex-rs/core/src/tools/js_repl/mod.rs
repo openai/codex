@@ -1572,29 +1572,38 @@ impl JsReplManager {
             },
         );
 
-        let payload = if let Some(tool_info) = exec
+        let requested_tool_name = codex_tools::ToolName::plain(req.tool_name.clone());
+        let (tool_call_name, payload) = if let Some(tool_info) = exec
             .session
-            .resolve_mcp_tool_info(&req.tool_name, /*namespace*/ None)
+            .resolve_mcp_tool_info(&requested_tool_name)
             .await
         {
-            crate::tools::context::ToolPayload::Mcp {
-                server: tool_info.server_name,
-                tool: tool_info.tool.name.to_string(),
-                raw_arguments: req.arguments.clone(),
-            }
+            (
+                tool_info.callable_tool_name(),
+                crate::tools::context::ToolPayload::Mcp {
+                    server: tool_info.server_name,
+                    tool: tool_info.tool.name.to_string(),
+                    raw_arguments: req.arguments.clone(),
+                },
+            )
         } else if is_freeform_tool(&router.specs(), &req.tool_name) {
-            crate::tools::context::ToolPayload::Custom {
-                input: req.arguments.clone(),
-            }
+            (
+                requested_tool_name,
+                crate::tools::context::ToolPayload::Custom {
+                    input: req.arguments.clone(),
+                },
+            )
         } else {
-            crate::tools::context::ToolPayload::Function {
-                arguments: req.arguments.clone(),
-            }
+            (
+                requested_tool_name,
+                crate::tools::context::ToolPayload::Function {
+                    arguments: req.arguments.clone(),
+                },
+            )
         };
 
-        let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
-            tool_name: codex_tools::ToolName::plain(tool_name.clone()),
+            tool_name: tool_call_name,
             call_id: req.id.clone(),
             payload,
         };

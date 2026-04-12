@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::ToolName;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
 use pretty_assertions::assert_eq;
@@ -644,6 +645,68 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+}
+
+#[tokio::test]
+async fn resolve_tool_info_accepts_plain_and_namespaced_tool_names() {
+    let startup_tools = vec![create_test_tool("rmcp", "echo")];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "rmcp".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            startup_snapshot: Some(startup_tools),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        },
+    );
+
+    let flat = manager
+        .resolve_tool_info(&ToolName::plain("mcp__rmcp__echo"))
+        .await
+        .expect("flat qualified MCP tool name should resolve");
+    let split = manager
+        .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "echo"))
+        .await
+        .expect("split MCP tool namespace and name should resolve");
+    let split_with_flat_name = manager
+        .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "mcp__rmcp__echo"))
+        .await
+        .expect("split namespace with flat qualified MCP tool name should resolve");
+
+    let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
+    assert_eq!(
+        (
+            flat.server_name.as_str(),
+            flat.callable_namespace.as_str(),
+            flat.callable_name.as_str(),
+            flat.tool.name.as_ref(),
+        ),
+        expected
+    );
+    assert_eq!(
+        (
+            split.server_name.as_str(),
+            split.callable_namespace.as_str(),
+            split.callable_name.as_str(),
+            split.tool.name.as_ref(),
+        ),
+        expected
+    );
+    assert_eq!(
+        (
+            split_with_flat_name.server_name.as_str(),
+            split_with_flat_name.callable_namespace.as_str(),
+            split_with_flat_name.callable_name.as_str(),
+            split_with_flat_name.tool.name.as_ref(),
+        ),
+        expected
+    );
 }
 
 #[tokio::test]

@@ -122,7 +122,7 @@ impl CodeModeTurnHost for CoreTurnHost {
         call_nested_tool(
             self.exec.clone(),
             self.tool_runtime.clone(),
-            tool_name,
+            ToolName::plain(tool_name),
             input,
             cancellation_token,
         )
@@ -274,38 +274,40 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
 async fn call_nested_tool(
     exec: ExecContext,
     tool_runtime: ToolCallRuntime,
-    tool_name: String,
+    tool_name: ToolName,
     input: Option<JsonValue>,
     cancellation_token: CancellationToken,
 ) -> Result<JsonValue, FunctionCallError> {
-    if tool_name == PUBLIC_TOOL_NAME {
+    if tool_name.namespace.is_none() && tool_name.name == PUBLIC_TOOL_NAME {
         return Err(FunctionCallError::RespondToModel(format!(
             "{PUBLIC_TOOL_NAME} cannot invoke itself"
         )));
     }
 
-    let payload = if let Some(tool_info) = exec
-        .session
-        .resolve_mcp_tool_info(&tool_name, /*namespace*/ None)
-        .await
-    {
-        match serialize_function_tool_arguments(&tool_name, input) {
-            Ok(raw_arguments) => ToolPayload::Mcp {
-                server: tool_info.server_name,
-                tool: tool_info.tool.name.to_string(),
-                raw_arguments,
-            },
-            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-        }
-    } else {
-        match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-            Ok(payload) => payload,
-            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-        }
-    };
+    let display_name = tool_name.display();
+    let (tool_call_name, payload) =
+        if let Some(tool_info) = exec.session.resolve_mcp_tool_info(&tool_name).await {
+            let raw_arguments = match serialize_function_tool_arguments(&display_name, input) {
+                Ok(raw_arguments) => raw_arguments,
+                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+            };
+            (
+                tool_info.callable_tool_name(),
+                ToolPayload::Mcp {
+                    server: tool_info.server_name,
+                    tool: tool_info.tool.name.to_string(),
+                    raw_arguments,
+                },
+            )
+        } else {
+            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
+                Ok(payload) => (tool_name, payload),
+                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+            }
+        };
 
     let call = ToolCall {
-        tool_name: ToolName::plain(tool_name.clone()),
+        tool_name: tool_call_name,
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
     };
@@ -325,16 +327,17 @@ fn tool_kind_for_spec(spec: &ToolSpec) -> codex_code_mode::CodeModeToolKind {
 
 fn tool_kind_for_name(
     spec: Option<ToolSpec>,
-    tool_name: &str,
+    tool_name: &ToolName,
 ) -> Result<codex_code_mode::CodeModeToolKind, String> {
+    let display_name = tool_name.display();
     spec.as_ref()
         .map(tool_kind_for_spec)
-        .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
+        .ok_or_else(|| format!("tool `{display_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
 }
 
 fn build_nested_tool_payload(
     spec: Option<ToolSpec>,
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     let actual_kind = tool_kind_for_name(spec, tool_name)?;
@@ -349,10 +352,11 @@ fn build_nested_tool_payload(
 }
 
 fn build_function_tool_payload(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let arguments = serialize_function_tool_arguments(tool_name, input)?;
+    let display_name = tool_name.display();
+    let arguments = serialize_function_tool_arguments(&display_name, input)?;
     Ok(ToolPayload::Function { arguments })
 }
 
@@ -371,11 +375,12 @@ fn serialize_function_tool_arguments(
 }
 
 fn build_freeform_tool_payload(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
+    let display_name = tool_name.display();
     match input {
         Some(JsonValue::String(input)) => Ok(ToolPayload::Custom { input }),
-        _ => Err(format!("tool `{tool_name}` expects a string input")),
+        _ => Err(format!("tool `{display_name}` expects a string input")),
     }
 }
