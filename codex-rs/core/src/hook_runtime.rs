@@ -11,6 +11,7 @@ use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
+use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -154,6 +155,9 @@ pub(crate) async fn run_permission_request_hooks(
     turn_context: &Arc<TurnContext>,
     run_id_suffix: String,
     payload: PermissionRequestPayload,
+    approval_attempt: String,
+    retry_reason: Option<String>,
+    network_approval_context: Option<NetworkApprovalContext>,
 ) -> Option<PermissionRequestDecision> {
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,
@@ -168,6 +172,9 @@ pub(crate) async fn run_permission_request_hooks(
         sandbox_permissions: payload.sandbox_permissions,
         additional_permissions: payload.additional_permissions,
         justification: payload.justification,
+        approval_attempt,
+        retry_reason,
+        network_approval_context,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;

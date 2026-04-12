@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::HookCompletedEvent;
@@ -34,6 +35,9 @@ pub struct PermissionRequestRequest {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
+    pub approval_attempt: String,
+    pub retry_reason: Option<String>,
+    pub network_approval_context: Option<NetworkApprovalContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,9 +119,11 @@ pub(crate) async fn run(
     )
     .await;
 
-    let decision = results
-        .iter()
-        .find_map(|result| result.data.decision.clone());
+    let decision = resolve_permission_request_decision(
+        results
+            .iter()
+            .filter_map(|result| result.data.decision.as_ref()),
+    );
 
     PermissionRequestOutcome {
         hook_events: results
@@ -128,6 +134,30 @@ pub(crate) async fn run(
             .collect(),
         decision,
     }
+}
+
+fn resolve_permission_request_decision<'a>(
+    decisions: impl IntoIterator<Item = &'a PermissionRequestDecision>,
+) -> Option<PermissionRequestDecision> {
+    // Hooks are discovered in increasing precedence order, so later handlers are
+    // more specific than earlier ones. Permission requests should stay
+    // conservative across layers: any matching deny wins immediately, while
+    // allows only take effect if no handler denied the request. When multiple
+    // allows match, use the highest-precedence one (the latest allow we saw).
+    let mut resolved_allow = None;
+    for decision in decisions {
+        match decision {
+            PermissionRequestDecision::Allow => {
+                resolved_allow = Some(PermissionRequestDecision::Allow);
+            }
+            PermissionRequestDecision::Deny { message } => {
+                return Some(PermissionRequestDecision::Deny {
+                    message: message.clone(),
+                });
+            }
+        }
+    }
+    resolved_allow
 }
 
 fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestCommandInput {
@@ -147,6 +177,9 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
             justification: request.justification.clone(),
+            approval_attempt: request.approval_attempt.clone(),
+            retry_reason: request.retry_reason.clone(),
+            network_approval_context: request.network_approval_context.clone(),
         },
     }
 }
@@ -251,5 +284,50 @@ fn parse_completed(
     dispatcher::ParsedHandler {
         completed,
         data: PermissionRequestHandlerData { decision },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::PermissionRequestDecision;
+    use super::resolve_permission_request_decision;
+
+    #[test]
+    fn permission_request_deny_overrides_earlier_allow() {
+        let decisions = vec![
+            PermissionRequestDecision::Allow,
+            PermissionRequestDecision::Deny {
+                message: "repo deny".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            resolve_permission_request_decision(decisions.iter()),
+            Some(PermissionRequestDecision::Deny {
+                message: "repo deny".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_returns_allow_when_no_handler_denies() {
+        let decisions = vec![
+            PermissionRequestDecision::Allow,
+            PermissionRequestDecision::Allow,
+        ];
+
+        assert_eq!(
+            resolve_permission_request_decision(decisions.iter()),
+            Some(PermissionRequestDecision::Allow)
+        );
+    }
+
+    #[test]
+    fn permission_request_returns_none_when_no_handler_decides() {
+        let decisions = Vec::<PermissionRequestDecision>::new();
+
+        assert_eq!(resolve_permission_request_decision(decisions.iter()), None);
     }
 }

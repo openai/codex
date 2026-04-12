@@ -1165,6 +1165,9 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
             "sandbox_permissions": "use_default",
             "additional_permissions": null,
             "justification": null,
+            "approval_attempt": "initial",
+            "retry_reason": null,
+            "network_approval_context": null,
         })
     );
     assert!(
@@ -1175,6 +1178,92 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         hook_inputs[0]["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-retry-shell-command";
+    let marker = "permissionrequest_retry_marker.txt";
+    let command = format!("printf retry > {marker}");
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request hook allowed retry"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some("^Bash$"),
+                "allow",
+                "should not be used for allow",
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    let marker_path = test.workspace_path(marker);
+    let _ = fs::remove_file(&marker_path);
+
+    test.submit_turn_with_policies(
+        "retry the shell command after sandbox denial",
+        AskForApproval::OnFailure,
+        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    requests[1].function_call_output(call_id);
+    assert_eq!(
+        fs::read_to_string(&marker_path).context("read retry marker")?,
+        "retry"
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["approval_context"],
+        serde_json::json!({
+            "sandbox_permissions": "use_default",
+            "additional_permissions": null,
+            "justification": null,
+            "approval_attempt": "retry",
+            "retry_reason": "command failed; retry without sandbox?",
+            "network_approval_context": null,
+        })
     );
 
     Ok(())

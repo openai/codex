@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 
@@ -244,6 +245,10 @@ pub(crate) struct PermissionRequestApprovalContext {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
+    #[schemars(schema_with = "permission_request_approval_attempt_schema")]
+    pub approval_attempt: String,
+    pub retry_reason: Option<String>,
+    pub network_approval_context: Option<NetworkApprovalContext>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -564,6 +569,10 @@ fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Bash")
+}
+
+fn permission_request_approval_attempt_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["initial", "retry"])
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

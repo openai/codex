@@ -23,6 +23,30 @@
       },
       "type": "object"
     },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5_tcp",
+        "socks5_udp"
+      ],
+      "type": "string"
+    },
     "NetworkPermissions": {
       "properties": {
         "enabled": {
@@ -54,7 +78,20 @@
         "additional_permissions": {
           "$ref": "#/definitions/PermissionProfile"
         },
+        "approval_attempt": {
+          "enum": [
+            "initial",
+            "retry"
+          ],
+          "type": "string"
+        },
         "justification": {
+          "type": "string"
+        },
+        "network_approval_context": {
+          "$ref": "#/definitions/NetworkApprovalContext"
+        },
+        "retry_reason": {
           "type": "string"
         },
         "sandbox_permissions": {
@@ -62,6 +99,7 @@
         }
       },
       "required": [
+        "approval_attempt",
         "sandbox_permissions"
       ],
       "type": "object"

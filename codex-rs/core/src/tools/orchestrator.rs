@@ -415,15 +415,24 @@ impl ToolOrchestrator {
         T: ToolRuntime<Rq, Out>,
     {
         if let Some(permission_request) = tool.permission_request_payload(req) {
-            let run_id_suffix = match approval_attempt {
-                ApprovalAttempt::Initial => format!("{}:initial", approval_ctx.call_id),
-                ApprovalAttempt::Retry => format!("{}:retry", approval_ctx.call_id),
+            let (approval_attempt_label, run_id_suffix) = match approval_attempt {
+                ApprovalAttempt::Initial => (
+                    "initial".to_string(),
+                    format!("{}:initial", approval_ctx.call_id),
+                ),
+                ApprovalAttempt::Retry => (
+                    "retry".to_string(),
+                    format!("{}:retry", approval_ctx.call_id),
+                ),
             };
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
                 run_id_suffix,
                 permission_request,
+                approval_attempt_label,
+                approval_ctx.retry_reason.clone(),
+                approval_ctx.network_approval_context.clone(),
             )
             .await
             {
