@@ -1077,7 +1077,7 @@ the client can offer session-scoped and/or persistent approval choices.
 
 ### Permission requests
 
-Clients must opt into each conversational permission request method by listing it in `initialize.params.capabilities.supportedServerRequests`. The opt-in is per connection and per method. Existing clients that do not advertise support keep their current behavior: app-server does not emit an unsupported approval request, no permissions are changed, and the model receives a denial-style result.
+Clients must opt into each conversational permission request method by listing it in `initialize.params.capabilities.supportedServerRequests`. The opt-in is per connection and per method. App-server uses this capability before starting a thread so unsupported clients do not expose the model-facing tools that trigger these request methods. Existing clients that do not advertise support keep their current behavior: app-server does not ask the model to use an unsupported approval UI, no permissions are changed, and delivery-time denials are only a fallback if a request is still produced.
 
 The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access.
 
@@ -1121,7 +1121,7 @@ Within the same turn, granted permissions are sticky: later shell-like tool call
 
 If the session approval policy uses `Granular` with `request_permissions: false`, standalone `request_permissions` tool calls are auto-denied and no `item/permissions/requestApproval` prompt is sent. Inline `with_additional_permissions` command requests remain controlled by `sandbox_approval`, and any previously granted permissions remain sticky for later shell-like calls in the same turn.
 
-The built-in `request_permission_preset` tool sends an `item/permissionPreset/requestApproval` JSON-RPC request when a model asks the client to open the permission preset picker. The request includes the resolved preset id, label, description, approval policy, approvals reviewer, sandbox policy, and optional reason so clients can show their native picker with the requested option already selected. Clients respond with `{ "decision": "accepted", "preset": "full-access" }` or `{ "decision": "declined", "preset": "full-access" }`. When the client omits `item/permissionPreset/requestApproval` from `supportedServerRequests`, app-server declines the preset request and leaves the active permissions unchanged.
+The built-in `request_permission_preset` tool sends an `item/permissionPreset/requestApproval` JSON-RPC request when a model asks the client to open the permission preset picker. The request includes the resolved preset id, label, description, approval policy, approvals reviewer, sandbox policy, and optional reason so clients can show their native picker with the requested option already selected. Clients respond with `{ "decision": "accepted", "preset": "full-access" }` or `{ "decision": "declined", "preset": "full-access" }`. When the client omits `item/permissionPreset/requestApproval` from `supportedServerRequests`, app-server hides the preset tool for new threads; if a request is still produced, app-server declines it and leaves the active permissions unchanged.
 
 ### Dynamic tool calls (experimental)
 

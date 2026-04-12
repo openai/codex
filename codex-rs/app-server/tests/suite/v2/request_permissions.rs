@@ -19,10 +19,58 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use serde_json::Value;
 use serde_json::json;
 use tokio::time::timeout;
+use wiremock::MockServer;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_tools_are_hidden_without_supported_server_requests() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(Vec::new()).await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ false, /*expect_preset*/ false,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_tools_expose_only_narrow_permission_capability() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(vec![
+        SupportedServerRequestMethod::PermissionsRequestApproval,
+    ])
+    .await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ true, /*expect_preset*/ false,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_tools_expose_only_preset_capability() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(vec![
+        SupportedServerRequestMethod::PermissionPresetRequestApproval,
+    ])
+    .await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ false, /*expect_preset*/ true,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_tools_expose_both_supported_capabilities() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(vec![
+        SupportedServerRequestMethod::PermissionsRequestApproval,
+        SupportedServerRequestMethod::PermissionPresetRequestApproval,
+    ])
+    .await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ true, /*expect_preset*/ true,
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_permissions_round_trips_when_client_supports_app_request() -> Result<()> {
@@ -289,6 +337,68 @@ async fn initialize_with_supported_server_requests(
         bail!("expected initialize response, got {initialized:?}");
     };
     Ok(())
+}
+
+async fn first_responses_request_body_for_supported_server_requests(
+    supported_server_requests: Vec<SupportedServerRequestMethod>,
+) -> Result<Value> {
+    let codex_home = tempfile::TempDir::new()?;
+    let responses = vec![create_final_assistant_message_sse_response("done")?];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    if supported_server_requests.is_empty() {
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    } else {
+        initialize_with_supported_server_requests(&mut mcp, supported_server_requests).await?;
+    }
+
+    start_thread_and_turn(&mut mcp, "Hello").await?;
+    wait_for_turn_completed_without_server_request(&mut mcp).await?;
+
+    first_responses_request_body(&server).await
+}
+
+async fn first_responses_request_body(server: &MockServer) -> Result<Value> {
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::format_err!("failed to fetch received requests"))?;
+    requests
+        .into_iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .ok_or_else(|| anyhow::format_err!("expected a /responses request"))?
+        .body_json()
+        .map_err(Into::into)
+}
+
+fn assert_permission_tool_exposure(body: &Value, expect_permissions: bool, expect_preset: bool) {
+    let tool_names = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_names.contains(&"request_permissions"),
+        expect_permissions
+    );
+    assert_eq!(
+        tool_names.contains(&"request_permission_preset"),
+        expect_preset
+    );
+
+    let body_text = body.to_string();
+    assert_eq!(
+        body_text.contains("# request_permissions Tool"),
+        expect_permissions
+    );
+    assert_eq!(
+        body_text.contains("# request_permission_preset Tool"),
+        expect_preset
+    );
 }
 
 async fn start_thread_and_turn(mcp: &mut McpProcess, input: &str) -> Result<String> {

@@ -202,6 +202,18 @@ impl ThreadStateManager {
             .insert(connection_id, supported_server_requests);
     }
 
+    pub(crate) async fn supported_server_requests_for_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) -> HashSet<SupportedServerRequestMethod> {
+        let state = self.state.lock().await;
+        state
+            .supported_server_requests_by_connection
+            .get(&connection_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
         let state = self.state.lock().await;
         let mut connection_ids = state
