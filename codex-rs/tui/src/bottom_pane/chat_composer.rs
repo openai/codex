@@ -136,6 +136,8 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -3242,6 +3244,65 @@ impl ChatComposer {
         Some(line)
     }
 
+    fn history_search_highlight_ranges(&self) -> Vec<Range<usize>> {
+        let Some(search) = self.history_search.as_ref() else {
+            return Vec::new();
+        };
+        if !matches!(search.status, HistorySearchStatus::Match) || search.query.is_empty() {
+            return Vec::new();
+        }
+        Self::case_insensitive_match_ranges(self.textarea.text(), &search.query)
+    }
+
+    fn case_insensitive_match_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+
+        let query_lower = query
+            .chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>();
+        if query_lower.is_empty() {
+            return Vec::new();
+        }
+
+        let mut folded = String::new();
+        let mut folded_spans: Vec<(Range<usize>, Range<usize>)> = Vec::new();
+        for (original_start, ch) in text.char_indices() {
+            let original_range = original_start..original_start + ch.len_utf8();
+            for lower in ch.to_lowercase() {
+                let folded_start = folded.len();
+                folded.push(lower);
+                folded_spans.push((folded_start..folded.len(), original_range.clone()));
+            }
+        }
+
+        let mut ranges = Vec::new();
+        let mut search_from = 0;
+        while search_from <= folded.len()
+            && let Some(relative_start) = folded[search_from..].find(&query_lower)
+        {
+            let folded_start = search_from + relative_start;
+            let folded_end = folded_start + query_lower.len();
+            if let Some((_, first_original)) = folded_spans.iter().find(|(folded_range, _)| {
+                folded_range.end > folded_start && folded_range.start < folded_end
+            }) {
+                let original_end = folded_spans
+                    .iter()
+                    .rev()
+                    .find(|(folded_range, _)| {
+                        folded_range.end > folded_start && folded_range.start < folded_end
+                    })
+                    .map(|(_, original_range)| original_range.end)
+                    .unwrap_or(first_original.end);
+                ranges.push(first_original.start..original_end);
+            }
+            search_from = folded_end;
+        }
+        ranges
+    }
+
     fn history_search_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let search = self.history_search.as_ref()?;
         let [_, _, _, popup_rect] = self.layout_areas(area);
@@ -4245,10 +4306,44 @@ impl ChatComposer {
         } else if is_zellij && textarea_is_empty {
             buf.set_style(textarea_rect, textarea_style);
         } else if is_zellij {
-            self.textarea
-                .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
+            let highlight_ranges = self.history_search_highlight_ranges();
+            if highlight_ranges.is_empty() {
+                self.textarea
+                    .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
+            } else {
+                let highlight_style =
+                    textarea_style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
+                let highlights = highlight_ranges
+                    .into_iter()
+                    .map(|range| (range, highlight_style))
+                    .collect::<Vec<_>>();
+                self.textarea.render_ref_styled_with_highlights(
+                    textarea_rect,
+                    buf,
+                    &mut state,
+                    textarea_style,
+                    &highlights,
+                );
+            }
         } else {
-            StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+            let highlight_ranges = self.history_search_highlight_ranges();
+            if highlight_ranges.is_empty() {
+                StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+            } else {
+                let highlight_style =
+                    Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+                let highlights = highlight_ranges
+                    .into_iter()
+                    .map(|range| (range, highlight_style))
+                    .collect::<Vec<_>>();
+                self.textarea.render_ref_styled_with_highlights(
+                    textarea_rect,
+                    buf,
+                    &mut state,
+                    Style::default(),
+                    &highlights,
+                );
+            }
         }
         if textarea_is_empty {
             let text = if self.input_enabled {
@@ -7595,6 +7690,19 @@ mod tests {
     }
 
     #[test]
+    fn history_search_match_ranges_are_case_insensitive() {
+        assert_eq!(
+            ChatComposer::case_insensitive_match_ranges("git status git", "GIT"),
+            vec![0..3, 11..14]
+        );
+        assert_eq!(
+            ChatComposer::case_insensitive_match_ranges("aİ i", "i"),
+            vec![1..3, 4..5]
+        );
+        assert!(ChatComposer::case_insensitive_match_ranges("git", "").is_empty());
+    }
+
+    #[test]
     fn history_search_accepts_matching_entry() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -7627,6 +7735,62 @@ mod tests {
         assert!(!composer.history_search_active());
         assert_eq!(composer.textarea.text(), "git status");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn history_search_highlights_matches_until_accepted() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("cargo test".to_string()));
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("git status".to_string()));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        for ch in ['g', 'i', 't'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        let area = Rect::new(0, 0, 60, 8);
+        let [_, _, textarea_rect, _] = composer.layout_areas(area);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+        let x = textarea_rect.x;
+        let y = textarea_rect.y;
+        assert_eq!(buf[(x, y)].symbol(), "g");
+        for offset in 0..3 {
+            let modifier = buf[(x + offset, y)].style().add_modifier;
+            assert!(modifier.contains(Modifier::REVERSED));
+            assert!(modifier.contains(Modifier::BOLD));
+        }
+        assert!(
+            !buf[(x + 3, y)]
+                .style()
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let [_, _, accepted_textarea_rect, _] = composer.layout_areas(area);
+        let mut accepted_buf = Buffer::empty(area);
+        composer.render(area, &mut accepted_buf);
+        for offset in 0..3 {
+            let modifier = accepted_buf
+                [(accepted_textarea_rect.x + offset, accepted_textarea_rect.y)]
+                .style()
+                .add_modifier;
+            assert!(!modifier.contains(Modifier::REVERSED));
+            assert!(!modifier.contains(Modifier::BOLD));
+        }
     }
 
     #[test]
