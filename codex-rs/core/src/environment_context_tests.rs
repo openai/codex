@@ -21,6 +21,7 @@ fn serialize_workspace_write_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
 
@@ -49,6 +50,7 @@ fn serialize_environment_context_with_network() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         Some(network),
+        Vec::new(),
         /*subagents*/ None,
     );
 
@@ -78,6 +80,7 @@ fn serialize_read_only_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
 
@@ -98,6 +101,7 @@ fn serialize_external_sandbox_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
 
@@ -118,6 +122,7 @@ fn serialize_external_sandbox_with_restricted_network_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
 
@@ -138,6 +143,7 @@ fn serialize_full_access_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
 
@@ -158,6 +164,7 @@ fn equals_except_shell_compares_cwd() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
@@ -166,6 +173,7 @@ fn equals_except_shell_compares_cwd() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
     assert!(context1.equals_except_shell(&context2));
@@ -179,6 +187,7 @@ fn equals_except_shell_ignores_sandbox_policy() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
@@ -187,6 +196,7 @@ fn equals_except_shell_ignores_sandbox_policy() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
 
@@ -201,6 +211,7 @@ fn equals_except_shell_compares_cwd_differences() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
@@ -209,6 +220,31 @@ fn equals_except_shell_compares_cwd_differences() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
+        /*subagents*/ None,
+    );
+
+    assert!(!context1.equals_except_shell(&context2));
+}
+
+#[test]
+fn equals_except_shell_compares_deny_read_patterns() {
+    let context1 = EnvironmentContext::new(
+        Some(PathBuf::from("/repo")),
+        fake_shell(),
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
+        vec!["/repo/.gitconfig".to_string()],
+        /*subagents*/ None,
+    );
+    let context2 = EnvironmentContext::new(
+        Some(PathBuf::from("/repo")),
+        fake_shell(),
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
+        vec!["/repo/.ssh".to_string()],
         /*subagents*/ None,
     );
 
@@ -227,6 +263,7 @@ fn equals_except_shell_ignores_shell() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
@@ -239,10 +276,41 @@ fn equals_except_shell_ignores_shell() {
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
+        Vec::new(),
         /*subagents*/ None,
     );
 
     assert!(context1.equals_except_shell(&context2));
+}
+
+#[test]
+fn serialize_environment_context_with_deny_read_patterns() {
+    let denied = vec!["/repo/.gitconfig".to_string(), "/repo/.ssh".to_string()];
+    let context = EnvironmentContext::new(
+        Some(test_path_buf("/repo")),
+        fake_shell(),
+        /*current_date*/ Some("2026-02-26".to_string()),
+        /*timezone*/ Some("America/Los_Angeles".to_string()),
+        /*network*/ None,
+        denied,
+        /*subagents*/ None,
+    );
+
+    let expected = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <deny_read_patterns>
+    <pattern>/repo/.gitconfig</pattern>
+    <pattern>/repo/.ssh</pattern>
+  </deny_read_patterns>
+</environment_context>"#,
+        test_path_buf("/repo").display()
+    );
+
+    assert_eq!(context.serialize_to_xml(), expected);
 }
 
 #[test]
@@ -253,6 +321,7 @@ fn serialize_environment_context_with_subagents() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
+        Vec::new(),
         Some("- agent-1: atlas\n- agent-2".to_string()),
     );
 

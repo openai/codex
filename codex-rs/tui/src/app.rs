@@ -8804,6 +8804,7 @@ guardian_approval = true
             approval_policy: primary_session.approval_policy,
             sandbox_policy: primary_session.sandbox_policy.clone(),
             network: None,
+            deny_read_patterns: Vec::new(),
             model: "gpt-agent".to_string(),
             personality: None,
             collaboration_mode: None,
