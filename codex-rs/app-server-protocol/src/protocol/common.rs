@@ -317,6 +317,16 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    #[experimental("thread/share")]
+    ThreadShare => "thread/share" {
+        params: v2::ThreadShareParams,
+        response: v2::ThreadShareResponse,
+    },
+    #[experimental("share/revoke")]
+    ShareRevoke => "share/revoke" {
+        params: v2::ShareRevokeParams,
+        response: v2::ShareRevokeResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,

@@ -58,6 +58,7 @@ use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ShareRevokeParams;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -74,6 +75,7 @@ use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadShareParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
@@ -449,6 +451,24 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/read", params).await
+    }
+
+    /// Send a `thread/share` JSON-RPC request.
+    pub async fn send_thread_share_request(
+        &mut self,
+        params: ThreadShareParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/share", params).await
+    }
+
+    /// Send a `share/revoke` JSON-RPC request.
+    pub async fn send_share_revoke_request(
+        &mut self,
+        params: ShareRevokeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("share/revoke", params).await
     }
 
     /// Send a `model/list` JSON-RPC request.

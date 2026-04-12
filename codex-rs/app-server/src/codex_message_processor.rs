@@ -18,6 +18,7 @@ use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
+use anyhow::Context;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -112,6 +113,8 @@ use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::ShareRevokeParams;
+use codex_app_server_protocol::ShareRevokeResponse;
 use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
@@ -159,6 +162,7 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadShareParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadSortKey;
@@ -189,6 +193,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::CreateThreadShareRequest;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_config::types::McpServerTransportConfig;
@@ -197,7 +202,6 @@ use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
-use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
@@ -293,6 +297,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
@@ -787,6 +792,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadShare { request_id, params } => {
+                self.thread_share(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ShareRevoke { request_id, params } => {
+                self.share_revoke(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
@@ -3712,6 +3725,212 @@ impl CodexMessageProcessor {
         );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_share(&self, request_id: ConnectionRequestId, params: ThreadShareParams) {
+        let thread_uuid = match ThreadId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let thread_id = thread_uuid.to_string();
+        let rollout_path = match find_thread_path_by_id_str(&self.config.codex_home, &thread_id)
+            .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                match find_archived_thread_path_by_id_str(&self.config.codex_home, &thread_id).await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        self.outgoing
+                            .send_error(
+                                request_id,
+                                JSONRPCErrorError {
+                                    code: INVALID_REQUEST_ERROR_CODE,
+                                    message: format!(
+                                        "thread {thread_uuid} is not materialized yet; thread/share is only available for persisted conversations"
+                                    ),
+                                    data: Some(serde_json::json!({
+                                        "reason": "thread_not_persisted"
+                                    })),
+                                },
+                            )
+                            .await;
+                        return;
+                    }
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to locate archived thread {thread_uuid}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to locate thread {thread_uuid}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let mut thread = match load_thread_summary_for_rollout(
+            &self.config,
+            thread_uuid,
+            rollout_path.as_path(),
+            self.config.model_provider_id.as_str(),
+            /*persisted_metadata*/ None,
+        )
+        .await
+        {
+            Ok(thread) => thread,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to snapshot thread {thread_uuid} for sharing: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        if let Err(message) = populate_thread_turns(
+            &mut thread,
+            ThreadTurnSource::RolloutPath(rollout_path.as_path()),
+            /*active_turn*/ None,
+        )
+        .await
+        {
+            self.send_internal_error(request_id, message).await;
+            return;
+        }
+
+        let auth = match self.auth_manager.auth().await {
+            Some(auth) if auth.is_chatgpt_auth() => auth,
+            Some(_) | None => {
+                self.send_invalid_request_error(
+                    request_id,
+                    "chatgpt authentication required to create share link".to_string(),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let title = thread
+            .name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| {
+                if thread.preview.trim().is_empty() {
+                    format!("Codex thread {}", thread.id)
+                } else {
+                    thread.preview.clone()
+                }
+            });
+        let markdown = match serde_json::to_string_pretty(&thread)
+            .map(|snapshot| format!("# {title}\n\n```json\n{snapshot}\n```\n"))
+            .context("serialize thread snapshot")
+        {
+            Ok(markdown) => markdown,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to render thread {thread_uuid} for sharing: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let client = match BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth) {
+            Ok(client) => client,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to construct backend client: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let request = CreateThreadShareRequest { title, markdown };
+        match client.create_thread_share(&request).await {
+            Ok(response) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ThreadShareResponse {
+                            share_id: response.share_id,
+                            share_url: response.share_url,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to create backend share link for thread {thread_uuid}: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn share_revoke(&self, request_id: ConnectionRequestId, params: ShareRevokeParams) {
+        let share_id = params.share_id.trim();
+        let has_path_chars = share_id.chars().any(|ch| matches!(ch, '/' | '?' | '#'));
+        if share_id.is_empty() || has_path_chars {
+            self.send_invalid_request_error(request_id, "shareId is invalid".to_string())
+                .await;
+            return;
+        }
+
+        let auth = match self.auth_manager.auth().await {
+            Some(auth) if auth.is_chatgpt_auth() => auth,
+            Some(_) | None => {
+                self.send_invalid_request_error(
+                    request_id,
+                    "chatgpt authentication required to revoke share link".to_string(),
+                )
+                .await;
+                return;
+            }
+        };
+        let client = match BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth) {
+            Ok(client) => client,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to construct backend client: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        match client.revoke_thread_share(share_id).await {
+            Ok(response) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ShareRevokeResponse {
+                            revoked: response.revoked,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to revoke share link: {err}"))
+                    .await;
+            }
+        }
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -9253,11 +9472,14 @@ mod tests {
     use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
+    use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_core::SessionMeta;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;

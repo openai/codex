@@ -1,7 +1,10 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigFileResponse;
+use crate::types::CreateThreadShareRequest;
+use crate::types::CreateThreadShareResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
+use crate::types::RevokeThreadShareResponse;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_client::build_reqwest_client_with_custom_ca;
@@ -355,6 +358,34 @@ impl Client {
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
+    }
+
+    pub async fn create_thread_share(
+        &self,
+        request: &CreateThreadShareRequest,
+    ) -> Result<CreateThreadShareResponse> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/thread-shares", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/thread-shares", self.base_url),
+        };
+        let req = self
+            .http
+            .post(&url)
+            .headers(self.headers())
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(request);
+        let (body, ct) = self.exec_request(req, "POST", &url).await?;
+        self.decode_json::<CreateThreadShareResponse>(&url, &ct, &body)
+    }
+
+    pub async fn revoke_thread_share(&self, share_id: &str) -> Result<RevokeThreadShareResponse> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/thread-shares/{share_id}", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/thread-shares/{share_id}", self.base_url),
+        };
+        let req = self.http.delete(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "DELETE", &url).await?;
+        self.decode_json::<RevokeThreadShareResponse>(&url, &ct, &body)
     }
 
     /// Create a new task (user turn) by POSTing to the appropriate backend path
