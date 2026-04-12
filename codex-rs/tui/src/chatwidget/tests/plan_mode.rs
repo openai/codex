@@ -72,7 +72,9 @@ fn plan_implementation_clear_context_requires_default_mode_and_plan() {
         Err(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE)
     );
     assert_eq!(
-        plan_implementation_clear_context_plan(/*default_mask_available*/ true, None),
+        plan_implementation_clear_context_plan(
+            /*default_mask_available*/ true, /*plan_markdown*/ None
+        ),
         Err(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
     );
     assert_eq!(
