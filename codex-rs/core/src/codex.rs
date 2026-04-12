@@ -2322,7 +2322,7 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        handlers::user_input_or_turn(
+        handlers::user_input_or_turn_inner(
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
@@ -2333,6 +2333,7 @@ impl Session {
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
             },
+            /*mirror_user_text_to_realtime*/ None,
         )
         .await;
     }
@@ -5016,6 +5017,7 @@ mod handlers {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::items::UserMessageItem;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
@@ -5023,6 +5025,7 @@ mod handlers {
     use serde_json::Value;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use tracing::debug;
     use tracing::info;
     use tracing::warn;
 
@@ -5064,6 +5067,21 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
+        user_input_or_turn_inner(
+            sess,
+            sub_id,
+            op,
+            /*mirror_user_text_to_realtime*/ Some(()),
+        )
+        .await;
+    }
+
+    pub(super) async fn user_input_or_turn_inner(
+        sess: &Arc<Session>,
+        sub_id: String,
+        op: Op,
+        mirror_user_text_to_realtime: Option<()>,
+    ) {
         let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
@@ -5129,7 +5147,7 @@ mod handlers {
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
-        match sess
+        let accepted_items = match sess
             .steer_input(
                 items.clone(),
                 /*expected_turn_id*/ None,
@@ -5137,7 +5155,10 @@ mod handlers {
             )
             .await
         {
-            Ok(_) => current_context.session_telemetry.user_prompt(&items),
+            Ok(_) => {
+                current_context.session_telemetry.user_prompt(&items);
+                Some(items)
+            }
             Err(SteerInputError::NoActiveTurn(items)) => {
                 if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                     current_context
@@ -5147,12 +5168,14 @@ mod handlers {
                 current_context.session_telemetry.user_prompt(&items);
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
+                let accepted_items = items.clone();
                 sess.spawn_task(
                     Arc::clone(&current_context),
                     items,
                     crate::tasks::RegularTask::new(),
                 )
                 .await;
+                Some(accepted_items)
             }
             Err(err) => {
                 sess.send_event_raw(Event {
@@ -5160,7 +5183,24 @@ mod handlers {
                     msg: EventMsg::Error(err.to_error_event()),
                 })
                 .await;
+                None
             }
+        };
+        if let (Some(items), Some(())) = (accepted_items, mirror_user_text_to_realtime) {
+            self::mirror_user_text_to_realtime(sess, &items).await;
+        }
+    }
+
+    async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
+        let text = UserMessageItem::new(items).message();
+        if text.is_empty() {
+            return;
+        }
+        if sess.conversation.running_state().await.is_none() {
+            return;
+        }
+        if let Err(err) = sess.conversation.text_in(text).await {
+            debug!("failed to mirror user text to realtime conversation: {err}");
         }
     }
 
