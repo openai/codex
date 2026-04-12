@@ -403,10 +403,6 @@ impl RealtimeConversationManager {
     }
 
     pub(crate) async fn text_in(&self, text: String) -> CodexResult<()> {
-        self.queue_text_input(text).await
-    }
-
-    async fn queue_text_input(&self, text: String) -> CodexResult<()> {
         let sender = {
             let guard = self.state.lock().await;
             guard.as_ref().map(|state| state.user_text_tx.clone())
@@ -908,7 +904,7 @@ pub(crate) async fn handle_text(
     sub_id: String,
     params: ConversationTextParams,
 ) {
-    debug!(text = %params.text, "[realtime-text] sending realtime conversation text input");
+    debug!(text = %params.text, "[realtime-text] appending realtime conversation text input");
     if let Err(err) = sess.conversation.text_in(params.text).await {
         error!("failed to append realtime text: {err}");
         if sess.conversation.running_state().await.is_some() {
@@ -943,9 +939,9 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
 
         loop {
             let result = tokio::select! {
-                // Text that should be sent into realtime.
+                // Text typed by the user that should be sent into realtime.
                 user_text = user_text_rx.recv() => {
-                    handle_realtime_text_input(
+                    handle_user_text_input(
                         user_text,
                         &writer,
                         &events_tx,
@@ -990,12 +986,12 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
     })
 }
 
-async fn handle_realtime_text_input(
-    input: Result<String, RecvError>,
+async fn handle_user_text_input(
+    text: Result<String, RecvError>,
     writer: &RealtimeWebsocketWriter,
     events_tx: &Sender<RealtimeEvent>,
 ) -> anyhow::Result<()> {
-    let text = input.context("text input channel closed")?;
+    let text = text.context("user text input channel closed")?;
 
     if let Err(err) = writer.send_conversation_item_create(text).await {
         let mapped_error = map_api_error(err);

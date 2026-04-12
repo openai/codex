@@ -2265,7 +2265,7 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        handlers::user_input_or_turn_without_realtime_text_mirror(
+        let _ = handlers::user_input_or_turn_without_realtime_text_mirror(
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
@@ -4960,21 +4960,14 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let accepted_items = user_input_or_turn_inner(sess, sub_id, op).await;
+        let accepted_items =
+            user_input_or_turn_without_realtime_text_mirror(sess, sub_id, op).await;
         if let Some(items) = accepted_items {
             mirror_user_text_to_realtime(sess, &items).await;
         }
     }
 
     pub(super) async fn user_input_or_turn_without_realtime_text_mirror(
-        sess: &Arc<Session>,
-        sub_id: String,
-        op: Op,
-    ) {
-        let _ = user_input_or_turn_inner(sess, sub_id, op).await;
-    }
-
-    async fn user_input_or_turn_inner(
         sess: &Arc<Session>,
         sub_id: String,
         op: Op,
