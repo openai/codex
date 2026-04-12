@@ -5696,46 +5696,32 @@ impl CodexMessageProcessor {
         }
 
         // Move the rollout file to archived.
-        let result: Result<(), JSONRPCErrorError> = async move {
+        let result: std::io::Result<()> = async move {
             let archive_folder = self
                 .config
                 .codex_home
                 .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
-            tokio::fs::create_dir_all(&archive_folder)
-                .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to archive thread: {err}"),
-                    data: None,
-                })?;
+            tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
-            tokio::fs::rename(&canonical_rollout_path, &archived_path)
-                .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to archive thread: {err}"),
-                    data: None,
-                })?;
+            tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
             if let Some(ctx) = state_db_ctx {
                 let _ = ctx
                     .mark_archived(thread_id, archived_path.as_path(), Utc::now())
                     .await;
                 let thread_id_str = thread_id.to_string();
-                ctx.delete_thread_delivery_state(&thread_id_str)
-                    .await
-                    .map_err(|err| JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!(
-                            "failed to archive thread: failed to delete delivery state for archived thread {thread_id}: {err}"
-                        ),
-                        data: None,
-                    })?;
+                if let Err(err) = ctx.delete_thread_delivery_state(&thread_id_str).await {
+                    warn!("failed to delete delivery state for archived thread {thread_id}: {err}");
+                }
             }
             Ok(())
         }
         .await;
 
-        result
+        result.map_err(|err| JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to archive thread: {err}"),
+            data: None,
+        })
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
