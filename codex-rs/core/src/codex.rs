@@ -3329,6 +3329,7 @@ impl Session {
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
             permissions: args.permissions,
+            suggested_scope: args.scope,
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()

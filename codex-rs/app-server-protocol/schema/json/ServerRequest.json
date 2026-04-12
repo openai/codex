@@ -1409,6 +1409,13 @@
         }
       ]
     },
+    "PermissionGrantScope": {
+      "enum": [
+        "turn",
+        "session"
+      ],
+      "type": "string"
+    },
     "PermissionPresetId": {
       "enum": [
         "auto",
@@ -1480,6 +1487,14 @@
             "string",
             "null"
           ]
+        },
+        "suggestedScope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionGrantScope"
+            }
+          ],
+          "default": "turn"
         },
         "threadId": {
           "type": "string"

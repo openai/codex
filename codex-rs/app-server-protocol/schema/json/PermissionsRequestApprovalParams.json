@@ -39,6 +39,13 @@
       },
       "type": "object"
     },
+    "PermissionGrantScope": {
+      "enum": [
+        "turn",
+        "session"
+      ],
+      "type": "string"
+    },
     "RequestPermissionProfile": {
       "additionalProperties": false,
       "properties": {
@@ -78,6 +85,14 @@
         "string",
         "null"
       ]
+    },
+    "suggestedScope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionGrantScope"
+        }
+      ],
+      "default": "turn"
     },
     "threadId": {
       "type": "string"

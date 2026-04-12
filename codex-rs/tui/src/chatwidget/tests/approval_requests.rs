@@ -230,6 +230,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
                 write: Some(vec![write_path.clone()]),
             }),
         },
+        suggested_scope: codex_app_server_protocol::PermissionGrantScope::Turn,
     });
 
     assert_eq!(

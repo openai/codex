@@ -308,6 +308,16 @@ fn request_permissions_tool_includes_full_permission_schema() {
             )),
         ),
         ("permissions".to_string(), permission_profile_schema()),
+        (
+            "scope".to_string(),
+            JsonSchema::string_enum(
+                vec![serde_json::json!("turn"), serde_json::json!("session")],
+                Some(
+                    "How long the granted permissions should apply. Use \"session\" when the user explicitly asks for access in this session; defaults to \"turn\"."
+                        .to_string(),
+                ),
+            ),
+        ),
     ]);
 
     assert_eq!(

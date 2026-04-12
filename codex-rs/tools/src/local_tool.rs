@@ -275,6 +275,16 @@ pub fn create_request_permissions_tool(description: String) -> ToolSpec {
             )),
         ),
         ("permissions".to_string(), permission_profile_schema()),
+        (
+            "scope".to_string(),
+            JsonSchema::string_enum(
+                vec![json!("turn"), json!("session")],
+                Some(
+                    "How long the granted permissions should apply. Use \"session\" when the user explicitly asks for access in this session; defaults to \"turn\"."
+                        .to_string(),
+                ),
+            ),
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -292,7 +302,7 @@ pub fn create_request_permissions_tool(description: String) -> ToolSpec {
 }
 
 pub fn request_permissions_tool_description() -> String {
-    "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope."
+    "Open a permissions request for specific filesystem or network access, such as writing to a named path like ~/Downloads. Use this immediately when the user conversationally asks to allow access to a specific path or network permission. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session when scope is \"session\" and the client approves them at session scope."
         .to_string()
 }
 

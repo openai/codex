@@ -107,12 +107,9 @@ fn request_permissions_is_under_development() {
 }
 
 #[test]
-fn request_permissions_tool_is_under_development() {
-    assert_eq!(
-        Feature::RequestPermissionsTool.stage(),
-        Stage::UnderDevelopment
-    );
-    assert_eq!(Feature::RequestPermissionsTool.default_enabled(), false);
+fn request_permissions_tool_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::RequestPermissionsTool.stage(), Stage::Stable);
+    assert_eq!(Feature::RequestPermissionsTool.default_enabled(), true);
 }
 
 #[test]

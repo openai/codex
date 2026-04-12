@@ -1842,6 +1842,7 @@ impl App {
                     call_id: params.item_id.clone(),
                     reason: params.reason.clone(),
                     permissions: params.permissions.clone().into(),
+                    suggested_scope: params.suggested_scope.to_core(),
                 }),
             ),
             ServerRequest::PermissionPresetRequestApproval { params, .. } => Some(
@@ -8711,11 +8712,13 @@ guardian_approval = true
                         write: Some(vec![test_absolute_path("/tmp/write")]),
                     }),
                 },
+                suggested_scope: codex_app_server_protocol::PermissionGrantScope::Turn,
             },
         };
 
         let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
             permissions,
+            suggested_scope,
             ..
         })) = app
             .interactive_request_for_thread_request(thread_id, &request)
@@ -8735,6 +8738,10 @@ guardian_approval = true
                     write: Some(vec![test_absolute_path("/tmp/write")]),
                 }),
             }
+        );
+        assert_eq!(
+            suggested_scope,
+            codex_protocol::request_permissions::PermissionGrantScope::Turn
         );
     }
 

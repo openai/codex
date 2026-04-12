@@ -869,6 +869,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: request.call_id.clone(),
                     reason: request.reason,
                     permissions: request.permissions.into(),
+                    suggested_scope: request.suggested_scope.into(),
                 };
                 let (pending_request_id, rx) = outgoing
                     .send_request(ServerRequestPayload::PermissionsRequestApproval(params))

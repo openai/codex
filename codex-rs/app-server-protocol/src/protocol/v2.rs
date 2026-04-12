@@ -6221,6 +6221,8 @@ pub struct PermissionsRequestApprovalParams {
     pub item_id: String,
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default)]
+    pub suggested_scope: PermissionGrantScope,
 }
 
 v2_enum_from_core!(
@@ -6650,6 +6652,7 @@ mod tests {
                 }),
             }
         );
+        assert_eq!(params.suggested_scope, PermissionGrantScope::Turn);
 
         assert_eq!(
             CoreRequestPermissionProfile::from(params.permissions),
@@ -6669,6 +6672,24 @@ mod tests {
                 }),
             }
         );
+    }
+
+    #[test]
+    fn permissions_request_approval_preserves_suggested_scope() {
+        let params = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "reason": "Select a workspace root",
+            "permissions": {
+                "network": null,
+                "fileSystem": null,
+            },
+            "suggestedScope": "session",
+        }))
+        .expect("permissions request should deserialize");
+
+        assert_eq!(params.suggested_scope, PermissionGrantScope::Session);
     }
 
     #[test]

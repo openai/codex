@@ -3359,6 +3359,14 @@
             "null"
           ]
         },
+        "suggestedScope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionGrantScope"
+            }
+          ],
+          "default": "turn"
+        },
         "threadId": {
           "type": "string"
         },

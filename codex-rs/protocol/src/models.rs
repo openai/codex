@@ -509,6 +509,7 @@ impl DeveloperInstructions {
         DeveloperInstructions::new(message)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
@@ -635,11 +636,11 @@ fn granular_prompt_intro_text() -> &'static str {
 }
 
 fn request_permissions_tool_prompt_section() -> &'static str {
-    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."
+    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it immediately when the user asks conversationally to allow specific filesystem or network access, for example \"allow writing to ~/Downloads in this session\" or \"grant access to /tmp/output\". Request only the specific permissions required. Set `scope` to `session` when the user explicitly asks for session-long access; otherwise use `turn`."
 }
 
 fn request_permission_preset_tool_prompt_section() -> &'static str {
-    "# request_permission_preset Tool\n\nThe built-in `request_permission_preset` tool is available in this session. Invoke it immediately when the user asks conversationally to change sandboxing, approval, or permission mode, for example \"make this session full access\", \"switch to full access\", \"make the session read-only\", or \"use guardian approvals\". The tool opens the permission-mode picker with the requested preset pre-selected; the session only changes if the user selects a mode there. Do not claim the mode changed until the tool returns an accepted decision. Use `request_permissions` instead for narrow filesystem or network grants required by later shell-like commands."
+    "# request_permission_preset Tool\n\nThe built-in `request_permission_preset` tool is available in this session. Invoke it immediately when the user asks conversationally to change the broad sandboxing, approval, or permission mode, for example \"make this session full access\", \"switch to full access\", \"make the session read-only\", or \"use guardian approvals\". The tool opens the permission-mode picker with the requested preset pre-selected; the session only changes if the user selects a mode there. Do not claim the mode changed until the tool returns an accepted decision. Use `request_permissions` instead for named paths or narrow filesystem/network grants; never use the preset picker for requests like \"allow writing to ~/Downloads\"."
 }
 
 fn granular_instructions(
@@ -1875,6 +1876,8 @@ mod tests {
         assert!(
             text.contains("The built-in `request_permissions` tool is available in this session.")
         );
+        assert!(text.contains("allow writing to ~/Downloads in this session"));
+        assert!(text.contains("Set `scope` to `session`"));
     }
 
     #[test]
@@ -1896,8 +1899,10 @@ mod tests {
         let text = instructions.into_text();
         assert!(text.contains("# request_permission_preset Tool"));
         assert!(text.contains(
-            "Invoke it immediately when the user asks conversationally to change sandboxing"
+            "asks conversationally to change the broad sandboxing, approval, or permission mode"
         ));
+        assert!(text.contains("Use `request_permissions` instead for named paths"));
+        assert!(text.contains("never use the preset picker"));
     }
 
     #[test]

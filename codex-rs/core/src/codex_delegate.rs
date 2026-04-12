@@ -771,6 +771,7 @@ async fn handle_request_permissions(
     let args = RequestPermissionsArgs {
         reason: event.reason,
         permissions: event.permissions,
+        scope: event.suggested_scope,
     };
     let response_fut = parent_session.request_permissions(parent_ctx, call_id.clone(), args);
     let response =

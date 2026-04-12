@@ -50,6 +50,8 @@ pub struct RequestPermissionsArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default)]
+    pub scope: PermissionGrantScope,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -70,4 +72,6 @@ pub struct RequestPermissionsEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default)]
+    pub suggested_scope: PermissionGrantScope,
 }
