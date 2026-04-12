@@ -153,14 +153,12 @@ pub(crate) async fn run(
     }
 }
 
+/// Resolve matching hook decisions conservatively: any deny wins immediately;
+/// otherwise keep the highest-precedence allow so more specific handlers
+/// override broader ones.
 fn resolve_permission_request_decision<'a>(
     decisions: impl IntoIterator<Item = &'a PermissionRequestDecision>,
 ) -> Option<PermissionRequestDecision> {
-    // Hooks are discovered in increasing precedence order, so later handlers are
-    // more specific than earlier ones. Permission requests should stay
-    // conservative across layers: any matching deny wins immediately, while
-    // allows only take effect if no handler denied the request. When multiple
-    // allows match, use the highest-precedence one (the latest allow we saw).
     let mut resolved_allow = None;
     for decision in decisions {
         match decision {
