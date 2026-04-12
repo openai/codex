@@ -4960,7 +4960,8 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        user_input_or_turn_inner(sess, sub_id, op, /*mirror_to_realtime*/ true).await;
+        let mirror_to_realtime = true;
+        user_input_or_turn_inner(sess, sub_id, op, mirror_to_realtime).await;
     }
 
     pub(super) async fn user_input_or_turn_without_realtime_text_mirror(
@@ -4968,7 +4969,8 @@ mod handlers {
         sub_id: String,
         op: Op,
     ) {
-        user_input_or_turn_inner(sess, sub_id, op, /*mirror_to_realtime*/ false).await;
+        let mirror_to_realtime = false;
+        user_input_or_turn_inner(sess, sub_id, op, mirror_to_realtime).await;
     }
 
     async fn user_input_or_turn_inner(
