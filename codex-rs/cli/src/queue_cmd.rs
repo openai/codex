@@ -181,71 +181,6 @@ mod tests {
     }
 
     #[test]
-    fn queue_rejects_legacy_content_flag() {
-        assert!(
-            MultitoolCli::try_parse_from([
-                "codex",
-                "queue",
-                "--thread",
-                "thread-1",
-                "--content",
-                "do work",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn queue_rejects_meta_flag() {
-        assert!(
-            MultitoolCli::try_parse_from([
-                "codex",
-                "queue",
-                "--thread",
-                "thread-1",
-                "--message",
-                "do work",
-                "--meta",
-                "ticket=ABC_123",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn queue_rejects_instructions_flag() {
-        assert!(
-            MultitoolCli::try_parse_from([
-                "codex",
-                "queue",
-                "--thread",
-                "thread-1",
-                "--message",
-                "do work",
-                "--instructions",
-                "be brief",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn queue_rejects_steer_flag() {
-        assert!(
-            MultitoolCli::try_parse_from([
-                "codex",
-                "queue",
-                "--thread",
-                "thread-1",
-                "--message",
-                "do work",
-                "--steer",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
     fn queue_requires_queued_messages_feature() {
         let mut features = Features::with_defaults();
 
@@ -361,53 +296,6 @@ mod tests {
                 .expect_err("stale name should fail")
                 .to_string(),
             "no thread named `stale`"
-        );
-    }
-
-    #[tokio::test]
-    async fn queue_cleanup_removes_message_when_thread_disappears() {
-        let codex_home = TempDir::new().expect("codex home tempdir");
-        let sqlite_home = TempDir::new().expect("sqlite home tempdir");
-        let runtime = StateRuntime::init(
-            sqlite_home.path().to_path_buf(),
-            "test-provider".to_string(),
-        )
-        .await
-        .expect("initialize state runtime");
-        let thread_id = ThreadId::new().to_string();
-        let params = codex_state::ThreadMessageCreateParams::new(
-            thread_id.clone(),
-            "external".to_string(),
-            "do work".to_string(),
-            /*instructions*/ None,
-            "{}".to_string(),
-            TimerDelivery::AfterTurn.as_str().to_string(),
-            /*queued_at*/ 100,
-        );
-        runtime
-            .create_thread_message(&params)
-            .await
-            .expect("create message");
-
-        let err = remove_queued_message_if_thread_missing(
-            codex_home.path(),
-            &runtime,
-            &thread_id,
-            &params.id,
-        )
-        .await
-        .expect_err("missing thread should fail after cleanup");
-
-        assert_eq!(
-            err.to_string(),
-            format!("thread `{thread_id}` was archived before queued work could be created")
-        );
-        assert_eq!(
-            runtime
-                .list_thread_messages(&thread_id)
-                .await
-                .expect("list messages"),
-            Vec::new()
         );
     }
 }

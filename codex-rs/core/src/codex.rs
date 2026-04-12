@@ -2137,6 +2137,7 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
         // Construct sandbox_state before MCP startup so it can be sent to each
