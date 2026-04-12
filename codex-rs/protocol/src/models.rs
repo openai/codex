@@ -636,7 +636,7 @@ fn granular_prompt_intro_text() -> &'static str {
 }
 
 fn request_permissions_tool_prompt_section() -> &'static str {
-    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it immediately when the user asks conversationally to allow specific filesystem or network access, for example \"allow writing to ~/Downloads in this session\" or \"grant access to /tmp/output\". Request only the specific permissions required. Set `scope` to `session` when the user explicitly asks for session-long access; otherwise use `turn`."
+    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it immediately when the user asks conversationally to allow specific filesystem or network access, for example \"allow writing to ~/Downloads in this session\" or \"grant access to /tmp/output\". Request only the specific permissions required. Set `scope` to `session` when the user explicitly asks for session-long access; otherwise use `turn`. After this tool returns, the user has already approved or denied the request in the UI. If permissions were granted, treat them as active now; do not say \"once you approve\" or ask the user to approve the same request again. If no permissions were granted, say the request was not approved."
 }
 
 fn request_permission_preset_tool_prompt_section() -> &'static str {
@@ -1811,6 +1811,8 @@ mod tests {
         let text = instructions.into_text();
         assert!(text.contains("`approval_policy` is `unless-trusted`"));
         assert!(text.contains("# request_permissions Tool"));
+        assert!(text.contains("After this tool returns, the user has already approved or denied"));
+        assert!(text.contains("do not say \"once you approve\""));
     }
 
     #[test]

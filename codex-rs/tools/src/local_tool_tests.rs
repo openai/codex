@@ -338,6 +338,14 @@ fn request_permissions_tool_includes_full_permission_schema() {
 }
 
 #[test]
+fn request_permissions_tool_description_marks_returned_decision_as_resolved() {
+    let description = request_permissions_tool_description();
+
+    assert!(description.contains("the user has already approved or denied the request"));
+    assert!(description.contains("do not ask the user to approve the same request again"));
+}
+
+#[test]
 fn shell_command_tool_matches_expected_spec() {
     let tool = create_shell_command_tool(CommandToolOptions {
         allow_login_shell: true,
