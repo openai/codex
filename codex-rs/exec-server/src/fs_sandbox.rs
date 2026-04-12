@@ -14,6 +14,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -50,13 +51,16 @@ impl FileSystemSandboxRunner {
         sandbox: &FileSystemSandboxContext,
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-        let helper_sandbox_policy =
-            sandbox_policy_with_helper_runtime_defaults(&sandbox.sandbox_policy);
+        let request_sandbox_policy =
+            normalize_sandbox_policy_root_aliases(sandbox.sandbox_policy.clone());
+        let helper_sandbox_policy = normalize_sandbox_policy_root_aliases(
+            sandbox_policy_with_helper_runtime_defaults(&sandbox.sandbox_policy),
+        );
         let cwd = current_sandbox_cwd().map_err(io_error)?;
         let cwd = AbsolutePathBuf::from_absolute_path(cwd.as_path())
             .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))?;
         let request_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-            &sandbox.sandbox_policy,
+            &request_sandbox_policy,
             cwd.as_path(),
         );
         let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
@@ -251,11 +255,65 @@ fn resolve_sandbox_path(
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
     {
-        return Ok(path.clone());
+        return Ok(normalize_top_level_alias(path.clone()));
     }
 
     let resolved = resolve_existing_path(path.as_path()).map_err(io_error)?;
     absolute_path(resolved)
+}
+
+fn normalize_sandbox_policy_root_aliases(sandbox_policy: SandboxPolicy) -> SandboxPolicy {
+    let mut sandbox_policy = sandbox_policy;
+    match &mut sandbox_policy {
+        SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted { readable_roots, .. },
+            ..
+        } => {
+            normalize_root_aliases(readable_roots);
+        }
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            read_only_access,
+            ..
+        } => {
+            normalize_root_aliases(writable_roots);
+            if let ReadOnlyAccess::Restricted { readable_roots, .. } = read_only_access {
+                normalize_root_aliases(readable_roots);
+            }
+        }
+        _ => {}
+    }
+    sandbox_policy
+}
+
+fn normalize_root_aliases(paths: &mut Vec<AbsolutePathBuf>) {
+    for path in paths {
+        *path = normalize_top_level_alias(path.clone());
+    }
+}
+
+fn normalize_top_level_alias(path: AbsolutePathBuf) -> AbsolutePathBuf {
+    let raw_path = path.to_path_buf();
+    for ancestor in raw_path.ancestors() {
+        if std::fs::symlink_metadata(ancestor).is_err() {
+            continue;
+        }
+        let Ok(normalized_ancestor) = canonicalize_preserving_symlinks(ancestor) else {
+            continue;
+        };
+        if normalized_ancestor == ancestor {
+            continue;
+        }
+        let Ok(suffix) = raw_path.strip_prefix(ancestor) else {
+            continue;
+        };
+        if let Ok(normalized_path) =
+            AbsolutePathBuf::from_absolute_path(normalized_ancestor.join(suffix))
+        {
+            return normalized_path;
+        }
+    }
+    path
 }
 
 fn absolute_path(path: PathBuf) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
