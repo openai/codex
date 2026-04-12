@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn constrained_add_validator_composes_with_existing_validator() -> anyhow::Result<()> {
-        let mut constrained = Constrained::new(5, |value: &i32| {
+        let mut constrained = Constrained::new(/*initial_value*/ 5, |value: &i32| {
             if *value >= 0 {
                 Ok(())
             } else {

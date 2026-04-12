@@ -1172,6 +1172,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }

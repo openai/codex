@@ -232,20 +232,20 @@ fn equals_except_shell_compares_deny_read_patterns() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
         fake_shell(),
-        None,
-        None,
-        None,
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
         vec!["/repo/.gitconfig".to_string()],
-        None,
+        /*subagents*/ None,
     );
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
         fake_shell(),
-        None,
-        None,
-        None,
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
         vec!["/repo/.ssh".to_string()],
-        None,
+        /*subagents*/ None,
     );
 
     assert!(!context1.equals_except_shell(&context2));
@@ -289,11 +289,11 @@ fn serialize_environment_context_with_deny_read_patterns() {
     let context = EnvironmentContext::new(
         Some(test_path_buf("/repo")),
         fake_shell(),
-        Some("2026-02-26".to_string()),
-        Some("America/Los_Angeles".to_string()),
-        None,
+        /*current_date*/ Some("2026-02-26".to_string()),
+        /*timezone*/ Some("America/Los_Angeles".to_string()),
+        /*network*/ None,
         denied,
-        None,
+        /*subagents*/ None,
     );
 
     let expected = format!(
