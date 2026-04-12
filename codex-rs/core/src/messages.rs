@@ -1,4 +1,11 @@
-//! Queued thread messages and model-visible message envelopes.
+//! Generated user-message payloads and model-visible XML envelopes.
+//!
+//! This module owns the shared representation for messages that are delivered
+//! into a thread by the harness rather than typed directly by the user. Today
+//! that includes external queued messages and timer-generated messages. The
+//! state database keeps the richer persisted payload, while this module renders
+//! the smaller XML envelope that is recorded in model history and builds the
+//! structured display event that clients can render without parsing that XML.
 
 use crate::timers::TimerDelivery;
 use codex_protocol::models::ContentItem;
