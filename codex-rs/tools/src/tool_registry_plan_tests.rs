@@ -1295,6 +1295,46 @@ fn search_tool_description_lists_each_mcp_source_once() {
 }
 
 #[test]
+fn search_tool_registers_deferred_mcp_flattened_handlers() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (_, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        Some(vec![deferred_mcp_tool(
+            "js",
+            "mcp__node_repl__",
+            "node_repl",
+            /*connector_name*/ None,
+            /*connector_description*/ None,
+        )]),
+        &[],
+    );
+
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::namespaced("mcp__node_repl__", "js"),
+        kind: ToolHandlerKind::Mcp,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain("mcp__node_repl__js"),
+        kind: ToolHandlerKind::Mcp,
+    }));
+}
+
+#[test]
 fn search_tool_requires_model_capability_and_feature_flag() {
     let model_info = search_capable_model_info();
     let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
