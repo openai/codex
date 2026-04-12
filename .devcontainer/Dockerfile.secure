@@ -10,6 +10,7 @@ ENV TZ="$TZ"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# Devcontainers run as a non-root user, so enable bubblewrap's setuid mode.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -37,6 +38,8 @@ RUN apt-get update \
         ipset \
         iptables \
         aggregate \
+        bubblewrap \
+    && chmod u+s /usr/bin/bwrap \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
