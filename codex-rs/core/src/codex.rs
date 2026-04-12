@@ -2265,7 +2265,7 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        handlers::user_input_or_turn_with_realtime_text_mirror(
+        handlers::user_input_or_turn_without_realtime_text_mirror(
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
@@ -2276,7 +2276,6 @@ impl Session {
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
             },
-            handlers::RealtimeTextMirror::Disabled,
         )
         .await;
     }
@@ -4917,6 +4916,7 @@ mod handlers {
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
     use serde_json::Value;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::debug;
@@ -4960,22 +4960,29 @@ mod handlers {
         }
     }
 
-    pub(super) enum RealtimeTextMirror {
-        Enabled,
-        Disabled,
+    struct PreparedUserInputOrTurn {
+        items: Vec<UserInput>,
+        updates: SessionSettingsUpdate,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        user_input_or_turn_with_realtime_text_mirror(sess, sub_id, op, RealtimeTextMirror::Enabled)
-            .await;
+        let prepared = prepare_user_input_or_turn(op);
+        let text = UserMessageItem::new(&prepared.items).message();
+        let realtime_text = (!text.is_empty()).then_some(text);
+        run_user_input_or_turn(sess, sub_id, prepared, realtime_text).await;
     }
 
-    pub(super) async fn user_input_or_turn_with_realtime_text_mirror(
+    pub(super) async fn user_input_or_turn_without_realtime_text_mirror(
         sess: &Arc<Session>,
         sub_id: String,
         op: Op,
-        realtime_text_mirror: RealtimeTextMirror,
     ) {
+        let prepared = prepare_user_input_or_turn(op);
+        run_user_input_or_turn(sess, sub_id, prepared, /*realtime_text*/ None).await;
+    }
+
+    fn prepare_user_input_or_turn(op: Op) -> PreparedUserInputOrTurn {
         let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
@@ -5034,14 +5041,24 @@ mod handlers {
             ),
             _ => unreachable!(),
         };
-        let realtime_text = match realtime_text_mirror {
-            RealtimeTextMirror::Enabled => {
-                let text = UserMessageItem::new(&items).message();
-                (!text.is_empty()).then_some(text)
-            }
-            RealtimeTextMirror::Disabled => None,
-        };
+        PreparedUserInputOrTurn {
+            items,
+            updates,
+            responsesapi_client_metadata,
+        }
+    }
 
+    async fn run_user_input_or_turn(
+        sess: &Arc<Session>,
+        sub_id: String,
+        prepared: PreparedUserInputOrTurn,
+        realtime_text: Option<String>,
+    ) {
+        let PreparedUserInputOrTurn {
+            items,
+            updates,
+            responsesapi_client_metadata,
+        } = prepared;
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
