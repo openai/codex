@@ -22,6 +22,7 @@ use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -935,6 +936,104 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             ))
         );
     });
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_prefers_codex_auto_review_when_available() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The user explicitly requested the exact command.",
+    })
+    .to_string();
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message("msg-guardian", &guardian_assessment),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    session.conversation_id = fixed_guardian_parent_session_id();
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.user_instructions = None;
+    let config = Arc::new(config);
+
+    let mut model_catalog = codex_models_manager::bundled_models_response()?;
+    let mut auto_review_model = model_catalog
+        .models
+        .iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("bundled catalog should include gpt-5.4")
+        .clone();
+    auto_review_model.slug = GUARDIAN_PREFERRED_MODEL.to_string();
+    auto_review_model.display_name = "Codex Auto Review".to_string();
+    auto_review_model.description = Some("Automatic approval review model for Codex.".to_string());
+    auto_review_model.visibility = ModelVisibility::Hide;
+    auto_review_model.priority = i32::MAX;
+    model_catalog.models.push(auto_review_model);
+
+    let models_manager = Arc::new(
+        codex_models_manager::manager::ModelsManager::new_with_provider(
+            config.codex_home.clone(),
+            Arc::clone(&session.services.auth_manager),
+            Some(model_catalog),
+            Default::default(),
+            config.model_provider.clone(),
+        ),
+    );
+    session.services.models_manager = models_manager;
+    turn.config = Arc::clone(&config);
+    turn.provider = config.model_provider.clone();
+    turn.user_instructions = None;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["true".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to verify the command.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
+        panic!("expected guardian assessment");
+    };
+    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
+
+    let request_body = request_log.single_request().body_json();
+    assert_eq!(
+        request_body
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some(GUARDIAN_PREFERRED_MODEL)
+    );
+    assert_eq!(
+        request_body["reasoning"]
+            .get("effort")
+            .and_then(serde_json::Value::as_str),
+        Some("low")
+    );
 
     Ok(())
 }
