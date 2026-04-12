@@ -5,6 +5,7 @@ use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -18,6 +19,7 @@ use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
@@ -1504,6 +1506,165 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     assert!(!startup_context.contains(MEMORY_PROMPT_PHRASE));
 
     startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_startup_context_current_thread_selects_many_turns_by_budget() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_current_thread_budget", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let latest_long_user_turn = format!(
+        "latest-long-start {} latest-long-middle {} latest-long-end",
+        "head detail ".repeat(120),
+        "tail detail ".repeat(170),
+    );
+    let mut user_turns = (1..=7)
+        .map(|index| {
+            format!(
+                "short-turn-{index}-start {} short-turn-{index}-end",
+                "detail ".repeat(70)
+            )
+        })
+        .collect::<Vec<_>>();
+    user_turns.push(latest_long_user_turn.clone());
+
+    let response_bodies = (1..=8)
+        .map(|index| {
+            responses::sse(vec![
+                responses::ev_response_created(&format!("resp-{index}")),
+                responses::ev_assistant_message(
+                    &format!("msg-{index}"),
+                    &format!("assistant turn {index}"),
+                ),
+                responses::ev_completed(&format!("resp-{index}")),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let _responses_mock = responses::mount_sse_sequence(&api_server, response_bodies).await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    // Seed real completed turns through the normal Responses path. This catches
+    // grouping and history-cloning behavior that a formatter-only test would miss.
+    for user_turn in user_turns {
+        test.codex
+            .submit(Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: user_turn,
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                cwd: test.cwd_path().to_path_buf(),
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: None,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                model: test.session_configured.model.clone(),
+                effort: test.config.model_reasoning_effort.clone(),
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let startup_context_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "current thread budget startup context request with instructions",
+        |request| websocket_request_instructions(request).is_some(),
+    )
+    .await;
+    let startup_context = websocket_request_instructions(&startup_context_request)
+        .expect("startup context request should contain instructions");
+
+    // Isolate only the Current Thread section; the startup prompt may also include
+    // workspace and notes sections after it.
+    let current_thread_start = startup_context
+        .find("## Current Thread")
+        .expect("startup context should include current thread section");
+    let current_thread_and_rest = &startup_context[current_thread_start..];
+    let current_thread_end = [
+        "\n## Recent Work",
+        "\n## Machine / Workspace Map",
+        "\n## Notes",
+    ]
+    .iter()
+    .filter_map(|marker| current_thread_and_rest.find(marker))
+    .min()
+    .unwrap_or(current_thread_and_rest.len());
+    let current_thread = &current_thread_and_rest[..current_thread_end];
+
+    let rendered_turns = current_thread
+        .split("\n### ")
+        .skip(1)
+        .map(|turn| format!("### {turn}"))
+        .collect::<Vec<_>>();
+    let over_budget_turns = rendered_turns
+        .iter()
+        .filter_map(|turn| {
+            let token_count = turn.len().div_ceil(4);
+            (token_count > 300).then(|| {
+                (
+                    turn.lines().next().unwrap_or_default().to_string(),
+                    token_count,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let latest_rendered_source =
+        format!("### Latest turn\nUser:\n{latest_long_user_turn}\n\nAssistant:\nassistant turn 8");
+
+    // Snapshot the actual section so turn order, oldest-first omission, and
+    // start/end truncation behavior are reviewed together.
+    let snapshot = format!(
+        "latest_source_tokens: {}\nrendered_turn_count: {}\nover_budget_turns: {over_budget_turns:?}\n\n{current_thread}",
+        latest_rendered_source.len().div_ceil(4),
+        rendered_turns.len(),
+    );
+    insta::assert_snapshot!(
+        "conversation_startup_context_current_thread_selects_many_turns_by_budget",
+        snapshot
+    );
+
+    // The input includes a turn over 300 approximate tokens, and every rendered
+    // turn still fits the per-turn cap after labels and truncation markers.
+    assert_eq!(
+        (
+            latest_rendered_source.len().div_ceil(4) > 300,
+            over_budget_turns,
+        ),
+        (true, Vec::<(String, usize)>::new()),
+    );
+
+    api_server.shutdown().await;
     realtime_server.shutdown().await;
     Ok(())
 }
