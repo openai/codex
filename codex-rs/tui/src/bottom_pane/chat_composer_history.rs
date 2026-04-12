@@ -122,6 +122,7 @@ pub(crate) enum HistorySearchDirection {
 pub(crate) enum HistorySearchResult {
     Found(HistoryEntry),
     Pending,
+    AtBoundary,
     NotFound,
 }
 
@@ -138,12 +139,15 @@ struct HistorySearchState {
     query_lower: String,
     selected_offset: Option<usize>,
     awaiting: Option<PendingHistorySearch>,
+    exhausted_older: bool,
+    exhausted_newer: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct PendingHistorySearch {
     offset: usize,
     direction: HistorySearchDirection,
+    boundary_if_exhausted: bool,
 }
 
 impl ChatComposerHistory {
@@ -305,12 +309,15 @@ impl ChatComposerHistory {
             .and_then(|search| search.awaiting)
             .is_some_and(|pending| pending.offset == offset)
         {
-            let direction = self
+            let pending = self
                 .search
                 .as_ref()
                 .and_then(|search| search.awaiting)
-                .map(|pending| pending.direction)
-                .unwrap_or(HistorySearchDirection::Older);
+                .unwrap_or(PendingHistorySearch {
+                    offset,
+                    direction: HistorySearchDirection::Older,
+                    boundary_if_exhausted: false,
+                });
             if let Some(entry) = entry
                 && self.search_matches(&entry)
             {
@@ -318,7 +325,8 @@ impl ChatComposerHistory {
             }
             return HistoryEntryResponse::Search(self.advance_search_after(
                 offset,
-                direction,
+                pending.direction,
+                pending.boundary_if_exhausted,
                 app_event_tx,
             ));
         }
@@ -368,13 +376,34 @@ impl ChatComposerHistory {
             search.awaiting = None;
         }
 
+        let boundary_if_exhausted = !restart
+            && self
+                .search
+                .as_ref()
+                .and_then(|search| search.selected_offset)
+                .is_some();
+        if boundary_if_exhausted
+            && self
+                .search
+                .as_ref()
+                .is_some_and(|search| search.is_exhausted(direction))
+        {
+            return HistorySearchResult::AtBoundary;
+        }
+
         let start_offset =
             self.search_start_offset(total_entries, direction, query_changed || restart);
         let Some(start_offset) = start_offset else {
-            return HistorySearchResult::NotFound;
+            return self.exhausted_search_result(direction, boundary_if_exhausted);
         };
 
-        self.advance_search_from(start_offset, direction, app_event_tx)
+        let result =
+            self.advance_search_from(start_offset, direction, boundary_if_exhausted, app_event_tx);
+        if matches!(result, HistorySearchResult::NotFound) {
+            self.exhausted_search_result(direction, boundary_if_exhausted)
+        } else {
+            result
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -419,6 +448,7 @@ impl ChatComposerHistory {
         &mut self,
         offset: usize,
         direction: HistorySearchDirection,
+        boundary_if_exhausted: bool,
         app_event_tx: &AppEventSender,
     ) -> HistorySearchResult {
         let next_offset = match direction {
@@ -428,15 +458,22 @@ impl ChatComposerHistory {
                 .filter(|next| *next < self.total_entries()),
         };
         let Some(next_offset) = next_offset else {
-            return HistorySearchResult::NotFound;
+            return self.exhausted_search_result(direction, boundary_if_exhausted);
         };
-        self.advance_search_from(next_offset, direction, app_event_tx)
+        let result =
+            self.advance_search_from(next_offset, direction, boundary_if_exhausted, app_event_tx);
+        if matches!(result, HistorySearchResult::NotFound) {
+            self.exhausted_search_result(direction, boundary_if_exhausted)
+        } else {
+            result
+        }
     }
 
     fn advance_search_from(
         &mut self,
         mut offset: usize,
         direction: HistorySearchDirection,
+        boundary_if_exhausted: bool,
         app_event_tx: &AppEventSender,
     ) -> HistorySearchResult {
         let total_entries = self.total_entries();
@@ -449,7 +486,11 @@ impl ChatComposerHistory {
                 && let Some(log_id) = self.history_log_id
             {
                 if let Some(search) = self.search.as_mut() {
-                    search.awaiting = Some(PendingHistorySearch { offset, direction });
+                    search.awaiting = Some(PendingHistorySearch {
+                        offset,
+                        direction,
+                        boundary_if_exhausted,
+                    });
                 }
                 app_event_tx.send(AppEvent::CodexOp(Op::GetHistoryEntryRequest {
                     offset,
@@ -496,8 +537,29 @@ impl ChatComposerHistory {
         if let Some(search) = self.search.as_mut() {
             search.selected_offset = Some(offset);
             search.awaiting = None;
+            search.exhausted_older = false;
+            search.exhausted_newer = false;
         }
         HistorySearchResult::Found(entry)
+    }
+
+    fn exhausted_search_result(
+        &mut self,
+        direction: HistorySearchDirection,
+        boundary_if_exhausted: bool,
+    ) -> HistorySearchResult {
+        if let Some(search) = self.search.as_mut() {
+            search.awaiting = None;
+            if boundary_if_exhausted {
+                search.mark_exhausted(direction);
+            }
+        }
+
+        if boundary_if_exhausted {
+            HistorySearchResult::AtBoundary
+        } else {
+            HistorySearchResult::NotFound
+        }
     }
 
     fn populate_history_at_index(
@@ -535,6 +597,22 @@ impl HistorySearchState {
             query_lower: query.to_lowercase(),
             selected_offset: None,
             awaiting: None,
+            exhausted_older: false,
+            exhausted_newer: false,
+        }
+    }
+
+    fn is_exhausted(&self, direction: HistorySearchDirection) -> bool {
+        match direction {
+            HistorySearchDirection::Older => self.exhausted_older,
+            HistorySearchDirection::Newer => self.exhausted_newer,
+        }
+    }
+
+    fn mark_exhausted(&mut self, direction: HistorySearchDirection) {
+        match direction {
+            HistorySearchDirection::Older => self.exhausted_older = true,
+            HistorySearchDirection::Newer => self.exhausted_newer = true,
         }
     }
 }
@@ -640,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn search_matches_local_history_and_cycles_without_wrapping() {
+    fn search_matches_local_history_and_stops_at_boundaries() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
 
@@ -668,7 +746,16 @@ mod tests {
             )
         );
         assert_eq!(
-            HistorySearchResult::NotFound,
+            HistorySearchResult::AtBoundary,
+            history.search(
+                "git",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        assert_eq!(
+            HistorySearchResult::AtBoundary,
             history.search(
                 "git",
                 HistorySearchDirection::Older,
@@ -685,6 +772,88 @@ mod tests {
                 &tx
             )
         );
+        assert_eq!(
+            HistorySearchResult::AtBoundary,
+            history.search(
+                "git",
+                HistorySearchDirection::Newer,
+                /*restart*/ false,
+                &tx
+            )
+        );
+    }
+
+    #[test]
+    fn repeated_boundary_search_does_not_refetch_persistent_history() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.set_metadata(/*log_id*/ 1, /*entry_count*/ 3);
+
+        assert_eq!(
+            HistorySearchResult::Pending,
+            history.search(
+                "needle",
+                HistorySearchDirection::Older,
+                /*restart*/ true,
+                &tx
+            )
+        );
+        let _ = rx.try_recv().expect("expected latest lookup");
+        assert_eq!(
+            HistoryEntryResponse::Search(HistorySearchResult::Found(HistoryEntry::new(
+                "needle latest".to_string()
+            ))),
+            history.on_entry_response(
+                /*log_id*/ 1,
+                /*offset*/ 2,
+                Some("needle latest".into()),
+                &tx,
+            )
+        );
+
+        assert_eq!(
+            HistorySearchResult::Pending,
+            history.search(
+                "needle",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        let _ = rx.try_recv().expect("expected next older lookup");
+        assert_eq!(
+            HistoryEntryResponse::Search(HistorySearchResult::Pending),
+            history.on_entry_response(
+                /*log_id*/ 1,
+                /*offset*/ 1,
+                Some("not a match".into()),
+                &tx,
+            )
+        );
+        let _ = rx.try_recv().expect("expected oldest lookup");
+        assert_eq!(
+            HistoryEntryResponse::Search(HistorySearchResult::AtBoundary),
+            history.on_entry_response(
+                /*log_id*/ 1,
+                /*offset*/ 0,
+                Some("also not a match".into()),
+                &tx,
+            )
+        );
+        assert!(rx.try_recv().is_err());
+
+        assert_eq!(
+            HistorySearchResult::AtBoundary,
+            history.search(
+                "needle",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

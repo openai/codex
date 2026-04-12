@@ -1566,6 +1566,11 @@ impl ChatComposer {
                     search.status = HistorySearchStatus::Searching;
                 }
             }
+            HistorySearchResult::AtBoundary => {
+                if let Some(search) = self.history_search.as_mut() {
+                    search.status = HistorySearchStatus::Match;
+                }
+            }
             HistorySearchResult::NotFound => {
                 let original_draft = self
                     .history_search
@@ -7740,6 +7745,52 @@ mod tests {
         assert!(!composer.history_search_active());
         assert_eq!(composer.textarea.text(), "git status");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn history_search_stays_on_single_match_at_boundaries() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.history.record_local_submission(HistoryEntry::new(
+            "Find and fix a bug in @filename".to_string(),
+        ));
+        composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        for ch in ['b', 'u', 'g'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(composer.textarea.text(), "Find and fix a bug in @filename");
+
+        for _ in 0..3 {
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        }
+        assert_eq!(composer.textarea.text(), "Find and fix a bug in @filename");
+        assert!(
+            composer
+                .history_search
+                .as_ref()
+                .is_some_and(|search| matches!(search.status, HistorySearchStatus::Match))
+        );
+
+        for _ in 0..3 {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert_eq!(composer.textarea.text(), "Find and fix a bug in @filename");
+        assert!(
+            composer
+                .history_search
+                .as_ref()
+                .is_some_and(|search| matches!(search.status, HistorySearchStatus::Match))
+        );
     }
 
     #[test]
