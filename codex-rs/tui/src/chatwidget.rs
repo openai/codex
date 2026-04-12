@@ -5673,6 +5673,10 @@ impl ChatWidget {
         }
 
         if let Some(active) = self.active_cell.take() {
+            debug_assert!(
+                !active.as_any().is::<history_cell::StreamingAgentTailCell>(),
+                "stream tail active cells are preview-only and must not enter transcript history"
+            );
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -5683,6 +5687,11 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        debug_assert!(
+            !cell.as_any().is::<history_cell::StreamingAgentTailCell>(),
+            "stream tail active cells are preview-only and must not enter transcript history"
+        );
+
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()

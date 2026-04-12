@@ -162,6 +162,7 @@ impl StreamCore {
             self.recompute_streaming_render();
             enqueued = self.sync_stable_queue();
         }
+        self.debug_assert_invariants();
         enqueued
     }
 
@@ -183,9 +184,12 @@ impl StreamCore {
             &mut rendered,
         );
         if self.emitted_stable_len >= rendered.len() {
+            self.debug_assert_invariants();
             Vec::new()
         } else {
-            rendered[self.emitted_stable_len..].to_vec()
+            let remaining = rendered[self.emitted_stable_len..].to_vec();
+            self.debug_assert_invariants();
+            remaining
         }
     }
 
@@ -193,19 +197,23 @@ impl StreamCore {
     fn tick(&mut self) -> Vec<Line<'static>> {
         let step = self.state.step();
         self.emitted_stable_len += step.len();
+        self.debug_assert_invariants();
         step
     }
 
     /// Batch drain: dequeue up to `max_lines`, update the emitted count.
     fn tick_batch(&mut self, max_lines: usize) -> Vec<Line<'static>> {
         if max_lines == 0 {
+            self.debug_assert_invariants();
             return Vec::new();
         }
         let step = self.state.drain_n(max_lines);
         if step.is_empty() {
+            self.debug_assert_invariants();
             return step;
         }
         self.emitted_stable_len += step.len();
+        self.debug_assert_invariants();
         step
     }
 
@@ -233,8 +241,7 @@ impl StreamCore {
     /// the end of `rendered_lines` is displayed live in the active-cell slot.
     #[inline]
     fn current_tail_lines(&self) -> Vec<Line<'static>> {
-        let start = self.enqueued_stable_len.min(self.rendered_lines.len());
-        self.rendered_lines[start..].to_vec()
+        self.rendered_lines[self.tail_start()..].to_vec()
     }
 
     fn current_tail_lines_with_partial(&mut self) -> Vec<Line<'static>> {
@@ -274,7 +281,7 @@ impl StreamCore {
             Some(self.cwd.as_path()),
             &mut speculative_rendered,
         );
-        let start = enqueued_stable_len.min(speculative_rendered.len());
+        let start = self.tail_start_for_len(speculative_rendered.len());
         let lines = speculative_rendered[start..].to_vec();
 
         self.speculative_tail_cache = Some(SpeculativeTailCache {
@@ -291,7 +298,7 @@ impl StreamCore {
 
     #[inline]
     fn has_tail(&self) -> bool {
-        self.enqueued_stable_len < self.rendered_lines.len()
+        self.tail_start() < self.rendered_lines.len()
     }
 
     #[inline]
@@ -336,6 +343,7 @@ impl StreamCore {
     /// current emitted line count.
     fn set_width(&mut self, width: Option<usize>) {
         if self.width == width {
+            self.debug_assert_invariants();
             return;
         }
         let had_pending_queue = self.state.queued_len() > 0;
@@ -344,6 +352,7 @@ impl StreamCore {
         self.speculative_tail_cache = None;
         self.state.collector.set_width(width);
         if self.raw_source.is_empty() {
+            self.debug_assert_invariants();
             return;
         }
 
@@ -364,9 +373,11 @@ impl StreamCore {
             // stable lines were waiting in the queue and there was no mutable
             // tail to preserve.
             self.enqueued_stable_len = self.rendered_lines.len();
+            self.debug_assert_invariants();
             return;
         }
         self.rebuild_stable_queue_from_render();
+        self.debug_assert_invariants();
     }
 
     /// Clear all accumulated state for current stream.
@@ -379,6 +390,13 @@ impl StreamCore {
         self.stable_prefix_len_cache = None;
         self.speculative_tail_cache = None;
         self.holdback_scanner.reset();
+        self.debug_assert_invariants();
+    }
+
+    fn clear_queue(&mut self) {
+        self.state.clear_queue();
+        self.enqueued_stable_len = self.emitted_stable_len;
+        self.debug_assert_invariants();
     }
 
     /// Re-render the full `raw_source` at current `width`.
@@ -409,7 +427,7 @@ impl StreamCore {
 
         // A structural rewrite moved the stable boundary backward into enqueue-but-unemitted
         // lines. Rebuild queue from the latest snapshot.
-        if target_stable_len < self.enqueued_stable_len {
+        let enqueued = if target_stable_len < self.enqueued_stable_len {
             self.state.clear_queue();
             if self.emitted_stable_len < target_stable_len {
                 self.state.enqueue(
@@ -417,17 +435,17 @@ impl StreamCore {
                 );
             }
             self.enqueued_stable_len = target_stable_len;
-            return self.state.queued_len() > 0;
-        }
-
-        if target_stable_len == self.enqueued_stable_len {
-            return false;
-        }
-
-        self.state
-            .enqueue(self.rendered_lines[self.enqueued_stable_len..target_stable_len].to_vec());
-        self.enqueued_stable_len = target_stable_len;
-        true
+            self.state.queued_len() > 0
+        } else if target_stable_len == self.enqueued_stable_len {
+            false
+        } else {
+            self.state
+                .enqueue(self.rendered_lines[self.enqueued_stable_len..target_stable_len].to_vec());
+            self.enqueued_stable_len = target_stable_len;
+            true
+        };
+        self.debug_assert_invariants();
+        enqueued
     }
 
     /// Rebuild the stable queue from the current render snapshot. Used after `set_width()` where
@@ -440,6 +458,42 @@ impl StreamCore {
                 .enqueue(self.rendered_lines[self.emitted_stable_len..target_stable_len].to_vec());
         }
         self.enqueued_stable_len = target_stable_len;
+        self.debug_assert_invariants();
+    }
+
+    #[inline]
+    fn tail_start(&self) -> usize {
+        self.tail_start_for_len(self.rendered_lines.len())
+    }
+
+    #[inline]
+    fn tail_start_for_len(&self, rendered_len: usize) -> usize {
+        self.enqueued_stable_len.min(rendered_len)
+    }
+
+    #[inline]
+    fn queued_stable_len(&self) -> usize {
+        self.enqueued_stable_len
+            .saturating_sub(self.emitted_stable_len)
+    }
+
+    fn debug_assert_invariants(&self) {
+        debug_assert!(
+            self.emitted_stable_len <= self.enqueued_stable_len,
+            "emitted stable lines must not exceed accounted stable lines"
+        );
+        debug_assert!(
+            self.enqueued_stable_len <= self.rendered_lines.len(),
+            "accounted stable lines must not exceed rendered lines"
+        );
+        debug_assert!(
+            self.emitted_stable_len <= self.rendered_lines.len(),
+            "emitted stable lines must not exceed rendered lines"
+        );
+        debug_assert!(
+            self.state.queued_len() <= self.queued_stable_len(),
+            "queued lines must be a subset of accounted-but-unemitted stable lines"
+        );
     }
 
     /// How many rendered lines to withhold as mutable tail.
@@ -606,8 +660,7 @@ impl StreamController {
     }
 
     pub(crate) fn clear_queue(&mut self) {
-        self.core.state.clear_queue();
-        self.core.enqueued_stable_len = self.core.emitted_stable_len;
+        self.core.clear_queue();
     }
 
     pub(crate) fn set_width(&mut self, width: Option<usize>) {
@@ -701,8 +754,7 @@ impl PlanStreamController {
     }
 
     pub(crate) fn clear_queue(&mut self) {
-        self.core.state.clear_queue();
-        self.core.enqueued_stable_len = self.core.emitted_stable_len;
+        self.core.clear_queue();
     }
 
     pub(crate) fn set_width(&mut self, width: Option<usize>) {
@@ -1003,6 +1055,13 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("")
             })
+            .collect()
+    }
+
+    fn cell_content_lines(cell: &dyn HistoryCell) -> Vec<String> {
+        lines_to_plain_strings(&cell.transcript_lines(u16::MAX))
+            .into_iter()
+            .map(|line| line.chars().skip(2).collect::<String>())
             .collect()
     }
 
@@ -1591,6 +1650,44 @@ mod tests {
     }
 
     #[test]
+    fn controller_does_not_enqueue_confirmed_table_rows_before_finalize() {
+        let mut ctrl = stream_controller(Some(80));
+
+        ctrl.push("Intro line before table.\n");
+        let (intro_cell, intro_idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(intro_idle);
+        assert_eq!(
+            intro_cell
+                .as_deref()
+                .map(cell_content_lines)
+                .unwrap_or_default(),
+            vec!["Intro line before table.".to_string()]
+        );
+
+        ctrl.push("| Name | Role |\n");
+        ctrl.push("| --- | --- |\n");
+        ctrl.push("| Alice | Engineer |\n");
+
+        let (unexpected_cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(idle);
+        assert!(
+            unexpected_cell.is_none(),
+            "confirmed table rows should remain mutable until finalize"
+        );
+        assert_eq!(ctrl.queued_lines(), 0);
+
+        let tail = lines_to_plain_strings(&ctrl.current_tail_lines());
+        assert!(
+            tail.iter().any(|line| line.contains("Alice")),
+            "expected table body in live tail: {tail:?}"
+        );
+        assert!(
+            tail.iter().any(|line| line.contains('│')),
+            "expected rendered table grid in live tail: {tail:?}"
+        );
+    }
+
+    #[test]
     fn controller_set_width_during_confirmed_table_stream_matches_finalize_render() {
         let mut ctrl = stream_controller(Some(120));
         let deltas = [
@@ -1624,6 +1721,88 @@ mod tests {
         crate::markdown::append_markdown_agent(&source, Some(32), &mut rendered);
         let expected = lines_to_plain_strings(&rendered);
         assert_eq!(streamed, expected);
+    }
+
+    #[test]
+    fn controller_resize_keeps_queue_counter_invariants_with_table_tail() {
+        let mut ctrl = stream_controller(Some(120));
+
+        ctrl.push("Intro one.\n");
+        ctrl.push("Intro two.\n");
+        let (first_cell, first_idle) = ctrl.on_commit_tick();
+        assert!(!first_idle);
+        let mut visible = first_cell
+            .as_deref()
+            .map(cell_content_lines)
+            .expect("expected first stable line");
+        assert_eq!(visible, vec!["Intro one.".to_string()]);
+
+        ctrl.push("| Key | Description |\n");
+        ctrl.push("| --- | --- |\n");
+        ctrl.push("| one | value that should remain mutable through resize |\n");
+        assert!(
+            ctrl.queued_lines() > 0,
+            "pre-table stable content should remain queued"
+        );
+
+        ctrl.set_width(Some(36));
+        let narrow_tail = lines_to_plain_strings(&ctrl.current_tail_lines());
+        assert!(
+            narrow_tail.iter().any(|line| line.contains("value")),
+            "expected table tail after narrow resize: {narrow_tail:?}"
+        );
+
+        ctrl.set_width(Some(80));
+        let (pending_cell, pending_idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(pending_idle);
+        visible.extend(
+            pending_cell
+                .as_deref()
+                .map(cell_content_lines)
+                .expect("expected remaining pre-table stable line"),
+        );
+
+        let (final_cell, source) = ctrl.finalize();
+        let source = source.expect("expected finalized source");
+        visible.extend(
+            final_cell
+                .as_deref()
+                .map(cell_content_lines)
+                .expect("expected finalized table tail"),
+        );
+
+        let mut rendered = Vec::new();
+        crate::markdown::append_markdown_agent(&source, Some(80), &mut rendered);
+        assert_eq!(visible, lines_to_plain_strings(&rendered));
+    }
+
+    #[test]
+    fn controller_finalize_with_live_tail_returns_deferred_cell_source_once() {
+        let source = "| Key | Value |\n| --- | --- |\n| one | two |\n";
+        let mut ctrl = stream_controller_with_live_tail_reflow(Some(80));
+
+        for delta in source.split_inclusive('\n') {
+            ctrl.push(delta);
+        }
+        assert!(ctrl.has_live_tail());
+        assert_eq!(ctrl.queued_lines(), 0);
+
+        let (cell, finalized_source) = ctrl.finalize();
+        assert_eq!(finalized_source, Some(source.to_string()));
+
+        let finalized_lines = cell
+            .as_deref()
+            .map(cell_content_lines)
+            .expect("expected finalized live tail cell");
+        let mut rendered = Vec::new();
+        crate::markdown::append_markdown_agent(source, Some(80), &mut rendered);
+        assert_eq!(finalized_lines, lines_to_plain_strings(&rendered));
+
+        assert!(!ctrl.has_live_tail());
+        assert!(ctrl.current_tail_lines().is_empty());
+        let (second_cell, second_source) = ctrl.finalize();
+        assert!(second_cell.is_none());
+        assert!(second_source.is_none());
     }
 
     #[test]
