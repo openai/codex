@@ -4960,22 +4960,23 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let items = match &op {
-            Op::UserTurn { items, .. } | Op::UserInput { items, .. } => items,
-            _ => unreachable!(),
-        };
-        let text = UserMessageItem::new(items).message();
-        let realtime_text = (!text.is_empty()).then_some(text);
-        if user_input_or_turn_without_realtime_text_mirror(sess, sub_id, op).await {
-            mirror_user_text_to_realtime(sess, realtime_text).await;
-        }
+        user_input_or_turn_inner(sess, sub_id, op, /*mirror_to_realtime*/ true).await;
     }
 
     pub(super) async fn user_input_or_turn_without_realtime_text_mirror(
         sess: &Arc<Session>,
         sub_id: String,
         op: Op,
-    ) -> bool {
+    ) {
+        user_input_or_turn_inner(sess, sub_id, op, /*mirror_to_realtime*/ false).await;
+    }
+
+    async fn user_input_or_turn_inner(
+        sess: &Arc<Session>,
+        sub_id: String,
+        op: Op,
+        mirror_to_realtime: bool,
+    ) {
         let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
@@ -5037,7 +5038,7 @@ mod handlers {
 
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.
-            return false;
+            return;
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
@@ -5051,7 +5052,9 @@ mod handlers {
         {
             Ok(_) => {
                 current_context.session_telemetry.user_prompt(&items);
-                true
+                if mirror_to_realtime {
+                    mirror_user_text_to_realtime(sess, &items).await;
+                }
             }
             Err(SteerInputError::NoActiveTurn(items)) => {
                 if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
@@ -5062,13 +5065,20 @@ mod handlers {
                 current_context.session_telemetry.user_prompt(&items);
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
+                let realtime_items = if mirror_to_realtime {
+                    Some(items.clone())
+                } else {
+                    None
+                };
                 sess.spawn_task(
                     Arc::clone(&current_context),
                     items,
                     crate::tasks::RegularTask::new(),
                 )
                 .await;
-                true
+                if let Some(items) = realtime_items {
+                    mirror_user_text_to_realtime(sess, &items).await;
+                }
             }
             Err(err) => {
                 sess.send_event_raw(Event {
@@ -5076,15 +5086,15 @@ mod handlers {
                     msg: EventMsg::Error(err.to_error_event()),
                 })
                 .await;
-                false
             }
         }
     }
 
-    async fn mirror_user_text_to_realtime(sess: &Arc<Session>, realtime_text: Option<String>) {
-        let Some(text) = realtime_text else {
+    async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
+        let text = UserMessageItem::new(items).message();
+        if text.is_empty() {
             return;
-        };
+        }
         if sess.conversation.running_state().await.is_none() {
             return;
         }
