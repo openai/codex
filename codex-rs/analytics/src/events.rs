@@ -86,6 +86,13 @@ pub(crate) struct CodexRuntimeMetadata {
     pub(crate) runtime_arch: String,
 }
 
+pub(crate) struct ThreadMetadata {
+    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) initialization_mode: ThreadInitializationMode,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+}
+
 #[derive(Serialize)]
 pub(crate) struct ThreadInitializedEventParams {
     pub(crate) thread_id: String,
@@ -341,6 +348,10 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) ephemeral: bool,
+    pub(crate) thread_source: Option<String>,
+    pub(crate) initialization_mode: ThreadInitializationMode,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) model_provider: String,
     pub(crate) sandbox_policy: Option<&'static str>,
@@ -390,6 +401,10 @@ pub(crate) struct CodexTurnSteerEventParams {
     pub(crate) accepted_turn_id: Option<String>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<String>,
+    pub(crate) initialization_mode: ThreadInitializationMode,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
     pub(crate) num_input_images: usize,
     pub(crate) result: TurnSteerResult,
     pub(crate) rejection_reason: Option<TurnSteerRejectionReason>,
@@ -528,6 +543,7 @@ pub(crate) fn codex_turn_steer_event_params(
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
     tracking: &TrackEventsContext,
+    thread_metadata: ThreadMetadata,
     turn_steer: CodexTurnSteerEvent,
 ) -> CodexTurnSteerEventParams {
     CodexTurnSteerEventParams {
@@ -536,6 +552,10 @@ pub(crate) fn codex_turn_steer_event_params(
         accepted_turn_id: turn_steer.accepted_turn_id,
         app_server_client,
         runtime,
+        thread_source: thread_metadata.thread_source.map(str::to_string),
+        initialization_mode: thread_metadata.initialization_mode,
+        subagent_source: thread_metadata.subagent_source,
+        parent_thread_id: thread_metadata.parent_thread_id,
         num_input_images: turn_steer.num_input_images,
         result: turn_steer.result,
         rejection_reason: turn_steer.rejection_reason,
