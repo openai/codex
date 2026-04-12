@@ -293,7 +293,7 @@ impl ChatComposer {
 
     fn cancel_history_search(&mut self) {
         if let Some(search) = self.history_search.take() {
-            self.history.reset_search();
+            self.history.reset_navigation();
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
             self.restore_draft(search.original_draft);
         }
@@ -759,6 +759,39 @@ mod tests {
         assert!(!composer.history_search_active());
         assert_eq!(composer.textarea.text(), "draft");
         assert_eq!(composer.textarea.cursor(), 2);
+    }
+
+    #[test]
+    fn history_search_esc_resets_normal_history_navigation() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("oldest matching entry".to_string()));
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("newest entry".to_string()));
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        for ch in ['m', 'a', 't', 'c', 'h'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(composer.textarea.text(), "oldest matching entry");
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!composer.history_search_active());
+        assert!(composer.textarea.is_empty());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "newest entry");
     }
 
     #[test]

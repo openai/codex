@@ -281,7 +281,7 @@ impl ChatComposerHistory {
     /// Clears only the active incremental search state.
     ///
     /// The normal Up/Down navigation cursor and cached persistent entries are left intact. Composer
-    /// search mode calls this when it accepts, cancels, or returns to an empty query so the next
+    /// search mode calls this when it accepts a match or returns to an empty query so the next
     /// search starts with a fresh unique-result cache.
     pub fn reset_search(&mut self) {
         self.search = None;
