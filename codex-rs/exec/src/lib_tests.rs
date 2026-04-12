@@ -410,6 +410,7 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: PathBuf::from("/tmp"),
+        instruction_sources: Vec::new(),
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
         approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
         sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {

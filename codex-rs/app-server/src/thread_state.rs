@@ -27,6 +27,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) rollout_path: PathBuf,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
+    pub(crate) instruction_sources: Vec<PathBuf>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,
 }
 
