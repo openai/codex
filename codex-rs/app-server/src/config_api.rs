@@ -700,6 +700,7 @@ mod tests {
                 }),
                 allow_local_binding: None,
             }),
+            permissions: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
