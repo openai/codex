@@ -1654,7 +1654,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
-            config.realtime.version = RealtimeWsVersion::V1;
+            config.experimental_realtime_ws_startup_context = Some(String::new());
         }
     });
     let test = builder.build(&api_server).await?;
@@ -1708,11 +1708,24 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
         ),
         (true, Some(user_text.to_string())),
     );
+    let realtime_response_create = timeout(Duration::from_millis(200), async {
+        wait_for_matching_websocket_request(
+            &realtime_server,
+            "unexpected realtime response request for mirrored user text",
+            |request| request.body_json()["type"].as_str() == Some("response.create"),
+        )
+        .await
+    })
+    .await;
+    assert!(
+        realtime_response_create.is_err(),
+        "mirrored user text should not request a realtime response"
+    );
 
     let realtime_request_body = realtime_text_request.body_json();
     let content = &realtime_request_body["item"]["content"][0];
     let snapshot = format!(
-        "type: {}\nitem.type: {}\nitem.role: {}\ncontent[0].type: {}\ncontent[0].text: {}",
+        "type: {}\nitem.type: {}\nitem.role: {}\ncontent[0].type: {}\ncontent[0].text: {}\nresponse.create: {}",
         realtime_request_body["type"].as_str().unwrap_or_default(),
         realtime_request_body["item"]["type"]
             .as_str()
@@ -1722,6 +1735,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
             .unwrap_or_default(),
         content["type"].as_str().unwrap_or_default(),
         content["text"].as_str().unwrap_or_default(),
+        realtime_response_create.is_ok(),
     );
     insta::assert_snapshot!(
         "conversation_user_text_turn_is_sent_to_realtime_when_active",

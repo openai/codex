@@ -5094,7 +5094,7 @@ mod handlers {
         if sess.conversation.running_state().await.is_none() {
             return;
         }
-        if let Err(err) = sess.conversation.text_in(text).await {
+        if let Err(err) = sess.conversation.append_user_text(text).await {
             debug!("failed to mirror user text to realtime conversation: {err}");
         }
     }
