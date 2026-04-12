@@ -1729,7 +1729,6 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     );
 
     realtime_server.shutdown().await;
-    api_server.shutdown().await;
     Ok(())
 }
 
