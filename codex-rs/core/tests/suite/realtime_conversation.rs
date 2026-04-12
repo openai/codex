@@ -1574,7 +1574,7 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
                 approvals_reviewer: None,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 model: test.session_configured.model.clone(),
-                effort: test.config.model_reasoning_effort.clone(),
+                effort: test.config.model_reasoning_effort,
                 summary: None,
                 service_tier: None,
                 collaboration_mode: None,
