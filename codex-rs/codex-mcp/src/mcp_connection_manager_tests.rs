@@ -674,6 +674,10 @@ async fn resolve_tool_info_accepts_plain_and_namespaced_tool_names() {
         .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "echo"))
         .await
         .expect("split MCP tool namespace and name should resolve");
+    let split_with_flat_name = manager
+        .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "mcp__rmcp__echo"))
+        .await
+        .expect("split namespace with flat qualified MCP tool name should resolve");
 
     let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
     assert_eq!(
@@ -691,6 +695,15 @@ async fn resolve_tool_info_accepts_plain_and_namespaced_tool_names() {
             split.callable_namespace.as_str(),
             split.callable_name.as_str(),
             split.tool.name.as_ref(),
+        ),
+        expected
+    );
+    assert_eq!(
+        (
+            split_with_flat_name.server_name.as_str(),
+            split_with_flat_name.callable_namespace.as_str(),
+            split_with_flat_name.callable_name.as_str(),
+            split_with_flat_name.tool.name.as_ref(),
         ),
         expected
     );
