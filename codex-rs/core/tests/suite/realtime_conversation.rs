@@ -2709,6 +2709,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             "type": "session.updated",
             "session": { "id": "sess_steer", "instructions": "backend prompt" }
         })],
+        vec![],
         vec![
             json!({
                 "type": "conversation.input_transcript.delta",
@@ -2763,6 +2764,12 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::AgentMessageContentDelta(_))
     })
+    .await;
+    let _ = wait_for_matching_websocket_request(
+        &realtime_server,
+        "first prompt mirrored to realtime",
+        |request| websocket_request_text(request).as_deref() == Some("first prompt"),
+    )
     .await;
 
     test.codex
