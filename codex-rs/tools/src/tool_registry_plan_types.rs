@@ -11,6 +11,9 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolHandlerKind {
+    CreateTimer,
+    DeleteTimer,
+    ListTimers,
     AgentJobs,
     ApplyPatch,
     CloseAgentV1,

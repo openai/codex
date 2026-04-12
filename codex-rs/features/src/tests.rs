@@ -152,6 +152,14 @@ fn image_generation_is_under_development() {
 }
 
 #[test]
+fn timers_are_under_development() {
+    assert_eq!(feature_for_key("timers"), Some(Feature::Timers));
+    assert_eq!(feature_for_key("timer_tool"), None);
+    assert_eq!(Feature::Timers.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::Timers.default_enabled(), false);
+}
+
+#[test]
 fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolCallMcpElicitation.stage(), Stage::Stable);
     assert_eq!(Feature::ToolCallMcpElicitation.default_enabled(), true);

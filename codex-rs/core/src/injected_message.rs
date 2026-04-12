@@ -11,11 +11,23 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::InjectedMessageEvent;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::BTreeMap;
 
 const EXTERNAL_MESSAGE_OPEN_TAG: &str = "<external_message>";
 const EXTERNAL_MESSAGE_CLOSE_TAG: &str = "</external_message>";
 const TIMER_MESSAGE_OPEN_TAG: &str = "<timer_message>";
 const TIMER_MESSAGE_CLOSE_TAG: &str = "</timer_message>";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessagePayload {
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub meta: BTreeMap<String, String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InjectedMessage {

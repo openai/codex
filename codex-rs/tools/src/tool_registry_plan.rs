@@ -22,6 +22,7 @@ use crate::create_apply_patch_json_tool;
 use crate::create_close_agent_tool_v1;
 use crate::create_close_agent_tool_v2;
 use crate::create_code_mode_tool;
+use crate::create_delete_timer_tool;
 use crate::create_exec_command_tool;
 use crate::create_followup_task_tool;
 use crate::create_image_generation_tool;
@@ -31,6 +32,7 @@ use crate::create_list_agents_tool;
 use crate::create_list_dir_tool;
 use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
+use crate::create_list_timers_tool;
 use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
@@ -45,6 +47,7 @@ use crate::create_spawn_agent_tool_v1;
 use crate::create_spawn_agent_tool_v2;
 use crate::create_spawn_agents_on_csv_tool;
 use crate::create_test_sync_tool;
+use crate::create_timer_tool;
 use crate::create_tool_search_tool;
 use crate::create_tool_suggest_tool;
 use crate::create_update_plan_tool;
@@ -245,6 +248,27 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
+    }
+
+    if config.timer_scheduler {
+        plan.push_spec(
+            create_timer_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.push_spec(
+            create_delete_timer_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.push_spec(
+            create_list_timers_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("create_timer", ToolHandlerKind::CreateTimer);
+        plan.register_handler("delete_timer", ToolHandlerKind::DeleteTimer);
+        plan.register_handler("list_timers", ToolHandlerKind::ListTimers);
     }
 
     if config.search_tool

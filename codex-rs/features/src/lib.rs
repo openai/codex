@@ -172,6 +172,8 @@ pub enum Feature {
     Personality,
     /// Enable native artifact tools.
     Artifact,
+    /// Enable per-thread persistent timer scheduling tools and APIs.
+    Timers,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
@@ -854,6 +856,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Artifact,
         key: "artifact",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Timers,
+        key: "timers",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
