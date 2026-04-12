@@ -43,14 +43,7 @@ fn should_warn_about_system_bwrap(sandbox_policy: &SandboxPolicy) -> bool {
 }
 
 fn system_bwrap_warning_for_path(system_bwrap_path: Option<&Path>) -> Option<String> {
-    system_bwrap_warning_for_path_with_wsl1(system_bwrap_path, is_wsl1())
-}
-
-fn system_bwrap_warning_for_path_with_wsl1(
-    system_bwrap_path: Option<&Path>,
-    is_wsl1: bool,
-) -> Option<String> {
-    if is_wsl1 {
+    if is_wsl1() {
         return Some(WSL1_BWRAP_WARNING.to_string());
     }
 

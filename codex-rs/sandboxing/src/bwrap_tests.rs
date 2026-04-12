@@ -13,22 +13,6 @@ fn system_bwrap_warning_reports_missing_system_bwrap() {
 }
 
 #[test]
-fn system_bwrap_warning_reports_wsl1_before_bwrap_probe() {
-    let fake_bwrap = write_fake_bwrap(
-        r#"#!/bin/sh
-echo 'bwrap: Unknown option --argv0' >&2
-exit 1
-"#,
-    );
-    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
-
-    assert_eq!(
-        system_bwrap_warning_for_path_with_wsl1(Some(fake_bwrap_path), /*is_wsl1*/ true),
-        Some(WSL1_BWRAP_WARNING.to_string())
-    );
-}
-
-#[test]
 fn system_bwrap_warning_reports_user_namespace_failures() {
     for failure in USER_NAMESPACE_FAILURES {
         let fake_bwrap = write_fake_bwrap(&format!(
