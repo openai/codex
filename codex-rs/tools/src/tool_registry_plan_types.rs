@@ -59,7 +59,7 @@ pub struct ToolRegistryPlan {
 pub struct ToolRegistryPlanParams<'a> {
     pub mcp_tools: Option<&'a [ToolRegistryPlanMcpTool<'a>]>,
     pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
-    pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
+    pub tool_namespaces: Option<&'a HashMap<ToolName, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
     pub dynamic_tools: &'a [DynamicToolSpec],
     pub default_agent_type_description: &'a str,
@@ -73,19 +73,16 @@ pub struct ToolNamespace {
 }
 
 /// Direct MCP tool metadata needed to expose the flat Responses API tool while
-/// registering its runtime handler with the canonical namespace/name split.
+/// registering its runtime handler with the canonical namespace/name identity.
 #[derive(Debug, Clone)]
 pub struct ToolRegistryPlanMcpTool<'a> {
-    pub qualified_name: String,
-    pub callable_name: String,
-    pub callable_namespace: String,
+    pub name: ToolName,
     pub tool: &'a rmcp::model::Tool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ToolRegistryPlanDeferredTool<'a> {
-    pub tool_name: &'a str,
-    pub tool_namespace: &'a str,
+    pub name: ToolName,
     pub server_name: &'a str,
     pub connector_name: Option<&'a str>,
     pub connector_description: Option<&'a str>,
