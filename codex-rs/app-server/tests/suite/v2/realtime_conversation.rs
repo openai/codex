@@ -1148,7 +1148,6 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
                     "samples_per_channel": 512
                 }),
             ],
-            vec![],
         ])]),
     )
     .await?;
@@ -1217,7 +1216,6 @@ async fn webrtc_v2_text_input_is_append_only_while_response_is_active() -> Resul
         no_main_loop_responses(),
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![session_updated("sess_v2_response_queue")],
-            vec![],
             vec![
                 json!({
                     "type": "response.created",
@@ -1233,7 +1231,6 @@ async fn webrtc_v2_text_input_is_append_only_while_response_is_active() -> Resul
                 "type": "response.done",
                 "response": { "id": "resp_active" }
             })],
-            vec![],
         ])]),
     )
     .await?;
@@ -1293,7 +1290,6 @@ async fn webrtc_v2_text_input_is_append_only_when_response_is_cancelled() -> Res
         no_main_loop_responses(),
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![session_updated("sess_v2_response_cancel_queue")],
-            vec![],
             vec![json!({
                 "type": "response.created",
                 "response": { "id": "resp_cancelled" }
@@ -1303,7 +1299,6 @@ async fn webrtc_v2_text_input_is_append_only_when_response_is_cancelled() -> Res
                 "type": "response.cancelled",
                 "response": { "id": "resp_cancelled" }
             })],
-            vec![],
         ])]),
     )
     .await?;
