@@ -11,6 +11,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_hooks::PermissionRequestGuardianReview;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -157,6 +158,13 @@ impl PermissionRequestPayload {
             justification,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PermissionRequestHookRequest {
+    pub run_id_suffix: String,
+    pub payload: PermissionRequestPayload,
+    pub guardian_review: Option<PermissionRequestGuardianReview>,
 }
 
 // Specifies what tool orchestrator should do with a given tool call.

@@ -13,6 +13,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -579,10 +580,9 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            if let Err(error) = config.features.enable(Feature::CodexHooks) {
+                panic!("test config should allow feature update: {error}");
+            }
         });
     let test = builder.build(&server).await?;
 
@@ -678,10 +678,9 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            if let Err(error) = config.features.enable(Feature::CodexHooks) {
+                panic!("test config should allow feature update: {error}");
+            }
         });
     let test = builder.build(&server).await?;
 
@@ -1096,8 +1095,10 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     let server = start_mock_server().await;
     let call_id = "permissionrequest-shell-command";
     let marker = std::env::temp_dir().join("permissionrequest-shell-command-marker");
-    let command = format!("printf allowed > {}", marker.display());
-    let args = serde_json::json!({ "command": command });
+    let command = format!("rm -f {}", marker.display());
+    let args = serde_json::json!({
+        "command": ["rm", "-f", marker.display().to_string()],
+    });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -1105,7 +1106,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
                 ev_response_created("resp-1"),
                 core_test_support::responses::ev_function_call(
                     call_id,
-                    "shell_command",
+                    "shell",
                     &serde_json::to_string(&args)?,
                 ),
                 ev_completed("resp-1"),
@@ -1138,31 +1139,21 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         });
     let test = builder.build(&server).await?;
 
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove leftover permission request marker")?;
-    }
+    fs::write(&marker, "seed").context("create permission request marker")?;
 
     test.submit_turn_with_policies(
         "run the shell command after hook approval",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("shell command output string");
+    requests[1].function_call_output(call_id);
     assert!(
-        output.contains("allowed"),
-        "shell command output should reach the model after hook approval",
-    );
-    assert!(
-        marker.exists(),
-        "approved command should create marker file"
+        !marker.exists(),
+        "approved command should remove marker file"
     );
 
     let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
@@ -1184,20 +1175,37 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn permission_request_hook_receives_guardian_review_before_fallback() -> Result<()> {
+#[test]
+fn permission_request_hook_receives_guardian_review_before_fallback() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current-thread tokio runtime")
+                .block_on(permission_request_hook_receives_guardian_review_before_fallback_inner())
+        })
+        .expect("spawn guardian permission request hook test thread")
+        .join()
+        .expect("guardian permission request hook test thread panicked")
+}
+
+async fn permission_request_hook_receives_guardian_review_before_fallback_inner() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let call_id = "permissionrequest-guardian-review";
     let marker = std::env::temp_dir().join("permissionrequest-guardian-review-marker");
-    let command = format!("printf guardian > {}", marker.display());
-    let args = serde_json::json!({ "command": command });
+    let command = format!("rm -f {}", marker.display());
+    let args = serde_json::json!({
+        "command": ["rm", "-f", marker.display().to_string()],
+    });
     let guardian_assessment = serde_json::json!({
         "risk_level": "medium",
         "user_authorization": "high",
         "outcome": "allow",
-        "rationale": "The user asked to run this local marker command.",
+        "rationale": "The user asked to delete this local marker file.",
     })
     .to_string();
     let responses = mount_sse_sequence(
@@ -1207,7 +1215,7 @@ async fn permission_request_hook_receives_guardian_review_before_fallback() -> R
                 ev_response_created("resp-1"),
                 core_test_support::responses::ev_function_call(
                     call_id,
-                    "shell_command",
+                    "shell",
                     &serde_json::to_string(&args)?,
                 ),
                 ev_completed("resp-1"),
@@ -1235,26 +1243,25 @@ async fn permission_request_hook_receives_guardian_review_before_fallback() -> R
             }
         })
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::GuardianApproval)
-                .expect("test config should allow feature update");
+            if let Err(error) = config.features.enable(Feature::CodexHooks) {
+                panic!("test config should allow feature update: {error}");
+            }
+            if let Err(error) = config.features.enable(Feature::ExecPermissionApprovals) {
+                panic!("test config should allow feature update: {error}");
+            }
+            if let Err(error) = config.features.enable(Feature::GuardianApproval) {
+                panic!("test config should allow feature update: {error}");
+            }
             config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         });
     let test = builder.build(&server).await?;
 
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove leftover guardian review marker")?;
-    }
+    fs::write(&marker, "seed").context("create guardian review marker")?;
 
     test.submit_turn_with_policies(
         "run the shell command after guardian review",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -1265,12 +1272,20 @@ async fn permission_request_hook_receives_guardian_review_before_fallback() -> R
         "guardian decision should be reused instead of running a second review",
     );
     assert!(
-        marker.exists(),
-        "guardian-approved fallback should create marker file",
+        requests[2]
+            .input()
+            .iter()
+            .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output")),
+        "guardian-approved fallback should continue with tool output",
+    );
+    assert!(
+        !marker.exists(),
+        "guardian-approved fallback should remove marker file",
     );
 
     let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(
         hook_inputs[0]["guardian_review"],
         serde_json::json!({
@@ -1278,7 +1293,7 @@ async fn permission_request_hook_receives_guardian_review_before_fallback() -> R
             "decision": "allow",
             "risk_level": "medium",
             "user_authorization": "high",
-            "rationale": "The user asked to run this local marker command.",
+            "rationale": "The user asked to delete this local marker file.",
         })
     );
 

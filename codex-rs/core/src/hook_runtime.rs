@@ -2,7 +2,6 @@ use std::future::Future;
 use std::sync::Arc;
 
 use codex_hooks::PermissionRequestDecision;
-use codex_hooks::PermissionRequestGuardianReview;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
@@ -14,10 +13,8 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
@@ -29,6 +26,8 @@ use serde_json::Value;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
+use crate::tools::sandboxing::PermissionRequestHookRequest;
+use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -154,14 +153,20 @@ pub(crate) async fn run_pre_tool_use_hooks(
 pub(crate) async fn run_permission_request_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    run_id_suffix: String,
-    tool_name: String,
-    command: String,
-    sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<PermissionProfile>,
-    justification: Option<String>,
-    guardian_review: Option<PermissionRequestGuardianReview>,
+    hook_request: PermissionRequestHookRequest,
 ) -> Option<PermissionRequestDecision> {
+    let PermissionRequestHookRequest {
+        run_id_suffix,
+        payload,
+        guardian_review,
+    } = hook_request;
+    let PermissionRequestPayload {
+        tool_name,
+        command,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
+    } = payload;
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
