@@ -22,6 +22,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WarningEvent;
+use codex_sandboxing::record_network_sandbox_violation;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -541,6 +542,7 @@ pub(crate) fn build_blocked_request_observer(
     Arc::new(move |blocked: BlockedRequest| {
         let network_approval = Arc::clone(&network_approval);
         async move {
+            record_network_sandbox_violation(&blocked);
             network_approval.record_blocked_request(blocked).await;
         }
     })
