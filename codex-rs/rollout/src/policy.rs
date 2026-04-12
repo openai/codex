@@ -93,6 +93,7 @@ fn should_persist_event_msg_extended(ev: &EventMsg) -> bool {
 fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
     match ev {
         EventMsg::UserMessage(_)
+        | EventMsg::InjectedMessage(_)
         | EventMsg::AgentMessage(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)

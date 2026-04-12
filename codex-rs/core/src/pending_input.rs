@@ -1,6 +1,6 @@
 //! Pending input queued for delivery into a future or active regular turn.
 //!
-//! Most pending input is an ordinary model input item. Generated input carries
+//! Most pending input is an ordinary model input item. Injected messages carry
 //! the model-visible item plus a separate display event so clients can render
 //! the human-facing content without parsing the XML envelope recorded in model
 //! history.
