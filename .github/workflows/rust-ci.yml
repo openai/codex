@@ -39,7 +39,7 @@ jobs:
           argument_comment_lint_package=false
           workflows=false
           for f in "${files[@]}"; do
-            [[ $f == codex-rs/* ]] && codex=true
+            [[ $f == codex-rs/* || $f == defs.bzl || $f == scripts/test-remote-env.sh ]] && codex=true
             [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
             [[ $f == .github/* ]] && workflows=true
@@ -50,7 +50,7 @@ jobs:
           echo "codex=$codex" >> "$GITHUB_OUTPUT"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
-  # --- Fast Cargo-native PR checks -------------------------------------------
+  # --- Fast PR checks --------------------------------------------------------
   general:
     name: Format / etc
     runs-on: ubuntu-24.04
@@ -84,6 +84,87 @@ jobs:
           version: 1.5.1
       - name: cargo shear
         run: cargo shear
+
+  remote_tests_linux:
+    name: Remote tests - Linux
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    timeout-minutes: 45
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Set up Bazel CI
+        uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+          install-test-prereqs: "true"
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          fi
+      - name: Enable unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Set up remote test env (Docker)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
+          export CODEX_TEST_REMOTE_ENV_SKIP_EXEC_SERVER_BUILD=1
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
+      - name: Remote tests via Bazel
+        id: remote_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+
+          run_remote_test() {
+            local target="$1"
+            local test_name="$2"
+
+            "${GITHUB_WORKSPACE}/.github/scripts/run-bazel-ci.sh" \
+              --print-failed-test-logs \
+              --use-node-test-env \
+              -- \
+              test \
+              --test_env=CODEX_TEST_REMOTE_ENV="${CODEX_TEST_REMOTE_ENV}" \
+              --test_arg="${test_name}" \
+              --test_arg=--exact \
+              --test_verbose_timeout_warnings \
+              --build_metadata=COMMIT_SHA="${GITHUB_SHA}" \
+              -- \
+              "${target}"
+          }
+
+          run_remote_test "//codex-rs/core:core-unit-tests" "unified_exec::tests::unified_exec_uses_remote_exec_server_when_configured"
+          run_remote_test "//codex-rs/core:core-unit-tests" "unified_exec::tests::remote_exec_server_rejects_inherited_fd_launches"
+          run_remote_test "//codex-rs/core:core-all-test" "suite::remote_env::remote_test_env_can_connect_and_use_filesystem"
+        env:
+          RUST_BACKTRACE: 1
+      - name: Tear down remote test env
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ "${{ steps.remote_tests.outcome }}" != "success" ]]; then
+            docker logs codex-remote-test-env || true
+          fi
+          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
 
   argument_comment_lint_package:
     name: Argument comment lint package
@@ -194,6 +275,7 @@ jobs:
         changed,
         general,
         cargo_shear,
+        remote_tests_linux,
         argument_comment_lint_package,
         argument_comment_lint_prebuilt,
       ]
@@ -206,6 +288,7 @@ jobs:
           echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
           echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
+          echo "remote : ${{ needs.remote_tests_linux.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
@@ -226,4 +309,5 @@ jobs:
           if [[ '${{ needs.changed.outputs.codex }}' == 'true' || '${{ needs.changed.outputs.workflows }}' == 'true' ]]; then
             [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
             [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
+            [[ '${{ needs.remote_tests_linux.result }}' == 'success' ]] || { echo 'remote_tests_linux failed'; exit 1; }
           fi
