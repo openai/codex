@@ -1095,7 +1095,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     let server = start_mock_server().await;
     let call_id = "permissionrequest-shell-command";
     let marker = std::env::temp_dir().join("permissionrequest-shell-command-marker");
-    let command = format!("printf allowed > {}", marker.display());
+    let command = format!("rm -f {}", marker.display());
     let args = serde_json::json!({ "command": command });
     let responses = mount_sse_sequence(
         &server,
@@ -1137,9 +1137,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         });
     let test = builder.build(&server).await?;
 
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove leftover permission request marker")?;
-    }
+    fs::write(&marker, "seed").context("create permission request marker")?;
 
     test.submit_turn_with_policies(
         "run the shell command after hook approval",
@@ -1150,18 +1148,10 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("shell command output string");
+    requests[1].function_call_output(call_id);
     assert!(
-        output.contains("allowed"),
-        "shell command output should reach the model after hook approval",
-    );
-    assert!(
-        marker.exists(),
-        "approved command should create marker file"
+        !marker.exists(),
+        "approved command should remove marker file"
     );
 
     let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
@@ -1169,6 +1159,14 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["approval_context"],
+        serde_json::json!({
+            "sandbox_permissions": "use_default",
+            "additional_permissions": null,
+            "justification": null,
+        })
+    );
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",

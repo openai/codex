@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
@@ -14,6 +16,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::schema::PermissionRequestApprovalContext;
 use crate::schema::PermissionRequestCommandInput;
 use crate::schema::PermissionRequestToolInput;
 
@@ -28,6 +31,9 @@ pub struct PermissionRequestRequest {
     pub tool_name: String,
     pub run_id_suffix: String,
     pub command: String,
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,19 +89,7 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&PermissionRequestCommandInput {
-        session_id: request.session_id.to_string(),
-        turn_id: request.turn_id.clone(),
-        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.cwd.display().to_string(),
-        hook_event_name: "PermissionRequest".to_string(),
-        model: request.model.clone(),
-        permission_mode: request.permission_mode.clone(),
-        tool_name: "Bash".to_string(),
-        tool_input: PermissionRequestToolInput {
-            command: request.command.clone(),
-        },
-    }) {
+    let input_json = match serde_json::to_string(&build_command_input(&request)) {
         Ok(input_json) => input_json,
         Err(error) => {
             let hook_events = common::serialization_failure_hook_events_for_tool_use(
@@ -133,6 +127,27 @@ pub(crate) async fn run(
             })
             .collect(),
         decision,
+    }
+}
+
+fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestCommandInput {
+    PermissionRequestCommandInput {
+        session_id: request.session_id.to_string(),
+        turn_id: request.turn_id.clone(),
+        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
+        cwd: request.cwd.display().to_string(),
+        hook_event_name: "PermissionRequest".to_string(),
+        model: request.model.clone(),
+        permission_mode: request.permission_mode.clone(),
+        tool_name: "Bash".to_string(),
+        tool_input: PermissionRequestToolInput {
+            command: request.command.clone(),
+        },
+        approval_context: PermissionRequestApprovalContext {
+            sandbox_permissions: request.sandbox_permissions,
+            additional_permissions: request.additional_permissions.clone(),
+            justification: request.justification.clone(),
+        },
     }
 }
 

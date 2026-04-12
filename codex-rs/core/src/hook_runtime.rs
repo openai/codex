@@ -26,6 +26,7 @@ use serde_json::Value;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
+use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -152,8 +153,7 @@ pub(crate) async fn run_permission_request_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     run_id_suffix: String,
-    tool_name: String,
-    command: String,
+    payload: PermissionRequestPayload,
 ) -> Option<PermissionRequestDecision> {
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,
@@ -162,9 +162,12 @@ pub(crate) async fn run_permission_request_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name,
+        tool_name: payload.tool_name,
         run_id_suffix,
-        command,
+        command: payload.command,
+        sandbox_permissions: payload.sandbox_permissions,
+        additional_permissions: payload.additional_permissions,
+        justification: payload.justification,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
