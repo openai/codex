@@ -610,7 +610,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
     );
 
     let mut tools_by_server = HashMap::<String, HashMap<String, Tool>>::new();
-    for (_qualified_name, tool_info) in tools {
+    for (_tool_name, tool_info) in tools {
         let raw_tool_name = tool_info.tool.name.to_string();
         let Some(tool) = protocol_tool_from_rmcp_tool(&raw_tool_name, &tool_info.tool) else {
             continue;
@@ -668,7 +668,8 @@ pub async fn collect_mcp_snapshot_from_manager_with_detail(
     let tools = tools
         .into_iter()
         .filter_map(|(name, tool)| {
-            protocol_tool_from_rmcp_tool(&name, &tool.tool).map(|tool| (name, tool))
+            let display_name = name.display();
+            protocol_tool_from_rmcp_tool(&display_name, &tool.tool).map(|tool| (display_name, tool))
         })
         .collect::<HashMap<_, _>>();
 
