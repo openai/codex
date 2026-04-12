@@ -375,11 +375,19 @@ struct FooterFlash {
 
 #[derive(Clone, Debug)]
 struct HistorySearchSession {
+    /// Draft to restore when search is canceled or a query has no match.
     original_draft: ComposerDraft,
+    /// Footer-owned query text typed while Ctrl+R search is active.
     query: String,
+    /// User-visible search status used to choose footer hints and composer preview behavior.
     status: HistorySearchStatus,
 }
 
+/// User-visible phase of the active Ctrl+R search session.
+///
+/// Search keeps the footer query and the composer preview separate: `Idle` leaves the original
+/// draft untouched, `Searching` waits for persistent history, `Match` previews a found entry, and
+/// `NoMatch` restores the original draft while leaving the search input open for more typing.
 #[derive(Clone, Debug)]
 enum HistorySearchStatus {
     Idle,

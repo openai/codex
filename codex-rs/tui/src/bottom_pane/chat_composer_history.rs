@@ -1,3 +1,16 @@
+//! The chat composer history module owns shell-style recall and incremental search traversal.
+//!
+//! It combines persistent cross-session entries with local in-session entries into one offset
+//! space. Persistent entries are fetched lazily and re-enter this state machine through
+//! [`ChatComposerHistory::on_entry_response`], while local entries are already available with full
+//! draft metadata.
+//!
+//! Ctrl+R search is modeled separately from normal Up/Down navigation because it has different
+//! guarantees: query edits restart from the newest match, repeated Older/Newer keys move through
+//! unique matching text, pending persistent fetches continue the same scan after the response
+//! arrives, and boundary hits must not advance hidden cursor state. Search deduplication is scoped
+//! to a single active search session and uses exact prompt text; it does not mutate stored history
+//! or change normal history browsing.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -115,10 +128,18 @@ pub(crate) struct ChatComposerHistory {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HistorySearchDirection {
+    /// Traverse toward older history offsets.
     Older,
+    /// Traverse toward newer history offsets.
     Newer,
 }
 
+/// Result of a single incremental history search step.
+///
+/// `Pending` means a persistent entry lookup has been requested and the caller should keep the
+/// visible search session open until [`ChatComposerHistory::on_entry_response`] supplies the next
+/// result. `AtBoundary` means the current selected match is still valid but the requested direction
+/// has no further unique match; callers should avoid treating it like a query miss.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HistorySearchResult {
     Found(HistoryEntry),
@@ -127,6 +148,10 @@ pub(crate) enum HistorySearchResult {
     NotFound,
 }
 
+/// Result of integrating an asynchronous persistent history response.
+///
+/// A response can satisfy normal Up/Down navigation, resume a pending Ctrl+R search scan, or be
+/// ignored if it belongs to a stale log or an offset the composer no longer needs.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HistoryEntryResponse {
     Found(HistoryEntry),
@@ -134,6 +159,13 @@ pub(crate) enum HistoryEntryResponse {
     Ignored,
 }
 
+/// State for one active Ctrl+R search query.
+///
+/// The state keeps two cursors: `selected_offset` is the raw combined-history offset used to
+/// continue scanning, while `selected_match_index` points into `unique_matches` so already
+/// discovered unique results can be revisited without rescanning duplicate offsets. `seen_texts`
+/// intentionally keys on exact prompt text because the UI previews and accepts text, not the
+/// storage identity of each historical record.
 #[derive(Clone, Debug)]
 struct HistorySearchState {
     query: String,
@@ -147,12 +179,22 @@ struct HistorySearchState {
     exhausted_newer: bool,
 }
 
+/// A unique search match cached with enough draft state to be selected again.
+///
+/// The vector of these matches is kept in newest-to-oldest offset order. Storing the entry beside
+/// the offset avoids depending on later cache lookups when the user moves Newer/Older among matches
+/// that have already been discovered.
 #[derive(Clone, Debug)]
 struct UniqueHistoryMatch {
     offset: usize,
     entry: HistoryEntry,
 }
 
+/// Persistent-history lookup currently blocking an incremental search scan.
+///
+/// The pending request records the direction and boundary behavior that were active when the fetch
+/// was issued so the response can either return a unique match or continue scanning as if no async
+/// gap had occurred.
 #[derive(Clone, Copy, Debug)]
 struct PendingHistorySearch {
     offset: usize,
@@ -353,6 +395,14 @@ impl ChatComposerHistory {
         HistoryEntryResponse::Ignored
     }
 
+    /// Advance the active Ctrl+R search and return the next visible search state.
+    ///
+    /// Callers pass `restart` after opening search or editing the query; that clears the unique
+    /// match cache and starts from the end of combined history. Repeated calls with the same query
+    /// and `restart == false` move relative to the current unique match, preserving the selected
+    /// entry at boundaries. Calling this while a previous persistent lookup is still pending will
+    /// keep returning `Pending`; otherwise a stale response could race with a newer user action and
+    /// replace the composer with an unexpected entry.
     pub fn search(
         &mut self,
         query: &str,
