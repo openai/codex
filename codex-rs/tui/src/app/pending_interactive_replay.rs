@@ -22,20 +22,19 @@ impl ElicitationRequestKey {
     }
 }
 
+/// Tracks which interactive prompts are still unresolved in the thread-event buffer.
+///
+/// Thread snapshots are replayed when switching threads or agents. Most events
+/// should replay verbatim, but interactive prompts such as approvals,
+/// `request_user_input`, MCP elicitations, permission grants, and permission
+/// preset pickers must only replay while they are still pending.
+///
+/// The state is updated from inbound events, outbound ops that resolve a prompt,
+/// and buffer eviction. It keeps both fast lookup sets for snapshot filtering
+/// and turn-indexed queues so `TurnComplete` and `TurnAborted` can clear stale
+/// prompts tied to a turn. `request_user_input` removal is FIFO because the
+/// overlay answers queued prompts in FIFO order for a shared `turn_id`.
 #[derive(Debug, Default)]
-// Tracks which interactive prompts are still unresolved in the thread-event buffer.
-//
-// Thread snapshots are replayed when switching threads/agents. Most events should replay
-// verbatim, but interactive prompts (approvals, request_user_input, MCP elicitations) must
-// only replay if they are still pending. This state is updated from:
-// - inbound events (`note_event`)
-// - outbound ops that resolve a prompt (`note_outbound_op`)
-// - buffer eviction (`note_evicted_event`)
-//
-// We keep both fast lookup sets (for snapshot filtering by call_id/request key) and
-// turn-indexed queues/vectors so `TurnComplete`/`TurnAborted` can clear stale prompts tied
-// to a turn. `request_user_input` removal is FIFO because the overlay answers queued prompts
-// in FIFO order for a shared `turn_id`.
 pub(super) struct PendingInteractiveReplayState {
     exec_approval_call_ids: HashSet<String>,
     exec_approval_call_ids_by_turn_id: HashMap<String, Vec<String>>,

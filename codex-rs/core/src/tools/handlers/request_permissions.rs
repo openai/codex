@@ -13,6 +13,7 @@ use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
+/// Handles model requests to open the narrow permission confirmation UI.
 pub struct RequestPermissionsHandler;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -30,6 +31,7 @@ struct RequestPermissionsToolOutput {
     message: &'static str,
 }
 
+/// Builds the model-visible result after the user has resolved the confirmation UI.
 fn output_for_response(response: RequestPermissionsResponse) -> RequestPermissionsToolOutput {
     if response.permissions.is_empty() {
         RequestPermissionsToolOutput {

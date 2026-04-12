@@ -6212,6 +6212,11 @@ pub struct DynamicToolCallParams {
     pub arguments: JsonValue,
 }
 
+/// Request sent to app clients when a model asks for a narrow permission grant.
+///
+/// The client owns the confirmation UI and may return fewer permissions than
+/// requested. Treat `suggested_scope` as the model's requested lifetime, not as
+/// an already-approved scope.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6234,6 +6239,11 @@ v2_enum_from_core!(
     }
 );
 
+/// Response from an app client after the narrow permission grant UI resolves.
+///
+/// Returning an empty permission profile is a denial. Returning a non-empty
+/// profile grants only those permissions, and core applies them for the
+/// specified scope.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6243,6 +6253,7 @@ pub struct PermissionsRequestApprovalResponse {
     pub scope: PermissionGrantScope,
 }
 
+/// A built-in permission-mode preset that app clients can confirm.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "kebab-case")]
 #[ts(rename_all = "kebab-case", export_to = "v2/")]
@@ -6254,6 +6265,7 @@ pub enum PermissionPresetId {
 }
 
 impl PermissionPresetId {
+    /// Converts the app-server preset identifier into the core protocol type.
     pub fn to_core(self) -> CorePermissionPresetId {
         match self {
             Self::Auto => CorePermissionPresetId::Auto,
@@ -6275,6 +6287,11 @@ impl From<CorePermissionPresetId> for PermissionPresetId {
     }
 }
 
+/// Request sent to app clients when a model asks to switch permission modes.
+///
+/// Core resolves the requested preset before emitting this payload, so clients
+/// should render the provided settings and label rather than recomputing policy
+/// choices from the preset id.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6298,6 +6315,7 @@ v2_enum_from_core!(
     }
 );
 
+/// Response from an app client after the permission preset picker resolves.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

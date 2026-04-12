@@ -8,6 +8,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
+/// Handles model requests to open the permission preset confirmation UI.
 pub struct RequestPermissionPresetHandler;
 
 impl ToolHandler for RequestPermissionPresetHandler {

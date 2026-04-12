@@ -1,3 +1,10 @@
+//! Protocol types for conversational permission-mode preset requests.
+//!
+//! These messages represent the narrow bridge between a model tool call and a
+//! client-owned confirmation UI. Core resolves a requested preset into concrete
+//! sandbox, approval, and reviewer settings before emitting the event, and the
+//! settings only become active after the client returns an accepted response.
+
 use crate::config_types::ApprovalsReviewer;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
@@ -6,6 +13,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+/// A built-in permission-mode preset that can be requested conversationally.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "kebab-case")]
 #[ts(rename_all = "kebab-case")]
@@ -17,6 +25,7 @@ pub enum PermissionPresetId {
 }
 
 impl PermissionPresetId {
+    /// Returns the stable kebab-case identifier used in tool arguments and UI payloads.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -26,6 +35,7 @@ impl PermissionPresetId {
         }
     }
 
+    /// Parses a stable preset identifier into a permission preset enum value.
     pub fn from_id(id: &str) -> Option<Self> {
         match id {
             "auto" => Some(Self::Auto),
@@ -37,6 +47,7 @@ impl PermissionPresetId {
     }
 }
 
+/// Arguments passed by the model when it asks the client to open the preset picker.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestPermissionPresetArgs {
     pub preset: PermissionPresetId,
@@ -44,6 +55,7 @@ pub struct RequestPermissionPresetArgs {
     pub reason: Option<String>,
 }
 
+/// The user's completed decision from the permission preset confirmation UI.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestPermissionPresetDecision {
@@ -51,6 +63,7 @@ pub enum RequestPermissionPresetDecision {
     Declined,
 }
 
+/// The result returned to the model after the permission preset picker is resolved.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestPermissionPresetResponse {
     pub decision: RequestPermissionPresetDecision,
@@ -58,6 +71,7 @@ pub struct RequestPermissionPresetResponse {
     pub message: String,
 }
 
+/// Event sent from core to a client so the client can confirm a preset change.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestPermissionPresetEvent {
     /// Responses API call id for the associated tool call, if available.

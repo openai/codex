@@ -1,3 +1,9 @@
+//! Built-in permission presets shared by clients that render permission pickers.
+//!
+//! This crate keeps preset definitions independent from any single UI. Callers
+//! decide which presets are available in their environment, then apply the
+//! returned policies only after the relevant confirmation surface resolves.
+
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -100,6 +106,11 @@ pub fn builtin_permission_presets(
     presets
 }
 
+/// Finds a built-in permission preset by stable identifier.
+///
+/// The availability flags must match the client surface that will display the
+/// preset. Passing broader flags than the UI uses can let a model request a
+/// preset that the user never had a chance to select.
 pub fn find_builtin_permission_preset(
     id: &str,
     include_read_only: bool,

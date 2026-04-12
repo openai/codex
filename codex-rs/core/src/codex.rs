@@ -3279,6 +3279,13 @@ impl Session {
         rx_approve
     }
 
+    /// Sends a narrow permission grant request to the active client and waits for the user's decision.
+    ///
+    /// The returned response contains the permissions the client says the user
+    /// granted, which may be empty or narrower than the requested profile. A
+    /// caller that treats the original request as granted would bypass the
+    /// confirmation contract and could run a later tool with permissions the
+    /// user declined.
     pub async fn request_permissions(
         &self,
         turn_context: &TurnContext,
@@ -3335,6 +3342,13 @@ impl Session {
         rx_response.await.ok()
     }
 
+    /// Sends a permission preset request to the active client and waits for the user's decision.
+    ///
+    /// Core resolves and validates the preset before emitting the event so the
+    /// client confirms concrete settings rather than interpreting policy names.
+    /// The settings are not applied by this function; they become active only
+    /// when `notify_request_permission_preset_response` receives an accepted
+    /// response for the pending call id.
     pub async fn request_permission_preset(
         &self,
         turn_context: &TurnContext,
@@ -3420,6 +3434,12 @@ impl Session {
             })
     }
 
+    /// Applies an accepted permission preset response and completes the pending tool call.
+    ///
+    /// Responses for unknown call ids are logged and ignored. Accepted
+    /// responses are re-resolved against the current session before applying so
+    /// a stale client response cannot select a preset that is no longer
+    /// available.
     pub async fn notify_request_permission_preset_response(
         &self,
         call_id: &str,
@@ -3660,6 +3680,12 @@ impl Session {
         }
     }
 
+    /// Records an approved narrow permission grant and completes the pending tool call.
+    ///
+    /// Turn-scoped grants are stored on the active turn, while session-scoped
+    /// grants are stored in session state after the turn lock is released.
+    /// Unknown call ids are ignored because they may be late replies from a
+    /// client prompt that was already resolved or abandoned.
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
