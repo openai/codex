@@ -1,3 +1,18 @@
+//! Permission-request hook execution.
+//!
+//! This event runs in the approval path, before guardian or user approval UI is
+//! shown. Unlike `pre_tool_use`, handlers do not rewrite tool input or block by
+//! stopping execution outright; instead they can return a concrete allow/deny
+//! decision, or decline to decide and let the normal approval flow continue.
+//!
+//! The event also mirrors the rest of the hook system's lifecycle:
+//!
+//! 1. Preview matching handlers so the UI can render pending hook rows.
+//! 2. Execute every matching handler in precedence order.
+//! 3. Parse each handler into transcript-visible output plus an optional
+//!    decision.
+//! 4. Fold the decisions conservatively: any deny wins, otherwise the last
+//!    allow wins, otherwise there is no hook verdict.
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
@@ -119,6 +134,8 @@ pub(crate) async fn run(
     )
     .await;
 
+    // Preserve the most specific matching allow, but treat any deny as final so
+    // broader policy layers cannot accidentally overrule a more specific block.
     let decision = resolve_permission_request_decision(
         results
             .iter()
@@ -296,7 +313,7 @@ mod tests {
 
     #[test]
     fn permission_request_deny_overrides_earlier_allow() {
-        let decisions = vec![
+        let decisions = [
             PermissionRequestDecision::Allow,
             PermissionRequestDecision::Deny {
                 message: "repo deny".to_string(),
@@ -313,7 +330,7 @@ mod tests {
 
     #[test]
     fn permission_request_returns_allow_when_no_handler_denies() {
-        let decisions = vec![
+        let decisions = [
             PermissionRequestDecision::Allow,
             PermissionRequestDecision::Allow,
         ];

@@ -399,10 +399,9 @@ impl ToolOrchestrator {
         }
     }
 
-    // PermissionRequest hooks get the first chance to answer approval prompts
-    // for tools that expose a hook payload. Today this is Bash-only; if no
-    // matching hook returns a decision, fall back to the normal user or guardian
-    // approval path.
+    // PermissionRequest hooks take top precedence for answering approval
+    // prompts. If no matching hook returns a decision, fall back to the
+    // normal guardian or user approval path.
     async fn request_approval<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,

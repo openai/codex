@@ -141,23 +141,6 @@ pub(crate) struct PermissionRequestPayload {
     pub justification: Option<String>,
 }
 
-impl PermissionRequestPayload {
-    pub(crate) fn bash(
-        command: String,
-        sandbox_permissions: SandboxPermissions,
-        additional_permissions: Option<PermissionProfile>,
-        justification: Option<String>,
-    ) -> Self {
-        Self {
-            tool_name: "Bash".to_string(),
-            command,
-            sandbox_permissions,
-            additional_permissions,
-            justification,
-        }
-    }
-}
-
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExecApprovalRequirement {
@@ -300,6 +283,8 @@ pub(crate) trait Approvable<Req> {
         None
     }
 
+    /// Return hook input for approval-time policy hooks when this runtime wants
+    /// hook evaluation to run before guardian or user approval.
     fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
         None
     }

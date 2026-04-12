@@ -150,6 +150,9 @@ pub(crate) async fn run_pre_tool_use_hooks(
     if should_block { block_reason } else { None }
 }
 
+// PermissionRequest hooks share the same preview/start/completed event flow as
+// other hook types, but they return an optional decision instead of mutating
+// tool input or post-run state.
 pub(crate) async fn run_permission_request_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
