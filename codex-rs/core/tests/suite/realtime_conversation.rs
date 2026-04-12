@@ -1557,7 +1557,8 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         .into_iter()
         .enumerate()
         .flat_map(|(index, user_turn)| {
-            let assistant_turn = format!("assistant turn {}", index + 1);
+            let turn_number = index + 1;
+            let assistant_turn = format!("assistant turn {turn_number}");
             [
                 RolloutItem::ResponseItem(ResponseItem::Message {
                     id: None,
