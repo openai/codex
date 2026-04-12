@@ -2,9 +2,12 @@ use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_core::test_support::auth_manager_from_auth;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -13,12 +16,14 @@ use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -1536,20 +1541,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         .collect::<Vec<_>>();
     user_turns.push(latest_long_user_turn.clone());
 
-    let response_bodies = (1..=8)
-        .map(|index| {
-            responses::sse(vec![
-                responses::ev_response_created(&format!("resp-{index}")),
-                responses::ev_assistant_message(
-                    &format!("msg-{index}"),
-                    &format!("assistant turn {index}"),
-                ),
-                responses::ev_completed(&format!("resp-{index}")),
-            ])
-        })
-        .collect::<Vec<_>>();
-    let _responses_mock = responses::mount_sse_sequence(&api_server, response_bodies).await;
-
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
@@ -1559,35 +1550,48 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
     });
     let test = builder.build(&api_server).await?;
 
-    // Seed real completed turns through the normal Responses path. This catches
-    // grouping and history-cloning behavior that a formatter-only test would miss.
-    for user_turn in user_turns {
-        test.codex
-            .submit(Op::UserTurn {
-                items: vec![UserInput::Text {
-                    text: user_turn,
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                cwd: test.cwd_path().to_path_buf(),
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                model: test.session_configured.model.clone(),
-                effort: test.config.model_reasoning_effort,
-                summary: None,
-                service_tier: None,
-                collaboration_mode: None,
-                personality: None,
-            })
-            .await?;
-        wait_for_event(&test.codex, |event| {
-            matches!(event, EventMsg::TurnComplete(_))
+    // Seed completed turns through a resumed thread so this remains an
+    // end-to-end startup-context test without paying for a model turn per
+    // fixture entry in platform CI.
+    let history = user_turns
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, user_turn)| {
+            let assistant_turn = format!("assistant turn {}", index + 1);
+            [
+                RolloutItem::ResponseItem(ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText { text: user_turn }],
+                    end_turn: None,
+                    phase: None,
+                }),
+                RolloutItem::ResponseItem(ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: assistant_turn,
+                    }],
+                    end_turn: None,
+                    phase: None,
+                }),
+            ]
         })
-        .await;
-    }
+        .collect::<Vec<_>>();
+    test.codex.shutdown_and_wait().await?;
+    let resumed_thread = test
+        .thread_manager
+        .resume_thread_with_history(
+            test.config.clone(),
+            InitialHistory::Forked(history),
+            auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let codex = resumed_thread.thread;
 
-    test.codex
+    codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
@@ -1664,6 +1668,7 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         (true, Vec::<(String, usize)>::new()),
     );
 
+    codex.shutdown_and_wait().await?;
     realtime_server.shutdown().await;
     Ok(())
 }
