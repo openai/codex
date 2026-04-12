@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-print_failed_bazel_test_logs=0
+summarize_failed_bazel_test_logs=0
 use_node_test_env=0
 remote_download_toplevel=0
 windows_msvc_host_platform=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --print-failed-test-logs)
-      print_failed_bazel_test_logs=1
+    --summarize-failed-test-logs)
+      summarize_failed_bazel_test_logs=1
       shift
       ;;
     --use-node-test-env)
@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--summarize-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -65,44 +65,122 @@ case "${RUNNER_OS:-}" in
     ;;
 esac
 
-print_bazel_test_log_tails() {
+summarize_failed_bazel_test_logs() {
   local console_log="$1"
-  local testlogs_dir
+  local testlogs_dir=
   local -a bazel_info_cmd=(bazel)
+  local rust_test_summary
+  rust_test_summary="$(mktemp)"
 
-  if (( ${#bazel_startup_args[@]} > 0 )); then
-    bazel_info_cmd+=("${bazel_startup_args[@]}")
-  fi
-
-  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
-
-  local failed_targets=()
-  while IFS= read -r target; do
-    failed_targets+=("$target")
+  local failed_target_logs=()
+  while IFS= read -r target_log; do
+    failed_target_logs+=("$target_log")
   done < <(
     grep -E '^FAIL: //' "$console_log" \
-      | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
+      | awk '{
+          target = $2
+          test_log = ""
+          if (match($0, /\(see [^)]*test\.log\)/)) {
+            test_log = substr($0, RSTART + 5, RLENGTH - 6)
+          }
+          if (!(target in test_logs) || test_logs[target] == "") {
+            test_logs[target] = test_log
+          }
+        }
+        END {
+          for (target in test_logs) {
+            print target "\t" test_logs[target]
+          }
+        }' \
       | sort -u
   )
 
-  if [[ ${#failed_targets[@]} -eq 0 ]]; then
+  if [[ ${#failed_target_logs[@]} -eq 0 ]]; then
     echo "No failed Bazel test targets were found in console output."
+    rm -f "$rust_test_summary"
     return
   fi
 
-  for target in "${failed_targets[@]}"; do
-    local rel_path="${target#//}"
-    rel_path="${rel_path/:/\/}"
-    local test_log="${testlogs_dir}/${rel_path}/test.log"
+  for target_log in "${failed_target_logs[@]}"; do
+    local target="${target_log%%$'\t'*}"
+    local test_log="${target_log#*$'\t'}"
 
-    echo "::group::Bazel test log tail for ${target}"
-    if [[ -f "$test_log" ]]; then
-      tail -n 200 "$test_log"
-    else
-      echo "Missing test log: $test_log"
+    if [[ -z "$test_log" ]]; then
+      if [[ -z "$testlogs_dir" ]]; then
+        if (( ${#bazel_startup_args[@]} > 0 )); then
+          bazel_info_cmd+=("${bazel_startup_args[@]}")
+        fi
+
+        testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+      fi
+
+      local rel_path="${target#//}"
+      rel_path="${rel_path/:/\/}"
+      test_log="${testlogs_dir}/${rel_path}/test.log"
     fi
-    echo "::endgroup::"
+
+    if [[ -f "$test_log" ]]; then
+      awk -v target="$target" '
+        /^failures:$/ {
+          in_failures = 1
+          next
+        }
+        in_failures && /^    / {
+          print "F\t" target "\t" substr($0, 5)
+          next
+        }
+        in_failures && $0 !~ /^$/ {
+          in_failures = 0
+        }
+        /^test result: FAILED\./ {
+          line = $0
+          sub(/^test result: FAILED\. /, "", line)
+          sub(/; finished.*$/, "", line)
+          field_count = split(line, fields, "; ")
+          printf "T\t%s", target
+          for (i = 1; i <= field_count; i++) {
+            split(fields[i], parts, " ")
+            printf "\t%d", parts[1]
+          }
+          print ""
+        }
+      ' "$test_log" >> "$rust_test_summary"
+    fi
   done
+
+  echo
+  awk -F '\t' '
+    BEGIN {
+      print "Rust test failures:"
+    }
+    $1 == "F" {
+      saw_failure = 1
+      print "  FAIL " $2 " " $3
+    }
+    $1 == "T" {
+      passed += $3
+      failed += $4
+      ignored += $5
+      measured += $6
+      filtered += $7
+      result_count += 1
+    }
+    END {
+      if (!saw_failure) {
+        print "  No Rust test failure names found in test logs."
+      }
+
+      print ""
+      print "Rust test result totals across failed Bazel targets:"
+      if (result_count > 0) {
+        printf "  %d passed; %d failed; %d ignored; %d measured; %d filtered out\n",
+          passed, failed, ignored, measured, filtered
+      } else {
+        print "  No Rust test result totals found in test logs."
+      }
+    }
+  ' "$rust_test_summary"
+  rm -f "$rust_test_summary"
 }
 
 bazel_args=()
@@ -271,8 +349,8 @@ else
 fi
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
-  if [[ $print_failed_bazel_test_logs -eq 1 ]]; then
-    print_bazel_test_log_tails "$bazel_console_log"
+  if [[ $summarize_failed_bazel_test_logs -eq 1 ]]; then
+    summarize_failed_bazel_test_logs "$bazel_console_log"
   fi
   exit "$bazel_status"
 fi
