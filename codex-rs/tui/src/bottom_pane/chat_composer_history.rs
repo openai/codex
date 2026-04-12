@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
@@ -138,9 +139,18 @@ struct HistorySearchState {
     query: String,
     query_lower: String,
     selected_offset: Option<usize>,
+    unique_matches: Vec<UniqueHistoryMatch>,
+    selected_match_index: Option<usize>,
+    seen_texts: HashSet<String>,
     awaiting: Option<PendingHistorySearch>,
     exhausted_older: bool,
     exhausted_newer: bool,
+}
+
+#[derive(Clone, Debug)]
+struct UniqueHistoryMatch {
+    offset: usize,
+    entry: HistoryEntry,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -320,6 +330,7 @@ impl ChatComposerHistory {
                 });
             if let Some(entry) = entry
                 && self.search_matches(&entry)
+                && self.search_result_is_unique(&entry)
             {
                 return HistoryEntryResponse::Search(self.search_match(offset, entry));
             }
@@ -382,6 +393,12 @@ impl ChatComposerHistory {
                 .as_ref()
                 .and_then(|search| search.selected_offset)
                 .is_some();
+        if !restart
+            && !query_changed
+            && let Some(result) = self.select_cached_unique_match(direction)
+        {
+            return result;
+        }
         if boundary_if_exhausted
             && self
                 .search
@@ -479,7 +496,7 @@ impl ChatComposerHistory {
         let total_entries = self.total_entries();
         while offset < total_entries {
             if let Some(entry) = self.entry_at_cached_offset(offset) {
-                if self.search_matches(&entry) {
+                if self.search_matches(&entry) && self.search_result_is_unique(&entry) {
                     return self.search_match(offset, entry);
                 }
             } else if offset < self.history_entry_count
@@ -531,16 +548,48 @@ impl ChatComposerHistory {
         search.query.is_empty() || entry.text.to_lowercase().contains(&search.query_lower)
     }
 
+    fn search_result_is_unique(&self, entry: &HistoryEntry) -> bool {
+        self.search
+            .as_ref()
+            .is_none_or(|search| !search.seen_texts.contains(entry.text.as_str()))
+    }
+
     fn search_match(&mut self, offset: usize, entry: HistoryEntry) -> HistorySearchResult {
         self.history_cursor = Some(offset as isize);
         self.last_history_text = Some(entry.text.clone());
         if let Some(search) = self.search.as_mut() {
             search.selected_offset = Some(offset);
+            search.record_match(offset, &entry);
             search.awaiting = None;
             search.exhausted_older = false;
             search.exhausted_newer = false;
         }
         HistorySearchResult::Found(entry)
+    }
+
+    fn select_cached_unique_match(
+        &mut self,
+        direction: HistorySearchDirection,
+    ) -> Option<HistorySearchResult> {
+        let next_index = {
+            let search = self.search.as_ref()?;
+            let selected_index = search.selected_match_index?;
+            match direction {
+                HistorySearchDirection::Older => {
+                    let next_index = selected_index + 1;
+                    (next_index < search.unique_matches.len()).then_some(next_index)?
+                }
+                HistorySearchDirection::Newer => selected_index.checked_sub(1)?,
+            }
+        };
+
+        let history_match = self.search.as_ref()?.unique_matches[next_index].clone();
+        self.history_cursor = Some(history_match.offset as isize);
+        self.last_history_text = Some(history_match.entry.text.clone());
+        if let Some(search) = self.search.as_mut() {
+            search.select_match(next_index);
+        }
+        Some(HistorySearchResult::Found(history_match.entry))
     }
 
     fn exhausted_search_result(
@@ -596,6 +645,9 @@ impl HistorySearchState {
             query: query.to_string(),
             query_lower: query.to_lowercase(),
             selected_offset: None,
+            unique_matches: Vec::new(),
+            selected_match_index: None,
+            seen_texts: HashSet::new(),
             awaiting: None,
             exhausted_older: false,
             exhausted_newer: false,
@@ -614,6 +666,41 @@ impl HistorySearchState {
             HistorySearchDirection::Older => self.exhausted_older = true,
             HistorySearchDirection::Newer => self.exhausted_newer = true,
         }
+    }
+
+    fn record_match(&mut self, offset: usize, entry: &HistoryEntry) {
+        if let Some(index) = self
+            .unique_matches
+            .iter()
+            .position(|history_match| history_match.offset == offset)
+        {
+            self.select_match(index);
+            return;
+        }
+
+        self.seen_texts.insert(entry.text.clone());
+        let insert_index = self
+            .unique_matches
+            .partition_point(|history_match| history_match.offset > offset);
+        self.unique_matches.insert(
+            insert_index,
+            UniqueHistoryMatch {
+                offset,
+                entry: entry.clone(),
+            },
+        );
+        self.select_match(insert_index);
+    }
+
+    fn select_match(&mut self, index: usize) {
+        let Some(history_match) = self.unique_matches.get(index) else {
+            return;
+        };
+        self.selected_offset = Some(history_match.offset);
+        self.selected_match_index = Some(index);
+        self.awaiting = None;
+        self.exhausted_older = false;
+        self.exhausted_newer = false;
     }
 }
 
@@ -784,6 +871,64 @@ mod tests {
     }
 
     #[test]
+    fn search_skips_duplicate_local_matches() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.record_local_submission(HistoryEntry::new("git status".to_string()));
+        history.record_local_submission(HistoryEntry::new("cargo test -p codex-tui".to_string()));
+        history.record_local_submission(HistoryEntry::new("git status".to_string()));
+        history.record_local_submission(HistoryEntry::new("git diff".to_string()));
+
+        assert_eq!(
+            HistorySearchResult::Found(HistoryEntry::new("git diff".to_string())),
+            history.search(
+                "git",
+                HistorySearchDirection::Older,
+                /*restart*/ true,
+                &tx
+            )
+        );
+        assert_eq!(
+            HistorySearchResult::Found(HistoryEntry::new("git status".to_string())),
+            history.search(
+                "git",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        assert_eq!(
+            HistorySearchResult::AtBoundary,
+            history.search(
+                "git",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        assert_eq!(
+            HistorySearchResult::Found(HistoryEntry::new("git diff".to_string())),
+            history.search(
+                "git",
+                HistorySearchDirection::Newer,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        assert_eq!(
+            HistorySearchResult::Found(HistoryEntry::new("git status".to_string())),
+            history.search(
+                "git",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+    }
+
+    #[test]
     fn repeated_boundary_search_does_not_refetch_persistent_history() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -912,6 +1057,97 @@ mod tests {
                 /*log_id*/ 1,
                 /*offset*/ 1,
                 Some("older command".into()),
+                &tx
+            )
+        );
+    }
+
+    #[test]
+    fn search_skips_duplicate_persistent_matches() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.set_metadata(/*log_id*/ 1, /*entry_count*/ 4);
+
+        assert_eq!(
+            HistorySearchResult::Pending,
+            history.search(
+                "needle",
+                HistorySearchDirection::Older,
+                /*restart*/ true,
+                &tx
+            )
+        );
+        let _ = rx.try_recv().expect("expected latest lookup");
+        assert_eq!(
+            HistoryEntryResponse::Search(HistorySearchResult::Found(HistoryEntry::new(
+                "needle same".to_string()
+            ))),
+            history.on_entry_response(
+                /*log_id*/ 1,
+                /*offset*/ 3,
+                Some("needle same".into()),
+                &tx,
+            )
+        );
+
+        assert_eq!(
+            HistorySearchResult::Pending,
+            history.search(
+                "needle",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        let _ = rx.try_recv().expect("expected duplicate lookup");
+        assert_eq!(
+            HistoryEntryResponse::Search(HistorySearchResult::Pending),
+            history.on_entry_response(
+                /*log_id*/ 1,
+                /*offset*/ 2,
+                Some("needle same".into()),
+                &tx,
+            )
+        );
+        let _ = rx.try_recv().expect("expected next lookup after duplicate");
+        assert_eq!(
+            HistoryEntryResponse::Search(HistorySearchResult::Pending),
+            history.on_entry_response(
+                /*log_id*/ 1,
+                /*offset*/ 1,
+                Some("not a match".into()),
+                &tx,
+            )
+        );
+        let _ = rx.try_recv().expect("expected oldest lookup");
+        assert_eq!(
+            HistoryEntryResponse::Search(HistorySearchResult::Found(HistoryEntry::new(
+                "needle older".to_string()
+            ))),
+            history.on_entry_response(
+                /*log_id*/ 1,
+                /*offset*/ 0,
+                Some("needle older".into()),
+                &tx,
+            )
+        );
+        assert_eq!(
+            HistorySearchResult::AtBoundary,
+            history.search(
+                "needle",
+                HistorySearchDirection::Older,
+                /*restart*/ false,
+                &tx
+            )
+        );
+        assert_eq!(
+            HistorySearchResult::Found(HistoryEntry::new("needle same".to_string())),
+            history.search(
+                "needle",
+                HistorySearchDirection::Newer,
+                /*restart*/ false,
                 &tx
             )
         );
