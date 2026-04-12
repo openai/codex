@@ -7,7 +7,7 @@ We provide two container paths:
 
 ## Codex contributor profile
 
-Use `devcontainer.json` when you are developing Codex itself. This is the same lightweight arm64 container that already exists in the repo, with Docker security options that allow Codex's Linux bubblewrap sandbox to run inside the container.
+Use `devcontainer.json` when you are developing Codex itself. This is the same lightweight arm64 container that already exists in the repo.
 
 ## Secure customer profile
 
@@ -37,19 +37,7 @@ To build the contributor image locally for x64 and then run it with the repo mou
 ```shell
 CODEX_DOCKER_IMAGE_NAME=codex-linux-dev
 docker build --platform=linux/amd64 -t "$CODEX_DOCKER_IMAGE_NAME" ./.devcontainer
-docker run --platform=linux/amd64 --rm -it \
-  --cap-add=SYS_ADMIN \
-  --cap-add=SYS_CHROOT \
-  --cap-add=NET_ADMIN \
-  --cap-add=SETUID \
-  --cap-add=SETGID \
-  --cap-add=SYS_PTRACE \
-  --security-opt "seccomp=$PWD/.devcontainer/seccomp-bubblewrap.json" \
-  --security-opt apparmor=unconfined \
-  -e CARGO_TARGET_DIR=/workspace/codex-rs/target-amd64 \
-  -v "$PWD":/workspace \
-  -w /workspace/codex-rs \
-  "$CODEX_DOCKER_IMAGE_NAME"
+docker run --platform=linux/amd64 --rm -it -e CARGO_TARGET_DIR=/workspace/codex-rs/target-amd64 -v "$PWD":/workspace -w /workspace/codex-rs "$CODEX_DOCKER_IMAGE_NAME"
 ```
 
 Note that `/workspace/target` will contain the binaries built for your host platform, so we include `-e CARGO_TARGET_DIR=/workspace/codex-rs/target-amd64` in the `docker run` command so that the binaries built inside your container are written to a separate directory.
@@ -58,4 +46,4 @@ For arm64, specify `--platform=linux/arm64` instead for both `docker build` and 
 
 Currently, the contributor `Dockerfile` works for both x64 and arm64 Linux, though you need to run `rustup target add x86_64-unknown-linux-musl` yourself to install the musl toolchain for x64.
 
-The capability, seccomp, and AppArmor options are required when you want Codex's bubblewrap sandbox to run inside Docker as the non-root devcontainer user. Without them, Docker's default runtime profile can block bubblewrap's namespace setup before Codex's own seccomp filter is installed.
+The secure profile's capability, seccomp, and AppArmor options are required when you want Codex's bubblewrap sandbox to run inside Docker as the non-root devcontainer user. Without them, Docker's default runtime profile can block bubblewrap's namespace setup before Codex's own seccomp filter is installed.

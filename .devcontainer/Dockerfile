@@ -8,12 +8,10 @@ RUN apt-get update && \
     add-apt-repository --yes universe
 
 # now install build deps
-# Devcontainers run as a non-root user, so enable bubblewrap's setuid mode.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential curl git ca-certificates \
-    pkg-config libcap-dev clang musl-tools libssl-dev just bubblewrap && \
-    chmod u+s /usr/bin/bwrap && \
+    pkg-config libcap-dev clang musl-tools libssl-dev just && \
     rm -rf /var/lib/apt/lists/*
 
 # Ubuntu 24.04 ships with user 'ubuntu' already created with UID 1000.

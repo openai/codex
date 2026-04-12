@@ -8,17 +8,7 @@
 
   /* Force VS Code to run the container as arm64 in
      case your host is x86 (or vice-versa). */
-  "runArgs": [
-    "--platform=linux/arm64",
-    "--cap-add=SYS_ADMIN",
-    "--cap-add=SYS_CHROOT",
-    "--cap-add=NET_ADMIN",
-    "--cap-add=SETUID",
-    "--cap-add=SETGID",
-    "--cap-add=SYS_PTRACE",
-    "--security-opt=seccomp=${localWorkspaceFolder}/.devcontainer/seccomp-bubblewrap.json",
-    "--security-opt=apparmor=unconfined"
-  ],
+  "runArgs": ["--platform=linux/arm64"],
 
   "containerEnv": {
     "RUST_BACKTRACE": "1",
