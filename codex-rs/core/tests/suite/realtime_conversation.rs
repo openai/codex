@@ -1530,7 +1530,7 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         .map(|index| {
             format!(
                 "short-turn-{index}-start {} short-turn-{index}-end",
-                "detail ".repeat(70)
+                "detail ".repeat(86)
             )
         })
         .collect::<Vec<_>>();
