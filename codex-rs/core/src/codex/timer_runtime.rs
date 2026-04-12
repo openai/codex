@@ -1,26 +1,29 @@
-//! SQLite-backed runtime bridge for thread timers.
+//! SQLite-backed runtime bridge for thread timers and queued thread messages.
 //!
 //! This module connects [`Session`] to the persistent state database, keeps the
 //! in-memory timer scheduler reconciled with cross-instance changes, and
-//! converts claimed timers into generated model input plus transcript-safe
-//! delivery events.
+//! converts claimed timers/messages into generated model input plus
+//! transcript-safe delivery events.
 //!
-//! Timer delivery must be single-consumer across all harness instances for a
-//! thread, even though those instances share the same SQLite state database. In
-//! other words, if two app or CLI processes are attached to the same thread, a
-//! due timer should be injected by at most one of them.
+//! Timer and queued-message delivery must be single-consumer across all harness
+//! instances for a thread, even though those instances share the same SQLite
+//! state database. In other words, if two app or CLI processes are attached to
+//! the same thread, a due timer or queued message should be injected by at most
+//! one of them.
 //!
 //! The database is the authority for that guarantee. Before this module
-//! Timers are first selected from local memory, but delivery proceeds only if
-//! the matching SQLite claim also wins: one-shot timers are deleted as part of
-//! the claim, and recurring timers are updated with the expected previous run
-//! timestamp so competing instances cannot both observe and persist the same
-//! run. If another instance wins the database race, this runtime refreshes its
-//! local timer view from SQLite and skips delivery.
+//! delivers a queued message, it calls into the state layer to atomically claim
+//! and remove the next eligible row. Timers are first selected from local
+//! memory, but delivery proceeds only if the matching SQLite claim also wins:
+//! one-shot timers are deleted as part of the claim, and recurring timers are
+//! updated with the expected previous run timestamp so competing instances
+//! cannot both observe and persist the same run. If another instance wins the
+//! database race, this runtime refreshes its local timer view from SQLite and
+//! skips delivery.
 //!
 //! The local `timer_start_in_progress` flag is still useful, but only as an
 //! in-process guard. It prevents this [`Session`] from starting multiple pending
-//! timer deliveries concurrently; cross-process exclusivity comes from
+//! timer/message deliveries concurrently; cross-process exclusivity comes from
 //! the SQLite claim operations above.
 
 use super::BackgroundEventEvent;
@@ -28,6 +31,7 @@ use super::Event;
 use super::EventMsg;
 use super::INITIAL_SUBMIT_ID;
 use super::Session;
+use crate::injected_message::InjectedMessage;
 use crate::injected_message::MessagePayload;
 use crate::pending_input::PendingInputItem;
 use crate::timers::ClaimedTimer;
@@ -64,6 +68,17 @@ enum TimerDbSyncStatus {
     Failed,
     Unchanged,
     Changed,
+}
+
+enum PendingMessageStart {
+    Started,
+    NotReady,
+    None,
+}
+
+enum PendingMessageClaim {
+    Claimed(Box<PendingInputItem>, TimerDelivery),
+    NotReady,
 }
 
 fn db_timer_to_persisted_timer(row: codex_state::ThreadTimer) -> Option<PersistedTimer> {
@@ -219,6 +234,10 @@ impl Session {
         {
             return;
         }
+        match self.maybe_start_pending_message().await {
+            PendingMessageStart::Started | PendingMessageStart::NotReady => return,
+            PendingMessageStart::None => {}
+        }
         self.try_start_pending_timer(RecurringTimerPolicy::IncludeAll)
             .await;
     }
@@ -261,6 +280,111 @@ impl Session {
         }
         *self.timer_start_in_progress.lock().await = false;
         true
+    }
+
+    async fn maybe_start_pending_message(self: &Arc<Self>) -> PendingMessageStart {
+        let Some(claim) = self.claim_next_message_for_delivery().await else {
+            return PendingMessageStart::None;
+        };
+        let PendingMessageClaim::Claimed(input_item, delivery) = claim else {
+            return PendingMessageStart::NotReady;
+        };
+        let input_item = *input_item;
+
+        match delivery {
+            TimerDelivery::SteerCurrentTurn => {
+                if !self
+                    .inject_message_into_active_turn(input_item.clone())
+                    .await
+                {
+                    self.queue_pending_input_for_next_turn(vec![input_item])
+                        .await;
+                    self.maybe_start_turn_for_pending_work().await;
+                }
+            }
+            TimerDelivery::AfterTurn => {
+                self.queue_pending_input_for_next_turn(vec![input_item])
+                    .await;
+                self.maybe_start_turn_for_pending_work().await;
+            }
+        }
+        *self.timer_start_in_progress.lock().await = false;
+        PendingMessageStart::Started
+    }
+
+    async fn claim_next_message_for_delivery(self: &Arc<Self>) -> Option<PendingMessageClaim> {
+        if !self.queued_messages_feature_enabled() {
+            return None;
+        }
+        let mut timer_start_in_progress = self.timer_start_in_progress.lock().await;
+        if *timer_start_in_progress {
+            return None;
+        }
+        *timer_start_in_progress = true;
+        drop(timer_start_in_progress);
+
+        let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await;
+        let (has_active_turn, active_turn_is_regular) = {
+            let active_turn = self.active_turn.lock().await;
+            let has_active_turn = active_turn.is_some();
+            let active_turn_is_regular = active_turn
+                .as_ref()
+                .and_then(|turn| turn.tasks.first())
+                .is_some_and(|(_, task)| matches!(task.kind, crate::state::TaskKind::Regular));
+            (has_active_turn, active_turn_is_regular)
+        };
+        let can_after_turn = !has_active_turn && !has_pending_turn_inputs;
+        let can_steer_current_turn = active_turn_is_regular;
+        let state_db = match self.timer_state_db().await {
+            Ok(state_db) => state_db,
+            Err(err) => {
+                warn!("failed to claim queued message from sqlite: {err}");
+                *self.timer_start_in_progress.lock().await = false;
+                return None;
+            }
+        };
+        self.start_timer_db_sync_task(state_db.clone());
+
+        loop {
+            let claim = match state_db
+                .claim_next_thread_message(
+                    &self.thread_id_string(),
+                    can_after_turn,
+                    can_steer_current_turn,
+                )
+                .await
+            {
+                Ok(claim) => claim,
+                Err(err) => {
+                    warn!("failed to claim queued message from sqlite: {err}");
+                    *self.timer_start_in_progress.lock().await = false;
+                    return None;
+                }
+            };
+            match claim {
+                Some(codex_state::ThreadMessageClaim::Claimed(row)) => {
+                    let (message, delivery) = match InjectedMessage::from_external_row(row) {
+                        Ok(parsed) => parsed,
+                        Err(err) => {
+                            warn!("{err}");
+                            continue;
+                        }
+                    };
+                    let input_item =
+                        PendingInputItem::injected(message.prompt_input_item(), message.event());
+                    return Some(PendingMessageClaim::Claimed(Box::new(input_item), delivery));
+                }
+                Some(codex_state::ThreadMessageClaim::Invalid { id, reason }) => {
+                    warn!("dropped invalid queued message {id}: {reason}");
+                    continue;
+                }
+                Some(codex_state::ThreadMessageClaim::NotReady) | None => {
+                    *self.timer_start_in_progress.lock().await = false;
+                    return claim.map(|_| PendingMessageClaim::NotReady);
+                }
+            }
+        }
     }
 
     async fn claim_next_timer_for_delivery(
@@ -310,6 +434,10 @@ impl Session {
     }
 
     async fn inject_timer_into_active_turn(&self, item: PendingInputItem) -> bool {
+        self.inject_message_into_active_turn(item).await
+    }
+
+    async fn inject_message_into_active_turn(&self, item: PendingInputItem) -> bool {
         let active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_ref() else {
             return false;
@@ -634,8 +762,12 @@ impl Session {
         self.features.enabled(Feature::Timers)
     }
 
+    fn queued_messages_feature_enabled(&self) -> bool {
+        self.features.enabled(Feature::QueuedMessages)
+    }
+
     fn timer_db_sync_feature_enabled(&self) -> bool {
-        self.timers_feature_enabled()
+        self.timers_feature_enabled() || self.queued_messages_feature_enabled()
     }
 
     fn spawn_restored_timer_tasks(self: &Arc<Self>, restored_tasks: Vec<RestoredTimerTask>) {

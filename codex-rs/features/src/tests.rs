@@ -160,6 +160,16 @@ fn timers_are_under_development() {
 }
 
 #[test]
+fn queued_messages_are_under_development() {
+    assert_eq!(
+        feature_for_key("queued_messages"),
+        Some(Feature::QueuedMessages)
+    );
+    assert_eq!(Feature::QueuedMessages.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::QueuedMessages.default_enabled(), false);
+}
+
+#[test]
 fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolCallMcpElicitation.stage(), Stage::Stable);
     assert_eq!(Feature::ToolCallMcpElicitation.default_enabled(), true);

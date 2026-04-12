@@ -8,6 +8,7 @@
 
 #![allow(dead_code)]
 
+use crate::timers::TimerDelivery;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::InjectedMessageEvent;
@@ -43,6 +44,22 @@ pub(crate) enum InjectedMessage {
 }
 
 impl InjectedMessage {
+    pub(crate) fn from_external_row(
+        row: codex_state::ThreadMessage,
+    ) -> Result<(Self, TimerDelivery), String> {
+        let delivery = serde_json::from_value::<TimerDelivery>(serde_json::Value::String(
+            row.delivery.clone(),
+        ))
+        .map_err(|err| format!("invalid message delivery `{}`: {err}", row.delivery))?;
+        Ok((
+            Self::External {
+                source: row.source,
+                content: row.content,
+            },
+            delivery,
+        ))
+    }
+
     pub(crate) fn prompt_input_item(&self) -> ResponseInputItem {
         ResponseInputItem::Message {
             role: "user".to_string(),

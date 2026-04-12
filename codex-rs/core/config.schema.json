@@ -434,6 +434,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "queued_messages": {
+              "type": "boolean"
+            },
             "realtime_conversation": {
               "type": "boolean"
             },
@@ -2284,6 +2287,9 @@
           "type": "boolean"
         },
         "prevent_idle_sleep": {
+          "type": "boolean"
+        },
+        "queued_messages": {
           "type": "boolean"
         },
         "realtime_conversation": {

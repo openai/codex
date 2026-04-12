@@ -20,6 +20,9 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::find_thread_path_by_id_str;
+use codex_state::StateRuntime;
+use codex_state::ThreadMessageCreateParams;
+use codex_state::ThreadTimerCreateParams;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -118,6 +121,26 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         .expect("expected rollout path for thread id to exist after materialization");
     assert_paths_match_on_disk(&discovered_path, &rollout_path)?;
 
+    let state_db = StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".to_string())
+        .await
+        .expect("initialize state db");
+    state_db
+        .create_thread_message(&message_params("message-1", &thread.id))
+        .await
+        .expect("create archived thread message");
+    state_db
+        .create_thread_message(&message_params("message-2", "other-thread"))
+        .await
+        .expect("create other thread message");
+    state_db
+        .create_thread_timer(&timer_params("timer-1", &thread.id))
+        .await
+        .expect("create archived thread timer");
+    state_db
+        .create_thread_timer(&timer_params("timer-2", "other-thread"))
+        .await
+        .expect("create other thread timer");
+
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
@@ -155,6 +178,40 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         archived_rollout_path.exists(),
         "expected archived rollout path {} to exist",
         archived_rollout_path.display()
+    );
+    assert_eq!(
+        state_db
+            .list_thread_messages(&thread.id)
+            .await
+            .expect("list archived thread messages"),
+        Vec::new()
+    );
+    assert_eq!(
+        state_db
+            .list_thread_timers(&thread.id)
+            .await
+            .expect("list archived thread timers"),
+        Vec::new()
+    );
+    assert_eq!(
+        state_db
+            .list_thread_messages("other-thread")
+            .await
+            .expect("list other thread messages")
+            .into_iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>(),
+        vec!["message-2".to_string()]
+    );
+    assert_eq!(
+        state_db
+            .list_thread_timers("other-thread")
+            .await
+            .expect("list other thread timers")
+            .into_iter()
+            .map(|timer| timer.id)
+            .collect::<Vec<_>>(),
+        vec!["timer-2".to_string()]
     );
 
     Ok(())
@@ -322,4 +379,35 @@ fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result
     let expected = expected.canonicalize()?;
     assert_eq!(actual, expected);
     Ok(())
+}
+
+fn message_params(id: &str, thread_id: &str) -> ThreadMessageCreateParams {
+    ThreadMessageCreateParams {
+        id: id.to_string(),
+        thread_id: thread_id.to_string(),
+        source: "external".to_string(),
+        content: "do something".to_string(),
+        instructions: None,
+        meta_json: "{}".to_string(),
+        delivery: "after-turn".to_string(),
+        queued_at: 100,
+    }
+}
+
+fn timer_params(id: &str, thread_id: &str) -> ThreadTimerCreateParams {
+    ThreadTimerCreateParams {
+        id: id.to_string(),
+        thread_id: thread_id.to_string(),
+        source: "agent".to_string(),
+        client_id: "codex-tui".to_string(),
+        trigger_json: r#"{"kind":"delay","seconds":10,"repeat":false}"#.to_string(),
+        content: "run tests".to_string(),
+        instructions: None,
+        meta_json: "{}".to_string(),
+        delivery: "after-turn".to_string(),
+        created_at: 100,
+        next_run_at: Some(110),
+        last_run_at: None,
+        pending_run: false,
+    }
 }

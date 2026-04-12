@@ -112,6 +112,48 @@ pub async fn find_thread_names_by_ids(
     Ok(names)
 }
 
+/// Find all thread ids whose latest indexed thread name exactly matches `name`.
+pub async fn find_thread_ids_by_name(
+    codex_home: &Path,
+    name: &str,
+) -> std::io::Result<Vec<ThreadId>> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = session_index_path(codex_home);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = tokio::fs::File::open(&path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut latest_names = HashMap::<ThreadId, String>::new();
+
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
+            continue;
+        };
+        let thread_name = entry.thread_name.trim();
+        if thread_name.is_empty() {
+            continue;
+        }
+        latest_names.insert(entry.id, thread_name.to_string());
+    }
+
+    let mut ids = latest_names
+        .into_iter()
+        .filter_map(|(thread_id, thread_name)| (thread_name == name).then_some(thread_id))
+        .collect::<Vec<_>>();
+    ids.sort_by_key(ToString::to_string);
+    Ok(ids)
+}
+
 /// Locate a recorded thread rollout and read its session metadata by thread name.
 /// Returns the newest indexed name that still has a readable rollout header.
 pub async fn find_thread_meta_by_name_str(

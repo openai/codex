@@ -377,3 +377,253 @@ async fn list_timers_discovers_externally_inserted_timer() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "timer/message integration tests currently exceed the Windows Bazel job timeout"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "queued turn"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::QueuedMessages)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.session_id.to_string();
+    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+        thread_id,
+        "external".to_string(),
+        "queued hello".to_string(),
+        /*instructions*/ None,
+        "{}".to_string(),
+        TimerDelivery::AfterTurn.as_str().to_string(),
+        Utc::now().timestamp(),
+    ))
+    .await?;
+
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::InjectedMessage(event) => {
+                event.source == "external" && event.content == "queued hello"
+            }
+            _ => false,
+        },
+        TIMER_INTEGRATION_TIMEOUT,
+    )
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        TIMER_INTEGRATION_TIMEOUT,
+    )
+    .await;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(requests.iter().any(|request| {
+        request
+            .message_input_texts("user")
+            .iter()
+            .any(|message| message.contains("<content>\nqueued hello\n</content>"))
+    }));
+
+    Ok(())
+}
+
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "timer/message integration tests currently exceed the Windows Bazel job timeout"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "timer turn"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "queued turn"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Timers)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+        config
+            .features
+            .enable(Feature::QueuedMessages)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let timer = test
+        .codex
+        .create_timer(
+            ThreadTimerTrigger::Delay {
+                seconds: 0,
+                repeat: Some(true),
+            },
+            MessagePayload {
+                content: "keep going".to_string(),
+                instructions: None,
+                meta: Default::default(),
+            },
+            TimerDelivery::AfterTurn,
+        )
+        .await
+        .map_err(|err| anyhow!("{err}"))?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::InjectedMessage(event) => event.source == format!("timer {}", timer.id),
+            _ => false,
+        },
+        TIMER_INTEGRATION_TIMEOUT,
+    )
+    .await;
+    let thread_id = test.session_configured.session_id.to_string();
+    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+        thread_id,
+        "external".to_string(),
+        "queued hello".to_string(),
+        /*instructions*/ None,
+        "{}".to_string(),
+        TimerDelivery::AfterTurn.as_str().to_string(),
+        Utc::now().timestamp(),
+    ))
+    .await?;
+    assert!(
+        test.codex
+            .delete_timer(&timer.id)
+            .await
+            .map_err(|err| anyhow!("{err}"))?,
+        "test should delete the idle recurring timer before it can schedule another turn"
+    );
+
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        TIMER_INTEGRATION_TIMEOUT,
+    )
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::InjectedMessage(event) => event.source == "external",
+            _ => false,
+        },
+        TIMER_INTEGRATION_TIMEOUT,
+    )
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        TIMER_INTEGRATION_TIMEOUT,
+    )
+    .await;
+
+    let requests = mock.requests();
+    assert!(
+        requests.len() >= 2,
+        "expected timer and queued-message turns to run"
+    );
+    assert!(
+        requests[0]
+            .message_input_texts("user")
+            .iter()
+            .any(|message| message.contains("<content>\nTimer fired: keep going\n</content>"))
+    );
+    assert!(
+        requests[1]
+            .message_input_texts("user")
+            .iter()
+            .any(|message| message.contains("<content>\nqueued hello\n</content>"))
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "timer/message integration tests currently exceed the Windows Bazel job timeout"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_messages_feature_disabled_leaves_messages_queued() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "first turn"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.session_id.to_string();
+    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+        thread_id.clone(),
+        "external".to_string(),
+        "queued hello".to_string(),
+        /*instructions*/ None,
+        "{}".to_string(),
+        TimerDelivery::AfterTurn.as_str().to_string(),
+        Utc::now().timestamp(),
+    ))
+    .await?;
+
+    test.submit_turn("start").await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(mock.requests().len(), 1);
+    assert!(
+        db.claim_next_thread_message(
+            &thread_id, /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
+        )
+        .await?
+        .is_some()
+    );
+
+    Ok(())
+}

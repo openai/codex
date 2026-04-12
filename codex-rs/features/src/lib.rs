@@ -174,6 +174,8 @@ pub enum Feature {
     Artifact,
     /// Enable per-thread persistent timer scheduling tools and APIs.
     Timers,
+    /// Enable queued message creation and delivery.
+    QueuedMessages,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
@@ -862,6 +864,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Timers,
         key: "timers",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::QueuedMessages,
+        key: "queued_messages",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
