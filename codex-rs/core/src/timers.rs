@@ -4,10 +4,10 @@
 //! message injected when a timer fires, and the persistent state shape used to
 //! restore timers after a harness restart.
 
-use crate::messages::MessageInvocationContext;
-use crate::messages::MessageInvocationKind;
-use crate::messages::MessagePayload;
-use crate::messages::validate_meta;
+use crate::injected_message::MessageInvocationContext;
+use crate::injected_message::MessageInvocationKind;
+use crate::injected_message::MessagePayload;
+use crate::injected_message::validate_meta;
 use crate::timer_trigger::TimerTrigger;
 use crate::timer_trigger::TriggerTiming;
 use crate::timer_trigger::next_run_after_due;
@@ -482,7 +482,7 @@ pub fn build_thread_timer_create_params(
 pub(crate) fn timer_prompt_input_item(
     timer: &TimerInvocationContext,
 ) -> codex_protocol::models::ResponseInputItem {
-    crate::messages::message_prompt_input_item(&timer_message_invocation_context(timer))
+    crate::injected_message::message_prompt_input_item(&timer_message_invocation_context(timer))
 }
 
 pub(crate) fn timer_message_invocation_context(
@@ -552,7 +552,7 @@ mod tests {
     use super::TimerInvocationContext;
     use super::TimersState;
     use super::timer_prompt_input_item;
-    use crate::messages::MessagePayload;
+    use crate::injected_message::MessagePayload;
     use crate::timer_trigger::TimerTrigger;
     use chrono::TimeZone;
     use chrono::Utc;

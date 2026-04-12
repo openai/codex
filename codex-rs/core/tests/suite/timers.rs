@@ -1,7 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use chrono::Utc;
-use codex_core::messages::MessagePayload;
+use codex_core::injected_message::MessagePayload;
 use codex_core::timers::TIMER_FIRED_BACKGROUND_EVENT_PREFIX;
 use codex_core::timers::ThreadTimer;
 use codex_core::timers::ThreadTimerTrigger;

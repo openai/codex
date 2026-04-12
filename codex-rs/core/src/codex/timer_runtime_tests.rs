@@ -1,5 +1,5 @@
 use super::make_session_and_context_with_rx;
-use crate::messages::MessagePayload;
+use crate::injected_message::MessagePayload;
 use crate::timers::MAX_ACTIVE_TIMERS_PER_THREAD;
 use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;

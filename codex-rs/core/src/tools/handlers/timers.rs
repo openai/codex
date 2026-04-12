@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 use crate::function_tool::FunctionCallError;
-use crate::messages::MessagePayload;
+use crate::injected_message::MessagePayload;
 use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;
 use crate::tools::context::FunctionToolOutput;

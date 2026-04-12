@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
-use crate::messages::MessagePayload;
+use crate::injected_message::MessagePayload;
 use crate::timers::ThreadTimer;
 use crate::timers::ThreadTimerTrigger;
 use crate::timers::TimerDelivery;
