@@ -137,6 +137,8 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadMemoryModeSetParams;
+use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
@@ -770,6 +772,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
                 self.thread_metadata_update(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemoryModeSet { request_id, params } => {
+                self.thread_memory_mode_set(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadUnarchive { request_id, params } => {
@@ -2769,6 +2775,127 @@ impl CodexMessageProcessor {
         };
         self.outgoing
             .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+            .await;
+    }
+
+    async fn thread_memory_mode_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemoryModeSetParams,
+    ) {
+        let ThreadMemoryModeSetParams { thread_id, mode } = params;
+        let thread_id = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            if thread.config_snapshot().await.ephemeral {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("ephemeral thread does not support memory mode updates: {thread_id}"),
+                )
+                .await;
+                return;
+            }
+
+            if let Err(err) = self
+                .submit_core_op(
+                    &request_id,
+                    thread.as_ref(),
+                    Op::SetThreadMemoryMode {
+                        mode: mode.to_core(),
+                    },
+                )
+                .await
+            {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to set thread memory mode: {err}"),
+                )
+                .await;
+                return;
+            }
+
+            self.outgoing
+                .send_response(request_id, ThreadMemoryModeSetResponse {})
+                .await;
+            return;
+        }
+
+        let rollout_path =
+            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+            {
+                Ok(Some(path)) => Some(path),
+                Ok(None) => None,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {thread_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+        let Some(rollout_path) = rollout_path else {
+            self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
+                .await;
+            return;
+        };
+
+        let mut session_meta = match read_session_meta_line(rollout_path.as_path()).await {
+            Ok(session_meta) => session_meta,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to set thread memory mode: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        if session_meta.meta.id != thread_id {
+            self.send_internal_error(
+                request_id,
+                format!(
+                    "failed to set thread memory mode: rollout session metadata id mismatch: expected {thread_id}, found {}",
+                    session_meta.meta.id
+                ),
+            )
+            .await;
+            return;
+        }
+        session_meta.meta.memory_mode = Some(mode.as_str().to_string());
+        let item = RolloutItem::SessionMeta(session_meta);
+
+        if let Err(err) = append_rollout_item_to_path(rollout_path.as_path(), &item).await {
+            self.send_internal_error(
+                request_id,
+                format!("failed to set thread memory mode: {err}"),
+            )
+            .await;
+            return;
+        }
+
+        let state_db_ctx = open_state_db_for_direct_thread_lookup(&self.config).await;
+        reconcile_rollout(
+            state_db_ctx.as_deref(),
+            rollout_path.as_path(),
+            self.config.model_provider_id.as_str(),
+            /*builder*/ None,
+            &[],
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
+
+        self.outgoing
+            .send_response(request_id, ThreadMemoryModeSetResponse {})
             .await;
     }
 

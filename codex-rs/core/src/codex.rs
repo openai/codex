@@ -4806,6 +4806,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::set_thread_name(&sess, sub.id.clone(), name).await;
                     false
                 }
+                Op::SetThreadMemoryMode { mode } => {
+                    handlers::set_thread_memory_mode(&sess, sub.id.clone(), mode).await;
+                    false
+                }
                 Op::RunUserShellCommand { command } => {
                     handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
                     false
@@ -4895,6 +4899,7 @@ mod handlers {
 
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::RolloutRecorder;
+    use crate::rollout::read_session_meta_line;
     use crate::tasks::CompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
@@ -4916,6 +4921,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SkillsListEntry;
+    use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
@@ -5653,6 +5659,43 @@ mod handlers {
         Ok(msg)
     }
 
+    async fn persist_thread_memory_mode_update(
+        sess: &Arc<Session>,
+        mode: ThreadMemoryMode,
+    ) -> anyhow::Result<()> {
+        let recorder = {
+            let guard = sess.services.rollout.lock().await;
+            guard.clone()
+        }
+        .ok_or_else(|| {
+            anyhow::anyhow!("Session persistence is disabled; cannot update thread memory mode.")
+        })?;
+        recorder.persist().await?;
+        recorder.flush().await?;
+
+        let rollout_path = recorder.rollout_path().to_path_buf();
+        let mut session_meta = read_session_meta_line(rollout_path.as_path()).await?;
+        if session_meta.meta.id != sess.conversation_id {
+            anyhow::bail!(
+                "rollout session metadata id mismatch: expected {}, found {}",
+                sess.conversation_id,
+                session_meta.meta.id
+            );
+        }
+        session_meta.meta.memory_mode = Some(
+            match mode {
+                ThreadMemoryMode::Enabled => "enabled",
+                ThreadMemoryMode::Disabled => "disabled",
+            }
+            .to_string(),
+        );
+
+        let item = RolloutItem::SessionMeta(session_meta);
+        recorder.record_items(std::slice::from_ref(&item)).await?;
+        recorder.flush().await?;
+        Ok(())
+    }
+
     /// Persists the thread name in the rollout and state database, updates in-memory state, and
     /// emits a `ThreadNameUpdated` event on success.
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
@@ -5710,6 +5753,28 @@ mod handlers {
         }
 
         sess.deliver_event_raw(Event { id: sub_id, msg }).await;
+    }
+
+    /// Persists thread-level memory mode metadata for the active session.
+    ///
+    /// This does not involve the model and only affects whether the thread is
+    /// eligible for future memory generation.
+    pub async fn set_thread_memory_mode(
+        sess: &Arc<Session>,
+        sub_id: String,
+        mode: ThreadMemoryMode,
+    ) {
+        if let Err(err) = persist_thread_memory_mode_update(sess, mode).await {
+            warn!("Failed to persist thread memory mode update to rollout: {err}");
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+        }
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
