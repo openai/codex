@@ -9,7 +9,6 @@ use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_experimental_api_macros::ExperimentalApi;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -73,31 +72,12 @@ macro_rules! experimental_type_entry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientRequestSerializationScope {
     Global(&'static str),
-    Thread {
-        thread_id: String,
-    },
-    ThreadPath {
-        path: PathBuf,
-    },
-    CommandExecProcess {
-        process_id: String,
-    },
-    FuzzyFileSearchSession {
-        session_id: String,
-    },
-    FsWatch {
-        watch_id: String,
-    },
-    Plugin {
-        marketplace_path: AbsolutePathBuf,
-        plugin_name: String,
-    },
-    PluginId {
-        plugin_id: String,
-    },
-    McpOauth {
-        server_name: String,
-    },
+    Thread { thread_id: String },
+    ThreadPath { path: PathBuf },
+    CommandExecProcess { process_id: String },
+    FuzzyFileSearchSession { session_id: String },
+    FsWatch { watch_id: String },
+    McpOauth { server_name: String },
 }
 
 macro_rules! serialization_scope_expr {
@@ -113,7 +93,11 @@ macro_rules! serialization_scope_expr {
         })
     };
     ($actual_params:ident, thread_or_path($params:ident . $thread_field:ident, $params2:ident . $path_field:ident)) => {
-        if let Some(path) = $actual_params.$path_field.clone() {
+        if !$actual_params.$thread_field.is_empty() {
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: $actual_params.$thread_field.clone(),
+            })
+        } else if let Some(path) = $actual_params.$path_field.clone() {
             Some(ClientRequestSerializationScope::ThreadPath { path })
         } else {
             Some(ClientRequestSerializationScope::Thread {
@@ -140,17 +124,6 @@ macro_rules! serialization_scope_expr {
     ($actual_params:ident, fs_watch_id($params:ident . $field:ident)) => {
         Some(ClientRequestSerializationScope::FsWatch {
             watch_id: $actual_params.$field.clone(),
-        })
-    };
-    ($actual_params:ident, plugin($params:ident . $marketplace_field:ident, $params2:ident . $plugin_field:ident)) => {
-        Some(ClientRequestSerializationScope::Plugin {
-            marketplace_path: $actual_params.$marketplace_field.clone(),
-            plugin_name: $actual_params.$plugin_field.clone(),
-        })
-    };
-    ($actual_params:ident, plugin_id($params:ident . $field:ident)) => {
-        Some(ClientRequestSerializationScope::PluginId {
-            plugin_id: $actual_params.$field.clone(),
         })
     };
     ($actual_params:ident, mcp_oauth_server($params:ident . $field:ident)) => {
@@ -498,17 +471,17 @@ client_request_definitions! {
     },
     SkillsConfigWrite => "skills/config/write" {
         params: v2::SkillsConfigWriteParams,
-        serialization: global("skills-config"),
+        serialization: global("config"),
         response: v2::SkillsConfigWriteResponse,
     },
     PluginInstall => "plugin/install" {
         params: v2::PluginInstallParams,
-        serialization: plugin(params.marketplace_path, params.plugin_name),
+        serialization: global("plugins"),
         response: v2::PluginInstallResponse,
     },
     PluginUninstall => "plugin/uninstall" {
         params: v2::PluginUninstallParams,
-        serialization: plugin_id(params.plugin_id),
+        serialization: global("plugins"),
         response: v2::PluginUninstallResponse,
     },
     TurnStart => "turn/start" {
@@ -615,6 +588,7 @@ client_request_definitions! {
 
     McpServerToolCall => "mcpServer/tool/call" {
         params: v2::McpServerToolCallParams,
+        serialization: thread_id(params.thread_id),
         response: v2::McpServerToolCallResponse,
     },
 
@@ -1246,32 +1220,32 @@ mod tests {
             })
         );
 
-        let resume_path = PathBuf::from("/tmp/resume-thread.jsonl");
-        let thread_resume_by_path = ClientRequest::ThreadResume {
+        let thread_resume_with_path = ClientRequest::ThreadResume {
             request_id: request_id(),
             params: v2::ThreadResumeParams {
                 thread_id: thread_id.clone(),
-                path: Some(resume_path.clone()),
+                path: Some(PathBuf::from("/tmp/resume-thread.jsonl")),
                 ..Default::default()
             },
         };
         assert_eq!(
-            thread_resume_by_path.serialization_scope(),
-            Some(ClientRequestSerializationScope::ThreadPath { path: resume_path })
+            thread_resume_with_path.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: thread_id.clone()
+            })
         );
 
-        let fork_path = PathBuf::from("/tmp/source-thread.jsonl");
         let thread_fork = ClientRequest::ThreadFork {
             request_id: request_id(),
             params: v2::ThreadForkParams {
-                thread_id,
-                path: Some(fork_path.clone()),
+                thread_id: thread_id.clone(),
+                path: Some(PathBuf::from("/tmp/source-thread.jsonl")),
                 ..Default::default()
             },
         };
         assert_eq!(
             thread_fork.serialization_scope(),
-            Some(ClientRequestSerializationScope::ThreadPath { path: fork_path })
+            Some(ClientRequestSerializationScope::Thread { thread_id })
         );
 
         let command_exec = ClientRequest::OneOffCommandExec {
@@ -1337,10 +1311,7 @@ mod tests {
         };
         assert_eq!(
             plugin_install.serialization_scope(),
-            Some(ClientRequestSerializationScope::Plugin {
-                marketplace_path: absolute_path("/tmp/marketplace"),
-                plugin_name: "plugin-a".to_string(),
-            })
+            Some(ClientRequestSerializationScope::Global("plugins"))
         );
 
         let plugin_uninstall = ClientRequest::PluginUninstall {
@@ -1352,9 +1323,7 @@ mod tests {
         };
         assert_eq!(
             plugin_uninstall.serialization_scope(),
-            Some(ClientRequestSerializationScope::PluginId {
-                plugin_id: "plugin-a".to_string()
-            })
+            Some(ClientRequestSerializationScope::Global("plugins"))
         );
 
         let mcp_oauth = ClientRequest::McpServerOauthLogin {
