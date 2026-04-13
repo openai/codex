@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_code_mode::CodeModeRuntime;
 use codex_code_mode::CodeModeTurnHost;
+use codex_code_mode::CodeModeTurnWorkerHandle;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -48,14 +50,16 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    inner: codex_code_mode::CodeModeService,
+    inner: Arc<dyn CodeModeRuntime>,
 }
 
 impl CodeModeService {
     pub(crate) fn new(_js_repl_node_path: Option<PathBuf>) -> Self {
-        Self {
-            inner: codex_code_mode::CodeModeService::new(),
-        }
+        Self::from_runtime(Arc::new(codex_code_mode::CodeModeService::new()))
+    }
+
+    pub(crate) fn from_runtime(inner: Arc<dyn CodeModeRuntime>) -> Self {
+        Self { inner }
     }
 
     pub(crate) async fn stored_values(&self) -> std::collections::HashMap<String, JsonValue> {
@@ -89,7 +93,7 @@ impl CodeModeService {
         turn: &Arc<TurnContext>,
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
-    ) -> Option<codex_code_mode::CodeModeTurnWorker> {
+    ) -> Option<Box<dyn CodeModeTurnWorkerHandle>> {
         if !turn.features.enabled(Feature::CodeMode) {
             return None;
         }

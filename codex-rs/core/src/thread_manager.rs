@@ -447,6 +447,27 @@ impl ThreadManager {
             persist_extended_history,
             metrics_service_name,
             parent_trace,
+            /*code_mode_runtime*/ None,
+            /*user_shell_override*/ None,
+        ))
+        .await
+    }
+
+    pub async fn start_thread_with_code_mode_runtime(
+        &self,
+        config: Config,
+        code_mode_runtime: Arc<dyn crate::CodeModeRuntime>,
+    ) -> CodexResult<NewThread> {
+        Box::pin(self.state.spawn_thread(
+            config,
+            InitialHistory::New,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            Vec::new(),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*parent_trace*/ None,
+            Some(code_mode_runtime),
             /*user_shell_override*/ None,
         ))
         .await
@@ -487,6 +508,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            /*code_mode_runtime*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -506,6 +528,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*code_mode_runtime*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -528,6 +551,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*code_mode_runtime*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -635,6 +659,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            /*code_mode_runtime*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -736,6 +761,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*code_mode_runtime*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -763,6 +789,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*code_mode_runtime*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -791,6 +818,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*code_mode_runtime*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -808,6 +836,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
+        code_mode_runtime: Option<Arc<dyn codex_code_mode::CodeModeRuntime>>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -822,6 +851,7 @@ impl ThreadManagerState {
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
+            code_mode_runtime,
             user_shell_override,
         ))
         .await
@@ -841,6 +871,7 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
+        code_mode_runtime: Option<Arc<dyn codex_code_mode::CodeModeRuntime>>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self.skills_watcher.register_config(
@@ -868,6 +899,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             user_shell_override,
+            code_mode_runtime,
             parent_trace,
         })
         .await?;

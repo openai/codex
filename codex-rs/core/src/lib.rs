@@ -201,6 +201,7 @@ pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;
+pub use codex_code_mode::CodeModeRuntime;
 pub use codex_sandboxing::get_platform_sandbox;
 pub use codex_tools::parse_tool_input_schema;
 pub use compact::content_items_to_text;

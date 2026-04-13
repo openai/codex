@@ -34,6 +34,22 @@ pub trait CodeModeTurnHost: Send + Sync {
     async fn notify(&self, call_id: String, cell_id: String, text: String) -> Result<(), String>;
 }
 
+#[async_trait]
+pub trait CodeModeRuntime: Send + Sync {
+    async fn stored_values(&self) -> HashMap<String, JsonValue>;
+
+    async fn replace_stored_values(&self, values: HashMap<String, JsonValue>);
+
+    async fn execute(&self, request: ExecuteRequest) -> Result<RuntimeResponse, String>;
+
+    async fn wait(&self, request: WaitRequest) -> Result<RuntimeResponse, String>;
+
+    fn start_turn_worker(
+        &self,
+        host: Arc<dyn CodeModeTurnHost>,
+    ) -> Box<dyn CodeModeTurnWorkerHandle>;
+}
+
 #[derive(Clone)]
 struct SessionHandle {
     control_tx: mpsc::UnboundedSender<SessionControlCommand>,
@@ -219,11 +235,41 @@ pub struct CodeModeTurnWorker {
     shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
+pub trait CodeModeTurnWorkerHandle: Send {}
+
+impl CodeModeTurnWorkerHandle for CodeModeTurnWorker {}
+
 impl Drop for CodeModeTurnWorker {
     fn drop(&mut self) {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
+    }
+}
+
+#[async_trait]
+impl CodeModeRuntime for CodeModeService {
+    async fn stored_values(&self) -> HashMap<String, JsonValue> {
+        CodeModeService::stored_values(self).await
+    }
+
+    async fn replace_stored_values(&self, values: HashMap<String, JsonValue>) {
+        CodeModeService::replace_stored_values(self, values).await;
+    }
+
+    async fn execute(&self, request: ExecuteRequest) -> Result<RuntimeResponse, String> {
+        CodeModeService::execute(self, request).await
+    }
+
+    async fn wait(&self, request: WaitRequest) -> Result<RuntimeResponse, String> {
+        CodeModeService::wait(self, request).await
+    }
+
+    fn start_turn_worker(
+        &self,
+        host: Arc<dyn CodeModeTurnHost>,
+    ) -> Box<dyn CodeModeTurnWorkerHandle> {
+        Box::new(CodeModeService::start_turn_worker(self, host))
     }
 }
 

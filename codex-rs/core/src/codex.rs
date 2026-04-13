@@ -422,6 +422,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
+    pub(crate) code_mode_runtime: Option<Arc<dyn codex_code_mode::CodeModeRuntime>>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
 }
 
@@ -476,6 +477,7 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            code_mode_runtime,
             parent_trace: _,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -660,6 +662,7 @@ impl Codex {
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
+            code_mode_runtime,
         )
         .await
         .map_err(|e| {
@@ -1478,6 +1481,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
+        code_mode_runtime: Option<Arc<dyn codex_code_mode::CodeModeRuntime>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1903,8 +1907,9 @@ impl Session {
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
             ),
-            code_mode_service: crate::tools::code_mode::CodeModeService::new(
-                config.js_repl_node_path.clone(),
+            code_mode_service: code_mode_runtime.map_or_else(
+                || crate::tools::code_mode::CodeModeService::new(config.js_repl_node_path.clone()),
+                crate::tools::code_mode::CodeModeService::from_runtime,
             ),
             environment: environment_manager.current().await?,
         };
