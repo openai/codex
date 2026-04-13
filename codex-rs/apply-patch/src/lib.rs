@@ -294,23 +294,13 @@ async fn apply_hunks_to_files(
         let path_abs = hunk.resolve_path(cwd);
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                if let Some(parent_abs) = path_abs.parent() {
-                    fs.create_directory(
-                        &parent_abs,
-                        CreateDirectoryOptions { recursive: true },
-                        sandbox,
-                    )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to create parent directories for {}",
-                            path_abs.display()
-                        )
-                    })?;
-                }
-                fs.write_file(&path_abs, contents.clone().into_bytes(), sandbox)
-                    .await
-                    .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                write_file_with_missing_parent_retry(
+                    fs,
+                    &path_abs,
+                    contents.clone().into_bytes(),
+                    sandbox,
+                )
+                .await?;
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
@@ -343,23 +333,13 @@ async fn apply_hunks_to_files(
                     derive_new_contents_from_chunks(&path_abs, chunks, fs, sandbox).await?;
                 if let Some(dest) = move_path {
                     let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
-                    if let Some(parent_abs) = dest_abs.parent() {
-                        fs.create_directory(
-                            &parent_abs,
-                            CreateDirectoryOptions { recursive: true },
-                            sandbox,
-                        )
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to create parent directories for {}",
-                                dest_abs.display()
-                            )
-                        })?;
-                    }
-                    fs.write_file(&dest_abs, new_contents.into_bytes(), sandbox)
-                        .await
-                        .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
+                    write_file_with_missing_parent_retry(
+                        fs,
+                        &dest_abs,
+                        new_contents.into_bytes(),
+                        sandbox,
+                    )
+                    .await?;
                     let result: io::Result<()> = async {
                         let metadata = fs.get_metadata(&path_abs, sandbox).await?;
                         if metadata.is_directory {
@@ -397,6 +377,40 @@ async fn apply_hunks_to_files(
         modified,
         deleted,
     })
+}
+
+async fn write_file_with_missing_parent_retry(
+    fs: &dyn ExecutorFileSystem,
+    path_abs: &AbsolutePathBuf,
+    contents: Vec<u8>,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> anyhow::Result<()> {
+    match fs.write_file(path_abs, contents.clone(), sandbox).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent_abs) = path_abs.parent() {
+                fs.create_directory(
+                    &parent_abs,
+                    CreateDirectoryOptions { recursive: true },
+                    sandbox,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to create parent directories for {}",
+                        path_abs.display()
+                    )
+                })?;
+            }
+            fs.write_file(path_abs, contents, sandbox)
+                .await
+                .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+            Ok(())
+        }
+        Err(err) => {
+            Err(err).with_context(|| format!("Failed to write file {}", path_abs.display()))
+        }
+    }
 }
 
 struct AppliedPatch {

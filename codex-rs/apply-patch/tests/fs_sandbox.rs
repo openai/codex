@@ -16,6 +16,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tempfile::tempdir;
@@ -49,15 +50,29 @@ enum FsCall {
 struct RecordingFileSystem {
     calls: Mutex<Vec<FsCall>>,
     files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+    directories: Mutex<HashSet<PathBuf>>,
 }
 
 impl RecordingFileSystem {
     fn with_file(path: PathBuf, contents: &str) -> Self {
         let mut files = HashMap::new();
         files.insert(path, contents.as_bytes().to_vec());
+        let mut directories = HashSet::new();
+        if let Some(parent) = path.parent() {
+            directories.insert(parent.to_path_buf());
+        }
         Self {
             calls: Mutex::new(Vec::new()),
             files: Mutex::new(files),
+            directories: Mutex::new(directories),
+        }
+    }
+
+    fn with_directories(directories: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            files: Mutex::new(HashMap::new()),
+            directories: Mutex::new(directories.into_iter().collect()),
         }
     }
 
@@ -104,6 +119,18 @@ impl ExecutorFileSystem for RecordingFileSystem {
                 path: path.to_path_buf(),
                 sandbox: sandbox.cloned(),
             });
+        if let Some(parent) = path.parent()
+            && !self
+                .directories
+                .lock()
+                .unwrap_or_else(|err| panic!("directories lock poisoned: {err}"))
+                .contains(parent.as_path())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "missing parent directory",
+            ));
+        }
         self.files
             .lock()
             .unwrap_or_else(|err| panic!("files lock poisoned: {err}"))
@@ -124,6 +151,10 @@ impl ExecutorFileSystem for RecordingFileSystem {
                 path: path.to_path_buf(),
                 sandbox: sandbox.cloned(),
             });
+        self.directories
+            .lock()
+            .unwrap_or_else(|err| panic!("directories lock poisoned: {err}"))
+            .insert(path.to_path_buf());
         Ok(())
     }
 
@@ -257,7 +288,7 @@ async fn apply_patch_passes_sandbox_to_add_file_operations() {
     let parent_abs = path_abs
         .parent()
         .unwrap_or_else(|| panic!("expected parent for {}", path_abs.display()));
-    let fs = RecordingFileSystem::default();
+    let fs = RecordingFileSystem::with_directories([cwd.to_path_buf()]);
     let sandbox = test_sandbox_context();
     let patch = wrap_patch(
         r#"*** Add File: nested/add.txt
@@ -273,6 +304,10 @@ async fn apply_patch_passes_sandbox_to_add_file_operations() {
     assert_eq!(
         fs.calls(),
         vec![
+            FsCall::WriteFile {
+                path: path_abs.to_path_buf(),
+                sandbox: Some(sandbox.clone()),
+            },
             FsCall::CreateDirectory {
                 path: parent_abs.to_path_buf(),
                 sandbox: Some(sandbox.clone()),
@@ -282,6 +317,34 @@ async fn apply_patch_passes_sandbox_to_add_file_operations() {
                 sandbox: Some(sandbox),
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_skips_parent_creation_when_parent_already_exists() {
+    let dir = tempdir().unwrap_or_else(|err| panic!("tempdir failed: {err}"));
+    let cwd = AbsolutePathBuf::from_absolute_path(dir.path())
+        .unwrap_or_else(|err| panic!("absolute cwd failed: {err}"));
+    let path_abs = cwd.join("add.txt");
+    let fs = RecordingFileSystem::with_directories([cwd.to_path_buf()]);
+    let sandbox = test_sandbox_context();
+    let patch = wrap_patch(
+        r#"*** Add File: add.txt
++hello"#,
+    );
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    apply_patch(&patch, &cwd, &mut stdout, &mut stderr, &fs, Some(&sandbox))
+        .await
+        .unwrap_or_else(|err| panic!("apply patch failed: {err}"));
+
+    assert_eq!(
+        fs.calls(),
+        vec![FsCall::WriteFile {
+            path: path_abs.to_path_buf(),
+            sandbox: Some(sandbox),
+        }]
     );
 }
 
