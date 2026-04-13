@@ -11,6 +11,7 @@ use codex_app_server_protocol::RequestId;
 use codex_utils_cargo_bin::cargo_bin;
 use futures::SinkExt;
 use futures::StreamExt;
+use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
@@ -26,6 +27,7 @@ const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct ExecServerHarness {
+    _codex_home: TempDir,
     child: Child,
     websocket_url: String,
     websocket: tokio_tungstenite::WebSocketStream<
@@ -41,17 +43,21 @@ impl Drop for ExecServerHarness {
 }
 
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
-    let binary = cargo_bin("codex-exec-server")?;
+    let binary = cargo_bin("codex")?;
+    let codex_home = TempDir::new()?;
     let mut child = Command::new(binary);
-    child.args(["--listen", "ws://127.0.0.1:0"]);
+    child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());
+    child.kill_on_drop(true);
+    child.env("CODEX_HOME", codex_home.path());
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;
     let (websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
     Ok(ExecServerHarness {
+        _codex_home: codex_home,
         child,
         websocket_url,
         websocket,
@@ -62,6 +68,17 @@ pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
 impl ExecServerHarness {
     pub(crate) fn websocket_url(&self) -> &str {
         &self.websocket_url
+    }
+
+    pub(crate) async fn disconnect_websocket(&mut self) -> anyhow::Result<()> {
+        self.websocket.close(None).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn reconnect_websocket(&mut self) -> anyhow::Result<()> {
+        let (websocket, _) = connect_websocket_when_ready(&self.websocket_url).await?;
+        self.websocket = websocket;
+        Ok(())
     }
 
     pub(crate) async fn send_request(
@@ -129,6 +146,9 @@ impl ExecServerHarness {
 
     pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.child.start_kill()?;
+        timeout(CONNECT_TIMEOUT, self.child.wait())
+            .await
+            .map_err(|_| anyhow!("timed out waiting for exec-server shutdown"))??;
         Ok(())
     }
 

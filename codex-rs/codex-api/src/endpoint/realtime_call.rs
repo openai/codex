@@ -226,6 +226,7 @@ mod tests {
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use codex_protocol::protocol::RealtimeVoice;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
     use std::sync::Mutex;
@@ -308,6 +309,7 @@ mod tests {
             session_id: Some(session_id.to_string()),
             event_parser: RealtimeEventParser::RealtimeV2,
             session_mode: RealtimeSessionMode::Conversational,
+            voice: RealtimeVoice::Marin,
         }
     }
 

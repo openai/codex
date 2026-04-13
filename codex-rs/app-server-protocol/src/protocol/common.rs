@@ -284,6 +284,11 @@ client_request_definitions! {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,
     },
+    #[experimental("thread/memoryMode/set")]
+    ThreadMemoryModeSet => "thread/memoryMode/set" {
+        params: v2::ThreadMemoryModeSetParams,
+        response: v2::ThreadMemoryModeSetResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
@@ -316,6 +321,11 @@ client_request_definitions! {
     ThreadRead => "thread/read" {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
+    },
+    /// Append raw Responses API items to the thread history without starting a user turn.
+    ThreadInjectItems => "thread/inject_items" {
+        params: v2::ThreadInjectItemsParams,
+        response: v2::ThreadInjectItemsResponse,
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
@@ -388,6 +398,7 @@ client_request_definitions! {
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
+        inspect_params: true,
         response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {
@@ -413,6 +424,11 @@ client_request_definitions! {
     ThreadRealtimeStop => "thread/realtime/stop" {
         params: v2::ThreadRealtimeStopParams,
         response: v2::ThreadRealtimeStopResponse,
+    },
+    #[experimental("thread/realtime/listVoices")]
+    ThreadRealtimeListVoices => "thread/realtime/listVoices" {
+        params: v2::ThreadRealtimeListVoicesParams,
+        response: v2::ThreadRealtimeListVoicesResponse,
     },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
@@ -462,6 +478,11 @@ client_request_definitions! {
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
         response: v2::McpResourceReadResponse,
+    },
+
+    McpServerToolCall => "mcpServer/tool/call" {
+        params: v2::McpServerToolCallParams,
+        response: v2::McpServerToolCallResponse,
     },
 
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
@@ -1394,6 +1415,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd: PathBuf::from("/tmp"),
+                instruction_sources: vec![PathBuf::from("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
@@ -1433,6 +1455,7 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": "/tmp",
+                    "instructionSources": ["/tmp/AGENTS.md"],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
@@ -1761,9 +1784,10 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
-                prompt: "You are on a call".to_string(),
+                prompt: Some(Some("You are on a call".to_string())),
                 session_id: Some("sess_456".to_string()),
                 transport: None,
+                voice: Some(codex_protocol::protocol::RealtimeVoice::Marin),
             },
         };
         assert_eq!(
@@ -1774,11 +1798,97 @@ mod tests {
                     "threadId": "thr_123",
                     "prompt": "You are on a call",
                     "sessionId": "sess_456",
-                    "transport": null
+                    "transport": null,
+                    "voice": "marin"
                 }
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_start_prompt_default_and_null() -> Result<()> {
+        let default_prompt_request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: None,
+                session_id: None,
+                transport: None,
+                voice: None,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "sessionId": null,
+                    "transport": null,
+                    "voice": null
+                }
+            }),
+            serde_json::to_value(&default_prompt_request)?,
+        );
+
+        let null_prompt_request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: Some(None),
+                session_id: None,
+                transport: None,
+                voice: None,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "prompt": null,
+                    "sessionId": null,
+                    "transport": null,
+                    "voice": null
+                }
+            }),
+            serde_json::to_value(&null_prompt_request)?,
+        );
+
+        let default_prompt_value = json!({
+            "method": "thread/realtime/start",
+            "id": 9,
+            "params": {
+                "threadId": "thr_123",
+                "sessionId": null,
+                "transport": null,
+                "voice": null
+            }
+        });
+        assert_eq!(
+            serde_json::from_value::<ClientRequest>(default_prompt_value)?,
+            default_prompt_request,
+        );
+
+        let null_prompt_value = json!({
+            "method": "thread/realtime/start",
+            "id": 9,
+            "params": {
+                "threadId": "thr_123",
+                "prompt": null,
+                "sessionId": null,
+                "transport": null,
+                "voice": null
+            }
+        });
+        assert_eq!(
+            serde_json::from_value::<ClientRequest>(null_prompt_value)?,
+            null_prompt_request,
+        );
+
         Ok(())
     }
 
@@ -1852,9 +1962,10 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
-                prompt: "You are on a call".to_string(),
+                prompt: Some(Some("You are on a call".to_string())),
                 session_id: None,
                 transport: None,
+                voice: None,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);

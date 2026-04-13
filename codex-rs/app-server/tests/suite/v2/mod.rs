@@ -1,6 +1,7 @@
 mod account;
 mod analytics;
 mod app_list;
+mod client_metadata;
 mod collaboration_mode_list;
 #[cfg(unix)]
 mod command_exec;
@@ -17,6 +18,7 @@ mod initialize;
 mod mcp_resource;
 mod mcp_server_elicitation;
 mod mcp_server_status;
+mod mcp_tool;
 mod model_list;
 mod output_schema;
 mod plan_item;
@@ -33,8 +35,10 @@ mod safety_check_downgrade;
 mod skills_list;
 mod thread_archive;
 mod thread_fork;
+mod thread_inject_items;
 mod thread_list;
 mod thread_loaded_list;
+mod thread_memory_mode_set;
 mod thread_metadata_update;
 mod thread_name_websocket;
 mod thread_read;

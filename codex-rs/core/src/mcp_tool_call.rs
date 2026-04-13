@@ -24,8 +24,11 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
+use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use codex_analytics::AppInvocation;
@@ -34,6 +37,7 @@ use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
@@ -178,14 +182,16 @@ pub(crate) async fn handle_mcp_tool_call(
 
                 let start = Instant::now();
                 let result = async {
-                    sess.call_tool(
+                    execute_mcp_tool_call(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
                         &server,
                         &tool_name,
                         arguments_value.clone(),
+                        metadata.as_ref(),
                         request_meta.clone(),
                     )
                     .await
-                    .map_err(|e| format!("tool call error: {e:?}"))
                 }
                 .instrument(mcp_tool_call_span(
                     sess.as_ref(),
@@ -200,13 +206,6 @@ pub(crate) async fn handle_mcp_tool_call(
                     },
                 ))
                 .await;
-                let result = sanitize_mcp_tool_result_for_model(
-                    turn_context
-                        .model_info
-                        .input_modalities
-                        .contains(&InputModality::Image),
-                    result,
-                );
                 if let Err(error) = &result {
                     tracing::warn!("MCP tool call error: {error:?}");
                 }
@@ -294,11 +293,17 @@ pub(crate) async fn handle_mcp_tool_call(
     maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
     let start = Instant::now();
-    // Perform the tool call.
     let result = async {
-        sess.call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
-            .await
-            .map_err(|e| format!("tool call error: {e:?}"))
+        execute_mcp_tool_call(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &server,
+            &tool_name,
+            arguments_value.clone(),
+            metadata.as_ref(),
+            request_meta,
+        )
+        .await
     }
     .instrument(mcp_tool_call_span(
         sess.as_ref(),
@@ -313,13 +318,6 @@ pub(crate) async fn handle_mcp_tool_call(
         },
     ))
     .await;
-    let result = sanitize_mcp_tool_result_for_model(
-        turn_context
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image),
-        result,
-    );
     if let Err(error) = &result {
         tracing::warn!("MCP tool call error: {error:?}");
     }
@@ -453,6 +451,35 @@ fn record_server_fields(span: &Span, url: Option<&str>) {
     }
 }
 
+async fn execute_mcp_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    tool_name: &str,
+    arguments_value: Option<serde_json::Value>,
+    metadata: Option<&McpToolApprovalMetadata>,
+    request_meta: Option<serde_json::Value>,
+) -> Result<CallToolResult, String> {
+    let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
+        sess,
+        turn_context,
+        arguments_value,
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+    )
+    .await?;
+    let result = sess
+        .call_tool(server, tool_name, rewritten_arguments, request_meta)
+        .await
+        .map_err(|e| format!("tool call error: {e:?}"))?;
+    sanitize_mcp_tool_result_for_model(
+        turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image),
+        Ok(result),
+    )
+}
+
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
     if !turn_context
         .config
@@ -566,6 +593,7 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_title: Option<String>,
     tool_description: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
+    openai_file_input_params: Option<Vec<String>>,
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
@@ -746,14 +774,16 @@ async fn maybe_request_mcp_tool_approval(
         .enabled(Feature::ToolCallMcpElicitation);
 
     if routes_approval_to_guardian(turn_context) {
+        let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,
             turn_context,
+            review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
             monitor_reason.clone(),
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(sess, call_id, decision).await;
+        let decision = mcp_tool_approval_decision_from_guardian(sess, &review_id, decision).await;
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -943,7 +973,7 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
 
 async fn mcp_tool_approval_decision_from_guardian(
     sess: &Session,
-    call_id: &str,
+    review_id: &str,
     decision: ReviewDecision,
 ) -> McpToolApprovalDecision {
     match decision {
@@ -952,7 +982,10 @@ async fn mcp_tool_approval_decision_from_guardian(
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
         ReviewDecision::Denied => McpToolApprovalDecision::Decline {
-            message: Some(guardian_rejection_message(sess, call_id).await),
+            message: Some(guardian_rejection_message(sess, review_id).await),
+        },
+        ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
+            message: Some(guardian_timeout_message()),
         },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
@@ -983,7 +1016,6 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .await
         .list_all_tools()
         .await;
-
     let tool_info = tools
         .into_values()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
@@ -1025,6 +1057,10 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
             .and_then(serde_json::Value::as_object)
             .cloned(),
+        openai_file_input_params: Some(declared_openai_file_input_param_names(
+            tool_info.tool.meta.as_deref(),
+        ))
+        .filter(|params| !params.is_empty()),
     })
 }
 
@@ -1509,7 +1545,7 @@ async fn persist_custom_mcp_tool_approval(
         if !servers.contains_key(server) {
             anyhow::bail!("MCP server `{server}` is not configured in config.toml");
         }
-        config.codex_home.clone()
+        config.codex_home.to_path_buf()
     };
 
     ConfigEditsBuilder::new(&config_folder)

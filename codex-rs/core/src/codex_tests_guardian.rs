@@ -95,7 +95,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -144,8 +144,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
-            tool_name: "shell".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("shell"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -211,8 +210,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
-            tool_name: "exec_command".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("exec_command"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -325,8 +323,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "sticky-turn-grant".to_string(),
-            tool_name: "shell".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("shell"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": [
@@ -420,12 +417,12 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let models_manager = Arc::new(ModelsManager::new(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         auth_manager.clone(),
         /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     ));
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
@@ -436,6 +433,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
+        analytics_events_client: None,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         skills_manager,

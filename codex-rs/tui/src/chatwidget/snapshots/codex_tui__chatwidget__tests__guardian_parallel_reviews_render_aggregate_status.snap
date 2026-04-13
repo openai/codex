@@ -1,6 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
-expression: rendered
+source: tui/src/chatwidget/tests/guardian.rs
+expression: normalize_snapshot_paths(rendered)
 ---
 • Reviewing 2 approval requests (0s • esc to interrupt)
   └ • rm -rf '/tmp/guardian target 1'
@@ -9,4 +9,4 @@ expression: rendered
 
 › Ask Codex to do anything
 
-  gpt-5.3-codex default · 100% left · /tmp/project
+  gpt-5.3-codex default · /tmp/project

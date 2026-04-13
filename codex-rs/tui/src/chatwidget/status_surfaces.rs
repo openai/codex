@@ -452,10 +452,10 @@ impl ChatWidget {
             }
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
-                .map(|remaining| format!("{remaining}% left")),
+                .map(|remaining| format!("Context {remaining}% left")),
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
-                .map(|used| format!("{used}% used")),
+                .map(|used| format!("Context {used}% used")),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id
@@ -498,6 +498,10 @@ impl ChatWidget {
                     "Fast off".to_string()
                 },
             ),
+            StatusLineItem::ThreadTitle => self.thread_name.as_ref().and_then(|name| {
+                let trimmed = name.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }),
         }
     }
 

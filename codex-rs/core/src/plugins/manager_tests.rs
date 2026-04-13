@@ -8,6 +8,7 @@ use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::LoadedPlugin;
 use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::PluginLoadOutcome;
+use crate::plugins::marketplace_install_root;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
@@ -16,6 +17,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
+use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use tempfile::TempDir;
@@ -163,7 +165,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
             ),
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
-            skill_roots: vec![plugin_root.join("skills")],
+            skill_roots: vec![plugin_root.join("skills").abs()],
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,
             mcp_servers: HashMap::from([(
@@ -177,6 +179,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
                     },
                     enabled: true,
                     required: false,
+                    supports_parallel_tool_calls: false,
                     disabled_reason: None,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
@@ -204,7 +207,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
     );
     assert_eq!(
         outcome.effective_skill_roots(),
-        vec![plugin_root.join("skills")]
+        vec![plugin_root.join("skills").abs()]
     );
     assert_eq!(outcome.effective_mcp_servers().len(), 1);
     assert_eq!(
@@ -242,7 +245,9 @@ enabled = false
 enabled = true
 "#;
     let outcome = load_plugins_from_config(config_toml, codex_home.path());
-    let skill_path = dunce::canonicalize(skill_path).expect("skill path should canonicalize");
+    let skill_path = dunce::canonicalize(skill_path)
+        .expect("skill path should canonicalize")
+        .abs();
 
     assert_eq!(
         outcome.plugins()[0].disabled_skill_paths,
@@ -324,7 +329,7 @@ fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
 
     let metadata = plugin_telemetry_metadata_from_root(
         &PluginId::parse("sample@test").expect("plugin id should parse"),
-        &plugin_root,
+        &plugin_root.abs(),
     );
 
     assert_eq!(
@@ -489,8 +494,8 @@ fn load_plugins_uses_manifest_configured_component_paths() {
     assert_eq!(
         outcome.plugins()[0].skill_roots,
         vec![
-            plugin_root.join("custom-skills"),
-            plugin_root.join("skills")
+            plugin_root.join("custom-skills").abs(),
+            plugin_root.join("skills").abs()
         ]
     );
     assert_eq!(
@@ -506,6 +511,7 @@ fn load_plugins_uses_manifest_configured_component_paths() {
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -598,7 +604,7 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
 
     assert_eq!(
         outcome.plugins()[0].skill_roots,
-        vec![plugin_root.join("skills")]
+        vec![plugin_root.join("skills").abs()]
     );
     assert_eq!(
         outcome.plugins()[0].mcp_servers,
@@ -613,6 +619,7 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -768,6 +775,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         },
         enabled: true,
         required: false,
+        supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -798,7 +806,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
     };
     let outcome = PluginLoadOutcome::from_plugins(vec![
         LoadedPlugin {
-            skill_roots: vec![codex_home.path().join("skills-plugin/skills")],
+            skill_roots: vec![codex_home.path().join("skills-plugin/skills").abs()],
             has_enabled_skills: true,
             ..plugin("skills@test", "skills-plugin", "skills-plugin")
         },
@@ -815,7 +823,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         plugin("empty@test", "empty-plugin", "empty-plugin"),
         LoadedPlugin {
             enabled: false,
-            skill_roots: vec![codex_home.path().join("disabled-plugin/skills")],
+            skill_roots: vec![codex_home.path().join("disabled-plugin/skills").abs()],
             apps: vec![connector("connector_hidden")],
             ..plugin("disabled@test", "disabled-plugin", "disabled-plugin")
         },
@@ -1502,6 +1510,174 @@ plugins = true
             }],
         }
     );
+}
+
+#[tokio::test]
+async fn list_marketplaces_includes_installed_marketplace_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marketplace_root = marketplace_install_root(tmp.path()).join("debug");
+    let plugin_root = marketplace_root.join("plugins/sample");
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[marketplaces.debug]
+last_updated = "2026-04-10T12:34:56Z"
+source_type = "git"
+source = "/tmp/debug"
+"#,
+    );
+    fs::create_dir_all(marketplace_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .unwrap();
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[])
+        .unwrap()
+        .marketplaces;
+
+    let marketplace = marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "debug")
+        .expect("installed marketplace should be listed");
+
+    assert_eq!(
+        marketplace.path,
+        AbsolutePathBuf::try_from(marketplace_root.join(".agents/plugins/marketplace.json"))
+            .unwrap()
+    );
+    assert_eq!(marketplace.plugins.len(), 1);
+    assert_eq!(marketplace.plugins[0].id, "sample@debug");
+    assert_eq!(
+        marketplace.plugins[0].source,
+        MarketplacePluginSource::Local {
+            path: AbsolutePathBuf::try_from(plugin_root).unwrap(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn list_marketplaces_uses_config_when_known_registry_is_malformed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marketplace_root = marketplace_install_root(tmp.path()).join("debug");
+    let plugin_root = marketplace_root.join("plugins/sample");
+    let registry_path = tmp.path().join(".tmp/known_marketplaces.json");
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[marketplaces.debug]
+last_updated = "2026-04-10T12:34:56Z"
+source_type = "git"
+source = "/tmp/debug"
+"#,
+    );
+    fs::create_dir_all(marketplace_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    fs::write(registry_path, "{not valid json").unwrap();
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[])
+        .unwrap()
+        .marketplaces;
+
+    let marketplace = marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "debug")
+        .expect("configured marketplace should be discovered");
+
+    assert_eq!(marketplace.plugins[0].id, "sample@debug");
+}
+
+#[tokio::test]
+async fn list_marketplaces_ignores_installed_roots_missing_from_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marketplace_root = marketplace_install_root(tmp.path()).join("debug");
+    let plugin_root = marketplace_root.join("plugins/sample");
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    fs::create_dir_all(marketplace_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .unwrap();
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[])
+        .unwrap()
+        .marketplaces;
+
+    assert!(marketplaces.is_empty());
 }
 
 #[tokio::test]

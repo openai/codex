@@ -133,16 +133,17 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
+- `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
-- `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
+- `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
@@ -150,6 +151,7 @@ Example with notification opt-out:
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`.
@@ -189,6 +191,7 @@ Example with notification opt-out:
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools and auth status, plus resources/resource templates for `full` detail; supports cursor+limit pagination. If `detail` is omitted, the server defaults to `full`.
 - `mcpServer/resource/read` — read a resource from a thread's configured MCP server by `threadId`, `server`, and `uri`, returning text/blob resource `contents`.
+- `mcpServer/tool/call` — call a tool on a thread's configured MCP server by `threadId`, `server`, `tool`, optional `arguments`, and optional `_meta`, returning the MCP tool result.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `config/read` — fetch the effective config on disk after resolving config layering.
@@ -212,6 +215,7 @@ Start a fresh thread when you need a new Codex conversation.
     "sandbox": "workspaceWrite",
     "personality": "friendly",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
+    "sessionStartSource": "startup", // optional: "startup" (default) or "clear"
     // Experimental: requires opt-in
     "dynamicTools": [
         {
@@ -335,11 +339,16 @@ When `nextCursor` is `null`, you’ve reached the final page.
 - `notSubscribed` when the connection was not subscribed to that thread.
 - `notLoaded` when the thread is not loaded.
 
-If this was the last subscriber, the server unloads the thread and emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
+If this was the last subscriber, the server does not unload the thread immediately. It unloads the thread after the thread has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
 
 ```json
 { "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123" } }
 { "id": 22, "result": { "status": "unsubscribed" } }
+```
+
+Later, after the idle unload timeout:
+
+```json
 { "method": "thread/status/changed", "params": {
     "threadId": "thr_123",
     "status": { "type": "notLoaded" }
@@ -391,6 +400,16 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
         "gitInfo": null
     }
 } }
+```
+
+Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
+
+```json
+{ "method": "thread/memoryMode/set", "id": 26, "params": {
+    "threadId": "thr_123",
+    "mode": "disabled"
+} }
+{ "id": 26, "result": {} }
 ```
 
 ### Example: Archive a thread
@@ -563,6 +582,24 @@ Invoke a plugin by including a UI mention token such as `@sample` in the text in
 } } }
 ```
 
+### Example: Inject raw history items
+
+Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests.
+
+```json
+{ "method": "thread/inject_items", "id": 36, "params": {
+    "threadId": "thr_123",
+    "items": [
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": "Previously computed context." }]
+        }
+    ]
+} }
+{ "id": 36, "result": {} }
+```
+
 ### Example: Start realtime with WebRTC
 
 Use `thread/realtime/start` with `transport.type: "webrtc"` when a browser or webview owns the `RTCPeerConnection` and app-server should create the server-side realtime session. The transport `sdp` must be the offer SDP produced by `RTCPeerConnection.createOffer()`, not a hand-written or minimal SDP string.
@@ -600,6 +637,9 @@ Then send `offer.sdp` to app-server. Core uses `experimental_realtime_ws_backend
     "sdp": "v=0\r\no=..."
 } }
 ```
+
+Omit `prompt` to use Codex's default realtime backend prompt. Send `prompt: null` or
+`prompt: ""` when the session should start without that default backend prompt.
 
 ```javascript
 await pc.setRemoteDescription({

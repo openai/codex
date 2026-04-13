@@ -67,7 +67,7 @@ impl SkillsWatcher {
             .skill_roots_for_config(&skills_input)
             .into_iter()
             .map(|root| WatchPath {
-                path: root.path,
+                path: root.path.into_path_buf(),
                 recursive: true,
             })
             .collect();

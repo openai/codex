@@ -6,7 +6,7 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 /**
  * Successful response for `fs/watch`.
  */
-export type FsWatchResponse = { 
+export type FsWatchResponse = {
 /**
  * Canonicalized path associated with the watch.
  */

@@ -335,7 +335,7 @@
           "type": "string"
         },
         "path": {
-          "type": "string"
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "shortDescription": {
           "type": [

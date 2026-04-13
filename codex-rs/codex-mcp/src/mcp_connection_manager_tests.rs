@@ -3,20 +3,18 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
+use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
+    let tool_namespace = format!("mcp__{server_name}__");
     ToolInfo {
         server_name: server_name.to_string(),
-        tool_name: tool_name.to_string(),
-        tool_namespace: if server_name == CODEX_APPS_MCP_SERVER_NAME {
-            format!("mcp__{server_name}__")
-        } else {
-            server_name.to_string()
-        },
+        callable_name: tool_name.to_string(),
+        callable_namespace: tool_namespace,
         server_instructions: None,
         tool: Tool {
             name: tool_name.to_string().into(),
@@ -61,6 +59,86 @@ fn create_codex_apps_tools_cache_context(
             is_workspace_account: false,
         },
     }
+}
+
+#[test]
+fn declared_openai_file_fields_treat_names_literally() {
+    let meta = serde_json::json!({
+        "openai/fileParams": ["file", "input_file", "attachments"]
+    });
+    let meta = meta.as_object().expect("meta object");
+
+    assert_eq!(
+        declared_openai_file_input_param_names(Some(meta)),
+        vec![
+            "file".to_string(),
+            "input_file".to_string(),
+            "attachments".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn tool_with_model_visible_input_schema_masks_file_params() {
+    let mut tool = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "upload").tool;
+    tool.input_schema = Arc::new(
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "object",
+                    "description": "Original file payload."
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "object"}
+                }
+            }
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    );
+    tool.meta = Some(Meta(
+        serde_json::json!({
+            "openai/fileParams": ["file", "files"]
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    ));
+
+    let tool = tool_with_model_visible_input_schema(&tool);
+
+    assert_eq!(
+        *tool.input_schema,
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Original file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                }
+            }
+        })
+        .as_object()
+        .expect("object")
+        .clone()
+    );
+}
+
+#[test]
+fn tool_with_model_visible_input_schema_leaves_tools_without_file_params_unchanged() {
+    let original_tool = create_test_tool("custom", "upload").tool;
+
+    let tool = tool_with_model_visible_input_schema(&original_tool);
+
+    assert_eq!(tool, original_tool);
 }
 
 #[test]
@@ -213,16 +291,12 @@ fn test_qualify_tools_long_names_same_server() {
     let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
     keys.sort();
 
-    assert_eq!(keys[0].len(), 64);
-    assert_eq!(
-        keys[0],
-        "mcp__my_server__extremel119a2b97664e41363932dc84de21e2ff1b93b3e9"
-    );
-
-    assert_eq!(keys[1].len(), 64);
-    assert_eq!(
-        keys[1],
-        "mcp__my_server__yet_anot419a82a89325c1b477274a41f8c65ea5f3a7f341"
+    assert!(keys.iter().all(|key| key.len() == 64));
+    assert!(keys.iter().all(|key| key.starts_with("mcp__my_server__")));
+    assert!(
+        keys.iter()
+            .all(|key| key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')),
+        "qualified names must be code-mode compatible: {keys:?}"
     );
 }
 
@@ -235,17 +309,94 @@ fn test_qualify_tools_sanitizes_invalid_characters() {
     assert_eq!(qualified_tools.len(), 1);
     let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
     assert_eq!(qualified_name, "mcp__server_one__tool_two_three");
+    assert_eq!(
+        format!("{}{}", tool.callable_namespace, tool.callable_name),
+        qualified_name
+    );
 
-    // The key is sanitized for OpenAI, but we keep original parts for the actual MCP call.
+    // The key and callable parts are sanitized for model-visible tool calls, but
+    // the raw MCP name is preserved for the actual MCP call.
     assert_eq!(tool.server_name, "server.one");
-    assert_eq!(tool.tool_name, "tool.two-three");
+    assert_eq!(tool.callable_namespace, "mcp__server_one__");
+    assert_eq!(tool.callable_name, "tool_two_three");
+    assert_eq!(tool.tool.name, "tool.two-three");
 
     assert!(
         qualified_name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-        "qualified name must be Responses API compatible: {qualified_name:?}"
+            .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "qualified name must be code-mode compatible: {qualified_name:?}"
     );
+}
+
+#[test]
+fn test_qualify_tools_keeps_hyphenated_mcp_tools_callable() {
+    let tools = vec![create_test_tool("music-studio", "get-strudel-guide")];
+
+    let qualified_tools = qualify_tools(tools);
+
+    assert_eq!(qualified_tools.len(), 1);
+    let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
+    assert_eq!(qualified_name, "mcp__music_studio__get_strudel_guide");
+    assert_eq!(tool.callable_namespace, "mcp__music_studio__");
+    assert_eq!(tool.callable_name, "get_strudel_guide");
+    assert_eq!(tool.tool.name, "get-strudel-guide");
+}
+
+#[test]
+fn test_qualify_tools_disambiguates_sanitized_namespace_collisions() {
+    let tools = vec![
+        create_test_tool("basic-server", "lookup"),
+        create_test_tool("basic_server", "query"),
+    ];
+
+    let qualified_tools = qualify_tools(tools);
+
+    assert_eq!(qualified_tools.len(), 2);
+    let mut namespaces = qualified_tools
+        .values()
+        .map(|tool| tool.callable_namespace.as_str())
+        .collect::<Vec<_>>();
+    namespaces.sort();
+    namespaces.dedup();
+    assert_eq!(namespaces.len(), 2);
+
+    let raw_servers = qualified_tools
+        .values()
+        .map(|tool| tool.server_name.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(raw_servers, HashSet::from(["basic-server", "basic_server"]));
+    assert!(
+        qualified_tools
+            .keys()
+            .all(|key| key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')),
+        "qualified names must be code-mode compatible: {qualified_tools:?}"
+    );
+}
+
+#[test]
+fn test_qualify_tools_disambiguates_sanitized_tool_name_collisions() {
+    let tools = vec![
+        create_test_tool("server", "tool-name"),
+        create_test_tool("server", "tool_name"),
+    ];
+
+    let qualified_tools = qualify_tools(tools);
+
+    assert_eq!(qualified_tools.len(), 2);
+    let raw_tool_names = qualified_tools
+        .values()
+        .map(|tool| tool.tool.name.to_string())
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        raw_tool_names,
+        HashSet::from(["tool-name".to_string(), "tool_name".to_string()])
+    );
+    let callable_tool_names = qualified_tools
+        .values()
+        .map(|tool| tool.callable_name.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(callable_tool_names.len(), 2);
 }
 
 #[test]
@@ -312,7 +463,7 @@ fn filter_tools_applies_per_server_filters() {
 
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].server_name, "server1");
-    assert_eq!(filtered[0].tool_name, "tool_a");
+    assert_eq!(filtered[0].callable_name, "tool_a");
 }
 
 #[test]
@@ -329,12 +480,12 @@ fn codex_apps_tools_cache_is_overwritten_by_last_write() {
     write_cached_codex_apps_tools(&cache_context, &tools_gateway_1);
     let cached_gateway_1 =
         read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for first write");
-    assert_eq!(cached_gateway_1[0].tool_name, "one");
+    assert_eq!(cached_gateway_1[0].callable_name, "one");
 
     write_cached_codex_apps_tools(&cache_context, &tools_gateway_2);
     let cached_gateway_2 =
         read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for second write");
-    assert_eq!(cached_gateway_2[0].tool_name, "two");
+    assert_eq!(cached_gateway_2[0].callable_name, "two");
 }
 
 #[test]
@@ -361,8 +512,8 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
     let read_user_2 =
         read_cached_codex_apps_tools(&cache_context_user_2).expect("cache entry for user two");
 
-    assert_eq!(read_user_1[0].tool_name, "one");
-    assert_eq!(read_user_2[0].tool_name, "two");
+    assert_eq!(read_user_1[0].callable_name, "one");
+    assert_eq!(read_user_2[0].callable_name, "two");
     assert_ne!(
         cache_context_user_1.cache_path(),
         cache_context_user_2.cache_path(),
@@ -397,7 +548,7 @@ fn codex_apps_tools_cache_filters_disallowed_connectors() {
     let cached = read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for user");
 
     assert_eq!(cached.len(), 1);
-    assert_eq!(cached[0].tool_name, "allowed_tool");
+    assert_eq!(cached[0].callable_name, "allowed_tool");
     assert_eq!(cached[0].connector_id.as_deref(), Some("calendar"));
 }
 
@@ -462,7 +613,7 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
-    assert_eq!(startup_tools[0].tool_name, "calendar_search");
+    assert_eq!(startup_tools[0].callable_name, "calendar_search");
 }
 
 #[tokio::test]
@@ -492,7 +643,7 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .get("mcp__codex_apps__calendar_create_event")
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
-    assert_eq!(tool.tool_name, "calendar_create_event");
+    assert_eq!(tool.callable_name, "calendar_create_event");
 }
 
 #[tokio::test]
@@ -574,7 +725,7 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         .get("mcp__codex_apps__calendar_create_event")
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
-    assert_eq!(tool.tool_name, "calendar_create_event");
+    assert_eq!(tool.callable_name, "calendar_create_event");
 }
 
 #[test]
@@ -606,6 +757,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -655,6 +807,7 @@ fn mcp_init_error_display_reports_generic_errors() {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
