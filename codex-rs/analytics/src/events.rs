@@ -1,5 +1,11 @@
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CompactionImplementation;
+use crate::facts::CompactionPhase;
+use crate::facts::CompactionReason;
+use crate::facts::CompactionStatus;
+use crate::facts::CompactionStrategy;
+use crate::facts::CompactionTrigger;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
@@ -9,6 +15,10 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
+use codex_protocol::protocol::GuardianAssessmentOutcome;
+use codex_protocol::protocol::GuardianCommandSource;
+use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
@@ -148,31 +158,6 @@ pub enum GuardianReviewSessionKind {
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GuardianReviewRiskLevel {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GuardianReviewUserAuthorization {
-    Unknown,
-    Low,
-    Medium,
-    High,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GuardianReviewOutcome {
-    Allow,
-    Deny,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianApprovalRequestSource {
     /// Approval requested directly by the main Codex turn.
@@ -228,19 +213,12 @@ pub enum GuardianReviewedAction {
     },
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GuardianCommandSource {
-    Shell,
-    UnifiedExec,
-}
-
 #[derive(Clone, Serialize)]
 pub struct GuardianReviewEventParams {
     pub thread_id: String,
     pub turn_id: String,
     pub review_id: String,
-    pub target_item_id: String,
+    pub target_item_id: Option<String>,
     pub retry_reason: Option<String>,
     pub approval_request_source: GuardianApprovalRequestSource,
     pub reviewed_action: GuardianReviewedAction,
@@ -248,9 +226,9 @@ pub struct GuardianReviewEventParams {
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
-    pub risk_level: Option<GuardianReviewRiskLevel>,
-    pub user_authorization: Option<GuardianReviewUserAuthorization>,
-    pub outcome: Option<GuardianReviewOutcome>,
+    pub risk_level: Option<GuardianRiskLevel>,
+    pub user_authorization: Option<GuardianUserAuthorization>,
+    pub outcome: Option<GuardianAssessmentOutcome>,
     pub rationale: Option<String>,
     pub guardian_thread_id: Option<String>,
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
@@ -258,7 +236,7 @@ pub struct GuardianReviewEventParams {
     pub guardian_reasoning_effort: Option<String>,
     pub had_prior_review_context: Option<bool>,
     pub review_timeout_ms: u64,
-    pub tool_call_count: u64,
+    pub tool_call_count: Option<u64>,
     pub time_to_first_token_ms: Option<u64>,
     pub completion_latency_ms: Option<u64>,
     pub started_at: u64,
@@ -310,12 +288,12 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_source: Option<&'static str>,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
-    pub(crate) trigger: crate::facts::CompactionTrigger,
-    pub(crate) reason: crate::facts::CompactionReason,
-    pub(crate) implementation: crate::facts::CompactionImplementation,
-    pub(crate) phase: crate::facts::CompactionPhase,
-    pub(crate) strategy: crate::facts::CompactionStrategy,
-    pub(crate) status: crate::facts::CompactionStatus,
+    pub(crate) trigger: CompactionTrigger,
+    pub(crate) reason: CompactionReason,
+    pub(crate) implementation: CompactionImplementation,
+    pub(crate) phase: CompactionPhase,
+    pub(crate) strategy: CompactionStrategy,
+    pub(crate) status: CompactionStatus,
     pub(crate) error: Option<String>,
     pub(crate) active_context_tokens_before: i64,
     pub(crate) active_context_tokens_after: i64,
