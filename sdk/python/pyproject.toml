@@ -3,13 +3,13 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codex-app-server-sdk"
+name = "openai-codex"
 version = "0.2.0"
 description = "Python SDK for Codex app-server v2"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "OpenClaw Assistant" }]
+authors = [{ name = "OpenAI" }]
 keywords = ["codex", "json-rpc", "sdk", "llm", "app-server"]
 classifiers = [
   "Development Status :: 4 - Beta",

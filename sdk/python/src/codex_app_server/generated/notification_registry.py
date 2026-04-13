@@ -44,6 +44,7 @@ from .v2_all import ThreadRealtimeClosedNotification
 from .v2_all import ThreadRealtimeErrorNotification
 from .v2_all import ThreadRealtimeItemAddedNotification
 from .v2_all import ThreadRealtimeOutputAudioDeltaNotification
+from .v2_all import ThreadRealtimeSdpNotification
 from .v2_all import ThreadRealtimeStartedNotification
 from .v2_all import ThreadRealtimeTranscriptUpdatedNotification
 from .v2_all import ThreadStartedNotification
@@ -97,6 +98,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "thread/realtime/error": ThreadRealtimeErrorNotification,
     "thread/realtime/itemAdded": ThreadRealtimeItemAddedNotification,
     "thread/realtime/outputAudio/delta": ThreadRealtimeOutputAudioDeltaNotification,
+    "thread/realtime/sdp": ThreadRealtimeSdpNotification,
     "thread/realtime/started": ThreadRealtimeStartedNotification,
     "thread/realtime/transcriptUpdated": ThreadRealtimeTranscriptUpdatedNotification,
     "thread/started": ThreadStartedNotification,
