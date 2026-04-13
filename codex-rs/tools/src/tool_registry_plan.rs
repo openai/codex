@@ -106,7 +106,13 @@ pub fn build_tool_registry_plan(
             create_code_mode_tool(
                 &enabled_tools,
                 &namespace_descriptions,
-                config.code_mode_only_enabled,
+                codex_code_mode::ExecToolDescriptionOptions {
+                    code_mode_only: config.code_mode_only_enabled,
+                    deferred_tools_available: config.search_tool
+                        && params
+                            .deferred_mcp_tools
+                            .is_some_and(|tools| !tools.is_empty()),
+                },
             ),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
