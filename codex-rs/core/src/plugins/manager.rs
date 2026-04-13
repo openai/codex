@@ -1084,7 +1084,48 @@ impl PluginsManager {
     ) {
         if config.features.enabled(Feature::Plugins) {
             self.start_curated_repo_sync();
-            self.maybe_start_configured_marketplace_upgrade_for_config(config);
+            {
+                let mut state = match self.configured_marketplace_upgrade_state.write() {
+                    Ok(state) => state,
+                    Err(err) => err.into_inner(),
+                };
+                if state.in_flight {
+                    return;
+                }
+                state.in_flight = true;
+            }
+
+            let manager = Arc::clone(self);
+            let codex_home = self.codex_home.clone();
+            let marketplace_upgrade_config = config.clone();
+            if let Err(err) = std::thread::Builder::new()
+                .name("plugins-marketplace-auto-upgrade".to_string())
+                .spawn(move || {
+                    let outcome = upgrade_configured_git_marketplaces(
+                        codex_home.as_path(),
+                        &marketplace_upgrade_config,
+                    );
+                    if !outcome.upgraded_roots.is_empty() {
+                        manager.maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
+                            &outcome.upgraded_roots,
+                            NonCuratedCacheRefreshMode::ForceReinstall,
+                        );
+                    }
+
+                    let mut state = match manager.configured_marketplace_upgrade_state.write() {
+                        Ok(state) => state,
+                        Err(err) => err.into_inner(),
+                    };
+                    state.in_flight = false;
+                })
+            {
+                let mut state = match self.configured_marketplace_upgrade_state.write() {
+                    Ok(state) => state,
+                    Err(err) => err.into_inner(),
+                };
+                state.in_flight = false;
+                warn!("failed to start configured marketplace auto-upgrade task: {err}");
+            }
             start_startup_remote_plugin_sync_once(
                 Arc::clone(self),
                 self.codex_home.clone(),
@@ -1109,58 +1150,6 @@ impl PluginsManager {
         }
     }
 
-    pub fn maybe_start_configured_marketplace_upgrade_for_config(
-        self: &Arc<Self>,
-        config: &Config,
-    ) {
-        if !config.features.enabled(Feature::Plugins) {
-            return;
-        }
-
-        let should_spawn = {
-            let mut state = match self.configured_marketplace_upgrade_state.write() {
-                Ok(state) => state,
-                Err(err) => err.into_inner(),
-            };
-            if state.in_flight {
-                return;
-            }
-            state.in_flight = true;
-            true
-        };
-        if !should_spawn {
-            return;
-        }
-
-        let manager = Arc::clone(self);
-        let codex_home = self.codex_home.clone();
-        let config = config.clone();
-        if let Err(err) = std::thread::Builder::new()
-            .name("plugins-marketplace-auto-upgrade".to_string())
-            .spawn(move || {
-                let outcome = upgrade_configured_git_marketplaces(codex_home.as_path(), &config);
-                if !outcome.upgraded_roots.is_empty() {
-                    manager.maybe_start_non_curated_plugin_cache_force_reinstall_for_roots(
-                        &outcome.upgraded_roots,
-                    );
-                }
-
-                let mut state = match manager.configured_marketplace_upgrade_state.write() {
-                    Ok(state) => state,
-                    Err(err) => err.into_inner(),
-                };
-                state.in_flight = false;
-            })
-        {
-            let mut state = match self.configured_marketplace_upgrade_state.write() {
-                Ok(state) => state,
-                Err(err) => err.into_inner(),
-            };
-            state.in_flight = false;
-            warn!("failed to start configured marketplace auto-upgrade task: {err}");
-        }
-    }
-
     pub fn maybe_start_non_curated_plugin_cache_refresh_for_roots(
         self: &Arc<Self>,
         roots: &[AbsolutePathBuf],
@@ -1168,16 +1157,6 @@ impl PluginsManager {
         self.maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
             roots,
             NonCuratedCacheRefreshMode::IfVersionChanged,
-        );
-    }
-
-    fn maybe_start_non_curated_plugin_cache_force_reinstall_for_roots(
-        self: &Arc<Self>,
-        roots: &[AbsolutePathBuf],
-    ) {
-        self.maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
-            roots,
-            NonCuratedCacheRefreshMode::ForceReinstall,
         );
     }
 
