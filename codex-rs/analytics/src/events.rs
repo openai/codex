@@ -531,11 +531,7 @@ pub(crate) fn codex_plugin_used_metadata(
 }
 
 pub(crate) fn thread_source_name(thread_source: &SessionSource) -> Option<&'static str> {
-    match thread_source {
-        SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
-        SessionSource::SubAgent(_) => Some("subagent"),
-        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
-    }
+    thread_source.thread_source_name()
 }
 
 pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {

@@ -439,9 +439,9 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     );
     assert_eq!(
         initial_parsed
-            .get("session_source")
+            .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("exec")
+        Some("user")
     );
 
     let git_config_global = cwd.join("empty-git-config");
@@ -536,15 +536,15 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .expect("second turn_id should be present");
     assert_eq!(
         first_parsed
-            .get("session_source")
+            .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("exec")
+        Some("user")
     );
     assert_eq!(
         second_parsed
-            .get("session_source")
+            .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("exec")
+        Some("user")
     );
     assert_eq!(
         first_turn_id, second_turn_id,

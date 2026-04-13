@@ -2633,6 +2633,15 @@ impl SessionSource {
         })
     }
 
+    /// Coarse-grained source classification used for analytics.
+    pub fn thread_source_name(&self) -> Option<&'static str> {
+        match self {
+            SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
+            SessionSource::SubAgent(_) => Some("subagent"),
+            SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
+        }
+    }
+
     pub fn get_nickname(&self) -> Option<String> {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
@@ -3880,6 +3889,24 @@ mod tests {
             SessionSource::from_startup_arg(" Atlas ").unwrap(),
             SessionSource::Custom("atlas".to_string())
         );
+    }
+
+    #[test]
+    fn session_source_thread_source_name_classifies_user_and_subagent_sources() {
+        for (source, expected) in [
+            (SessionSource::Cli, Some("user")),
+            (SessionSource::VSCode, Some("user")),
+            (SessionSource::Exec, Some("user")),
+            (
+                SessionSource::SubAgent(SubAgentSource::Review),
+                Some("subagent"),
+            ),
+            (SessionSource::Mcp, None),
+            (SessionSource::Custom("atlas".to_string()), None),
+            (SessionSource::Unknown, None),
+        ] {
+            assert_eq!(source.thread_source_name(), expected);
+        }
     }
 
     #[test]
