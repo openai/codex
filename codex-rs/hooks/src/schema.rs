@@ -12,12 +12,6 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::approvals::NetworkApprovalProtocol;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxPermissions;
-
-use crate::events::permission_request::PermissionRequestApprovalAttempt;
-
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
@@ -248,41 +242,8 @@ pub(crate) struct PreToolUseCommandInput {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PermissionRequestToolInput {
     pub command: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestAttemptContext {
-    pub stage: PermissionRequestApprovalAttempt,
-    pub retry_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestPolicyContext {
-    pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<PermissionProfile>,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestResourceContext {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<NetworkApprovalProtocol>,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestApprovalContext {
-    pub attempt: PermissionRequestAttemptContext,
-    pub policy: PermissionRequestPolicyContext,
-    pub justification: Option<String>,
-    pub resource: PermissionRequestResourceContext,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -302,7 +263,6 @@ pub(crate) struct PermissionRequestCommandInput {
     #[schemars(schema_with = "permission_request_tool_name_schema")]
     pub tool_name: String,
     pub tool_input: PermissionRequestToolInput,
-    pub approval_context: PermissionRequestApprovalContext,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

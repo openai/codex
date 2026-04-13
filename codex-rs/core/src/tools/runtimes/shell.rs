@@ -203,9 +203,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Some(PermissionRequestPayload {
             tool_name: "Bash".to_string(),
             command: req.hook_command.clone(),
-            sandbox_permissions: req.sandbox_permissions,
-            additional_permissions: req.additional_permissions.clone(),
-            justification: req.justification.clone(),
+            description: req.justification.clone(),
         })
     }
 
@@ -224,6 +222,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         Some(NetworkApprovalSpec {
             network: req.network.clone(),
             mode: NetworkApprovalMode::Immediate,
+            command: req.hook_command.clone(),
         })
     }
 

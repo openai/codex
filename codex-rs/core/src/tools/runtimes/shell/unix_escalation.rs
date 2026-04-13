@@ -403,9 +403,7 @@ impl CoreShellActionProvider {
                 let permission_request = PermissionRequestPayload {
                     tool_name: "Bash".to_string(),
                     command: codex_shell_command::parse_command::shlex_join(&command),
-                    sandbox_permissions: self.approval_sandbox_permissions,
-                    additional_permissions: additional_permissions.clone(),
-                    justification: None,
+                    description: None,
                 };
                 let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
                 match run_permission_request_hooks(

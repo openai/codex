@@ -160,8 +160,8 @@ pub(crate) async fn run_permission_request_hooks(
     request_id: &str,
     payload: PermissionRequestPayload,
     approval_attempt: PermissionRequestApprovalAttempt,
-    retry_reason: Option<String>,
-    network_approval_context: Option<NetworkApprovalContext>,
+    _retry_reason: Option<String>,
+    _network_approval_context: Option<NetworkApprovalContext>,
 ) -> Option<PermissionRequestDecision> {
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,
@@ -173,12 +173,7 @@ pub(crate) async fn run_permission_request_hooks(
         tool_name: payload.tool_name,
         run_id_suffix: format!("{request_id}:{}", approval_attempt.as_wire_value()),
         command: payload.command,
-        sandbox_permissions: payload.sandbox_permissions,
-        additional_permissions: payload.additional_permissions,
-        justification: payload.justification,
-        approval_attempt,
-        retry_reason,
-        network_approval_context,
+        description: payload.description,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;

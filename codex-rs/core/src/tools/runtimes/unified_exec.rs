@@ -186,9 +186,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Some(PermissionRequestPayload {
             tool_name: "Bash".to_string(),
             command: req.hook_command.clone(),
-            sandbox_permissions: req.sandbox_permissions,
-            additional_permissions: req.additional_permissions.clone(),
-            justification: req.justification.clone(),
+            description: req.justification.clone(),
         })
     }
 
@@ -207,6 +205,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         Some(NetworkApprovalSpec {
             network: req.network.clone(),
             mode: NetworkApprovalMode::Deferred,
+            command: req.hook_command.clone(),
         })
     }
 

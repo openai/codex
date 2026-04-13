@@ -448,11 +448,8 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         expected_hook_command
     );
     assert_eq!(
-        hook_inputs[0]["approval_context"]["attempt"],
-        serde_json::json!({
-            "stage": "initial",
-            "retryReason": null,
-        })
+        hook_inputs[0]["tool_input"]["description"],
+        serde_json::Value::Null
     );
 
     Ok(())

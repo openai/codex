@@ -1172,20 +1172,15 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(
-        hook_inputs[0]["approval_context"],
-        serde_json::json!({
-            "attempt": {
-                "stage": "initial",
-                "retryReason": null,
-            },
-            "policy": {
-                "sandboxPermissions": "use_default",
-                "additionalPermissions": null,
-            },
-            "justification": null,
-            "resource": {},
-        })
+        hook_inputs[0]["tool_input"]["description"],
+        serde_json::Value::Null
     );
+    assert!(hook_inputs[0].get("approval_attempt").is_none());
+    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
+    assert!(hook_inputs[0].get("additional_permissions").is_none());
+    assert!(hook_inputs[0].get("justification").is_none());
+    assert!(hook_inputs[0].get("host").is_none());
+    assert!(hook_inputs[0].get("protocol").is_none());
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
@@ -1207,9 +1202,12 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     let call_id = "permissionrequest-exec-command";
     let marker = std::env::temp_dir().join("permissionrequest-exec-command-marker");
     let command = format!("rm -f {}", marker.display());
+    let justification = "remove the temporary marker";
     let args = serde_json::json!({
         "cmd": command,
         "login": true,
+        "sandbox_permissions": "require_escalated",
+        "justification": justification,
     });
     let responses = mount_sse_sequence(
         &server,
@@ -1261,7 +1259,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     test.submit_turn_with_policies(
         "run the exec command after hook approval",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
     )
     .await?;
 
@@ -1278,21 +1276,13 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(
-        hook_inputs[0]["approval_context"],
-        serde_json::json!({
-            "attempt": {
-                "stage": "initial",
-                "retryReason": null,
-            },
-            "policy": {
-                "sandboxPermissions": "use_default",
-                "additionalPermissions": null,
-            },
-            "justification": null,
-            "resource": {},
-        })
-    );
+    assert_eq!(hook_inputs[0]["tool_input"]["description"], justification);
+    assert!(hook_inputs[0].get("approval_attempt").is_none());
+    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
+    assert!(hook_inputs[0].get("additional_permissions").is_none());
+    assert!(hook_inputs[0].get("justification").is_none());
+    assert!(hook_inputs[0].get("host").is_none());
+    assert!(hook_inputs[0].get("protocol").is_none());
 
     Ok(())
 }
@@ -1446,28 +1436,17 @@ allow_local_binding = true
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
     assert_eq!(hook_inputs[0]["tool_name"], "NetworkAccess");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(
-        hook_inputs[0]["tool_input"]["command"],
-        "network-access http://codex-network-test.invalid:80"
+        hook_inputs[0]["tool_input"]["description"],
+        "network-access codex-network-test.invalid"
     );
-    assert_eq!(
-        hook_inputs[0]["approval_context"],
-        serde_json::json!({
-            "attempt": {
-                "stage": "initial",
-                "retryReason": null,
-            },
-            "policy": {
-                "sandboxPermissions": "use_default",
-                "additionalPermissions": null,
-            },
-            "justification": "codex-network-test.invalid is not in the allowed_domains",
-            "resource": {
-                "host": "codex-network-test.invalid",
-                "protocol": "http",
-            },
-        })
-    );
+    assert!(hook_inputs[0].get("approval_attempt").is_none());
+    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
+    assert!(hook_inputs[0].get("additional_permissions").is_none());
+    assert!(hook_inputs[0].get("justification").is_none());
+    assert!(hook_inputs[0].get("host").is_none());
+    assert!(hook_inputs[0].get("protocol").is_none());
 
     test.codex.submit(Op::Shutdown {}).await?;
     wait_for_event(&test.codex, |event| {
@@ -1550,20 +1529,15 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(
-        hook_inputs[0]["approval_context"],
-        serde_json::json!({
-            "attempt": {
-                "stage": "retry",
-                "retryReason": "command failed; retry without sandbox?",
-            },
-            "policy": {
-                "sandboxPermissions": "use_default",
-                "additionalPermissions": null,
-            },
-            "justification": null,
-            "resource": {},
-        })
+        hook_inputs[0]["tool_input"]["description"],
+        serde_json::Value::Null
     );
+    assert!(hook_inputs[0].get("approval_attempt").is_none());
+    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
+    assert!(hook_inputs[0].get("additional_permissions").is_none());
+    assert!(hook_inputs[0].get("justification").is_none());
+    assert!(hook_inputs[0].get("host").is_none());
+    assert!(hook_inputs[0].get("protocol").is_none());
 
     Ok(())
 }

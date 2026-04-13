@@ -16,9 +16,6 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
-use codex_protocol::approvals::NetworkApprovalContext;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
@@ -35,11 +32,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
-use crate::schema::PermissionRequestApprovalContext;
-use crate::schema::PermissionRequestAttemptContext;
 use crate::schema::PermissionRequestCommandInput;
-use crate::schema::PermissionRequestPolicyContext;
-use crate::schema::PermissionRequestResourceContext;
 use crate::schema::PermissionRequestToolInput;
 
 #[derive(Debug, Clone)]
@@ -53,12 +46,7 @@ pub struct PermissionRequestRequest {
     pub tool_name: String,
     pub run_id_suffix: String,
     pub command: String,
-    pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<PermissionProfile>,
-    pub justification: Option<String>,
-    pub approval_attempt: PermissionRequestApprovalAttempt,
-    pub retry_reason: Option<String>,
-    pub network_approval_context: Option<NetworkApprovalContext>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -198,11 +186,6 @@ fn resolve_permission_request_decision<'a>(
 }
 
 fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestCommandInput {
-    let (host, protocol) = request
-        .network_approval_context
-        .as_ref()
-        .map(|context| (Some(context.host.clone()), Some(context.protocol)))
-        .unwrap_or((None, None));
     PermissionRequestCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
@@ -214,18 +197,7 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
         tool_name: request.tool_name.clone(),
         tool_input: PermissionRequestToolInput {
             command: request.command.clone(),
-        },
-        approval_context: PermissionRequestApprovalContext {
-            attempt: PermissionRequestAttemptContext {
-                stage: request.approval_attempt,
-                retry_reason: request.retry_reason.clone(),
-            },
-            policy: PermissionRequestPolicyContext {
-                sandbox_permissions: request.sandbox_permissions,
-                additional_permissions: request.additional_permissions.clone(),
-            },
-            justification: request.justification.clone(),
-            resource: PermissionRequestResourceContext { host, protocol },
+            description: request.description.clone(),
         },
     }
 }

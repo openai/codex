@@ -2,137 +2,19 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "AbsolutePathBuf": {
-      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
-      "type": "string"
-    },
-    "FileSystemPermissions": {
-      "properties": {
-        "read": {
-          "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
-          },
-          "type": "array"
-        },
-        "write": {
-          "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "NetworkApprovalProtocol": {
-      "enum": [
-        "http",
-        "https",
-        "socks5_tcp",
-        "socks5_udp"
-      ],
-      "type": "string"
-    },
-    "NetworkPermissions": {
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "NullableString": {
       "type": [
         "string",
         "null"
       ]
     },
-    "PermissionProfile": {
-      "properties": {
-        "file_system": {
-          "$ref": "#/definitions/FileSystemPermissions"
-        },
-        "network": {
-          "$ref": "#/definitions/NetworkPermissions"
-        }
-      },
-      "type": "object"
-    },
-    "PermissionRequestApprovalAttempt": {
-      "enum": [
-        "initial",
-        "retry"
-      ],
-      "type": "string"
-    },
-    "PermissionRequestApprovalContext": {
-      "additionalProperties": false,
-      "properties": {
-        "attempt": {
-          "$ref": "#/definitions/PermissionRequestAttemptContext"
-        },
-        "justification": {
-          "type": "string"
-        },
-        "policy": {
-          "$ref": "#/definitions/PermissionRequestPolicyContext"
-        },
-        "resource": {
-          "$ref": "#/definitions/PermissionRequestResourceContext"
-        }
-      },
-      "required": [
-        "attempt",
-        "policy",
-        "resource"
-      ],
-      "type": "object"
-    },
-    "PermissionRequestAttemptContext": {
-      "additionalProperties": false,
-      "properties": {
-        "retryReason": {
-          "type": "string"
-        },
-        "stage": {
-          "$ref": "#/definitions/PermissionRequestApprovalAttempt"
-        }
-      },
-      "required": [
-        "stage"
-      ],
-      "type": "object"
-    },
-    "PermissionRequestPolicyContext": {
-      "additionalProperties": false,
-      "properties": {
-        "additionalPermissions": {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        "sandboxPermissions": {
-          "$ref": "#/definitions/SandboxPermissions"
-        }
-      },
-      "required": [
-        "sandboxPermissions"
-      ],
-      "type": "object"
-    },
-    "PermissionRequestResourceContext": {
-      "additionalProperties": false,
-      "properties": {
-        "host": {
-          "type": "string"
-        },
-        "protocol": {
-          "$ref": "#/definitions/NetworkApprovalProtocol"
-        }
-      },
-      "type": "object"
-    },
     "PermissionRequestToolInput": {
       "additionalProperties": false,
       "properties": {
         "command": {
+          "type": "string"
+        },
+        "description": {
           "type": "string"
         }
       },
@@ -140,38 +22,9 @@
         "command"
       ],
       "type": "object"
-    },
-    "SandboxPermissions": {
-      "description": "Controls the per-command sandbox override requested by a shell-like tool call.",
-      "oneOf": [
-        {
-          "description": "Run with the turn's configured sandbox policy unchanged.",
-          "enum": [
-            "use_default"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Request to run outside the sandbox.",
-          "enum": [
-            "require_escalated"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Request to stay in the sandbox while widening permissions for this command only.",
-          "enum": [
-            "with_additional_permissions"
-          ],
-          "type": "string"
-        }
-      ]
     }
   },
   "properties": {
-    "approval_context": {
-      "$ref": "#/definitions/PermissionRequestApprovalContext"
-    },
     "cwd": {
       "type": "string"
     },
@@ -214,7 +67,6 @@
     }
   },
   "required": [
-    "approval_context",
     "cwd",
     "hook_event_name",
     "model",
