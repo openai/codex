@@ -1502,6 +1502,71 @@ async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
 }
 
 #[tokio::test]
+async fn memories_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ false);
+
+    chat.open_memories_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("memories_enable_prompt", popup);
+}
+
+#[tokio::test]
+async fn memories_enable_prompt_updates_feature_and_emits_notice() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ false);
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::MemoryTool, true)]
+    );
+    let cell = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("Memories will be enabled in the next session."));
+}
+
+#[tokio::test]
+async fn memories_settings_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("memories_settings_popup", popup);
+}
+
+#[tokio::test]
+async fn memories_settings_toggle_saves_on_enter() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char(' ')));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateMemorySettings {
+            use_memories: true,
+            generate_memories: true,
+        })
+    );
+}
+
+#[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
     chat.thread_id = Some(ThreadId::new());

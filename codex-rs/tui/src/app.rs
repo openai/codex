@@ -1466,6 +1466,48 @@ impl App {
         }
     }
 
+    async fn update_memory_settings(&mut self, use_memories: bool, generate_memories: bool) {
+        let active_profile = self.active_profile.clone();
+        let scoped_memory_segments = |key: &str| {
+            if let Some(profile) = active_profile.as_deref() {
+                vec![
+                    "profiles".to_string(),
+                    profile.to_string(),
+                    "memories".to_string(),
+                    key.to_string(),
+                ]
+            } else {
+                vec!["memories".to_string(), key.to_string()]
+            }
+        };
+        let edits = [
+            ConfigEdit::SetPath {
+                segments: scoped_memory_segments("use_memories"),
+                value: use_memories.into(),
+            },
+            ConfigEdit::SetPath {
+                segments: scoped_memory_segments("generate_memories"),
+                value: generate_memories.into(),
+            },
+        ];
+
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            tracing::error!(error = %err, "failed to persist memory settings");
+            self.chat_widget
+                .add_error_message(format!("Failed to save memory settings: {err}"));
+            return;
+        }
+
+        self.config.memories.use_memories = use_memories;
+        self.config.memories.generate_memories = generate_memories;
+        self.chat_widget
+            .set_memory_settings(use_memories, generate_memories);
+    }
+
     fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
@@ -5273,6 +5315,13 @@ impl App {
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(updates).await;
             }
+            AppEvent::UpdateMemorySettings {
+                use_memories,
+                generate_memories,
+            } => {
+                self.update_memory_settings(use_memories, generate_memories)
+                    .await;
+            }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
             }
@@ -7898,6 +7947,44 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("Subagents will be enabled in the next session."));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+
+        app.update_memory_settings(
+            /*use_memories*/ false, /*generate_memories*/ false,
+        )
+        .await;
+
+        assert!(!app.config.memories.use_memories);
+        assert!(!app.config.memories.generate_memories);
+        assert!(!app.chat_widget.config_ref().memories.use_memories);
+        assert!(!app.chat_widget.config_ref().memories.generate_memories);
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        let config_value = toml::from_str::<TomlValue>(&config)?;
+        let memories = config_value
+            .as_table()
+            .and_then(|table| table.get("memories"))
+            .and_then(TomlValue::as_table)
+            .expect("memories table should exist");
+        assert_eq!(
+            memories.get("use_memories"),
+            Some(&TomlValue::Boolean(false))
+        );
+        assert_eq!(
+            memories.get("generate_memories"),
+            Some(&TomlValue::Boolean(false))
+        );
+        assert!(
+            !memories.contains_key("no_memories_if_mcp_or_web_search"),
+            "the TUI menu should not write the MCP pollution setting"
+        );
         Ok(())
     }
 

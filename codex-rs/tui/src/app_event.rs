@@ -455,6 +455,12 @@ pub(crate) enum AppEvent {
         updates: Vec<(Feature, bool)>,
     },
 
+    /// Update memory settings and persist them to config.toml.
+    UpdateMemorySettings {
+        use_memories: bool,
+        generate_memories: bool,
+    },
+
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),
 
