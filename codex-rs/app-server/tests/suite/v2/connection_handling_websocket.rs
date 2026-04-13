@@ -338,7 +338,7 @@ async fn websocket_transport_allows_unauthenticated_non_loopback_startup_by_defa
 }
 
 #[tokio::test]
-async fn websocket_disconnect_unloads_last_subscribed_thread() -> Result<()> {
+async fn websocket_disconnect_keeps_last_subscribed_thread_loaded() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -359,7 +359,7 @@ async fn websocket_disconnect_unloads_last_subscribed_thread() -> Result<()> {
     send_initialize_request(&mut ws2, /*id*/ 4, "ws_reconnect_client").await?;
     read_response_for_id(&mut ws2, /*id*/ 4).await?;
 
-    wait_for_loaded_threads(&mut ws2, /*first_id*/ 5, &[]).await?;
+    wait_for_loaded_threads(&mut ws2, /*first_id*/ 5, &[thread_id.as_str()]).await?;
 
     process
         .kill()
