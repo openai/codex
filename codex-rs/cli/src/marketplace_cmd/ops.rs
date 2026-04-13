@@ -79,6 +79,15 @@ pub(super) fn replace_marketplace_root(staged_root: &Path, destination: &Path) -
     fs::rename(staged_root, destination).map_err(Into::into)
 }
 
+pub(super) fn remove_marketplace_root(root: &Path) -> Result<bool> {
+    if !root.exists() {
+        return Ok(false);
+    }
+
+    fs::remove_dir_all(root)?;
+    Ok(true)
+}
+
 pub(super) fn marketplace_staging_root(install_root: &Path) -> PathBuf {
     install_root.join(".staging")
 }
@@ -114,5 +123,14 @@ mod tests {
             fs::read_to_string(destination.join("marker.txt")).unwrap(),
             "installed"
         );
+    }
+
+    #[test]
+    fn remove_marketplace_root_returns_false_when_missing() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let removed = remove_marketplace_root(&temp_dir.path().join("missing")).unwrap();
+
+        assert!(!removed);
     }
 }
