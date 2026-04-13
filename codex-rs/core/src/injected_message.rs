@@ -6,6 +6,8 @@
 //! structured event with the human-facing text so they do not need to parse or
 //! hide that XML.
 
+#![allow(dead_code)]
+
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::InjectedMessageEvent;

@@ -15,6 +15,7 @@ pub(crate) struct PendingInputItem {
 }
 
 impl PendingInputItem {
+    #[allow(dead_code)]
     pub(crate) fn injected(item: ResponseInputItem, event: InjectedMessageEvent) -> Self {
         Self {
             item,
@@ -22,6 +23,7 @@ impl PendingInputItem {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn timer_source(&self) -> Option<&str> {
         let source = self.injected_event.as_ref()?.source.as_str();
         source.starts_with("timer ").then_some(source)

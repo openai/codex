@@ -4363,6 +4363,7 @@ impl Session {
         idle_pending_input.extend(items.into_iter().map(PendingInputItem::from));
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn queue_pending_input_for_next_turn(&self, items: Vec<PendingInputItem>) {
         if items.is_empty() {
             return;
