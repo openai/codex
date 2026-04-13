@@ -211,9 +211,17 @@ pub struct RealtimeWebsocketEvents {
     is_closed: Arc<AtomicBool>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct ActiveTranscriptState {
     entries: Vec<RealtimeTranscriptEntry>,
+    in_progress_parts: Vec<ActiveTranscriptPart>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ActiveTranscriptPart {
+    role: String,
+    entry_index: usize,
+    start: usize,
 }
 
 impl RealtimeWebsocketConnection {
@@ -414,24 +422,21 @@ impl RealtimeWebsocketEvents {
         match event {
             RealtimeEvent::InputAudioSpeechStarted(_) => {}
             RealtimeEvent::InputTranscriptDelta(update) => {
-                append_transcript_delta(&mut active_transcript.entries, "user", &update.delta);
+                append_transcript_delta(&mut active_transcript, "user", &update.delta);
             }
             RealtimeEvent::InputTranscriptDone(update) => {
-                complete_transcript_entry(&mut active_transcript.entries, "user", &update.text);
+                complete_transcript_entry(&mut active_transcript, "user", &update.text);
             }
             RealtimeEvent::OutputTranscriptDelta(update) => {
-                append_transcript_delta(&mut active_transcript.entries, "assistant", &update.delta);
+                append_transcript_delta(&mut active_transcript, "assistant", &update.delta);
             }
             RealtimeEvent::OutputTranscriptDone(update) => {
-                complete_transcript_entry(
-                    &mut active_transcript.entries,
-                    "assistant",
-                    &update.text,
-                );
+                complete_transcript_entry(&mut active_transcript, "assistant", &update.text);
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 if self.event_parser == RealtimeEventParser::V1 {
                     handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
+                    active_transcript.in_progress_parts.clear();
                 }
             }
             RealtimeEvent::SessionUpdated { .. }
@@ -446,39 +451,80 @@ impl RealtimeWebsocketEvents {
     }
 }
 
-fn append_transcript_delta(entries: &mut Vec<RealtimeTranscriptEntry>, role: &str, delta: &str) {
+fn append_transcript_delta(state: &mut ActiveTranscriptState, role: &str, delta: &str) {
     if delta.is_empty() {
         return;
     }
 
-    if let Some(last_entry) = entries.last_mut()
-        && last_entry.role == role
-    {
-        last_entry.text.push_str(delta);
-        return;
+    let entry_index = match state.entries.last() {
+        Some(last_entry) if last_entry.role == role => state.entries.len() - 1,
+        _ => {
+            state.entries.push(RealtimeTranscriptEntry {
+                role: role.to_string(),
+                text: String::new(),
+            });
+            state.entries.len() - 1
+        }
+    };
+
+    let part_index = state
+        .in_progress_parts
+        .iter()
+        .position(|part| part.role == role);
+    let start = part_index
+        .and_then(|index| state.in_progress_parts.get(index))
+        .filter(|part| part.entry_index == entry_index)
+        .map(|part| part.start)
+        .unwrap_or_else(|| state.entries[entry_index].text.len());
+
+    let active_part = ActiveTranscriptPart {
+        role: role.to_string(),
+        entry_index,
+        start,
+    };
+    if let Some(index) = part_index {
+        state.in_progress_parts[index] = active_part;
+    } else {
+        state.in_progress_parts.push(active_part);
     }
 
-    entries.push(RealtimeTranscriptEntry {
-        role: role.to_string(),
-        text: delta.to_string(),
-    });
+    state.entries[entry_index].text.push_str(delta);
 }
 
-fn complete_transcript_entry(entries: &mut Vec<RealtimeTranscriptEntry>, role: &str, text: &str) {
+fn complete_transcript_entry(state: &mut ActiveTranscriptState, role: &str, text: &str) {
+    let part_index = state
+        .in_progress_parts
+        .iter()
+        .position(|part| part.role == role);
+
     if text.is_empty() {
+        if let Some(part_index) = part_index {
+            state.in_progress_parts.swap_remove(part_index);
+        }
         return;
     }
 
-    // Final transcript events carry the complete part. Replace the in-progress entry
-    // instead of appending, so active transcript state stays usable after deltas.
-    if let Some(last_entry) = entries.last_mut()
+    if let Some(part_index) = part_index {
+        let part = state.in_progress_parts.swap_remove(part_index);
+        if let Some(entry) = state.entries.get_mut(part.entry_index)
+            && entry.role == role
+            && part.start <= entry.text.len()
+        {
+            // Done events carry the complete current part, not the complete
+            // message, so only replace the suffix accumulated for that part.
+            entry.text.replace_range(part.start.., text);
+            return;
+        }
+    }
+
+    if let Some(last_entry) = state.entries.last_mut()
         && last_entry.role == role
     {
-        last_entry.text = text.to_string();
+        last_entry.text.push_str(text);
         return;
     }
 
-    entries.push(RealtimeTranscriptEntry {
+    state.entries.push(RealtimeTranscriptEntry {
         role: role.to_string(),
         text: text.to_string(),
     });
@@ -966,6 +1012,27 @@ mod tests {
                     text: "all done".to_string(),
                 }
             ))
+        );
+    }
+
+    #[test]
+    fn complete_transcript_entry_replaces_current_part_only() {
+        let mut state = ActiveTranscriptState::default();
+
+        append_transcript_delta(&mut state, "assistant", "hello");
+        complete_transcript_entry(&mut state, "assistant", "hello");
+        append_transcript_delta(&mut state, "assistant", " wor");
+        complete_transcript_entry(&mut state, "assistant", " world");
+
+        assert_eq!(
+            state,
+            ActiveTranscriptState {
+                entries: vec![RealtimeTranscriptEntry {
+                    role: "assistant".to_string(),
+                    text: "hello world".to_string(),
+                }],
+                in_progress_parts: Vec::new(),
+            }
         );
     }
 
