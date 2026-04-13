@@ -248,14 +248,14 @@ pub async fn discover_project_doc_paths(
     if !project_root_markers.is_empty() {
         for ancestor in dir.ancestors() {
             for marker in &project_root_markers {
-                let marker_path = AbsolutePathBuf::try_from(ancestor.join(marker))?;
+                let marker_path = ancestor.join(marker);
                 let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
                     Ok(_) => true,
                     Err(err) if err.kind() == io::ErrorKind::NotFound => false,
                     Err(err) => return Err(err),
                 };
                 if marker_exists {
-                    project_root = Some(AbsolutePathBuf::try_from(ancestor.to_path_buf())?);
+                    project_root = Some(ancestor.clone());
                     break;
                 }
             }

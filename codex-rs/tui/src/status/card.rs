@@ -457,11 +457,21 @@ impl StatusHistoryCell {
                     resets_at,
                 } => {
                     let percent_remaining = (100.0 - percent_used).clamp(0.0, 100.0);
-                    let value_spans = vec![
+                    let summary = format_status_limit_summary(percent_remaining);
+                    let full_value_spans = vec![
                         Span::from(render_status_limit_progress_bar(percent_remaining)),
                         Span::from(" "),
-                        Span::from(format_status_limit_summary(percent_remaining)),
+                        Span::from(summary.clone()),
                     ];
+                    // On narrow terminals, keep the percentage visible rather than
+                    // letting the fixed-width progress bar crowd out the reset time.
+                    let value_spans = if line_display_width(&Line::from(full_value_spans.clone()))
+                        <= formatter.value_width(available_inner_width)
+                    {
+                        full_value_spans
+                    } else {
+                        vec![Span::from(summary)]
+                    };
                     let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
                     let base_line = Line::from(base_spans.clone());
 
@@ -477,7 +487,21 @@ impl StatusHistoryCell {
                             lines.push(Line::from(inline_spans));
                         } else {
                             lines.push(base_line);
-                            lines.push(formatter.continuation(vec![resets_span]));
+                            let reset_text = format!("(resets {resets_at})");
+                            let reset_width = formatter.value_width(available_inner_width).max(1);
+                            let wrap_options =
+                                textwrap::Options::new(reset_width).break_words(false);
+                            // Reset timestamps are the actionable part of this row, so wrap them
+                            // onto continuation lines instead of truncating partial times/dates.
+                            lines.extend(
+                                textwrap::wrap(reset_text.as_str(), wrap_options)
+                                    .into_iter()
+                                    .map(|wrapped| {
+                                        formatter.continuation(vec![
+                                            Span::from(wrapped.into_owned()).dim(),
+                                        ])
+                                    }),
+                            );
                         }
                     } else {
                         lines.push(base_line);

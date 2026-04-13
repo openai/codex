@@ -29,7 +29,7 @@ const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
 async fn apps_enabled(config: &Config) -> bool {
     let auth_manager = AuthManager::shared(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     );
@@ -120,7 +120,7 @@ fn all_connectors_cache_key(config: &Config, token_data: &TokenData) -> AllConne
 }
 
 fn plugin_apps_for_config(config: &Config) -> Vec<codex_core::plugins::AppConnectorId> {
-    PluginsManager::new(config.codex_home.clone())
+    PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(config)
         .effective_apps()
 }
