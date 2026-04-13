@@ -100,6 +100,72 @@ jobs:
           set -euo pipefail
           "${CODEX_EXEC_PATH}" --version
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build and smoke test Python SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          python -m pip install build hatchling datamodel-code-generator==0.31.2 "ruff>=0.11" pytest
+
+          python sdk/python/scripts/update_sdk_artifacts.py generate-types
+          git diff --exit-code -- \
+            sdk/python/src/codex_app_server/generated \
+            sdk/python/src/codex_app_server/api.py
+
+          runtime_bundle="${RUNNER_TEMP}/codex-runtime-bundle"
+          runtime_stage="${RUNNER_TEMP}/openai-codex-cli-bin-stage"
+          sdk_stage="${RUNNER_TEMP}/openai-codex-stage"
+          runtime_venv="${RUNNER_TEMP}/python-runtime-venv"
+          sdk_venv="${RUNNER_TEMP}/python-sdk-venv"
+
+          rm -rf "$runtime_bundle" "$runtime_stage" "$sdk_stage" "$runtime_venv" "$sdk_venv"
+          mkdir -p "$runtime_bundle"
+          install -m 755 "$CODEX_EXEC_PATH" "$runtime_bundle/codex"
+
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-runtime \
+            "$runtime_stage" \
+            "$runtime_bundle" \
+            --runtime-version 0.0.0.dev0
+          python -m build --wheel "$runtime_stage"
+
+          python -m venv "$runtime_venv"
+          "$runtime_venv/bin/python" -m pip install --upgrade pip
+          runtime_wheel="$(ls "$runtime_stage"/dist/openai_codex_cli_bin-*.whl)"
+          "$runtime_venv/bin/python" -m pip install "$runtime_wheel"
+          "$runtime_venv/bin/python" - <<'PY'
+          import subprocess
+          from codex_cli_bin import bundled_codex_path, bundled_runtime_files
+
+          path = bundled_codex_path()
+          assert bundled_runtime_files() == (path,)
+          subprocess.run([str(path), "--version"], check=True)
+          PY
+
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-sdk \
+            "$sdk_stage" \
+            --sdk-version 0.0.0.dev0 \
+            --runtime-version 0.0.0.dev0
+          python -m build "$sdk_stage"
+
+          python -m venv "$sdk_venv"
+          "$sdk_venv/bin/python" -m pip install --upgrade pip
+          sdk_wheel="$(ls "$sdk_stage"/dist/openai_codex-*.whl)"
+          "$sdk_venv/bin/python" -m pip install "$runtime_wheel"
+          "$sdk_venv/bin/python" -m pip install "$sdk_wheel"
+          "$sdk_venv/bin/python" - <<'PY'
+          import codex_app_server
+
+          assert codex_app_server.__version__ == "0.0.0.dev0"
+          PY
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
