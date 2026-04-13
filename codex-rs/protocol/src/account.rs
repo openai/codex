@@ -12,6 +12,7 @@ pub enum PlanType {
     Go,
     Plus,
     Pro,
+    ProLite,
     Team,
     #[serde(rename = "self_serve_business_usage_based")]
     #[ts(rename = "self_serve_business_usage_based")]
@@ -54,9 +55,17 @@ mod tests {
             "\"enterprise_cbp_usage_based\""
         );
         assert_eq!(
+            serde_json::to_string(&PlanType::ProLite).expect("prolite should serialize"),
+            "\"prolite\""
+        );
+        assert_eq!(
             serde_json::from_str::<PlanType>("\"self_serve_business_usage_based\"")
                 .expect("self-serve business usage based should deserialize"),
             PlanType::SelfServeBusinessUsageBased
+        );
+        assert_eq!(
+            serde_json::from_str::<PlanType>("\"prolite\"").expect("prolite should deserialize"),
+            PlanType::ProLite
         );
         assert_eq!(
             serde_json::from_str::<PlanType>("\"enterprise_cbp_usage_based\"")

@@ -76,7 +76,7 @@ async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
         }),
     };
 
-    UnifiedExecProcess::from_remote_started(started, SandboxType::None)
+    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
         .await
         .expect("remote process should start")
 }
@@ -133,7 +133,7 @@ async fn remote_process_waits_for_early_exit_event() {
         let _ = wake_tx.send(1);
     });
 
-    let process = UnifiedExecProcess::from_remote_started(started, SandboxType::None)
+    let process = UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
         .await
         .expect("remote process should observe early exit");
 

@@ -68,6 +68,8 @@ const REALTIME_V2_PROGRESS_UPDATE_SUFFIX: &str =
     "\n\nUpdate from background agent (task hasn't finished yet):";
 const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
+const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
+    "Conversation already has an active response in progress:";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RealtimeConversationEnd {
@@ -115,6 +117,68 @@ enum HandoffOutput {
 struct OutputAudioState {
     item_id: String,
     audio_end_ms: u32,
+}
+
+#[derive(Default)]
+struct RealtimeResponseCreateQueue {
+    active_default_response: bool,
+    pending_create: bool,
+}
+
+impl RealtimeResponseCreateQueue {
+    async fn request_create(
+        &mut self,
+        writer: &RealtimeWebsocketWriter,
+        events_tx: &Sender<RealtimeEvent>,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        if self.active_default_response {
+            self.pending_create = true;
+            return Ok(());
+        }
+        self.send_create_now(writer, events_tx, reason).await
+    }
+
+    fn mark_started(&mut self) {
+        self.active_default_response = true;
+    }
+
+    async fn mark_finished(
+        &mut self,
+        writer: &RealtimeWebsocketWriter,
+        events_tx: &Sender<RealtimeEvent>,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        self.active_default_response = false;
+        if !self.pending_create {
+            return Ok(());
+        }
+        self.pending_create = false;
+        self.send_create_now(writer, events_tx, reason).await
+    }
+
+    async fn send_create_now(
+        &mut self,
+        writer: &RealtimeWebsocketWriter,
+        events_tx: &Sender<RealtimeEvent>,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        if let Err(err) = writer.send_response_create().await {
+            let mapped_error = map_api_error(err);
+            let error_message = mapped_error.to_string();
+            if error_message.starts_with(REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX) {
+                warn!("realtime response.create raced an active response; deferring");
+                self.active_default_response = true;
+                self.pending_create = true;
+                return Ok(());
+            }
+            warn!("failed to send {reason} response.create: {mapped_error}");
+            let _ = events_tx.send(RealtimeEvent::Error(error_message)).await;
+            return Err(mapped_error.into());
+        }
+        self.active_default_response = true;
+        Ok(())
+    }
 }
 
 struct RealtimeInputTask {
@@ -871,12 +935,17 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
 
     tokio::spawn(async move {
         let mut output_audio_state: Option<OutputAudioState> = None;
+        let mut response_create_queue = RealtimeResponseCreateQueue::default();
 
         loop {
             let result = tokio::select! {
                 // Text typed by the user that should be sent into realtime.
                 user_text = user_text_rx.recv() => {
-                    handle_user_text_input(user_text, &writer, &events_tx, session_kind)
+                    handle_user_text_input(
+                        user_text,
+                        &writer,
+                        &events_tx,
+                    )
                         .await
                 }
                 // Background agent progress or final output that should be sent back to realtime.
@@ -887,6 +956,7 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                         &events_tx,
                         &handoff_state,
                         event_parser,
+                        &mut response_create_queue,
                     )
                         .await
                 }
@@ -899,6 +969,7 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                         &handoff_state,
                         session_kind,
                         &mut output_audio_state,
+                        &mut response_create_queue,
                     )
                     .await
                 }
@@ -919,7 +990,6 @@ async fn handle_user_text_input(
     text: Result<String, RecvError>,
     writer: &RealtimeWebsocketWriter,
     events_tx: &Sender<RealtimeEvent>,
-    session_kind: RealtimeSessionKind,
 ) -> anyhow::Result<()> {
     let text = text.context("user text input channel closed")?;
 
@@ -931,19 +1001,6 @@ async fn handle_user_text_input(
             .await;
         return Err(mapped_error.into());
     }
-    match session_kind {
-        RealtimeSessionKind::V1 => {}
-        RealtimeSessionKind::V2 => {
-            if let Err(err) = writer.send_response_create().await {
-                let mapped_error = map_api_error(err);
-                warn!("failed to send text response.create: {mapped_error}");
-                let _ = events_tx
-                    .send(RealtimeEvent::Error(mapped_error.to_string()))
-                    .await;
-                return Err(mapped_error.into());
-            }
-        }
-    }
     Ok(())
 }
 
@@ -953,6 +1010,7 @@ async fn handle_handoff_output(
     events_tx: &Sender<RealtimeEvent>,
     handoff_state: &RealtimeHandoffState,
     event_parser: RealtimeEventParser,
+    response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
     let handoff_output = handoff_output.context("handoff output channel closed")?;
 
@@ -1000,7 +1058,9 @@ async fn handle_handoff_output(
                 {
                     Err(err)
                 } else {
-                    writer.send_response_create().await
+                    return response_create_queue
+                        .request_create(writer, events_tx, "handoff")
+                        .await;
                 }
             }
         },
@@ -1023,6 +1083,7 @@ async fn handle_realtime_server_event(
     handoff_state: &RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
     output_audio_state: &mut Option<OutputAudioState>,
+    response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
     let event = match event {
         Ok(Some(event)) => event,
@@ -1079,8 +1140,35 @@ async fn handle_realtime_server_event(
             }
             false
         }
+        RealtimeEvent::ResponseCreated(_) => {
+            match session_kind {
+                RealtimeSessionKind::V1 => {}
+                RealtimeSessionKind::V2 => response_create_queue.mark_started(),
+            }
+            false
+        }
         RealtimeEvent::ResponseCancelled(_) => {
             *output_audio_state = None;
+            match session_kind {
+                RealtimeSessionKind::V1 => {}
+                RealtimeSessionKind::V2 => {
+                    response_create_queue
+                        .mark_finished(writer, events_tx, "deferred")
+                        .await?;
+                }
+            }
+            false
+        }
+        RealtimeEvent::ResponseDone(_) => {
+            *output_audio_state = None;
+            match session_kind {
+                RealtimeSessionKind::V1 => {}
+                RealtimeSessionKind::V2 => {
+                    response_create_queue
+                        .mark_finished(writer, events_tx, "deferred")
+                        .await?;
+                }
+            }
             false
         }
         RealtimeEvent::HandoffRequested(handoff) => {
@@ -1111,16 +1199,9 @@ async fn handle_realtime_server_event(
                                     .await;
                                 return Err(mapped_error.into());
                             }
-                            if let Err(err) = writer.send_response_create().await {
-                                let mapped_error = map_api_error(err);
-                                warn!(
-                                    "failed to send handoff steering response.create: {mapped_error}"
-                                );
-                                let _ = events_tx
-                                    .send(RealtimeEvent::Error(mapped_error.to_string()))
-                                    .await;
-                                return Err(mapped_error.into());
-                            }
+                            response_create_queue
+                                .request_create(writer, events_tx, "handoff steering")
+                                .await?;
                         }
                         None => {
                             *handoff_state.last_output_text.lock().await = None;

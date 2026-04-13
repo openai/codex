@@ -2,10 +2,10 @@ use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
+use crate::legacy_core::config::Config;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::config::Config;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -67,20 +67,10 @@ struct StatusRateLimitState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusHistoryHandle {
-    agents_summary: Arc<RwLock<String>>,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
 }
 
 impl StatusHistoryHandle {
-    pub(crate) fn finish_agents_summary_discovery(&self, agents_summary: String) {
-        #[expect(clippy::expect_used)]
-        let mut current = self
-            .agents_summary
-            .write()
-            .expect("status history agents summary state poisoned");
-        *current = agents_summary;
-    }
-
     pub(crate) fn finish_rate_limit_refresh(
         &self,
         rate_limits: &[RateLimitSnapshotDisplay],
@@ -360,13 +350,10 @@ impl StatusHistoryCell {
                 session_id,
                 forked_from,
                 token_usage,
-                agents_summary: agents_summary.clone(),
+                agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
             },
-            StatusHistoryHandle {
-                agents_summary,
-                rate_limit_state,
-            },
+            StatusHistoryHandle { rate_limit_state },
         )
     }
 
