@@ -19,7 +19,9 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-v8 = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+v8 = { workspace = true }

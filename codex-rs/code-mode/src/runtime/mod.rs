@@ -1,24 +1,35 @@
+#[cfg(not(target_arch = "wasm32"))]
 mod callbacks;
+#[cfg(not(target_arch = "wasm32"))]
 mod globals;
+#[cfg(not(target_arch = "wasm32"))]
 mod module_loader;
+#[cfg(not(target_arch = "wasm32"))]
 mod value;
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
-use std::sync::mpsc as std_mpsc;
-use std::thread;
 
 use serde_json::Value as JsonValue;
-use tokio::sync::mpsc;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::description::EnabledToolMetadata;
 use crate::description::ToolDefinition;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::description::enabled_tool_metadata;
 use crate::response::FunctionCallOutputContentItem;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc as std_mpsc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::sync::mpsc;
 
 pub const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL: usize = 10_000;
+#[cfg(not(target_arch = "wasm32"))]
 const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Clone, Debug)]
@@ -56,6 +67,7 @@ pub enum RuntimeResponse {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub(crate) enum TurnMessage {
     ToolCall {
@@ -71,6 +83,7 @@ pub(crate) enum TurnMessage {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
     ToolResponse { id: String, result: JsonValue },
@@ -78,6 +91,7 @@ pub(crate) enum RuntimeCommand {
     Terminate,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub(crate) enum RuntimeEvent {
     Started,
@@ -98,6 +112,7 @@ pub(crate) enum RuntimeEvent {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn_runtime(
     request: ExecuteRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
@@ -126,6 +141,7 @@ pub(crate) fn spawn_runtime(
     Ok((command_tx, isolate_handle))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 struct RuntimeConfig {
     tool_call_id: String,
@@ -134,6 +150,7 @@ struct RuntimeConfig {
     stored_values: HashMap<String, JsonValue>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) struct RuntimeState {
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_tool_calls: HashMap<String, v8::Global<v8::PromiseResolver>>,
@@ -144,6 +161,7 @@ pub(super) struct RuntimeState {
     exit_requested: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) enum CompletionState {
     Pending,
     Completed {
@@ -152,6 +170,7 @@ pub(super) enum CompletionState {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn initialize_v8() {
     static PLATFORM: OnceLock<v8::SharedRef<v8::Platform>> = OnceLock::new();
 
@@ -163,6 +182,7 @@ fn initialize_v8() {
     });
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_runtime(
     config: RuntimeConfig,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
@@ -264,6 +284,7 @@ fn run_runtime(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn capture_scope_send_error(
     scope: &mut v8::PinScope<'_, '_>,
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
@@ -277,6 +298,7 @@ fn capture_scope_send_error(
     send_result(event_tx, stored_values, error_text);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn send_result(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
     stored_values: HashMap<String, JsonValue>,
@@ -288,7 +310,7 @@ fn send_result(
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::collections::HashMap;
     use std::time::Duration;

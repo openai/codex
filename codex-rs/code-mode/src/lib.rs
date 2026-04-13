@@ -1,6 +1,7 @@
 mod description;
 mod response;
 mod runtime;
+#[cfg_attr(target_arch = "wasm32", path = "service_wasm.rs")]
 mod service;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;

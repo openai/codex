@@ -225,6 +225,7 @@ pub fn augment_tool_definition(mut definition: ToolDefinition) -> ToolDefinition
     definition
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata {
     EnabledToolMetadata {
         tool_name: definition.name.clone(),
@@ -234,6 +235,7 @@ pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EnabledToolMetadata {
     pub tool_name: String,
