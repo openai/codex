@@ -3,8 +3,8 @@
 //! The [`McpConnectionManager`] owns one [`codex_rmcp_client::RmcpClient`] per
 //! configured server (keyed by the *server name*). It offers convenience
 //! helpers to query the available tools across *all* servers and returns them
-//! in a single aggregated map using the model-visible fully-qualified tool name
-//! as the key.
+//! in a single aggregated map using the model-visible callable tool name as the
+//! key.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -910,10 +910,11 @@ impl McpConnectionManager {
         failures
     }
 
-    /// Returns a single map that contains all tools. Each key is the
-    /// fully-qualified name for the tool.
+    /// Returns a single map that contains all tools keyed by model-visible
+    /// callable name. Each key's `display()` is unique and <= 64 bytes so it
+    /// can be used at flat protocol/display boundaries.
     #[instrument(level = "trace", skip_all)]
-    pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
+    pub async fn list_all_tools(&self) -> HashMap<ToolName, ToolInfo> {
         let mut tools = Vec::new();
         for managed_client in self.clients.values() {
             let Some(server_tools) = managed_client.listed_tools().await else {
@@ -929,7 +930,7 @@ impl McpConnectionManager {
     /// On success, the refreshed tools replace the cache contents and the
     /// latest filtered tool map is returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
-    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<HashMap<String, ToolInfo>> {
+    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<HashMap<ToolName, ToolInfo>> {
         let managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -1200,16 +1201,11 @@ impl McpConnectionManager {
 
     pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         let all_tools = self.list_all_tools().await;
-        let tools_by_name = all_tools
-            .into_values()
-            .map(|tool| (tool.callable_tool_name(), tool))
-            .collect::<HashMap<_, _>>();
-
-        if let Some(tool) = tools_by_name.get(tool_name) {
+        if let Some(tool) = all_tools.get(tool_name) {
             return Some(tool.clone());
         }
 
-        tools_by_name
+        all_tools
             .into_iter()
             .find_map(|(name, tool)| (name.display() == tool_name.name).then_some(tool))
     }
@@ -1299,8 +1295,8 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
 }
 
 pub fn filter_non_codex_apps_mcp_tools_only(
-    mcp_tools: &HashMap<String, ToolInfo>,
-) -> HashMap<String, ToolInfo> {
+    mcp_tools: &HashMap<ToolName, ToolInfo>,
+) -> HashMap<ToolName, ToolInfo> {
     mcp_tools
         .iter()
         .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
