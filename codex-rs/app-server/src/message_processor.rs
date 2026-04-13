@@ -9,6 +9,7 @@ use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::config_manager::ConfigManager;
+use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::device_key_api::DeviceKeyApi;
 use crate::error_code::invalid_request;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
@@ -176,6 +177,7 @@ pub(crate) struct MessageProcessor {
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
     origin: ConnectionOrigin,
+    rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
@@ -197,6 +199,7 @@ impl ConnectionSessionState {
     pub(crate) fn new(origin: ConnectionOrigin) -> Self {
         Self {
             origin,
+            rpc_gate: Arc::new(ConnectionRpcGate::new()),
             initialized: OnceLock::new(),
         }
     }
@@ -545,7 +548,12 @@ impl MessageProcessor {
         self.codex_message_processor.shutdown_threads().await;
     }
 
-    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_closed(
+        &self,
+        connection_id: ConnectionId,
+        session_state: &ConnectionSessionState,
+    ) {
+        session_state.rpc_gate.shutdown().await;
         self.outgoing.connection_closed(connection_id).await;
         self.fs_watch_manager.connection_closed(connection_id).await;
         self.codex_message_processor
@@ -736,9 +744,11 @@ impl MessageProcessor {
         let client_version = session.client_version().map(str::to_string);
         let device_key_requests_allowed = session.allows_device_key_requests();
         let error_request_id = connection_request_id.clone();
+        let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
         let span = request_context.span();
         let request = QueuedInitializedRequest::new(
+            rpc_gate,
             async move {
                 let result = processor
                     .handle_initialized_client_request(
