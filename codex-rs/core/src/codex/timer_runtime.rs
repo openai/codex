@@ -340,8 +340,13 @@ impl Session {
                 let Some(session) = weak.upgrade() else {
                     break;
                 };
-                let changed = session.timers.lock().await.mark_timer_due(&id, Utc::now());
-                if changed && !session.persist_timer_due_best_effort(&id).await {
+                let due_at = Utc::now();
+                let changed = session.timers.lock().await.mark_timer_due(&id, due_at);
+                if changed
+                    && !session
+                        .persist_timer_due_best_effort(&id, due_at.timestamp())
+                        .await
+                {
                     session.sync_timers_from_db(/*emit_update*/ true).await;
                     continue;
                 }
@@ -403,7 +408,7 @@ impl Session {
         })
     }
 
-    async fn persist_timer_due_best_effort(&self, id: &str) -> bool {
+    async fn persist_timer_due_best_effort(&self, id: &str, due_at: i64) -> bool {
         let state_db = match self.timer_state_db().await {
             Ok(state_db) => state_db,
             Err(err) => {
@@ -418,6 +423,7 @@ impl Session {
             .update_thread_timer_due(
                 &self.thread_id_string(),
                 id,
+                due_at,
                 persisted_timer.timer.next_run_at,
             )
             .await
