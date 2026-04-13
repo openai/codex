@@ -477,6 +477,7 @@ fn append_transcript_delta(
         update.output_index,
         update.content_index,
     );
+    let key_has_metadata = transcript_part_key_has_metadata(&key);
 
     if let Some(part_index) = state
         .in_progress_parts
@@ -488,6 +489,7 @@ fn append_transcript_delta(
             .entries
             .get(entry_index)
             .is_some_and(|entry| entry.role == role)
+            && (key_has_metadata || entry_index == state.entries.len().saturating_sub(1))
         {
             let insert_at = state.in_progress_parts[part_index].end;
             state.entries[entry_index]
@@ -529,6 +531,7 @@ fn complete_transcript_entry(
         update.output_index,
         update.content_index,
     );
+    let key_has_metadata = transcript_part_key_has_metadata(&key);
     let part_index = state
         .in_progress_parts
         .iter()
@@ -537,7 +540,10 @@ fn complete_transcript_entry(
     if let Some(part_index) = part_index {
         let part = state.in_progress_parts.swap_remove(part_index);
         let old_len = part.end.saturating_sub(part.start);
-        let replaced = if let Some(entry) = state.entries.get_mut(part.entry_index)
+        let entry_is_current =
+            key_has_metadata || part.entry_index == state.entries.len().saturating_sub(1);
+        let replaced = if entry_is_current
+            && let Some(entry) = state.entries.get_mut(part.entry_index)
             && entry.role == role
             && part.end <= entry.text.len()
         {
@@ -587,6 +593,10 @@ fn transcript_part_key(
         output_index,
         content_index,
     }
+}
+
+fn transcript_part_key_has_metadata(key: &TranscriptPartKey) -> bool {
+    key.item_id.is_some() || key.output_index.is_some() || key.content_index.is_some()
 }
 
 fn transcript_entry_index(entries: &mut Vec<RealtimeTranscriptEntry>, role: &str) -> usize {
@@ -1167,6 +1177,61 @@ mod tests {
                     text: "hello! beta".to_string(),
                 }],
                 in_progress_parts: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn unkeyed_transcript_deltas_start_new_entry_after_role_change() {
+        let mut state = ActiveTranscriptState::default();
+        let assistant_context = RealtimeTranscriptDelta {
+            delta: "assistant context".to_string(),
+            ..Default::default()
+        };
+        let delegated_query = RealtimeTranscriptDelta {
+            delta: "delegated query".to_string(),
+            ..Default::default()
+        };
+        let assist_confirm = RealtimeTranscriptDelta {
+            delta: "assist confirm".to_string(),
+            ..Default::default()
+        };
+
+        append_transcript_delta(&mut state, "assistant", &assistant_context);
+        append_transcript_delta(&mut state, "user", &delegated_query);
+        append_transcript_delta(&mut state, "assistant", &assist_confirm);
+
+        assert_eq!(
+            state,
+            ActiveTranscriptState {
+                entries: vec![
+                    RealtimeTranscriptEntry {
+                        role: "assistant".to_string(),
+                        text: "assistant context".to_string(),
+                    },
+                    RealtimeTranscriptEntry {
+                        role: "user".to_string(),
+                        text: "delegated query".to_string(),
+                    },
+                    RealtimeTranscriptEntry {
+                        role: "assistant".to_string(),
+                        text: "assist confirm".to_string(),
+                    },
+                ],
+                in_progress_parts: vec![
+                    ActiveTranscriptPart {
+                        key: transcript_part_key("user", None, None, None),
+                        entry_index: 1,
+                        start: 0,
+                        end: "delegated query".len(),
+                    },
+                    ActiveTranscriptPart {
+                        key: transcript_part_key("assistant", None, None, None),
+                        entry_index: 2,
+                        start: 0,
+                        end: "assist confirm".len(),
+                    },
+                ],
             }
         );
     }
