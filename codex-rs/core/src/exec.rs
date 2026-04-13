@@ -1243,6 +1243,9 @@ async fn consume_output(
     let (exit_status, timed_out) = tokio::select! {
         biased;
         _ = &mut expiration_wait => {
+            // The expiration future can win the race after the child has already
+            // exited but before `child.wait()` is polled. Preserve the real exit
+            // status in that case instead of reporting a synthetic timeout.
             if let Some(exit_status) = child.try_wait()? {
                 (exit_status, false)
             } else {
