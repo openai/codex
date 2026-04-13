@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PermissionPresetApprovalDecision": {
+      "enum": [
+        "accepted",
+        "declined"
+      ],
+      "type": "string"
+    },
+    "PermissionPresetId": {
+      "description": "A built-in permission-mode preset that app clients can confirm.",
+      "enum": [
+        "auto",
+        "full-access",
+        "read-only",
+        "guardian-approvals"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Response from an app client after the permission preset picker resolves.",
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/PermissionPresetApprovalDecision"
+    },
+    "preset": {
+      "$ref": "#/definitions/PermissionPresetId"
+    }
+  },
+  "required": [
+    "decision",
+    "preset"
+  ],
+  "title": "PermissionPresetRequestApprovalResponse",
+  "type": "object"
+}

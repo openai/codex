@@ -87,6 +87,8 @@ use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::request_permission_preset::PermissionPresetId as CorePermissionPresetId;
+use codex_protocol::request_permission_preset::RequestPermissionPresetDecision as CoreRequestPermissionPresetDecision;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -6241,6 +6243,77 @@ pub struct PermissionsRequestApprovalResponse {
     pub scope: PermissionGrantScope,
 }
 
+/// A built-in permission-mode preset that app clients can confirm.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum PermissionPresetId {
+    Auto,
+    FullAccess,
+    ReadOnly,
+    GuardianApprovals,
+}
+
+impl PermissionPresetId {
+    /// Converts the app-server preset identifier into the core protocol type.
+    pub fn to_core(self) -> CorePermissionPresetId {
+        match self {
+            Self::Auto => CorePermissionPresetId::Auto,
+            Self::FullAccess => CorePermissionPresetId::FullAccess,
+            Self::ReadOnly => CorePermissionPresetId::ReadOnly,
+            Self::GuardianApprovals => CorePermissionPresetId::GuardianApprovals,
+        }
+    }
+}
+
+impl From<CorePermissionPresetId> for PermissionPresetId {
+    fn from(value: CorePermissionPresetId) -> Self {
+        match value {
+            CorePermissionPresetId::Auto => Self::Auto,
+            CorePermissionPresetId::FullAccess => Self::FullAccess,
+            CorePermissionPresetId::ReadOnly => Self::ReadOnly,
+            CorePermissionPresetId::GuardianApprovals => Self::GuardianApprovals,
+        }
+    }
+}
+
+/// Request sent to app clients when a model asks to switch permission modes.
+///
+/// Core resolves the requested preset before emitting this payload, so clients
+/// should render the provided settings and label rather than recomputing policy
+/// choices from the preset id.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub preset: PermissionPresetId,
+    pub label: String,
+    pub description: String,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_policy: SandboxPolicy,
+    pub reason: Option<String>,
+}
+
+v2_enum_from_core!(
+    pub enum PermissionPresetApprovalDecision from CoreRequestPermissionPresetDecision {
+        Accepted,
+        Declined
+    }
+);
+
+/// Response from an app client after the permission preset picker resolves.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetRequestApprovalResponse {
+    pub decision: PermissionPresetApprovalDecision,
+    pub preset: PermissionPresetId,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6625,6 +6698,31 @@ mod tests {
         .expect("permissions request should deserialize");
 
         assert_eq!(params.suggested_scope, PermissionGrantScope::Session);
+    }
+
+    #[test]
+    fn permission_preset_request_approval_response_round_trips() {
+        let response = serde_json::from_value::<PermissionPresetRequestApprovalResponse>(json!({
+            "decision": "accepted",
+            "preset": "full-access",
+        }))
+        .expect("permission preset response should deserialize");
+
+        assert_eq!(
+            response,
+            PermissionPresetRequestApprovalResponse {
+                decision: PermissionPresetApprovalDecision::Accepted,
+                preset: PermissionPresetId::FullAccess,
+            }
+        );
+        assert_eq!(
+            response.decision.to_core(),
+            CoreRequestPermissionPresetDecision::Accepted
+        );
+        assert_eq!(
+            response.preset.to_core(),
+            CorePermissionPresetId::FullAccess
+        );
     }
 
     #[test]
