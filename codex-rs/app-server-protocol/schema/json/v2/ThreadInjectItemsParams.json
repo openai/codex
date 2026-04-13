@@ -14,6 +14,6 @@
     "items",
     "threadId"
   ],
-  "title": "TurnInjectItemsParams",
+  "title": "ThreadInjectItemsParams",
   "type": "object"
 }

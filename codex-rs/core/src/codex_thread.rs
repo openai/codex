@@ -208,6 +208,12 @@ impl CodexThread {
         }
 
         let turn_context = self.codex.session.new_default_turn().await;
+        if self.codex.session.reference_context_item().await.is_none() {
+            self.codex
+                .session
+                .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                .await;
+        }
         self.codex
             .session
             .record_conversation_items(turn_context.as_ref(), &items)

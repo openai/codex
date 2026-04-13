@@ -132,6 +132,8 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -177,8 +179,6 @@ use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
-use codex_app_server_protocol::TurnInjectItemsParams;
-use codex_app_server_protocol::TurnInjectItemsResponse;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -960,8 +960,8 @@ impl CodexMessageProcessor {
                 )
                 .await;
             }
-            ClientRequest::TurnInjectItems { request_id, params } => {
-                self.turn_inject_items(to_connection_request_id(request_id), params)
+            ClientRequest::ThreadInjectItems { request_id, params } => {
+                self.thread_inject_items(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
@@ -6992,10 +6992,10 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn turn_inject_items(
+    async fn thread_inject_items(
         &self,
         request_id: ConnectionRequestId,
-        params: TurnInjectItemsParams,
+        params: ThreadInjectItemsParams,
     ) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(value) => value,
@@ -7025,7 +7025,7 @@ impl CodexMessageProcessor {
         match thread.inject_response_items(items).await {
             Ok(()) => {
                 self.outgoing
-                    .send_response(request_id, TurnInjectItemsResponse {})
+                    .send_response(request_id, ThreadInjectItemsResponse {})
                     .await;
             }
             Err(CodexErr::InvalidRequest(message)) => {

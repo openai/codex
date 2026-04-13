@@ -322,6 +322,11 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    /// Append raw Responses API items to the thread history without starting a user turn.
+    ThreadInjectItems => "thread/inject_items" {
+        params: v2::ThreadInjectItemsParams,
+        response: v2::ThreadInjectItemsResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
@@ -390,11 +395,6 @@ client_request_definitions! {
         params: v2::TurnStartParams,
         inspect_params: true,
         response: v2::TurnStartResponse,
-    },
-    /// Append raw Responses API items to the thread history without starting a user turn.
-    TurnInjectItems => "turn/inject_items" {
-        params: v2::TurnInjectItemsParams,
-        response: v2::TurnInjectItemsResponse,
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,

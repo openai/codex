@@ -62,6 +62,7 @@ use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
@@ -80,7 +81,6 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnCompletedNotification;
-use codex_app_server_protocol::TurnInjectItemsParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
@@ -603,13 +603,13 @@ impl McpProcess {
         self.send_request("turn/start", params).await
     }
 
-    /// Send a `turn/inject_items` JSON-RPC request (v2).
-    pub async fn send_turn_inject_items_request(
+    /// Send a `thread/inject_items` JSON-RPC request (v2).
+    pub async fn send_thread_inject_items_request(
         &mut self,
-        params: TurnInjectItemsParams,
+        params: ThreadInjectItemsParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("turn/inject_items", params).await
+        self.send_request("thread/inject_items", params).await
     }
 
     /// Send a `command/exec` JSON-RPC request (v2).

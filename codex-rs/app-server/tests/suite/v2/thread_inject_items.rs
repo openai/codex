@@ -4,10 +4,10 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnInjectItemsParams;
-use codex_app_server_protocol::TurnInjectItemsResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::RolloutRecorder;
@@ -16,6 +16,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use core_test_support::responses;
+use serde_json::Value;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -23,7 +24,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn turn_inject_items_adds_raw_response_items_to_thread_history() -> Result<()> {
+async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Result<()> {
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -63,7 +64,7 @@ async fn turn_inject_items_adds_raw_response_items_to_thread_history() -> Result
     };
 
     let inject_req = mcp
-        .send_turn_inject_items_request(TurnInjectItemsParams {
+        .send_thread_inject_items_request(ThreadInjectItemsParams {
             thread_id: thread.id.clone(),
             items: vec![serde_json::to_value(&injected_item)?],
         })
@@ -73,7 +74,8 @@ async fn turn_inject_items_adds_raw_response_items_to_thread_history() -> Result
         mcp.read_stream_until_response_message(RequestId::Integer(inject_req)),
     )
     .await??;
-    let _response: TurnInjectItemsResponse = to_response::<TurnInjectItemsResponse>(inject_resp)?;
+    let _response: ThreadInjectItemsResponse =
+        to_response::<ThreadInjectItemsResponse>(inject_resp)?;
 
     let rollout_path = thread.path.as_ref().context("thread path missing")?;
     let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
@@ -109,17 +111,31 @@ async fn turn_inject_items_adds_raw_response_items_to_thread_history() -> Result
     )
     .await??;
 
+    let injected_value = serde_json::to_value(&injected_item)?;
     let model_input = response_mock.single_request().input();
+    let environment_context_index =
+        response_item_text_position(&model_input, "<environment_context>")
+            .expect("environment context should be injected before the first user turn");
+    let injected_index = model_input
+        .iter()
+        .position(|item| item == &injected_value)
+        .expect("injected item should be sent in the next model request");
+    let user_prompt_index = response_item_text_position(&model_input, "Hello")
+        .expect("user prompt should be sent in the next model request");
     assert!(
-        model_input.contains(&serde_json::to_value(&injected_item)?),
-        "injected item should be sent in the next model request"
+        environment_context_index < injected_index,
+        "standard initial context should be sent before injected items"
+    );
+    assert!(
+        injected_index < user_prompt_index,
+        "injected items should be sent before the user prompt"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn turn_inject_items_adds_raw_response_items_after_a_turn() -> Result<()> {
+async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()> {
     let server = responses::start_mock_server().await;
     let first_body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -185,7 +201,7 @@ async fn turn_inject_items_adds_raw_response_items_after_a_turn() -> Result<()> 
     let injected_value = serde_json::to_value(&injected_item)?;
 
     let inject_req = mcp
-        .send_turn_inject_items_request(TurnInjectItemsParams {
+        .send_thread_inject_items_request(ThreadInjectItemsParams {
             thread_id: thread.id.clone(),
             items: vec![injected_value.clone()],
         })
@@ -195,7 +211,8 @@ async fn turn_inject_items_adds_raw_response_items_after_a_turn() -> Result<()> 
         mcp.read_stream_until_response_message(RequestId::Integer(inject_req)),
     )
     .await??;
-    let _response: TurnInjectItemsResponse = to_response::<TurnInjectItemsResponse>(inject_resp)?;
+    let _response: ThreadInjectItemsResponse =
+        to_response::<ThreadInjectItemsResponse>(inject_resp)?;
 
     let second_turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -253,4 +270,19 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn response_item_text_position(items: &[Value], needle: &str) -> Option<usize> {
+    items.iter().position(|item| {
+        item.get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|content| {
+                content
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains(needle))
+            })
+    })
 }

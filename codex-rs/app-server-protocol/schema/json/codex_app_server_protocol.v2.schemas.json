@@ -1161,6 +1161,31 @@
           "type": "object"
         },
         {
+          "description": "Append raw Responses API items to the thread history without starting a user turn.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/inject_items"
+              ],
+              "title": "Thread/injectItemsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadInjectItemsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/injectItemsRequest",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1566,31 +1591,6 @@
             "params"
           ],
           "title": "Turn/startRequest",
-          "type": "object"
-        },
-        {
-          "description": "Append raw Responses API items to the thread history without starting a user turn.",
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "turn/inject_items"
-              ],
-              "title": "Turn/injectItemsRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/TurnInjectItemsParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Turn/injectItemsRequest",
           "type": "object"
         },
         {
@@ -10735,6 +10735,30 @@
     "ThreadId": {
       "type": "string"
     },
+    "ThreadInjectItemsParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "items": {
+          "description": "Raw Responses API items to append to the thread's model-visible history.",
+          "items": true,
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "threadId"
+      ],
+      "title": "ThreadInjectItemsParams",
+      "type": "object"
+    },
+    "ThreadInjectItemsResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadInjectItemsResponse",
+      "type": "object"
+    },
     "ThreadItem": {
       "oneOf": [
         {
@@ -12775,30 +12799,6 @@
       "required": [
         "message"
       ],
-      "type": "object"
-    },
-    "TurnInjectItemsParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "items": {
-          "description": "Raw Responses API items to append to the thread's model-visible history.",
-          "items": true,
-          "type": "array"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "items",
-        "threadId"
-      ],
-      "title": "TurnInjectItemsParams",
-      "type": "object"
-    },
-    "TurnInjectItemsResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "TurnInjectItemsResponse",
       "type": "object"
     },
     "TurnInterruptParams": {
