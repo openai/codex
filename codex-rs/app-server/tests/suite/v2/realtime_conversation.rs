@@ -738,15 +738,15 @@ async fn realtime_text_connection_requests_text_output_and_final_transcript() ->
         }),
         json!({
             "type": "response.output_text.delta",
-            "delta": "hel"
+            "delta": "hello "
         }),
         json!({
             "type": "response.output_text.delta",
-            "delta": "lo"
+            "delta": "world"
         }),
         json!({
             "type": "response.output_text.done",
-            "text": "hello"
+            "text": "hello world"
         }),
     ]]])
     .await;
@@ -820,19 +820,19 @@ async fn realtime_text_connection_requests_text_output_and_final_transcript() ->
             ThreadRealtimeTranscriptUpdatedNotification {
                 thread_id: thread_start.thread.id.clone(),
                 role: "assistant".to_string(),
-                text: "hel".to_string(),
+                text: "hello ".to_string(),
                 update_kind: RealtimeTranscriptUpdateKind::Delta,
             },
             ThreadRealtimeTranscriptUpdatedNotification {
                 thread_id: thread_start.thread.id.clone(),
                 role: "assistant".to_string(),
-                text: "lo".to_string(),
+                text: "world".to_string(),
                 update_kind: RealtimeTranscriptUpdateKind::Delta,
             },
             ThreadRealtimeTranscriptUpdatedNotification {
                 thread_id: thread_start.thread.id,
                 role: "assistant".to_string(),
-                text: "hello".to_string(),
+                text: "hello world".to_string(),
                 update_kind: RealtimeTranscriptUpdateKind::Done,
             },
         ]
