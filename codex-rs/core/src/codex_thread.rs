@@ -9,6 +9,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
@@ -92,6 +94,11 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
         self.codex.submit_with_trace(op, trace).await
+    }
+
+    /// Persist whether this thread is eligible for future memory generation.
+    pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
+        self.codex.set_thread_memory_mode(mode).await
     }
 
     pub async fn steer_input(
@@ -222,6 +229,19 @@ impl CodexThread {
             .await?;
 
         Ok(serde_json::to_value(result)?)
+    }
+
+    pub async fn call_mcp_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> anyhow::Result<CallToolResult> {
+        self.codex
+            .session
+            .call_tool(server, tool, arguments, meta)
+            .await
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

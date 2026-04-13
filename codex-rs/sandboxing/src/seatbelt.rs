@@ -249,10 +249,14 @@ fn dynamic_network_policy_for_network(
     if should_use_restricted_network_policy {
         let mut policy = String::new();
         if proxy.allow_local_binding {
-            policy.push_str("; allow loopback local binding and loopback traffic\n");
-            policy.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
+            policy.push_str("; allow local binding and loopback traffic\n");
+            policy.push_str("(allow network-bind (local ip \"*:*\"))\n");
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+        }
+        if proxy.allow_local_binding && !proxy.ports.is_empty() {
+            policy.push_str("; allow DNS lookups while application traffic remains proxy-routed\n");
+            policy.push_str("(allow network-outbound (remote ip \"*:53\"))\n");
         }
         for port in &proxy.ports {
             policy.push_str(&format!(
