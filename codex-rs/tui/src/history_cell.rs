@@ -489,6 +489,98 @@ impl HistoryCell for AgentMessageCell {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RealtimeTranscriptRole {
+    User,
+    Assistant,
+}
+
+impl RealtimeTranscriptRole {
+    pub(crate) fn from_name(role: &str) -> Option<Self> {
+        match role {
+            "user" => Some(Self::User),
+            "assistant" => Some(Self::Assistant),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RealtimeTranscriptCell {
+    pub(crate) role: RealtimeTranscriptRole,
+    text: String,
+}
+
+impl RealtimeTranscriptCell {
+    pub(crate) fn new(role: RealtimeTranscriptRole, text: String) -> Self {
+        Self { role, text }
+    }
+
+    pub(crate) fn append(&mut self, delta: &str) {
+        self.text.push_str(delta);
+    }
+}
+
+impl HistoryCell for RealtimeTranscriptCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let role_name = match self.role {
+            RealtimeTranscriptRole::User => "user",
+            RealtimeTranscriptRole::Assistant => "assistant",
+        };
+        let style = Style::default().dim().italic();
+        let text = match self.role {
+            RealtimeTranscriptRole::User => self.text.clone(),
+            RealtimeTranscriptRole::Assistant => clean_assistant_realtime_transcript(&self.text),
+        };
+        let line = Line::from(text).style(style);
+        adaptive_wrap_lines(
+            &[line],
+            RtOptions::new(width as usize)
+                .initial_indent(vec![format!("{role_name}: ").dim().italic()].into())
+                .subsequent_indent("  ".dim().italic().into()),
+        )
+    }
+}
+
+fn clean_assistant_realtime_transcript(text: &str) -> String {
+    let text = strip_realtime_code_fence(text);
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .and_then(|object| object.get("response"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| text.to_string())
+}
+
+fn strip_realtime_code_fence(text: &str) -> &str {
+    let text = text.trim();
+    let Some(mut rest) = text.strip_prefix("```") else {
+        return text;
+    };
+
+    let has_language = rest.chars().next().is_some_and(|ch| !ch.is_whitespace());
+    rest = rest.trim_start();
+    if has_language && let Some((first_line, remaining)) = rest.split_once('\n') {
+        let first_line = first_line.trim();
+        if !first_line.is_empty()
+            && first_line
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            rest = remaining;
+        }
+    }
+
+    rest.trim()
+        .strip_suffix("```")
+        .map(str::trim)
+        .unwrap_or_else(|| rest.trim())
+}
+
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
@@ -2932,6 +3024,32 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn realtime_transcript_cell_strips_assistant_code_fence() {
+        let cell = RealtimeTranscriptCell::new(
+            RealtimeTranscriptRole::Assistant,
+            "``` \nHey!".to_string(),
+        );
+
+        assert_eq!(
+            render_lines(&cell.display_lines(/*width*/ 80)),
+            vec!["assistant: Hey!"]
+        );
+    }
+
+    #[test]
+    fn realtime_transcript_cell_unwraps_assistant_response_json() {
+        let cell = RealtimeTranscriptCell::new(
+            RealtimeTranscriptRole::Assistant,
+            r#"{"response":"I'm doing well."}"#.to_string(),
+        );
+
+        assert_eq!(
+            render_lines(&cell.display_lines(/*width*/ 80)),
+            vec!["assistant: I'm doing well."]
+        );
     }
 
     fn image_block(data: &str) -> serde_json::Value {

@@ -193,6 +193,10 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -337,6 +341,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::HookCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::RealtimeTranscriptRole;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -6175,54 +6180,45 @@ impl ChatWidget {
             }
             ServerNotification::ThreadRealtimeStarted(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_started(
-                        codex_protocol::protocol::RealtimeConversationStartedEvent {
-                            session_id: notification.session_id,
-                            version: notification.version,
-                        },
-                    );
+                    self.on_realtime_conversation_started(RealtimeConversationStartedEvent {
+                        session_id: notification.session_id,
+                        version: notification.version,
+                    });
                 }
             }
             ServerNotification::ThreadRealtimeItemAdded(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_realtime(
-                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
-                            payload: codex_protocol::protocol::RealtimeEvent::ConversationItemAdded(
-                                notification.item,
-                            ),
-                        },
-                    );
+                    self.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+                        payload: RealtimeEvent::ConversationItemAdded(notification.item),
+                    });
+                }
+            }
+            ServerNotification::ThreadRealtimeTranscriptUpdated(notification) => {
+                if !from_replay
+                    && let Some(role) = RealtimeTranscriptRole::from_name(&notification.role)
+                {
+                    self.on_realtime_transcript_delta(role, notification.text);
                 }
             }
             ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_realtime(
-                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
-                            payload: codex_protocol::protocol::RealtimeEvent::AudioOut(
-                                notification.audio.into(),
-                            ),
-                        },
-                    );
+                    self.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+                        payload: RealtimeEvent::AudioOut(notification.audio.into()),
+                    });
                 }
             }
             ServerNotification::ThreadRealtimeError(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_realtime(
-                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
-                            payload: codex_protocol::protocol::RealtimeEvent::Error(
-                                notification.message,
-                            ),
-                        },
-                    );
+                    self.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+                        payload: RealtimeEvent::Error(notification.message),
+                    });
                 }
             }
             ServerNotification::ThreadRealtimeClosed(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_closed(
-                        codex_protocol::protocol::RealtimeConversationClosedEvent {
-                            reason: notification.reason,
-                        },
-                    );
+                    self.on_realtime_conversation_closed(RealtimeConversationClosedEvent {
+                        reason: notification.reason,
+                    });
                 }
             }
             ServerNotification::ThreadRealtimeSdp(notification) => {
@@ -6245,7 +6241,6 @@ impl ChatWidget {
             | ServerNotification::FsChanged(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
-            | ServerNotification::ThreadRealtimeTranscriptUpdated(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}

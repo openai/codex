@@ -22,6 +22,31 @@ async fn realtime_error_closes_without_followup_closed_info() {
     insta::assert_snapshot!(rendered.join("\n\n"), @"■ Realtime voice error: boom");
 }
 
+#[tokio::test]
+async fn realtime_output_text_delta_renders_transcript_cell() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+
+    chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+        payload: RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: "hello ".to_string(),
+        }),
+    });
+    chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+        payload: RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: "there".to_string(),
+        }),
+    });
+
+    let lines = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("realtime transcript cell");
+    insta::assert_snapshot!(
+        lines_to_single_string(&lines).trim_end(),
+        @"assistant: hello there"
+    );
+}
+
 #[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn deleted_realtime_meter_uses_shared_stop_path() {

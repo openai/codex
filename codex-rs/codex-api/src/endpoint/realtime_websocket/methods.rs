@@ -1519,7 +1519,7 @@ mod tests {
                 first_json["session"]["type"],
                 Value::String("realtime".to_string())
             );
-            assert_eq!(first_json["session"]["output_modalities"], json!(["audio"]));
+            assert_eq!(first_json["session"]["output_modalities"], json!(["text"]));
             assert_eq!(
                 first_json["session"]["audio"]["input"]["format"],
                 json!({
@@ -1541,17 +1541,7 @@ mod tests {
                     "create_response": true,
                 })
             );
-            assert_eq!(
-                first_json["session"]["audio"]["output"]["format"],
-                json!({
-                    "type": "audio/pcm",
-                    "rate": 24_000,
-                })
-            );
-            assert_eq!(
-                first_json["session"]["audio"]["output"]["voice"],
-                Value::String("cedar".to_string())
-            );
+            assert!(first_json["session"]["audio"].get("output").is_none());
             assert_eq!(
                 first_json["session"]["tools"][0]["type"],
                 Value::String("function".to_string())

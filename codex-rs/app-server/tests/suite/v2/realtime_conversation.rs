@@ -550,9 +550,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         startup_context_request.body_json()["type"].as_str(),
         Some("session.update")
     );
-    assert_eq!(
-        startup_context_request.body_json()["session"]["audio"]["output"]["voice"],
-        "cedar"
+    assert!(
+        startup_context_request.body_json()["session"]["audio"]
+            .get("output")
+            .is_none()
     );
     let startup_context_instructions =
         startup_context_request.body_json()["session"]["instructions"]
@@ -973,7 +974,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["text"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
     assert_eq!(
         body,
         format!(
@@ -1996,6 +1997,7 @@ fn assert_v2_session_update(request: &Value) -> Result<()> {
             .context("v2 session.update instructions")?
             .contains("startup context")
     );
+    assert_eq!(request["session"]["output_modalities"], json!(["text"]));
     assert_eq!(
         request["session"]["tools"][0]["name"].as_str(),
         Some("background_agent")

@@ -1,4 +1,6 @@
 use super::*;
+use crate::history_cell::RealtimeTranscriptCell;
+use crate::history_cell::RealtimeTranscriptRole;
 use codex_config::config_toml::RealtimeTransport;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
@@ -315,8 +317,6 @@ impl ChatWidget {
                 RealtimeEvent::AudioOut(_)
                     | RealtimeEvent::InputAudioSpeechStarted(_)
                     | RealtimeEvent::ResponseCreated(_)
-                    | RealtimeEvent::ResponseCancelled(_)
-                    | RealtimeEvent::ResponseDone(_)
             )
         {
             return;
@@ -326,18 +326,65 @@ impl ChatWidget {
                 self.realtime_conversation.session_id = Some(session_id);
             }
             RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
-            RealtimeEvent::InputTranscriptDelta(_) => {}
-            RealtimeEvent::OutputTranscriptDelta(_) => {}
+            RealtimeEvent::InputTranscriptDelta(delta) => {
+                self.on_realtime_transcript_delta(RealtimeTranscriptRole::User, delta.delta);
+            }
+            RealtimeEvent::OutputTranscriptDelta(delta) => {
+                self.on_realtime_transcript_delta(RealtimeTranscriptRole::Assistant, delta.delta);
+            }
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
             RealtimeEvent::ResponseCreated(_) => {}
-            RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
-            RealtimeEvent::ResponseDone(_) => {}
+            RealtimeEvent::ResponseCancelled(_) => {
+                self.flush_active_realtime_transcript();
+                self.interrupt_realtime_audio_playback();
+            }
+            RealtimeEvent::ResponseDone(_) => self.flush_active_realtime_transcript(),
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
             RealtimeEvent::Error(message) => {
                 self.fail_realtime_conversation(format!("Realtime voice error: {message}"));
             }
+        }
+    }
+
+    pub(super) fn on_realtime_transcript_delta(
+        &mut self,
+        role: RealtimeTranscriptRole,
+        delta: String,
+    ) {
+        if delta.is_empty() {
+            return;
+        }
+
+        self.flush_unified_exec_wait_streak();
+
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<RealtimeTranscriptCell>())
+            && cell.role == role
+        {
+            cell.append(&delta);
+            self.bump_active_cell_revision();
+            self.request_redraw();
+            return;
+        }
+
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(RealtimeTranscriptCell::new(role, delta)));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    fn flush_active_realtime_transcript(&mut self) {
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<RealtimeTranscriptCell>())
+        {
+            self.flush_active_cell();
+            self.request_redraw();
         }
     }
 
@@ -349,6 +396,7 @@ impl ChatWidget {
             return;
         }
 
+        self.flush_active_realtime_transcript();
         let requested = self.realtime_conversation.requested_close;
         let reason = ev.reason;
         self.reset_realtime_conversation_state();

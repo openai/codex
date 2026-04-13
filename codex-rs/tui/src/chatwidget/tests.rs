@@ -172,6 +172,7 @@ pub(super) use codex_protocol::protocol::ReadOnlyAccess;
 pub(super) use codex_protocol::protocol::RealtimeConversationClosedEvent;
 pub(super) use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 pub(super) use codex_protocol::protocol::RealtimeEvent;
+pub(super) use codex_protocol::protocol::RealtimeTranscriptDelta;
 pub(super) use codex_protocol::protocol::ReviewRequest;
 pub(super) use codex_protocol::protocol::ReviewTarget;
 pub(super) use codex_protocol::protocol::SessionConfiguredEvent;
