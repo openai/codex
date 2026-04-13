@@ -138,12 +138,36 @@ async fn file_system_get_metadata_returns_expected_fields(use_remote: bool) -> R
     std::fs::write(&file_path, "hello")?;
 
     let metadata = file_system
-        .get_metadata(&absolute_path(file_path), /*sandbox*/ None)
+        .get_metadata(&absolute_path(file_path.clone()), /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(metadata.is_directory, false);
     assert_eq!(metadata.is_file, true);
+    assert_eq!(metadata.is_symlink, false);
     assert!(metadata.modified_at_ms > 0);
+
+    let symlink_path = tmp.path().join("note-link.txt");
+    symlink(&file_path, &symlink_path)?;
+    let symlink_metadata = file_system
+        .get_metadata(&absolute_path(symlink_path.clone()), /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(symlink_metadata.is_directory, false);
+    assert_eq!(symlink_metadata.is_file, true);
+    assert_eq!(symlink_metadata.is_symlink, true);
+    assert!(symlink_metadata.modified_at_ms > 0);
+
+    let dir_path = tmp.path().join("notes");
+    std::fs::create_dir(&dir_path)?;
+    let dir_symlink_path = tmp.path().join("notes-link");
+    symlink(&dir_path, &dir_symlink_path)?;
+    let dir_symlink_metadata = file_system
+        .get_metadata(&absolute_path(dir_symlink_path), /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(dir_symlink_metadata.is_directory, true);
+    assert_eq!(dir_symlink_metadata.is_file, false);
+    assert_eq!(dir_symlink_metadata.is_symlink, true);
 
     Ok(())
 }

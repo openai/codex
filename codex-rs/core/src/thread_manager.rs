@@ -365,6 +365,10 @@ impl ThreadManager {
         self.state.mcp_manager.clone()
     }
 
+    pub fn environment_manager(&self) -> Arc<EnvironmentManager> {
+        self.state.environment_manager.clone()
+    }
+
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
         self.state.models_manager.clone()
     }
@@ -903,11 +907,23 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
-        let watch_registration = self.skills_watcher.register_config(
-            &config,
-            self.skills_manager.as_ref(),
-            self.plugins_manager.as_ref(),
-        );
+        let environment = self
+            .environment_manager
+            .current()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let skill_fs = environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
+        let watch_registration = self
+            .skills_watcher
+            .register_config(
+                &config,
+                self.skills_manager.as_ref(),
+                self.plugins_manager.as_ref(),
+                skill_fs,
+            )
+            .await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {

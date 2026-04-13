@@ -7,6 +7,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -15,6 +16,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
@@ -136,22 +138,21 @@ enabled = {enabled}
     )
 }
 
-fn skills_for_config_with_stack(
+async fn skills_for_config_with_stack(
     skills_manager: &SkillsManager,
     cwd: &TempDir,
     config_layer_stack: &ConfigLayerStack,
-    effective_skill_roots: &[PathBuf],
+    effective_skill_roots: &[AbsolutePathBuf],
 ) -> SkillLoadOutcome {
     let skills_input = SkillsLoadInput::new(
         cwd.path().abs(),
-        effective_skill_roots
-            .iter()
-            .map(codex_utils_absolute_path::test_support::PathBufExt::abs)
-            .collect(),
+        effective_skill_roots.to_vec(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(config_layer_stack),
     );
-    skills_manager.skills_for_config(&skills_input)
+    skills_manager
+        .skills_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .await
 }
 
 #[test]
@@ -184,7 +185,8 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     );
 
     write_user_skill(&codex_home, "a", "skill-a", "from a");
-    let outcome1 = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
+    let outcome1 =
+        skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
     assert!(
         outcome1.skills.iter().any(|s| s.name == "skill-a"),
         "expected skill-a to be discovered"
@@ -193,7 +195,8 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     // Write a new skill after the first call; the second call should reuse the config-aware cache
     // entry because the effective skill config is unchanged.
     write_user_skill(&codex_home, "b", "skill-b", "from b");
-    let outcome2 = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
+    let outcome2 =
+        skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
     assert_eq!(outcome2.errors, outcome1.errors);
     assert_eq!(outcome2.skills, outcome1.skills);
 }
@@ -218,7 +221,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .parent()
         .and_then(std::path::Path::parent)
         .expect("plugin skill should live under a skills root")
-        .to_path_buf();
+        .abs();
     let skills_manager = SkillsManager::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
@@ -229,7 +232,8 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         &cwd,
         &config_layer_stack,
         &[plugin_skill_root],
-    );
+    )
+    .await;
     let skill = outcome
         .skills
         .iter()
@@ -259,7 +263,7 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
-    let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
+    let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
 
     write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
     let extra_root_path = extra_root.path().abs();
@@ -274,6 +278,7 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
             &base_input,
             /*force_reload*/ true,
             std::slice::from_ref(&extra_root_path),
+            Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
     assert!(
@@ -298,10 +303,148 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
         bundled_skills_enabled_from_stack(&config_layer_stack),
     );
     let outcome_without_extra = skills_manager
-        .skills_for_cwd(&base_input, /*force_reload*/ false)
+        .skills_for_cwd(
+            &base_input,
+            /*force_reload*/ false,
+            Some(Arc::clone(&LOCAL_FS)),
+        )
         .await;
     assert_eq!(outcome_without_extra.skills, outcome_with_extra.skills);
     assert_eq!(outcome_without_extra.errors, outcome_with_extra.errors);
+}
+
+#[tokio::test]
+async fn skills_for_cwd_loads_repo_user_and_extra_roots_with_local_fs() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let extra_root = tempfile::tempdir().expect("tempdir");
+    let repo_dot_codex = cwd.path().join(".codex");
+    fs::create_dir_all(&repo_dot_codex).expect("create repo config dir");
+
+    write_user_skill(&codex_home, "user", "user-skill", "from local user root");
+    write_user_skill(&extra_root, "extra", "extra-skill", "from extra root");
+    let repo_skill_dir = repo_dot_codex.join("skills/repo");
+    fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
+    fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: from repo root\n---\n\n# Body\n",
+    )
+    .expect("write repo skill");
+
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![
+            user_config_layer(&codex_home, ""),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: repo_dot_codex.abs(),
+                },
+                toml::Value::Table(toml::map::Map::new()),
+            ),
+        ],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let skills_manager = SkillsManager::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let outcome = skills_manager
+        .skills_for_cwd_with_extra_user_roots(
+            &skills_input,
+            /*force_reload*/ true,
+            &[extra_root.path().abs()],
+            Some(Arc::clone(&LOCAL_FS)),
+        )
+        .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    let loaded_names = outcome
+        .skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(loaded_names.contains("user-skill"));
+    assert!(loaded_names.contains("repo-skill"));
+    assert!(loaded_names.contains("extra-skill"));
+}
+
+#[tokio::test]
+async fn skills_for_cwd_without_fs_skips_repo_and_extra_roots() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let extra_root = tempfile::tempdir().expect("tempdir");
+    let repo_dot_codex = cwd.path().join(".codex");
+    fs::create_dir_all(&repo_dot_codex).expect("create repo config dir");
+
+    write_user_skill(&codex_home, "user", "user-skill", "from local user root");
+    write_user_skill(&extra_root, "extra", "extra-skill", "from extra root");
+    let repo_skill_dir = repo_dot_codex.join("skills/repo");
+    fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
+    fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: from repo root\n---\n\n# Body\n",
+    )
+    .expect("write repo skill");
+
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![
+            user_config_layer(&codex_home, ""),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: repo_dot_codex.abs(),
+                },
+                toml::Value::Table(toml::map::Map::new()),
+            ),
+        ],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let skills_manager = SkillsManager::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let outcome = skills_manager
+        .skills_for_cwd_with_extra_user_roots(
+            &skills_input,
+            /*force_reload*/ true,
+            &[extra_root.path().abs()],
+            None,
+        )
+        .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    let loaded_names = outcome
+        .skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(loaded_names.contains("user-skill"));
+    assert!(!loaded_names.contains("repo-skill"));
+    assert!(!loaded_names.contains("extra-skill"));
 }
 
 #[tokio::test]
@@ -330,7 +473,8 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
     )
     .expect("rewrite bundled skill");
 
-    let outcome = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
+    let outcome =
+        skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
     assert!(
         outcome
             .skills
@@ -356,7 +500,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
-    let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
+    let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
 
     write_user_skill(&extra_root_a, "x", "extra-skill-a", "from extra root a");
     write_user_skill(&extra_root_b, "x", "extra-skill-b", "from extra root b");
@@ -373,6 +517,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
             &base_input,
             /*force_reload*/ true,
             std::slice::from_ref(&extra_root_a_path),
+            Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
     assert!(
@@ -394,6 +539,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
             &base_input,
             /*force_reload*/ false,
             std::slice::from_ref(&extra_root_b_path),
+            Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
     assert!(
@@ -414,6 +560,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
             &base_input,
             /*force_reload*/ true,
             std::slice::from_ref(&extra_root_b_path),
+            Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
     assert!(
@@ -600,7 +747,11 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
     );
 
     let parent_outcome = skills_manager
-        .skills_for_cwd(&parent_input, /*force_reload*/ true)
+        .skills_for_cwd(
+            &parent_input,
+            /*force_reload*/ true,
+            Some(Arc::clone(&LOCAL_FS)),
+        )
         .await;
     let parent_skill = parent_outcome
         .skills
@@ -609,7 +760,8 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
         .expect("demo skill should be discovered");
     assert_eq!(parent_outcome.is_skill_enabled(parent_skill), false);
 
-    let child_outcome = skills_for_config_with_stack(&skills_manager, &cwd, &child_stack, &[]);
+    let child_outcome =
+        skills_for_config_with_stack(&skills_manager, &cwd, &child_stack, &[]).await;
     let child_skill = child_outcome
         .skills
         .iter()

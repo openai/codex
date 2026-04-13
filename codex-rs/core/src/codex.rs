@@ -496,10 +496,19 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
+        let environment = environment_manager
+            .current()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let skill_fs = environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
         let plugin_outcome = plugins_manager.plugins_for_config(&config);
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
-        let loaded_skills = skills_manager.skills_for_config(&skills_input);
+        let loaded_skills = skills_manager
+            .skills_for_config(&skills_input, skill_fs)
+            .await;
 
         for err in &loaded_skills.errors {
             error!(
@@ -544,10 +553,6 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let environment = environment_manager
-            .current()
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
         let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
@@ -2661,10 +2666,16 @@ impl Session {
             .plugins_for_config(&per_turn_config);
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        let skill_fs = self
+            .services
+            .environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&skills_input),
+                .skills_for_config(&skills_input, skill_fs)
+                .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.conversation_id,
@@ -5383,6 +5394,11 @@ mod handlers {
 
         let skills_manager = &sess.services.skills_manager;
         let plugins_manager = &sess.services.plugins_manager;
+        let skill_fs = sess
+            .services
+            .environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
         let config = sess.get_config().await;
         let codex_home = sess.codex_home().await;
         let mut skills = Vec::new();
@@ -5439,7 +5455,7 @@ mod handlers {
                 config.bundled_skills_enabled(),
             );
             let outcome = skills_manager
-                .skills_for_cwd(&skills_input, force_reload)
+                .skills_for_cwd(&skills_input, force_reload, skill_fs.clone())
                 .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);

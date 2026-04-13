@@ -11,6 +11,7 @@ use codex_app_server_protocol::SkillsListExtraRootsForCwd;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -60,6 +61,56 @@ async fn skills_list_includes_skills_from_per_cwd_extra_user_roots() -> Result<(
             .skills
             .iter()
             .any(|skill| skill.name == "extra-skill")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = TempDir::new()?;
+    write_skill(&codex_home, "home-skill")?;
+    write_skill(&extra_root, "extra-skill")?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+            per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
+                cwd: cwd.path().to_path_buf(),
+                extra_user_roots: vec![extra_root.path().to_path_buf()],
+            }]),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].cwd, cwd.path().to_path_buf());
+    assert_eq!(data[0].errors, Vec::new());
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .any(|skill| skill.name == "home-skill")
+    );
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .all(|skill| skill.name != "extra-skill")
     );
     Ok(())
 }
