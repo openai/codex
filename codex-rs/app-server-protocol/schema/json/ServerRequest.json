@@ -1344,6 +1344,13 @@
         }
       ]
     },
+    "PermissionGrantScope": {
+      "enum": [
+        "turn",
+        "session"
+      ],
+      "type": "string"
+    },
     "PermissionsRequestApprovalParams": {
       "properties": {
         "itemId": {
@@ -1357,6 +1364,14 @@
             "string",
             "null"
           ]
+        },
+        "suggestedScope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionGrantScope"
+            }
+          ],
+          "default": "turn"
         },
         "threadId": {
           "type": "string"

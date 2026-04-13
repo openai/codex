@@ -18,6 +18,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use serde_json::Value;
 use serde_json::json;
 use tokio::time::timeout;
@@ -75,7 +76,7 @@ async fn permission_tools_expose_only_the_narrow_flow_for_now() -> Result<()> {
 async fn request_permissions_round_trips_when_client_supports_app_request() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
-        create_request_permissions_sse_response("call1")?,
+        create_request_permissions_sse_response("call1", PermissionGrantScope::Session)?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -101,6 +102,10 @@ async fn request_permissions_round_trips_when_client_supports_app_request() -> R
     assert_eq!(params.thread_id, thread_id);
     assert_eq!(params.item_id, "call1");
     assert_eq!(params.reason.as_deref(), Some("Select a workspace root"));
+    assert_eq!(
+        params.suggested_scope,
+        codex_app_server_protocol::PermissionGrantScope::Session
+    );
     let resolved_request_id = request_id.clone();
 
     mcp.send_response(
@@ -121,7 +126,7 @@ async fn request_permissions_round_trips_when_client_supports_app_request() -> R
 async fn request_permissions_auto_declines_without_app_request() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
-        create_request_permissions_sse_response("call1")?,
+        create_request_permissions_sse_response("call1", PermissionGrantScope::Turn)?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;

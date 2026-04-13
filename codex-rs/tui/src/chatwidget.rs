@@ -1572,7 +1572,7 @@ fn request_permissions_from_params(
         call_id: params.item_id,
         reason: params.reason,
         permissions: params.permissions.into(),
-        suggested_scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+        suggested_scope: params.suggested_scope.to_core(),
     }
 }
 
@@ -4582,6 +4582,7 @@ impl ChatWidget {
             call_id: ev.call_id,
             reason: ev.reason,
             permissions: ev.permissions,
+            suggested_scope: ev.suggested_scope,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
