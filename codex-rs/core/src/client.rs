@@ -48,10 +48,13 @@ use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
+#[cfg(not(target_arch = "wasm32"))]
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
+#[cfg(not(target_arch = "wasm32"))]
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
+#[cfg(not(target_arch = "wasm32"))]
 use codex_api::WebsocketTelemetry;
 use codex_api::build_conversation_headers;
 use codex_api::common::Reasoning;
@@ -84,8 +87,11 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::oneshot::error::TryRecvError;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::tungstenite::Error;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::tungstenite::Message;
 use tracing::instrument;
 use tracing::trace;
@@ -118,6 +124,7 @@ pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
+#[cfg(not(target_arch = "wasm32"))]
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
@@ -219,6 +226,7 @@ struct LastResponse {
 
 #[derive(Debug, Default)]
 struct WebsocketSession {
+    #[cfg(not(target_arch = "wasm32"))]
     connection: Option<ApiWebSocketConnection>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
@@ -241,6 +249,7 @@ impl WebsocketSession {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum WebsocketStreamOutcome {
     Stream(ResponseStream),
     FallbackToHttp,
@@ -514,6 +523,15 @@ impl ModelClient {
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
+    #[cfg(target_arch = "wasm32")]
+    pub fn responses_websocket_enabled(&self) -> bool {
+        false
+    }
+
+    /// Returns whether the Responses-over-WebSocket transport is active for this session.
+    ///
+    /// WebSocket use is controlled by provider capability and session-scoped fallback state.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn responses_websocket_enabled(&self) -> bool {
         if !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
@@ -551,6 +569,7 @@ impl ModelClient {
     /// Both startup prewarm and in-turn `needs_new` reconnects call this path so handshake
     /// behavior remains consistent across both flows.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn connect_websocket(
         &self,
         session_telemetry: &SessionTelemetry,
@@ -638,6 +657,7 @@ impl ModelClient {
     ///
     /// Callers should pass the current turn-state lock when available so sticky-routing state is
     /// replayed on reconnect within the same turn.
+    #[cfg(not(target_arch = "wasm32"))]
     fn build_websocket_headers(
         &self,
         turn_state: Option<&Arc<OnceLock<String>>>,
@@ -678,12 +698,20 @@ impl Drop for ModelClientSession {
 
 impl ModelClientSession {
     fn reset_websocket_session(&mut self) {
-        self.websocket_session.connection = None;
+        self.reset_websocket_connection();
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reset_websocket_connection(&mut self) {
+        self.websocket_session.connection = None;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn reset_websocket_connection(&mut self) {}
 
     fn build_responses_request(
         &self,
@@ -817,6 +845,7 @@ impl ModelClientSession {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn get_last_response(&mut self) -> Option<LastResponse> {
         self.websocket_session
             .last_response_rx
@@ -827,6 +856,7 @@ impl ModelClientSession {
             })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn prepare_websocket_request(
         &mut self,
         payload: ResponseCreateWsRequest,
@@ -858,6 +888,7 @@ impl ModelClientSession {
     /// Opportunistically preconnects a websocket for this turn-scoped client session.
     ///
     /// This performs only connection setup; it never sends prompt payloads.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn preconnect_websocket(
         &mut self,
         session_telemetry: &SessionTelemetry,
@@ -897,7 +928,18 @@ impl ModelClientSession {
             .set_connection_reused(/*connection_reused*/ false);
         Ok(())
     }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn preconnect_websocket(
+        &mut self,
+        _session_telemetry: &SessionTelemetry,
+        _model_info: &ModelInfo,
+    ) -> std::result::Result<(), ApiError> {
+        Ok(())
+    }
+
     /// Returns a websocket connection for this turn.
+    #[cfg(not(target_arch = "wasm32"))]
     #[instrument(
         name = "model_client.websocket_connection",
         level = "info",
@@ -1085,6 +1127,7 @@ impl ModelClientSession {
 
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(target_arch = "wasm32"))]
     #[instrument(
         name = "model_client.stream_responses_websocket",
         level = "info",
@@ -1218,6 +1261,7 @@ impl ModelClientSession {
     }
 
     /// Builds telemetry for the Responses API WebSocket transport.
+    #[cfg(not(target_arch = "wasm32"))]
     fn build_websocket_telemetry(
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
@@ -1235,6 +1279,7 @@ impl ModelClientSession {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn prewarm_websocket(
         &mut self,
         prompt: &Prompt,
@@ -1286,6 +1331,21 @@ impl ModelClientSession {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(target_arch = "wasm32")]
+    pub async fn prewarm_websocket(
+        &mut self,
+        _prompt: &Prompt,
+        _model_info: &ModelInfo,
+        _session_telemetry: &SessionTelemetry,
+        _effort: Option<ReasoningEffortConfig>,
+        _summary: ReasoningSummaryConfig,
+        _service_tier: Option<ServiceTier>,
+        _turn_metadata_header: Option<&str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     /// Streams a single model request within the current turn.
     ///
     /// The caller is responsible for passing per-turn settings explicitly (model selection,
@@ -1305,6 +1365,7 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
+                #[cfg(not(target_arch = "wasm32"))]
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
@@ -1369,6 +1430,7 @@ fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<Head
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn build_ws_client_metadata(turn_metadata_header: Option<&str>) -> Option<HashMap<String, String>> {
     let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header)?;
     let turn_metadata = turn_metadata_header.to_str().ok()?.to_string();
@@ -1547,6 +1609,7 @@ impl AuthRequestTelemetryContext {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct WebsocketConnectParams<'a> {
     session_telemetry: &'a SessionTelemetry,
     api_provider: codex_api::Provider,
@@ -1774,6 +1837,7 @@ impl SseTelemetry for ApiTelemetry {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl WebsocketTelemetry for ApiTelemetry {
     fn on_ws_request(&self, duration: Duration, error: Option<&ApiError>, connection_reused: bool) {
         let error_message = error.map(telemetry_api_error_message);
