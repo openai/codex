@@ -1944,6 +1944,8 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     });
     let test = builder.build(&api_server).await?;
 
+    // Phase 1: start realtime so the next normal user turn mirrors over the
+    // active WebSocket session.
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: Some(Some("backend prompt".to_string())),
@@ -1962,6 +1964,8 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     .await;
     assert_eq!(session_updated, "sess_long_user_text");
 
+    // Phase 2: submit one oversized text turn. The model request should keep
+    // the exact user text, while the realtime mirror should get the capped copy.
     let user_text = format!(
         "mirror-head {} mirror-middle {} mirror-tail",
         "alpha ".repeat(900),
@@ -1983,6 +1987,8 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     })
     .await;
 
+    // Phase 3: capture the mirrored WebSocket item and wait for the capped
+    // payload itself, not just the turn completion event.
     let realtime_text_request = wait_for_matching_websocket_request(
         &realtime_server,
         "capped normal user turn text mirrored to realtime",
@@ -1999,6 +2005,32 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     let realtime_text =
         websocket_request_text(&realtime_text_request).expect("realtime request text");
     let model_user_texts = response_mock.single_request().message_input_texts("user");
+
+    let realtime_request_body = realtime_text_request.body_json();
+    let content = &realtime_request_body["item"]["content"][0];
+
+    // Snapshot the request envelope and capped text together so reviewers can
+    // see the preserved head/tail and truncation marker in one place.
+    let snapshot = format!(
+        "type: {}\nitem.type: {}\nitem.role: {}\ncontent[0].type: {}\nmodel_has_full_user_text: {}\nrealtime_text_equal_full_user_text: {}\nrealtime_text_approx_tokens: {}\ncontent[0].text: {}",
+        realtime_request_body["type"].as_str().unwrap_or_default(),
+        realtime_request_body["item"]["type"]
+            .as_str()
+            .unwrap_or_default(),
+        realtime_request_body["item"]["role"]
+            .as_str()
+            .unwrap_or_default(),
+        content["type"].as_str().unwrap_or_default(),
+        model_user_texts.iter().any(|text| text == &user_text),
+        realtime_text == user_text,
+        approx_token_count(&realtime_text),
+        realtime_text,
+    );
+    insta::assert_snapshot!(
+        "conversation_user_text_turn_is_capped_when_mirrored_to_realtime",
+        snapshot
+    );
+
     assert_eq!(
         (
             model_user_texts.iter().any(|text| text == &user_text),
