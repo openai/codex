@@ -450,12 +450,15 @@ impl ChatWidget {
                     Some(format!("{} used", format_tokens_compact(total)))
                 }
             }
+            StatusLineItem::ContextRemaining => self
+                .status_line_context_remaining_percent()
+                .map(|remaining| format!("Context {remaining}% left")),
+            StatusLineItem::ContextUsed => self
+                .status_line_context_used_percent()
+                .map(|used| format!("Context {used}% used")),
             StatusLineItem::ContextUsage => self
                 .status_line_context_used_percent()
                 .map(format_context_used_meter),
-            StatusLineItem::ContextUsagePercent => self
-                .status_line_context_used_percent()
-                .map(|used| format!("Context {used}% used")),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id

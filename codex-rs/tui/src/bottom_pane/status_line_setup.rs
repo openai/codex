@@ -63,18 +63,18 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
-    /// Visual meter of context window usage.
-    ///
-    /// Also accepts legacy `context-remaining` and `context-used` config values.
-    #[strum(
-        to_string = "context-usage",
-        serialize = "context-remaining",
-        serialize = "context-used"
-    )]
-    ContextUsage,
+    /// Percentage of context window remaining.
+    ContextRemaining,
 
     /// Percentage of context window used.
-    ContextUsagePercent,
+    ///
+    /// Also accepts the legacy `context-usage` config value.
+    #[strum(to_string = "context-used", serialize = "context-usage")]
+    ContextUsed,
+
+    /// Visual meter of context window usage.
+    #[strum(to_string = "context-usage-meter")]
+    ContextUsage,
 
     /// Remaining usage on the 5-hour rate limit.
     FiveHourLimit,
@@ -116,11 +116,14 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::ContextRemaining => {
+                "Percentage of context window remaining (omitted when unknown)"
+            }
+            StatusLineItem::ContextUsed => {
+                "Percentage of context window used (omitted when unknown)"
+            }
             StatusLineItem::ContextUsage => {
                 "Visual meter of context window usage (omitted when unknown)"
-            }
-            StatusLineItem::ContextUsagePercent => {
-                "Percentage of context window used (omitted when unknown)"
             }
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on 5-hour usage limit (omitted when unavailable)"
@@ -305,31 +308,39 @@ mod tests {
     use crate::app_event::AppEvent;
 
     #[test]
-    fn context_usage_is_canonical_and_accepts_legacy_ids() {
-        assert_eq!(StatusLineItem::ContextUsage.to_string(), "context-usage");
-        assert_eq!(
-            "context-usage".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ContextUsage)
-        );
-        assert_eq!(
-            "context-remaining".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ContextUsage)
-        );
+    fn context_used_accepts_context_usage_legacy_id() {
+        assert_eq!(StatusLineItem::ContextUsed.to_string(), "context-used");
         assert_eq!(
             "context-used".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ContextUsage)
+            Ok(StatusLineItem::ContextUsed)
+        );
+        assert_eq!(
+            "context-usage".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsed)
         );
     }
 
     #[test]
-    fn context_usage_percent_is_separate_selectable_id() {
+    fn context_remaining_is_separate_selectable_id() {
         assert_eq!(
-            StatusLineItem::ContextUsagePercent.to_string(),
-            "context-usage-percent"
+            "context-remaining".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextRemaining)
         );
         assert_eq!(
-            "context-usage-percent".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ContextUsagePercent)
+            StatusLineItem::ContextRemaining.to_string(),
+            "context-remaining"
+        );
+    }
+
+    #[test]
+    fn context_usage_meter_is_separate_selectable_id() {
+        assert_eq!(
+            StatusLineItem::ContextUsage.to_string(),
+            "context-usage-meter"
+        );
+        assert_eq!(
+            "context-usage-meter".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextUsage)
         );
     }
 
