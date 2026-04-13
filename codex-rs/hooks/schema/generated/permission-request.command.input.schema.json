@@ -57,9 +57,19 @@
       },
       "type": "object"
     },
+    "PermissionRequestApprovalAttempt": {
+      "enum": [
+        "initial",
+        "retry"
+      ],
+      "type": "string"
+    },
     "PermissionRequestApprovalContext": {
       "additionalProperties": false,
       "properties": {
+        "attempt": {
+          "$ref": "#/definitions/PermissionRequestAttemptContext"
+        },
         "justification": {
           "type": "string"
         },
@@ -71,8 +81,24 @@
         }
       },
       "required": [
+        "attempt",
         "policy",
         "resource"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestAttemptContext": {
+      "additionalProperties": false,
+      "properties": {
+        "retryReason": {
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/definitions/PermissionRequestApprovalAttempt"
+        }
+      },
+      "required": [
+        "stage"
       ],
       "type": "object"
     },

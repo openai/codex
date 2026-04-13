@@ -16,6 +16,8 @@ use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 
+use crate::events::permission_request::PermissionRequestApprovalAttempt;
+
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
@@ -251,6 +253,14 @@ pub(crate) struct PermissionRequestToolInput {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestAttemptContext {
+    pub stage: PermissionRequestApprovalAttempt,
+    pub retry_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PermissionRequestPolicyContext {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
@@ -269,6 +279,7 @@ pub(crate) struct PermissionRequestResourceContext {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PermissionRequestApprovalContext {
+    pub attempt: PermissionRequestAttemptContext,
     pub policy: PermissionRequestPolicyContext,
     pub justification: Option<String>,
     pub resource: PermissionRequestResourceContext,
