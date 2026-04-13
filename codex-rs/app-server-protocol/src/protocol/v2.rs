@@ -2320,10 +2320,12 @@ pub struct FsGetMetadataParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsGetMetadataResponse {
-    /// Whether the path currently resolves to a directory.
+    /// Whether the path resolves to a directory.
     pub is_directory: bool,
-    /// Whether the path currently resolves to a regular file.
+    /// Whether the path resolves to a regular file.
     pub is_file: bool,
+    /// Whether the path itself is a symbolic link.
+    pub is_symlink: bool,
     /// File creation time in Unix milliseconds when available, otherwise `0`.
     #[ts(type = "number")]
     pub created_at_ms: i64,
@@ -6765,6 +6767,7 @@ mod tests {
         let response = FsGetMetadataResponse {
             is_directory: false,
             is_file: true,
+            is_symlink: false,
             created_at_ms: 123,
             modified_at_ms: 456,
         };
@@ -6775,6 +6778,7 @@ mod tests {
             json!({
                 "isDirectory": false,
                 "isFile": true,
+                "isSymlink": false,
                 "createdAtMs": 123,
                 "modifiedAtMs": 456,
             })
