@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "properties": {
+    "codex_permission_context": true,
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "PermissionRequest",
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "permission_suggestions": {
+      "items": true,
+      "type": "array"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tool_input": true,
+    "tool_name": {
+      "enum": [
+        "Bash",
+        "Edit"
+      ],
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "turn_id": {
+      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "codex_permission_context",
+    "cwd",
+    "hook_event_name",
+    "permission_mode",
+    "permission_suggestions",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "transcript_path",
+    "turn_id"
+  ],
+  "title": "permission-request.command.input",
+  "type": "object"
+}

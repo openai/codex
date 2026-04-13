@@ -15,6 +15,7 @@ use crate::tools::approval::ApprovalCache;
 use crate::tools::approval::ApprovalPlan;
 use crate::tools::approval::CommandApprovalRequest;
 use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::PermissionRequestHook;
 use crate::tools::approval::UserApprovalRequest;
 use crate::tools::approval::request_approval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -42,10 +43,12 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::parse_command::shlex_join;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
+use serde_json::json;
 use std::collections::HashMap;
 
 /// Request payload used by the unified-exec runtime after approvals and
@@ -132,6 +135,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
+            let command_for_hook = shlex_join(&command);
             request_approval(
                 session,
                 turn,
@@ -167,6 +171,18 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         },
                         retry_reason,
                     ),
+                    hook: PermissionRequestHook {
+                        tool_name: "Bash",
+                        tool_input: json!({
+                            "command": command_for_hook,
+                            "description": req.justification.clone(),
+                        }),
+                        codex_permission_context: json!({
+                            "kind": "command",
+                            "sandbox_permissions": req.sandbox_permissions,
+                            "additional_permissions": req.additional_permissions.clone(),
+                        }),
+                    },
                 },
             )
             .await

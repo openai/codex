@@ -19,6 +19,7 @@ use crate::tools::approval::ApprovalCache;
 use crate::tools::approval::ApprovalPlan;
 use crate::tools::approval::CommandApprovalRequest;
 use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::PermissionRequestHook;
 use crate::tools::approval::UserApprovalRequest;
 use crate::tools::approval::request_approval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -40,9 +41,11 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::parse_command::shlex_join;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
+use serde_json::json;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -156,6 +159,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
+            let command_for_hook = shlex_join(&command);
             request_approval(
                 session,
                 turn,
@@ -190,6 +194,18 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         },
                         retry_reason,
                     ),
+                    hook: PermissionRequestHook {
+                        tool_name: "Bash",
+                        tool_input: json!({
+                            "command": command_for_hook,
+                            "description": req.justification.clone(),
+                        }),
+                        codex_permission_context: json!({
+                            "kind": "command",
+                            "sandbox_permissions": req.sandbox_permissions,
+                            "additional_permissions": req.additional_permissions.clone(),
+                        }),
+                    },
                 },
             )
             .await

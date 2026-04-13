@@ -3,15 +3,20 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::config::Constrained;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_message_item_added;
@@ -237,6 +242,59 @@ elif mode == "exit_2":
     Ok(())
 }
 
+fn write_permission_request_hook(home: &Path, matcher: Option<&str>, behavior: &str) -> Result<()> {
+    let script_path = home.join("permission_request_hook.py");
+    let log_path = home.join("permission_request_hook_log.jsonl");
+    let behavior_json =
+        serde_json::to_string(behavior).context("serialize permission request behavior")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{log_path}")
+behavior = {behavior_json}
+
+payload = json.load(sys.stdin)
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "PermissionRequest",
+        "decision": {{
+            "behavior": behavior
+        }}
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+        behavior_json = behavior_json,
+    );
+
+    let mut group = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": format!("python3 {}", script_path.display()),
+            "statusMessage": "running permission request hook",
+        }]
+    });
+    if let Some(matcher) = matcher {
+        group["matcher"] = Value::String(matcher.to_string());
+    }
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PermissionRequest": [group]
+        }
+    });
+
+    fs::write(&script_path, script).context("write permission request hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_post_tool_use_hook(
     home: &Path,
     matcher: Option<&str>,
@@ -403,6 +461,15 @@ fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>>
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse post tool use hook log line"))
+        .collect()
+}
+
+fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("permission_request_hook_log.jsonl"))
+        .context("read permission request hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse permission request hook log line"))
         .collect()
 }
 
@@ -1355,6 +1422,272 @@ async fn pre_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
     assert!(
         !hook_log_path.exists(),
         "non-shell tools should not trigger pre tool use hooks",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_approves_apply_patch_without_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-apply-patch";
+    let target_path = std::env::current_dir()?.join("permission-request-apply-patch.txt");
+    let patch_path = target_path.display().to_string();
+    let patch = format!(
+        "*** Begin Patch\n*** Add File: {patch_path}\n+permission request apply patch\n*** End Patch\n"
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_apply_patch_function_call(call_id, &patch),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "patch applied"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let approval_policy = AskForApproval::OnRequest;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(home, Some("^Edit$"), "allow") {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        });
+    let test = builder.build(&server).await?;
+
+    if target_path.exists() {
+        fs::remove_file(&target_path).context("remove leftover permission request patch target")?;
+    }
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "apply the patch".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy,
+            approvals_reviewer: None,
+            sandbox_policy,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ApplyPatchApprovalRequest(event) => {
+            panic!("unexpected patch approval request: {:?}", event.call_id)
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    assert_eq!(
+        fs::read_to_string(&target_path)?,
+        "permission request apply patch\n"
+    );
+    assert_eq!(responses.requests().len(), 2);
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Edit");
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["patch"]
+            .as_str()
+            .expect("permission request hook patch"),
+        patch.trim_end_matches('\n'),
+    );
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["files"],
+        serde_json::json!([patch_path])
+    );
+    assert_eq!(hook_inputs[0]["codex_permission_context"]["kind"], "edit");
+    assert_eq!(
+        hook_inputs[0]["permission_suggestions"],
+        serde_json::json!([])
+    );
+    let transcript_path = hook_inputs[0]["transcript_path"]
+        .as_str()
+        .expect("permission request hook transcript_path");
+    assert!(
+        !transcript_path.is_empty(),
+        "permission request hook should receive a non-empty transcript_path",
+    );
+    assert!(
+        Path::new(transcript_path).exists(),
+        "permission request hook transcript_path should be materialized on disk",
+    );
+    assert!(
+        hook_inputs[0]["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    fs::remove_file(target_path).context("clean up permission request patch target")?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_denies_shell_command_without_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let approval_policy = AskForApproval::OnRequest;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(home, Some("^Bash$"), "deny") {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        });
+    let test = builder.build(&server).await?;
+
+    let call_id = "permissionrequest-shell-command";
+    let marker = test.cwd.path().join("permission-request-shell-marker");
+    let command = format!("printf denied > {}", marker.display());
+    let args = serde_json::json!({
+        "command": command,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request denied"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover permission request shell marker")?;
+    }
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run the denied command".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy,
+            approvals_reviewer: None,
+            sandbox_policy,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ExecApprovalRequest(event) => {
+            panic!("unexpected exec approval request: {:?}", event.command)
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let _output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(!marker.exists(), "denied shell command should not execute");
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert!(
+        hook_inputs[0]["tool_input"]["command"]
+            .as_str()
+            .is_some_and(|hook_command| hook_command.contains(&command)),
+    );
+    assert_eq!(
+        hook_inputs[0]["codex_permission_context"]["kind"],
+        "command"
+    );
+    assert_eq!(
+        hook_inputs[0]["permission_suggestions"],
+        serde_json::json!([])
+    );
+    assert!(
+        hook_inputs[0]["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())
     );
 
     Ok(())

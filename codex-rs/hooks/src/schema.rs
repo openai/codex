@@ -15,6 +15,8 @@ use std::path::PathBuf;
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
+const PERMISSION_REQUEST_INPUT_FIXTURE: &str = "permission-request.command.input.schema.json";
+const PERMISSION_REQUEST_OUTPUT_FIXTURE: &str = "permission-request.command.output.schema.json";
 const PRE_TOOL_USE_INPUT_FIXTURE: &str = "pre-tool-use.command.input.schema.json";
 const PRE_TOOL_USE_OUTPUT_FIXTURE: &str = "pre-tool-use.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
@@ -69,6 +71,8 @@ pub(crate) struct HookUniversalOutputWire {
 pub(crate) enum HookEventNameWire {
     #[serde(rename = "PreToolUse")]
     PreToolUse,
+    #[serde(rename = "PermissionRequest")]
+    PermissionRequest,
     #[serde(rename = "PostToolUse")]
     PostToolUse,
     #[serde(rename = "SessionStart")]
@@ -92,6 +96,17 @@ pub(crate) struct PreToolUseCommandOutputWire {
     pub reason: Option<String>,
     #[serde(default)]
     pub hook_specific_output: Option<PreToolUseHookSpecificOutputWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "permission-request.command.output")]
+pub(crate) struct PermissionRequestCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+    #[serde(default)]
+    pub hook_specific_output: Option<PermissionRequestHookSpecificOutputWire>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -136,6 +151,15 @@ pub(crate) struct PreToolUseHookSpecificOutputWire {
     pub additional_context: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestHookSpecificOutputWire {
+    pub hook_event_name: HookEventNameWire,
+    #[serde(default)]
+    pub decision: Option<PermissionRequestDecisionWire>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub(crate) enum PreToolUsePermissionDecisionWire {
     #[serde(rename = "allow")]
@@ -152,6 +176,29 @@ pub(crate) enum PreToolUseDecisionWire {
     Approve,
     #[serde(rename = "block")]
     Block,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestDecisionWire {
+    pub behavior: PermissionRequestBehaviorWire,
+    #[serde(default)]
+    pub updated_input: Option<Value>,
+    #[serde(default)]
+    pub updated_permissions: Option<Vec<Value>>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub interrupt: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub(crate) enum PermissionRequestBehaviorWire {
+    #[serde(rename = "allow")]
+    Allow,
+    #[serde(rename = "deny")]
+    Deny,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -179,6 +226,26 @@ pub(crate) struct PreToolUseCommandInput {
     pub tool_name: String,
     pub tool_input: PreToolUseToolInput,
     pub tool_use_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "permission-request.command.input")]
+pub(crate) struct PermissionRequestCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "permission_request_hook_event_name_schema")]
+    pub hook_event_name: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    #[schemars(schema_with = "permission_request_tool_name_schema")]
+    pub tool_name: String,
+    pub tool_input: Value,
+    pub permission_suggestions: Vec<Value>,
+    pub codex_permission_context: Value,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -359,6 +426,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<PostToolUseCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(PERMISSION_REQUEST_INPUT_FIXTURE),
+        schema_json::<PermissionRequestCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(PERMISSION_REQUEST_OUTPUT_FIXTURE),
+        schema_json::<PermissionRequestCommandOutputWire>()?,
+    )?;
+    write_schema(
         &generated_dir.join(PRE_TOOL_USE_INPUT_FIXTURE),
         schema_json::<PreToolUseCommandInput>()?,
     )?;
@@ -453,6 +528,14 @@ fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
 
+fn permission_request_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PermissionRequest")
+}
+
+fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["Bash", "Edit"])
+}
+
 fn post_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Bash")
 }
@@ -516,10 +599,13 @@ fn default_continue() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::PERMISSION_REQUEST_INPUT_FIXTURE;
+    use super::PERMISSION_REQUEST_OUTPUT_FIXTURE;
     use super::POST_TOOL_USE_INPUT_FIXTURE;
     use super::POST_TOOL_USE_OUTPUT_FIXTURE;
     use super::PRE_TOOL_USE_INPUT_FIXTURE;
     use super::PRE_TOOL_USE_OUTPUT_FIXTURE;
+    use super::PermissionRequestCommandInput;
     use super::PostToolUseCommandInput;
     use super::PreToolUseCommandInput;
     use super::SESSION_START_INPUT_FIXTURE;
@@ -543,6 +629,12 @@ mod tests {
             }
             POST_TOOL_USE_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/post-tool-use.command.output.schema.json")
+            }
+            PERMISSION_REQUEST_INPUT_FIXTURE => {
+                include_str!("../schema/generated/permission-request.command.input.schema.json")
+            }
+            PERMISSION_REQUEST_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/permission-request.command.output.schema.json")
             }
             PRE_TOOL_USE_INPUT_FIXTURE => {
                 include_str!("../schema/generated/pre-tool-use.command.input.schema.json")
@@ -585,6 +677,8 @@ mod tests {
         for fixture in [
             POST_TOOL_USE_INPUT_FIXTURE,
             POST_TOOL_USE_OUTPUT_FIXTURE,
+            PERMISSION_REQUEST_INPUT_FIXTURE,
+            PERMISSION_REQUEST_OUTPUT_FIXTURE,
             PRE_TOOL_USE_INPUT_FIXTURE,
             PRE_TOOL_USE_OUTPUT_FIXTURE,
             SESSION_START_INPUT_FIXTURE,
@@ -610,6 +704,11 @@ mod tests {
             &schema_json::<PreToolUseCommandInput>().expect("serialize pre tool use input schema"),
         )
         .expect("parse pre tool use input schema");
+        let permission_request: Value = serde_json::from_slice(
+            &schema_json::<PermissionRequestCommandInput>()
+                .expect("serialize permission request input schema"),
+        )
+        .expect("parse permission request input schema");
         let post_tool_use: Value = serde_json::from_slice(
             &schema_json::<PostToolUseCommandInput>()
                 .expect("serialize post tool use input schema"),
@@ -625,7 +724,13 @@ mod tests {
         )
         .expect("parse stop input schema");
 
-        for schema in [&pre_tool_use, &post_tool_use, &user_prompt_submit, &stop] {
+        for schema in [
+            &pre_tool_use,
+            &permission_request,
+            &post_tool_use,
+            &user_prompt_submit,
+            &stop,
+        ] {
             assert_eq!(schema["properties"]["turn_id"]["type"], "string");
             assert!(
                 schema["required"]

@@ -7,6 +7,7 @@ use crate::tools::approval::ApprovalCache;
 use crate::tools::approval::ApprovalPlan;
 use crate::tools::approval::CommandApprovalRequest;
 use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::PermissionRequestHook;
 use crate::tools::approval::UserApprovalRequest;
 use crate::tools::approval::request_approval_for_turn;
 use crate::tools::sandboxing::ToolError;
@@ -27,6 +28,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WarningEvent;
 use indexmap::IndexMap;
+use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -383,7 +385,7 @@ impl NetworkApprovalService {
                     approval_id: None,
                     command: vec!["network-access".to_string(), target.clone()],
                     cwd: turn_context.cwd.to_path_buf(),
-                    reason: Some(prompt_reason),
+                    reason: Some(prompt_reason.clone()),
                     network_approval_context: Some(network_approval_context.clone()),
                     proposed_execpolicy_amendment: None,
                     additional_permissions: None,
@@ -396,13 +398,28 @@ impl NetworkApprovalService {
                             || turn_context.sub_id.clone(),
                             |call| call.turn_id.clone(),
                         ),
-                        target,
+                        target: target.clone(),
                         host: request.host,
                         protocol,
                         port: key.port,
                     },
                     Some(policy_denial_message.clone()),
                 ),
+                hook: PermissionRequestHook {
+                    tool_name: "Bash",
+                    tool_input: json!({
+                        "command": format!("network-access {target}"),
+                        "description": prompt_reason,
+                    }),
+                    codex_permission_context: json!({
+                        "kind": "network",
+                        "target": target,
+                        "host": network_approval_context.host,
+                        "port": key.port,
+                        "protocol": network_approval_context.protocol,
+                        "reason": policy_denial_message,
+                    }),
+                },
             },
         )
         .await;

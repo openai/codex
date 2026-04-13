@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_hooks::PermissionRequestOutcome;
+use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -17,6 +19,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
@@ -143,6 +146,33 @@ pub(crate) async fn run_pre_tool_use_hooks(
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
     if should_block { block_reason } else { None }
+}
+
+pub(crate) async fn run_permission_request_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    request: crate::tools::approval::PermissionRequestHook,
+) -> Option<ReviewDecision> {
+    let request = PermissionRequestRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name: request.tool_name.to_string(),
+        tool_input: request.tool_input,
+        permission_suggestions: Vec::new(),
+        codex_permission_context: request.codex_permission_context,
+    };
+    let preview_runs = sess.hooks().preview_permission_request(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let PermissionRequestOutcome {
+        hook_events,
+        decision,
+    } = sess.hooks().run_permission_request(request).await;
+    emit_hook_completed_events(sess, turn_context, hook_events).await;
+    decision
 }
 
 pub(crate) async fn run_post_tool_use_hooks(

@@ -20,6 +20,13 @@ pub(crate) struct PreToolUseOutput {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct PermissionRequestOutput {
+    pub universal: UniversalOutput,
+    pub decision: Option<PermissionRequestDecision>,
+    pub invalid_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PostToolUseOutput {
     pub universal: UniversalOutput,
     pub should_block: bool,
@@ -46,8 +53,16 @@ pub(crate) struct StopOutput {
     pub invalid_block_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionRequestDecision {
+    Allow,
+    Deny,
+}
+
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
+use crate::schema::PermissionRequestBehaviorWire;
+use crate::schema::PermissionRequestCommandOutputWire;
 use crate::schema::PostToolUseCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
@@ -111,6 +126,32 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     Some(PreToolUseOutput {
         universal,
         block_reason,
+        invalid_reason,
+    })
+}
+
+pub(crate) fn parse_permission_request(stdout: &str) -> Option<PermissionRequestOutput> {
+    let wire: PermissionRequestCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_permission_request_universal(&universal).or_else(|| {
+        wire.hook_specific_output
+            .as_ref()
+            .and_then(unsupported_permission_request_hook_specific_output)
+    });
+    let decision = if invalid_reason.is_none() {
+        wire.hook_specific_output
+            .and_then(|output| output.decision)
+            .map(|decision| match decision.behavior {
+                PermissionRequestBehaviorWire::Allow => PermissionRequestDecision::Allow,
+                PermissionRequestBehaviorWire::Deny => PermissionRequestDecision::Deny,
+            })
+    } else {
+        None
+    };
+
+    Some(PermissionRequestOutput {
+        universal,
+        decision,
         invalid_reason,
     })
 }
@@ -235,6 +276,18 @@ fn unsupported_pre_tool_use_universal(universal: &UniversalOutput) -> Option<Str
     }
 }
 
+fn unsupported_permission_request_universal(universal: &UniversalOutput) -> Option<String> {
+    if !universal.continue_processing {
+        Some("PermissionRequest hook returned unsupported continue:false".to_string())
+    } else if universal.stop_reason.is_some() {
+        Some("PermissionRequest hook returned unsupported stopReason".to_string())
+    } else if universal.suppress_output {
+        Some("PermissionRequest hook returned unsupported suppressOutput".to_string())
+    } else {
+        None
+    }
+}
+
 fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
     if universal.suppress_output {
         Some("PostToolUse hook returned unsupported suppressOutput".to_string())
@@ -293,6 +346,21 @@ fn unsupported_pre_tool_use_hook_specific_output(
                 }
             }
         }
+    }
+}
+
+fn unsupported_permission_request_hook_specific_output(
+    output: &crate::schema::PermissionRequestHookSpecificOutputWire,
+) -> Option<String> {
+    let decision = output.decision.as_ref()?;
+    if decision.updated_input.is_some() {
+        Some("PermissionRequest hook returned unsupported updatedInput".to_string())
+    } else if decision.updated_permissions.is_some() {
+        Some("PermissionRequest hook returned unsupported updatedPermissions".to_string())
+    } else if decision.interrupt.is_some() {
+        Some("PermissionRequest hook returned unsupported interrupt".to_string())
+    } else {
+        None
     }
 }
 

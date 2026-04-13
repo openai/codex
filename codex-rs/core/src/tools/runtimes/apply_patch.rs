@@ -13,6 +13,7 @@ use crate::tools::approval::ApprovalCache;
 use crate::tools::approval::ApprovalPlan;
 use crate::tools::approval::GuardianApproval;
 use crate::tools::approval::PatchApprovalRequest;
+use crate::tools::approval::PermissionRequestHook;
 use crate::tools::approval::UserApprovalRequest;
 use crate::tools::approval::request_approval;
 use crate::tools::sandboxing::Approvable;
@@ -35,6 +36,7 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -171,6 +173,18 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                             ApplyPatchRuntime::build_guardian_review_request(req, &call_id),
                             retry_reason,
                         ),
+                        hook: PermissionRequestHook {
+                            tool_name: "Edit",
+                            tool_input: json!({
+                                "patch": &req.action.patch,
+                                "files": &req.file_paths,
+                            }),
+                            codex_permission_context: json!({
+                                "kind": "edit",
+                                "grant_root": Option::<PathBuf>::None,
+                                "additional_permissions": req.additional_permissions.clone(),
+                            }),
+                        },
                     },
                 )
                 .await
@@ -196,6 +210,18 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id),
                         retry_reason,
                     ),
+                    hook: PermissionRequestHook {
+                        tool_name: "Edit",
+                        tool_input: json!({
+                            "patch": &req.action.patch,
+                            "files": &req.file_paths,
+                        }),
+                        codex_permission_context: json!({
+                            "kind": "edit",
+                            "grant_root": Option::<PathBuf>::None,
+                            "additional_permissions": req.additional_permissions.clone(),
+                        }),
+                    },
                 },
             )
             .await

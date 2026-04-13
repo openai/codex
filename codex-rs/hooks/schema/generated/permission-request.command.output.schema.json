@@ -2,12 +2,6 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "BlockDecisionWire": {
-      "enum": [
-        "block"
-      ],
-      "type": "string"
-    },
     "HookEventNameWire": {
       "enum": [
         "PreToolUse",
@@ -19,12 +13,51 @@
       ],
       "type": "string"
     },
-    "UserPromptSubmitHookSpecificOutputWire": {
+    "PermissionRequestBehaviorWire": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestDecisionWire": {
       "additionalProperties": false,
       "properties": {
-        "additionalContext": {
+        "behavior": {
+          "$ref": "#/definitions/PermissionRequestBehaviorWire"
+        },
+        "interrupt": {
+          "default": null,
+          "type": "boolean"
+        },
+        "message": {
           "default": null,
           "type": "string"
+        },
+        "updatedInput": {
+          "default": null
+        },
+        "updatedPermissions": {
+          "default": null,
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "behavior"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestDecisionWire"
+            }
+          ],
+          "default": null
         },
         "hookEventName": {
           "$ref": "#/definitions/HookEventNameWire"
@@ -41,25 +74,13 @@
       "default": true,
       "type": "boolean"
     },
-    "decision": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/BlockDecisionWire"
-        }
-      ],
-      "default": null
-    },
     "hookSpecificOutput": {
       "allOf": [
         {
-          "$ref": "#/definitions/UserPromptSubmitHookSpecificOutputWire"
+          "$ref": "#/definitions/PermissionRequestHookSpecificOutputWire"
         }
       ],
       "default": null
-    },
-    "reason": {
-      "default": null,
-      "type": "string"
     },
     "stopReason": {
       "default": null,
@@ -74,6 +95,6 @@
       "type": "string"
     }
   },
-  "title": "user-prompt-submit.command.output",
+  "title": "permission-request.command.output",
   "type": "object"
 }

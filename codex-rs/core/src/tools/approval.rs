@@ -12,6 +12,7 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::run_permission_request_hooks;
 use crate::state::SessionServices;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -20,6 +21,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use futures::Future;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -106,10 +108,18 @@ impl GuardianApproval {
 }
 
 #[derive(Debug)]
+pub(crate) struct PermissionRequestHook {
+    pub tool_name: &'static str,
+    pub tool_input: Value,
+    pub codex_permission_context: Value,
+}
+
+#[derive(Debug)]
 pub(crate) struct ApprovalPlan<K> {
     pub cache: ApprovalCache<K>,
     pub user: UserApprovalRequest,
     pub guardian: GuardianApproval,
+    pub hook: PermissionRequestHook,
 }
 
 pub(crate) fn guardian_review_id_for_turn(turn: &crate::codex::TurnContext) -> Option<String> {
@@ -127,11 +137,11 @@ pub(crate) async fn with_cached_approval<K, F, Fut>(
     tool_name: &str,
     keys: Vec<K>,
     fetch: F,
-) -> ReviewDecision
+) -> ApprovalOutcome
 where
     K: Serialize,
     F: FnOnce() -> Fut,
-    Fut: Future<Output = ReviewDecision>,
+    Fut: Future<Output = ApprovalOutcome>,
 {
     if keys.is_empty() {
         return fetch().await;
@@ -144,28 +154,31 @@ where
     };
 
     if already_approved {
-        return ReviewDecision::ApprovedForSession;
+        return ApprovalOutcome {
+            decision: ReviewDecision::ApprovedForSession,
+            guardian_review_id: None,
+        };
     }
 
-    let decision = fetch().await;
+    let outcome = fetch().await;
 
     services.session_telemetry.counter(
         "codex.approval.requested",
         /*inc*/ 1,
         &[
             ("tool", tool_name),
-            ("approved", decision.to_opaque_string()),
+            ("approved", outcome.decision.to_opaque_string()),
         ],
     );
 
-    if matches!(decision, ReviewDecision::ApprovedForSession) {
+    if matches!(outcome.decision, ReviewDecision::ApprovedForSession) {
         let mut store = services.tool_approvals.lock().await;
         for key in keys {
             store.put(key, ReviewDecision::ApprovedForSession);
         }
     }
 
-    decision
+    outcome
 }
 
 async fn dispatch_user_approval(
@@ -205,20 +218,21 @@ async fn dispatch_user_approval(
     }
 }
 
-pub(crate) async fn request_approval<K>(
+async fn request_uncached_approval(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     guardian_review_id: Option<String>,
-    plan: ApprovalPlan<K>,
-) -> ApprovalOutcome
-where
-    K: Serialize,
-{
-    let ApprovalPlan {
-        cache,
-        user,
-        guardian,
-    } = plan;
+    user: UserApprovalRequest,
+    guardian: GuardianApproval,
+    hook: PermissionRequestHook,
+) -> ApprovalOutcome {
+    if let Some(decision) = run_permission_request_hooks(session, turn, hook).await {
+        return ApprovalOutcome {
+            decision,
+            guardian_review_id: None,
+        };
+    }
+
     if let Some(review_id) = guardian_review_id.clone() {
         return ApprovalOutcome {
             decision: review_approval_request(
@@ -233,19 +247,37 @@ where
         };
     }
 
-    let decision = match cache {
-        ApprovalCache::None => dispatch_user_approval(session, turn, user).await,
+    ApprovalOutcome {
+        decision: dispatch_user_approval(session, turn, user).await,
+        guardian_review_id: None,
+    }
+}
+
+pub(crate) async fn request_approval<K>(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    guardian_review_id: Option<String>,
+    plan: ApprovalPlan<K>,
+) -> ApprovalOutcome
+where
+    K: Serialize,
+{
+    let ApprovalPlan {
+        cache,
+        user,
+        guardian,
+        hook,
+    } = plan;
+    match cache {
+        ApprovalCache::None => {
+            request_uncached_approval(session, turn, guardian_review_id, user, guardian, hook).await
+        }
         ApprovalCache::SessionApproveOnly { tool_name, keys } => {
             with_cached_approval(&session.services, tool_name, keys, || {
-                dispatch_user_approval(session, turn, user)
+                request_uncached_approval(session, turn, guardian_review_id, user, guardian, hook)
             })
             .await
         }
-    };
-
-    ApprovalOutcome {
-        decision,
-        guardian_review_id: None,
     }
 }
 

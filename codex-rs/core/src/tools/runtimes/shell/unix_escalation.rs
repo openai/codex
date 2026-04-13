@@ -13,6 +13,7 @@ use crate::tools::approval::ApprovalCache;
 use crate::tools::approval::ApprovalPlan;
 use crate::tools::approval::CommandApprovalRequest;
 use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::PermissionRequestHook;
 use crate::tools::approval::UserApprovalRequest;
 use crate::tools::approval::request_approval_for_turn;
 use crate::tools::runtimes::build_sandbox_command;
@@ -45,6 +46,7 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
+use codex_shell_command::parse_command::shlex_join;
 use codex_shell_escalation::EscalateServer;
 use codex_shell_escalation::EscalationDecision;
 use codex_shell_escalation::EscalationExecution;
@@ -58,6 +60,7 @@ use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -422,10 +425,20 @@ impl CoreShellActionProvider {
                                 program: program.to_string_lossy().into_owned(),
                                 argv: argv.to_vec(),
                                 cwd: workdir,
-                                additional_permissions,
+                                additional_permissions: additional_permissions.clone(),
                             },
                             /*retry_reason*/ None,
                         ),
+                        hook: PermissionRequestHook {
+                            tool_name: "Bash",
+                            tool_input: json!({
+                                "command": shlex_join(&command),
+                            }),
+                            codex_permission_context: json!({
+                                "kind": "command",
+                                "additional_permissions": additional_permissions,
+                            }),
+                        },
                     },
                 )
                 .await;
