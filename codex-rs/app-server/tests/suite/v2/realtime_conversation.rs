@@ -31,7 +31,8 @@ use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
-use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -40,7 +41,6 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
-use codex_protocol::protocol::RealtimeTranscriptUpdateKind;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use core_test_support::responses;
@@ -624,45 +624,32 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(item_added.thread_id, output_audio.thread_id);
     assert_eq!(item_added.item["type"], json!("message"));
 
-    let first_transcript_update = read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+    let first_transcript_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
         &mut mcp,
-        "thread/realtime/transcriptUpdated",
+        "thread/realtime/transcript/delta",
     )
     .await?;
-    assert_eq!(first_transcript_update.thread_id, output_audio.thread_id);
-    assert_eq!(first_transcript_update.role, "user");
-    assert_eq!(first_transcript_update.text, "delegate now");
-    assert_eq!(
-        first_transcript_update.update_kind,
-        RealtimeTranscriptUpdateKind::Delta
-    );
+    assert_eq!(first_transcript_delta.thread_id, output_audio.thread_id);
+    assert_eq!(first_transcript_delta.role, "user");
+    assert_eq!(first_transcript_delta.delta, "delegate now");
 
-    let second_transcript_update =
-        read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
-            &mut mcp,
-            "thread/realtime/transcriptUpdated",
-        )
-        .await?;
-    assert_eq!(second_transcript_update.thread_id, output_audio.thread_id);
-    assert_eq!(second_transcript_update.role, "assistant");
-    assert_eq!(second_transcript_update.text, "working");
-    assert_eq!(
-        second_transcript_update.update_kind,
-        RealtimeTranscriptUpdateKind::Delta
-    );
-
-    let final_transcript_update = read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+    let second_transcript_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
         &mut mcp,
-        "thread/realtime/transcriptUpdated",
+        "thread/realtime/transcript/delta",
     )
     .await?;
-    assert_eq!(final_transcript_update.thread_id, output_audio.thread_id);
-    assert_eq!(final_transcript_update.role, "assistant");
-    assert_eq!(final_transcript_update.text, "working on it");
-    assert_eq!(
-        final_transcript_update.update_kind,
-        RealtimeTranscriptUpdateKind::Done
-    );
+    assert_eq!(second_transcript_delta.thread_id, output_audio.thread_id);
+    assert_eq!(second_transcript_delta.role, "assistant");
+    assert_eq!(second_transcript_delta.delta, "working");
+
+    let final_transcript_done = read_notification::<ThreadRealtimeTranscriptDoneNotification>(
+        &mut mcp,
+        "thread/realtime/transcript/done",
+    )
+    .await?;
+    assert_eq!(final_transcript_done.thread_id, output_audio.thread_id);
+    assert_eq!(final_transcript_done.role, "assistant");
+    assert_eq!(final_transcript_done.text, "working on it");
 
     let handoff_item_added = read_notification::<ThreadRealtimeItemAddedNotification>(
         &mut mcp,
@@ -799,43 +786,43 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
         json!(["text"])
     );
 
-    let first_delta = read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+    let first_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
         &mut mcp,
-        "thread/realtime/transcriptUpdated",
+        "thread/realtime/transcript/delta",
     )
     .await?;
-    let second_delta = read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+    let second_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
         &mut mcp,
-        "thread/realtime/transcriptUpdated",
+        "thread/realtime/transcript/delta",
     )
     .await?;
-    let done = read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+    let done = read_notification::<ThreadRealtimeTranscriptDoneNotification>(
         &mut mcp,
-        "thread/realtime/transcriptUpdated",
+        "thread/realtime/transcript/done",
     )
     .await?;
     assert_eq!(
-        vec![first_delta, second_delta, done],
+        vec![first_delta, second_delta],
         vec![
-            ThreadRealtimeTranscriptUpdatedNotification {
+            ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_start.thread.id.clone(),
                 role: "assistant".to_string(),
-                text: "hello ".to_string(),
-                update_kind: RealtimeTranscriptUpdateKind::Delta,
+                delta: "hello ".to_string(),
             },
-            ThreadRealtimeTranscriptUpdatedNotification {
+            ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: thread_start.thread.id.clone(),
                 role: "assistant".to_string(),
-                text: "world".to_string(),
-                update_kind: RealtimeTranscriptUpdateKind::Delta,
-            },
-            ThreadRealtimeTranscriptUpdatedNotification {
-                thread_id: thread_start.thread.id,
-                role: "assistant".to_string(),
-                text: "hello world".to_string(),
-                update_kind: RealtimeTranscriptUpdateKind::Done,
+                delta: "world".to_string(),
             },
         ]
+    );
+    assert_eq!(
+        done,
+        ThreadRealtimeTranscriptDoneNotification {
+            thread_id: thread_start.thread.id,
+            role: "assistant".to_string(),
+            text: "hello world".to_string(),
+        }
     );
 
     realtime_server.shutdown().await;
@@ -1314,12 +1301,11 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     harness.append_text(thread_id, "hello").await?;
 
     let transcript = harness
-        .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
-            "thread/realtime/transcriptUpdated",
+        .read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+            "thread/realtime/transcript/delta",
         )
         .await?;
-    assert_eq!(transcript.text, "transcribed audio");
-    assert_eq!(transcript.update_kind, RealtimeTranscriptUpdateKind::Delta);
+    assert_eq!(transcript.delta, "transcribed audio");
     let output_audio = harness
         .read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
             "thread/realtime/outputAudio/delta",
@@ -1404,12 +1390,11 @@ async fn webrtc_v2_text_input_is_append_only_while_response_is_active() -> Resul
         "first",
     );
     let transcript = harness
-        .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
-            "thread/realtime/transcriptUpdated",
+        .read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+            "thread/realtime/transcript/delta",
         )
         .await?;
-    assert_eq!(transcript.text, "active response started");
-    assert_eq!(transcript.update_kind, RealtimeTranscriptUpdateKind::Delta);
+    assert_eq!(transcript.delta, "active response started");
 
     // Phase 3: send a second text turn while `resp_active` is still open. The
     // user message must reach realtime without requesting another response.

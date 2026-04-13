@@ -82,7 +82,8 @@ use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
-use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -401,28 +402,50 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .await;
                     }
                     RealtimeEvent::InputTranscriptDelta(event) => {
-                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                        let notification = ThreadRealtimeTranscriptDeltaNotification {
                             thread_id: conversation_id.to_string(),
                             role: "user".to_string(),
-                            text: event.delta,
-                            update_kind: event.update_kind,
+                            delta: event.delta,
                         };
                         outgoing
                             .send_server_notification(
-                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                                ServerNotification::ThreadRealtimeTranscriptDelta(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::InputTranscriptDone(event) => {
+                        let notification = ThreadRealtimeTranscriptDoneNotification {
+                            thread_id: conversation_id.to_string(),
+                            role: "user".to_string(),
+                            text: event.text,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptDone(notification),
                             )
                             .await;
                     }
                     RealtimeEvent::OutputTranscriptDelta(event) => {
-                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                        let notification = ThreadRealtimeTranscriptDeltaNotification {
                             thread_id: conversation_id.to_string(),
                             role: "assistant".to_string(),
-                            text: event.delta,
-                            update_kind: event.update_kind,
+                            delta: event.delta,
                         };
                         outgoing
                             .send_server_notification(
-                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                                ServerNotification::ThreadRealtimeTranscriptDelta(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::OutputTranscriptDone(event) => {
+                        let notification = ThreadRealtimeTranscriptDoneNotification {
+                            thread_id: conversation_id.to_string(),
+                            role: "assistant".to_string(),
+                            text: event.text,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptDone(notification),
                             )
                             .await;
                     }

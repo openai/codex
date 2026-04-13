@@ -16,7 +16,6 @@ pub use realtime_websocket::RealtimeEventParser;
 pub use realtime_websocket::RealtimeOutputModality;
 pub use realtime_websocket::RealtimeSessionConfig;
 pub use realtime_websocket::RealtimeSessionMode;
-pub use realtime_websocket::RealtimeTranscriptUpdateKind;
 pub use realtime_websocket::RealtimeWebsocketClient;
 pub use realtime_websocket::RealtimeWebsocketConnection;
 pub use realtime_websocket::RealtimeWebsocketEvents;

@@ -301,7 +301,8 @@ export type { ThreadRealtimeOutputAudioDeltaNotification } from "./ThreadRealtim
 export type { ThreadRealtimeSdpNotification } from "./ThreadRealtimeSdpNotification";
 export type { ThreadRealtimeStartTransport } from "./ThreadRealtimeStartTransport";
 export type { ThreadRealtimeStartedNotification } from "./ThreadRealtimeStartedNotification";
-export type { ThreadRealtimeTranscriptUpdatedNotification } from "./ThreadRealtimeTranscriptUpdatedNotification";
+export type { ThreadRealtimeTranscriptDeltaNotification } from "./ThreadRealtimeTranscriptDeltaNotification";
+export type { ThreadRealtimeTranscriptDoneNotification } from "./ThreadRealtimeTranscriptDoneNotification";
 export type { ThreadResumeParams } from "./ThreadResumeParams";
 export type { ThreadResumeResponse } from "./ThreadResumeResponse";
 export type { ThreadRollbackParams } from "./ThreadRollbackParams";

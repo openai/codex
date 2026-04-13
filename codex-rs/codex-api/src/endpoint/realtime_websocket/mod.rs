@@ -16,4 +16,3 @@ pub use protocol::RealtimeEventParser;
 pub use protocol::RealtimeOutputModality;
 pub use protocol::RealtimeSessionConfig;
 pub use protocol::RealtimeSessionMode;
-pub use protocol::RealtimeTranscriptUpdateKind;

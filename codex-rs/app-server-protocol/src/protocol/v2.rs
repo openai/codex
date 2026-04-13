@@ -75,7 +75,6 @@ use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
-use codex_protocol::protocol::RealtimeTranscriptUpdateKind;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
@@ -4076,17 +4075,28 @@ pub struct ThreadRealtimeItemAddedNotification {
     pub item: JsonValue,
 }
 
-/// EXPERIMENTAL - flat transcript update emitted whenever realtime
-/// transcript text changes or completes.
+/// EXPERIMENTAL - flat transcript delta emitted whenever realtime
+/// transcript text changes.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadRealtimeTranscriptUpdatedNotification {
+pub struct ThreadRealtimeTranscriptDeltaNotification {
     pub thread_id: String,
     pub role: String,
-    /// Delta text for delta updates; final complete text for done updates.
+    /// Live transcript delta from the realtime event.
+    pub delta: String,
+}
+
+/// EXPERIMENTAL - final transcript text emitted when realtime completes
+/// a transcript part.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeTranscriptDoneNotification {
+    pub thread_id: String,
+    pub role: String,
+    /// Final complete text for the transcript part.
     pub text: String,
-    pub update_kind: RealtimeTranscriptUpdateKind,
 }
 
 /// EXPERIMENTAL - streamed output audio emitted by thread realtime.

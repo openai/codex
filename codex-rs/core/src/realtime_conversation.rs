@@ -1232,7 +1232,9 @@ async fn handle_realtime_server_event(
         RealtimeEvent::Error(_) => true,
         RealtimeEvent::SessionUpdated { .. }
         | RealtimeEvent::InputTranscriptDelta(_)
+        | RealtimeEvent::InputTranscriptDone(_)
         | RealtimeEvent::OutputTranscriptDelta(_)
+        | RealtimeEvent::OutputTranscriptDone(_)
         | RealtimeEvent::ConversationItemAdded(_)
         | RealtimeEvent::ConversationItemDone { .. } => false,
     };

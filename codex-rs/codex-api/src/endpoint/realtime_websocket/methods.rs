@@ -10,9 +10,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
-use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
-use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptUpdateKind;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
@@ -416,10 +414,20 @@ impl RealtimeWebsocketEvents {
         match event {
             RealtimeEvent::InputAudioSpeechStarted(_) => {}
             RealtimeEvent::InputTranscriptDelta(update) => {
-                update_active_transcript_entry(&mut active_transcript.entries, "user", update);
+                append_transcript_delta(&mut active_transcript.entries, "user", &update.delta);
+            }
+            RealtimeEvent::InputTranscriptDone(update) => {
+                complete_transcript_entry(&mut active_transcript.entries, "user", &update.text);
             }
             RealtimeEvent::OutputTranscriptDelta(update) => {
-                update_active_transcript_entry(&mut active_transcript.entries, "assistant", update);
+                append_transcript_delta(&mut active_transcript.entries, "assistant", &update.delta);
+            }
+            RealtimeEvent::OutputTranscriptDone(update) => {
+                complete_transcript_entry(
+                    &mut active_transcript.entries,
+                    "assistant",
+                    &update.text,
+                );
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 if self.event_parser == RealtimeEventParser::V1 {
@@ -454,21 +462,6 @@ fn append_transcript_delta(entries: &mut Vec<RealtimeTranscriptEntry>, role: &st
         role: role.to_string(),
         text: delta.to_string(),
     });
-}
-
-fn update_active_transcript_entry(
-    entries: &mut Vec<RealtimeTranscriptEntry>,
-    role: &str,
-    update: &RealtimeTranscriptDelta,
-) {
-    match update.update_kind {
-        RealtimeTranscriptUpdateKind::Delta => {
-            append_transcript_delta(entries, role, &update.delta)
-        }
-        RealtimeTranscriptUpdateKind::Done => {
-            complete_transcript_entry(entries, role, &update.delta)
-        }
-    }
 }
 
 fn complete_transcript_entry(entries: &mut Vec<RealtimeTranscriptEntry>, role: &str, text: &str) {
@@ -770,13 +763,14 @@ fn normalize_realtime_path(url: &mut Url) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
     use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
     use codex_protocol::protocol::RealtimeResponseCancelled;
     use codex_protocol::protocol::RealtimeResponseCreated;
     use codex_protocol::protocol::RealtimeResponseDone;
+    use codex_protocol::protocol::RealtimeTranscriptDelta;
+    use codex_protocol::protocol::RealtimeTranscriptDone;
     use codex_protocol::protocol::RealtimeVoice;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
@@ -891,7 +885,6 @@ mod tests {
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello ".to_string(),
-                    update_kind: RealtimeTranscriptUpdateKind::Delta,
                 }
             ))
         );
@@ -910,7 +903,6 @@ mod tests {
             Some(RealtimeEvent::OutputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hi".to_string(),
-                    update_kind: RealtimeTranscriptUpdateKind::Delta,
                 }
             ))
         );
@@ -954,7 +946,6 @@ mod tests {
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello".to_string(),
-                    update_kind: RealtimeTranscriptUpdateKind::Delta,
                 }
             ))
         );
@@ -970,10 +961,9 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::OutputTranscriptDelta(
-                RealtimeTranscriptDelta {
-                    delta: "all done".to_string(),
-                    update_kind: RealtimeTranscriptUpdateKind::Done,
+            Some(RealtimeEvent::OutputTranscriptDone(
+                RealtimeTranscriptDone {
+                    text: "all done".to_string(),
                 }
             ))
         );
@@ -1514,7 +1504,6 @@ mod tests {
             input_delta_event,
             RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "delegate ".to_string(),
-                update_kind: RealtimeTranscriptUpdateKind::Delta,
             })
         );
 
@@ -1527,7 +1516,6 @@ mod tests {
             input_delta_event,
             RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "now".to_string(),
-                update_kind: RealtimeTranscriptUpdateKind::Delta,
             })
         );
 
@@ -1540,7 +1528,6 @@ mod tests {
             output_delta_event,
             RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "working".to_string(),
-                update_kind: RealtimeTranscriptUpdateKind::Delta,
             })
         );
 
