@@ -348,6 +348,15 @@ impl Session {
                         .await
                 {
                     session.sync_timers_from_db(/*emit_update*/ true).await;
+                    let next_timer_spec = session
+                        .timers
+                        .lock()
+                        .await
+                        .timer_spec_for_timer(&id, Utc::now());
+                    let Some(next_timer_spec) = next_timer_spec else {
+                        break;
+                    };
+                    delay = next_timer_spec.delay;
                     continue;
                 }
                 session.maybe_start_pending_timer().await;
