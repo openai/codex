@@ -2,13 +2,18 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
+use codex_config::remove_user_marketplace;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core::plugins::MarketplaceAddRequest;
 use codex_core::plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core::plugins::PluginsManager;
 use codex_core::plugins::add_marketplace;
+use codex_core::plugins::marketplace_install_root;
+use codex_core::plugins::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
+
+mod ops;
 
 #[derive(Debug, Parser)]
 pub struct MarketplaceCli {
@@ -23,6 +28,7 @@ pub struct MarketplaceCli {
 enum MarketplaceSubcommand {
     Add(AddMarketplaceArgs),
     Upgrade(UpgradeMarketplaceArgs),
+    Remove(RemoveMarketplaceArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -47,6 +53,12 @@ struct UpgradeMarketplaceArgs {
     marketplace_name: Option<String>,
 }
 
+#[derive(Debug, Parser)]
+struct RemoveMarketplaceArgs {
+    /// Configured marketplace name to remove.
+    marketplace_name: String,
+}
+
 impl MarketplaceCli {
     pub async fn run(self) -> Result<()> {
         let MarketplaceCli {
@@ -61,6 +73,7 @@ impl MarketplaceCli {
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(args).await?,
             MarketplaceSubcommand::Upgrade(args) => run_upgrade(overrides, args).await?,
+            MarketplaceSubcommand::Remove(args) => run_remove(args).await?,
         }
 
         Ok(())
@@ -118,6 +131,38 @@ async fn run_upgrade(
         .upgrade_configured_marketplaces_for_config(&config, marketplace_name.as_deref())
         .map_err(anyhow::Error::msg)?;
     print_upgrade_outcome(&outcome, marketplace_name.as_deref())
+}
+
+async fn run_remove(args: RemoveMarketplaceArgs) -> Result<()> {
+    let RemoveMarketplaceArgs { marketplace_name } = args;
+    validate_plugin_segment(&marketplace_name, "marketplace name").map_err(anyhow::Error::msg)?;
+
+    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let install_root = marketplace_install_root(&codex_home);
+    let destination = install_root.join(&marketplace_name);
+    let removed_root = ops::remove_marketplace_root(&destination).with_context(|| {
+        format!(
+            "failed to remove installed marketplace root {}",
+            destination.display()
+        )
+    })?;
+    let removed_config =
+        remove_user_marketplace(&codex_home, &marketplace_name).with_context(|| {
+            format!("failed to remove marketplace `{marketplace_name}` from user config.toml")
+        })?;
+    if !removed_root && !removed_config {
+        bail!("marketplace `{marketplace_name}` is not configured or installed");
+    }
+
+    println!("Removed marketplace `{marketplace_name}`.");
+    if removed_root {
+        println!(
+            "Removed installed marketplace root: {}",
+            destination.display()
+        );
+    }
+
+    Ok(())
 }
 
 fn print_upgrade_outcome(
@@ -200,5 +245,11 @@ mod tests {
 
         let upgrade_one = UpgradeMarketplaceArgs::try_parse_from(["upgrade", "debug"]).unwrap();
         assert_eq!(upgrade_one.marketplace_name.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn remove_subcommand_parses_marketplace_name() {
+        let remove = RemoveMarketplaceArgs::try_parse_from(["remove", "debug"]).unwrap();
+        assert_eq!(remove.marketplace_name, "debug");
     }
 }
