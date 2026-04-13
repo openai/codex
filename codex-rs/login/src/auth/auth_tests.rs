@@ -137,6 +137,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                 account_id: None,
             }),
             last_refresh: Some(last_refresh),
+            agent_identity: None,
         },
         auth_dot_json
     );
@@ -174,6 +175,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         openai_api_key: Some("sk-test-key".to_string()),
         tokens: None,
         last_refresh: None,
+        agent_identity: None,
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
@@ -181,6 +183,48 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     assert!(logout(dir.path(), AuthCredentialsStoreMode::File)?);
     assert!(!auth_file.exists());
     Ok(())
+}
+
+#[test]
+fn chatgpt_auth_persists_agent_identity_for_workspace() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
+    let record = AgentIdentityAuthRecord {
+        workspace_id: "account-123".to_string(),
+        agent_runtime_id: "agent_123".to_string(),
+        agent_private_key: "pkcs8-base64".to_string(),
+        registered_at: "2026-04-13T12:00:00Z".to_string(),
+    };
+
+    auth.set_agent_identity(record.clone())
+        .expect("set agent identity");
+
+    assert_eq!(auth.get_agent_identity("account-123"), Some(record.clone()));
+    assert_eq!(auth.get_agent_identity("other-account"), None);
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let persisted = storage
+        .load()
+        .expect("load auth")
+        .expect("auth should exist");
+    assert_eq!(persisted.agent_identity, Some(record));
+
+    assert!(auth.remove_agent_identity().expect("remove agent identity"));
+    assert_eq!(auth.get_agent_identity("account-123"), None);
 }
 
 #[test]
@@ -493,6 +537,7 @@ async fn auth_manager_notifies_when_auth_state_changes() {
             openai_api_key: Some("sk-test-key".to_string()),
             tokens: None,
             last_refresh: None,
+            agent_identity: None,
         },
         AuthCredentialsStoreMode::File,
     )
@@ -514,6 +559,7 @@ async fn auth_manager_notifies_when_auth_state_changes() {
             openai_api_key: Some("sk-updated-key".to_string()),
             tokens: None,
             last_refresh: None,
+            agent_identity: None,
         },
         AuthCredentialsStoreMode::File,
     )

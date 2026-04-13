@@ -9,14 +9,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_features::Feature;
+use codex_login::AgentIdentityAuthRecord;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_protocol::protocol::SessionSource;
-use codex_secrets::SecretName;
-use codex_secrets::SecretScope;
-use codex_secrets::SecretsBackendKind;
-use codex_secrets::SecretsManager;
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::VerifyingKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
@@ -32,14 +29,12 @@ use tracing::warn;
 
 use crate::config::Config;
 
-const AGENT_IDENTITY_SECRET_NAME: &str = "AGENT_IDENTITY";
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const AGENT_IDENTITY_BISCUIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub(crate) struct AgentIdentityManager {
     auth_manager: Arc<AuthManager>,
-    secrets_manager: SecretsManager,
     chatgpt_base_url: String,
     feature_enabled: bool,
     abom: AgentBillOfMaterials,
@@ -108,10 +103,6 @@ impl AgentIdentityManager {
     ) -> Self {
         Self {
             auth_manager,
-            secrets_manager: SecretsManager::new(
-                config.codex_home.to_path_buf(),
-                SecretsBackendKind::Local,
-            ),
             chatgpt_base_url: config.chatgpt_base_url.clone(),
             feature_enabled: config.features.enabled(Feature::UseAgentIdentity),
             abom: build_abom(session_source),
@@ -142,7 +133,7 @@ impl AgentIdentityManager {
 
         let _guard = self.ensure_lock.lock().await;
 
-        if let Some(stored_identity) = self.load_stored_identity(&binding)? {
+        if let Some(stored_identity) = self.load_stored_identity(&auth, &binding)? {
             info!(
                 agent_runtime_id = %stored_identity.agent_runtime_id,
                 binding_id = %binding.binding_id,
@@ -152,7 +143,7 @@ impl AgentIdentityManager {
         }
 
         let stored_identity = self.register_agent_identity(&binding).await?;
-        self.store_identity(&binding, &stored_identity)?;
+        self.store_identity(&auth, &stored_identity)?;
         Ok(Some(stored_identity))
     }
 
@@ -252,33 +243,33 @@ impl AgentIdentityManager {
 
     fn load_stored_identity(
         &self,
+        auth: &CodexAuth,
         binding: &AgentIdentityBinding,
     ) -> Result<Option<StoredAgentIdentity>> {
-        let scope = secret_scope(binding)?;
-        let name = agent_identity_secret_name()?;
-        let Some(value) = self.secrets_manager.get(&scope, &name)? else {
+        let Some(record) = auth.get_agent_identity(&binding.chatgpt_account_id) else {
             return Ok(None);
         };
 
-        let stored_identity = match serde_json::from_str::<StoredAgentIdentity>(&value) {
-            Ok(stored_identity) => stored_identity,
-            Err(error) => {
-                warn!(
-                    binding_id = %binding.binding_id,
-                    error = %error,
-                    "stored agent identity could not be deserialized; deleting cached value"
-                );
-                self.delete_identity(&scope, &name)?;
-                return Ok(None);
-            }
-        };
+        let stored_identity =
+            match StoredAgentIdentity::from_auth_record(binding, record, self.abom.clone()) {
+                Ok(stored_identity) => stored_identity,
+                Err(error) => {
+                    warn!(
+                        binding_id = %binding.binding_id,
+                        error = %error,
+                        "stored agent identity is invalid; deleting cached value"
+                    );
+                    auth.remove_agent_identity()?;
+                    return Ok(None);
+                }
+            };
 
         if !stored_identity.matches_binding(binding) {
             warn!(
                 binding_id = %binding.binding_id,
                 "stored agent identity binding no longer matches current auth; deleting cached value"
             );
-            self.delete_identity(&scope, &name)?;
+            auth.remove_agent_identity()?;
             return Ok(None);
         }
 
@@ -289,7 +280,7 @@ impl AgentIdentityManager {
                 error = %error,
                 "stored agent identity key material is invalid; deleting cached value"
             );
-            self.delete_identity(&scope, &name)?;
+            auth.remove_agent_identity()?;
             return Ok(None);
         }
 
@@ -298,18 +289,10 @@ impl AgentIdentityManager {
 
     fn store_identity(
         &self,
-        binding: &AgentIdentityBinding,
+        auth: &CodexAuth,
         stored_identity: &StoredAgentIdentity,
     ) -> Result<()> {
-        let scope = secret_scope(binding)?;
-        let name = agent_identity_secret_name()?;
-        let value = serde_json::to_string(stored_identity)
-            .context("failed to serialize stored agent identity")?;
-        self.secrets_manager.set(&scope, &name, &value)
-    }
-
-    fn delete_identity(&self, scope: &SecretScope, name: &SecretName) -> Result<()> {
-        self.secrets_manager.delete(scope, name)?;
+        auth.set_agent_identity(stored_identity.to_auth_record())?;
         Ok(())
     }
 
@@ -319,11 +302,9 @@ impl AgentIdentityManager {
         feature_enabled: bool,
         chatgpt_base_url: String,
         session_source: SessionSource,
-        secrets_manager: SecretsManager,
     ) -> Self {
         Self {
             auth_manager,
-            secrets_manager,
             chatgpt_base_url,
             feature_enabled,
             abom: build_abom(session_source),
@@ -333,6 +314,40 @@ impl AgentIdentityManager {
 }
 
 impl StoredAgentIdentity {
+    fn from_auth_record(
+        binding: &AgentIdentityBinding,
+        record: AgentIdentityAuthRecord,
+        abom: AgentBillOfMaterials,
+    ) -> Result<Self> {
+        if record.workspace_id != binding.chatgpt_account_id {
+            anyhow::bail!(
+                "stored agent identity workspace {:?} does not match current workspace {:?}",
+                record.workspace_id,
+                binding.chatgpt_account_id
+            );
+        }
+        let signing_key = signing_key_from_private_key_pkcs8_base64(&record.agent_private_key)?;
+        Ok(Self {
+            binding_id: binding.binding_id.clone(),
+            chatgpt_account_id: binding.chatgpt_account_id.clone(),
+            chatgpt_user_id: binding.chatgpt_user_id.clone(),
+            agent_runtime_id: record.agent_runtime_id,
+            private_key_pkcs8_base64: record.agent_private_key,
+            public_key_ssh: encode_ssh_ed25519_public_key(&signing_key.verifying_key()),
+            registered_at: record.registered_at,
+            abom,
+        })
+    }
+
+    fn to_auth_record(&self) -> AgentIdentityAuthRecord {
+        AgentIdentityAuthRecord {
+            workspace_id: self.chatgpt_account_id.clone(),
+            agent_runtime_id: self.agent_runtime_id.clone(),
+            agent_private_key: self.private_key_pkcs8_base64.clone(),
+            registered_at: self.registered_at.clone(),
+        }
+    }
+
     fn matches_binding(&self, binding: &AgentIdentityBinding) -> bool {
         self.binding_id == binding.binding_id
             && self.chatgpt_account_id == binding.chatgpt_account_id
@@ -353,11 +368,7 @@ impl StoredAgentIdentity {
     }
 
     pub(crate) fn signing_key(&self) -> Result<SigningKey> {
-        let private_key = BASE64_STANDARD
-            .decode(&self.private_key_pkcs8_base64)
-            .context("stored agent identity private key is not valid base64")?;
-        SigningKey::from_pkcs8_der(&private_key)
-            .context("stored agent identity private key is not valid PKCS#8")
+        signing_key_from_private_key_pkcs8_base64(&self.private_key_pkcs8_base64)
     }
 }
 
@@ -432,19 +443,17 @@ fn append_ssh_string(buf: &mut Vec<u8>, value: &[u8]) {
     buf.extend_from_slice(value);
 }
 
-fn agent_identity_secret_name() -> Result<SecretName> {
-    SecretName::new(AGENT_IDENTITY_SECRET_NAME)
-        .context("agent identity secret name constant must be valid")
-}
-
-fn secret_scope(binding: &AgentIdentityBinding) -> Result<SecretScope> {
-    SecretScope::environment(binding.binding_id.clone())
-        .context("agent identity binding must be a valid secrets scope")
-}
-
 fn agent_registration_url(chatgpt_base_url: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
     format!("{trimmed}/v1/agent/register")
+}
+
+fn signing_key_from_private_key_pkcs8_base64(private_key_pkcs8_base64: &str) -> Result<SigningKey> {
+    let private_key = BASE64_STANDARD
+        .decode(private_key_pkcs8_base64)
+        .context("stored agent identity private key is not valid base64")?;
+    SigningKey::from_pkcs8_der(&private_key)
+        .context("stored agent identity private key is not valid PKCS#8")
 }
 
 fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
@@ -469,7 +478,6 @@ mod tests {
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use codex_app_server_protocol::AuthMode as ApiAuthMode;
-    use codex_keyring_store::tests::MockKeyringStore;
     use codex_login::AuthCredentialsStoreMode;
     use codex_login::AuthDotJson;
     use codex_login::save_auth;
@@ -485,13 +493,6 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_registered_identity_skips_when_feature_is_disabled() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let keyring_store = Arc::new(MockKeyringStore::default());
-        let secrets_manager = SecretsManager::new_with_keyring_store(
-            tempdir.path().to_path_buf(),
-            SecretsBackendKind::Local,
-            keyring_store,
-        );
         let auth_manager =
             AuthManager::from_auth_for_testing(make_chatgpt_auth("account-123", Some("user-123")));
         let manager = AgentIdentityManager::new_for_tests(
@@ -499,7 +500,6 @@ mod tests {
             /*feature_enabled*/ false,
             "https://chatgpt.com/backend-api/".to_string(),
             SessionSource::Cli,
-            secrets_manager,
         );
 
         assert_eq!(manager.ensure_registered_identity().await.unwrap(), None);
@@ -507,20 +507,12 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_registered_identity_skips_for_api_key_auth() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let keyring_store = Arc::new(MockKeyringStore::default());
-        let secrets_manager = SecretsManager::new_with_keyring_store(
-            tempdir.path().to_path_buf(),
-            SecretsBackendKind::Local,
-            keyring_store,
-        );
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-key"));
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
             "https://chatgpt.com/backend-api/".to_string(),
             SessionSource::Cli,
-            secrets_manager,
         );
 
         assert_eq!(manager.ensure_registered_identity().await.unwrap(), None);
@@ -541,13 +533,6 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let keyring_store = Arc::new(MockKeyringStore::default());
-        let secrets_manager = SecretsManager::new_with_keyring_store(
-            tempdir.path().to_path_buf(),
-            SecretsBackendKind::Local,
-            keyring_store,
-        );
         let auth_manager =
             AuthManager::from_auth_for_testing(make_chatgpt_auth("account-123", Some("user-123")));
         let manager = AgentIdentityManager::new_for_tests(
@@ -555,7 +540,6 @@ mod tests {
             /*feature_enabled*/ true,
             chatgpt_base_url,
             SessionSource::Cli,
-            secrets_manager,
         );
 
         let first = manager
@@ -591,33 +575,24 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let keyring_store = Arc::new(MockKeyringStore::default());
-        let secrets_manager = SecretsManager::new_with_keyring_store(
-            tempdir.path().to_path_buf(),
-            SecretsBackendKind::Local,
-            keyring_store.clone(),
-        );
-        let auth_manager =
-            AuthManager::from_auth_for_testing(make_chatgpt_auth("account-123", Some("user-123")));
+        let auth = make_chatgpt_auth("account-123", Some("user-123"));
+        let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
             chatgpt_base_url,
             SessionSource::Cli,
-            secrets_manager.clone(),
         );
 
-        let binding = AgentIdentityBinding::from_auth(
-            &make_chatgpt_auth("account-123", Some("user-123")),
-            /*forced_workspace_id*/ None,
-        )
-        .expect("binding");
-        let scope = secret_scope(&binding).expect("scope");
-        let name = agent_identity_secret_name().expect("secret name");
-        secrets_manager
-            .set(&scope, &name, "{\"not\":\"valid\"}")
-            .expect("seed invalid secret");
+        let binding =
+            AgentIdentityBinding::from_auth(&auth, /*forced_workspace_id*/ None).expect("binding");
+        auth.set_agent_identity(AgentIdentityAuthRecord {
+            workspace_id: "account-123".to_string(),
+            agent_runtime_id: "agent_invalid".to_string(),
+            agent_private_key: "not-valid-base64".to_string(),
+            registered_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .expect("seed invalid identity");
 
         let stored = manager
             .ensure_registered_identity()
@@ -626,12 +601,10 @@ mod tests {
             .expect("identity should be registered");
 
         assert_eq!(stored.agent_runtime_id, "agent_456");
-        let persisted = secrets_manager
-            .get(&scope, &name)
-            .expect("read secret")
-            .expect("secret");
-        let parsed: StoredAgentIdentity = serde_json::from_str(&persisted).expect("json");
-        assert_eq!(parsed.agent_runtime_id, "agent_456");
+        let persisted = auth
+            .get_agent_identity(&binding.chatgpt_account_id)
+            .expect("stored identity");
+        assert_eq!(persisted.agent_runtime_id, "agent_456");
     }
 
     #[tokio::test]
@@ -649,13 +622,6 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let keyring_store = Arc::new(MockKeyringStore::default());
-        let secrets_manager = SecretsManager::new_with_keyring_store(
-            tempdir.path().to_path_buf(),
-            SecretsBackendKind::Local,
-            keyring_store,
-        );
         let auth_manager =
             AuthManager::from_auth_for_testing(make_chatgpt_auth("account-123", Some("user-123")));
         let manager = AgentIdentityManager::new_for_tests(
@@ -663,7 +629,6 @@ mod tests {
             /*feature_enabled*/ true,
             chatgpt_base_url,
             SessionSource::Cli,
-            secrets_manager,
         );
 
         let stored = manager
@@ -727,6 +692,7 @@ mod tests {
                 account_id: Some(account_id.to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            agent_identity: None,
         };
         save_auth(tempdir.path(), &auth_json, AuthCredentialsStoreMode::File).expect("save auth");
         CodexAuth::from_auth_storage(tempdir.path(), AuthCredentialsStoreMode::File)
