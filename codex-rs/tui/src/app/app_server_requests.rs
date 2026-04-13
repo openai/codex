@@ -8,6 +8,7 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::PermissionPresetRequestApprovalResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -32,6 +33,7 @@ pub(super) struct PendingAppServerRequests {
     exec_approvals: HashMap<String, AppServerRequestId>,
     file_change_approvals: HashMap<String, AppServerRequestId>,
     permissions_approvals: HashMap<String, AppServerRequestId>,
+    permission_preset_approvals: HashMap<String, AppServerRequestId>,
     user_inputs: HashMap<String, AppServerRequestId>,
     mcp_requests: HashMap<McpLegacyRequestKey, AppServerRequestId>,
 }
@@ -41,6 +43,7 @@ impl PendingAppServerRequests {
         self.exec_approvals.clear();
         self.file_change_approvals.clear();
         self.permissions_approvals.clear();
+        self.permission_preset_approvals.clear();
         self.user_inputs.clear();
         self.mcp_requests.clear();
     }
@@ -65,6 +68,11 @@ impl PendingAppServerRequests {
             }
             ServerRequest::PermissionsRequestApproval { request_id, params } => {
                 self.permissions_approvals
+                    .insert(params.item_id.clone(), request_id.clone());
+                None
+            }
+            ServerRequest::PermissionPresetRequestApproval { request_id, params } => {
+                self.permission_preset_approvals
                     .insert(params.item_id.clone(), request_id.clone());
                 None
             }
@@ -164,6 +172,24 @@ impl PendingAppServerRequests {
                     })
                 })
                 .transpose()?,
+            AppCommandView::RequestPermissionPresetResponse { id, response } => self
+                .permission_preset_approvals
+                .remove(id)
+                .map(|request_id| {
+                    Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
+                        request_id,
+                        result: serde_json::to_value(PermissionPresetRequestApprovalResponse {
+                            decision: response.decision.into(),
+                            preset: response.preset.into(),
+                        })
+                        .map_err(|err| {
+                            format!(
+                                "failed to serialize permission preset approval response: {err}"
+                            )
+                        })?,
+                    })
+                })
+                .transpose()?,
             AppCommandView::UserInputAnswer { id, response } => self
                 .user_inputs
                 .remove(id)
@@ -234,6 +260,8 @@ impl PendingAppServerRequests {
         self.file_change_approvals
             .retain(|_, value| value != request_id);
         self.permissions_approvals
+            .retain(|_, value| value != request_id);
+        self.permission_preset_approvals
             .retain(|_, value| value != request_id);
         self.user_inputs.retain(|_, value| value != request_id);
         self.mcp_requests.retain(|_, value| value != request_id);

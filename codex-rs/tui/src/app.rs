@@ -125,6 +125,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::request_permission_preset::RequestPermissionPresetEvent;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -174,6 +175,10 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
+    PermissionPreset {
+        request: RequestPermissionPresetEvent,
+        response_context: crate::app_event::PermissionPresetSelectionContext,
+    },
 }
 
 fn app_server_request_id_to_mcp_request_id(
@@ -1843,6 +1848,25 @@ impl App {
                     suggested_scope: params.suggested_scope.to_core(),
                 }),
             ),
+            ServerRequest::PermissionPresetRequestApproval { params, .. } => {
+                Some(ThreadInteractiveRequest::PermissionPreset {
+                    request: RequestPermissionPresetEvent {
+                        turn_id: params.turn_id.clone(),
+                        call_id: params.item_id.clone(),
+                        reason: params.reason.clone(),
+                        preset: params.preset.to_core(),
+                        label: params.label.clone(),
+                        description: params.description.clone(),
+                        approval_policy: params.approval_policy.to_core(),
+                        approvals_reviewer: params.approvals_reviewer.to_core(),
+                        sandbox_policy: params.sandbox_policy.to_core(),
+                    },
+                    response_context: crate::app_event::PermissionPresetSelectionContext {
+                        thread_id,
+                        call_id: params.item_id.clone(),
+                    },
+                })
+            }
             _ => None,
         }
     }
@@ -2683,6 +2707,13 @@ impl App {
                 ThreadInteractiveRequest::McpServerElicitation(request) => {
                     self.chat_widget
                         .push_mcp_server_elicitation_request(request);
+                }
+                ThreadInteractiveRequest::PermissionPreset {
+                    request,
+                    response_context,
+                } => {
+                    self.chat_widget
+                        .handle_request_permission_preset_now(request, Some(response_context));
                 }
             }
         }
@@ -4611,9 +4642,13 @@ impl App {
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,
+                permission_preset_context,
             } => {
-                self.chat_widget
-                    .open_full_access_confirmation(preset, return_to_permissions);
+                self.chat_widget.open_full_access_confirmation(
+                    preset,
+                    return_to_permissions,
+                    permission_preset_context,
+                );
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
@@ -5486,6 +5521,13 @@ impl App {
             }
             AppEvent::OpenPermissionsPopup => {
                 self.chat_widget.open_permissions_popup();
+            }
+            AppEvent::OpenPermissionsPopupForRequest {
+                preset,
+                response_context,
+            } => {
+                self.chat_widget
+                    .open_permissions_popup_for_request(preset, response_context);
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
@@ -6382,6 +6424,7 @@ mod tests {
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
     use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
+    use codex_app_server_protocol::PermissionPresetRequestApprovalParams;
     use codex_app_server_protocol::PermissionsRequestApprovalParams;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
@@ -8711,6 +8754,45 @@ guardian_approval = true
             }
         );
         assert_eq!(suggested_scope, PermissionGrantScope::Turn);
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_permission_preset_request_preserves_response_context() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let request = ServerRequest::PermissionPresetRequestApproval {
+            request_id: AppServerRequestId::Integer(8),
+            params: PermissionPresetRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-preset".to_string(),
+                item_id: "call-preset".to_string(),
+                preset: codex_app_server_protocol::PermissionPresetId::FullAccess,
+                label: "Full Access".to_string(),
+                description: "Run commands without filesystem sandboxing; network access enabled."
+                    .to_string(),
+                approval_policy: codex_app_server_protocol::AskForApproval::Never,
+                approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+                sandbox_policy: codex_app_server_protocol::SandboxPolicy::DangerFullAccess,
+                reason: Some("The user asked to switch into full access mode.".to_string()),
+            },
+        };
+
+        let Some(ThreadInteractiveRequest::PermissionPreset {
+            request,
+            response_context,
+        }) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected permission preset request");
+        };
+
+        assert_eq!(
+            request.preset,
+            codex_protocol::request_permission_preset::PermissionPresetId::FullAccess
+        );
+        assert_eq!(response_context.thread_id, thread_id);
+        assert_eq!(response_context.call_id, "call-preset");
     }
 
     #[tokio::test]

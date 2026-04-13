@@ -471,7 +471,10 @@ where
 }
 
 fn tui_supported_server_requests() -> Vec<SupportedServerRequestMethod> {
-    vec![SupportedServerRequestMethod::PermissionsRequestApproval]
+    vec![
+        SupportedServerRequestMethod::PermissionsRequestApproval,
+        SupportedServerRequestMethod::PermissionPresetRequestApproval,
+    ]
 }
 
 async fn shutdown_app_server_if_present(app_server: Option<AppServerSession>) {
@@ -1826,7 +1829,10 @@ mod tests {
         let supported = tui_supported_server_requests();
         assert_eq!(
             supported,
-            vec![SupportedServerRequestMethod::PermissionsRequestApproval]
+            vec![
+                SupportedServerRequestMethod::PermissionsRequestApproval,
+                SupportedServerRequestMethod::PermissionPresetRequestApproval,
+            ]
         );
     }
 

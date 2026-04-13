@@ -8,10 +8,12 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::request_permission_preset::RequestPermissionPresetEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 
 use super::ChatWidget;
+use crate::app_event::PermissionPresetSelectionContext;
 
 #[derive(Debug)]
 pub(crate) enum QueuedInterrupt {
@@ -19,6 +21,10 @@ pub(crate) enum QueuedInterrupt {
     ApplyPatchApproval(ApplyPatchApprovalRequestEvent),
     Elicitation(ElicitationRequestEvent),
     RequestPermissions(RequestPermissionsEvent),
+    RequestPermissionPreset {
+        ev: RequestPermissionPresetEvent,
+        response_context: Option<PermissionPresetSelectionContext>,
+    },
     RequestUserInput(RequestUserInputEvent),
     ExecBegin(ExecCommandBeginEvent),
     ExecEnd(ExecCommandEndEvent),
@@ -62,6 +68,18 @@ impl InterruptManager {
             .push_back(QueuedInterrupt::RequestPermissions(ev));
     }
 
+    pub(crate) fn push_request_permission_preset(
+        &mut self,
+        ev: RequestPermissionPresetEvent,
+        response_context: Option<PermissionPresetSelectionContext>,
+    ) {
+        self.queue
+            .push_back(QueuedInterrupt::RequestPermissionPreset {
+                ev,
+                response_context,
+            });
+    }
+
     pub(crate) fn push_user_input(&mut self, ev: RequestUserInputEvent) {
         self.queue.push_back(QueuedInterrupt::RequestUserInput(ev));
     }
@@ -93,6 +111,10 @@ impl InterruptManager {
                 QueuedInterrupt::ApplyPatchApproval(ev) => chat.handle_apply_patch_approval_now(ev),
                 QueuedInterrupt::Elicitation(ev) => chat.handle_elicitation_request_now(ev),
                 QueuedInterrupt::RequestPermissions(ev) => chat.handle_request_permissions_now(ev),
+                QueuedInterrupt::RequestPermissionPreset {
+                    ev,
+                    response_context,
+                } => chat.handle_request_permission_preset_now(ev, response_context),
                 QueuedInterrupt::RequestUserInput(ev) => chat.handle_request_user_input_now(ev),
                 QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),
                 QueuedInterrupt::ExecEnd(ev) => chat.handle_exec_end_now(ev),
