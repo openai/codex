@@ -15,6 +15,7 @@ mod experimental_api;
 mod experimental_feature_list;
 mod fs;
 mod initialize;
+mod marketplace_add;
 mod mcp_resource;
 mod mcp_server_elicitation;
 mod mcp_server_status;

@@ -149,6 +149,8 @@ export type { ListMcpServerStatusResponse } from "./ListMcpServerStatusResponse"
 export type { LoginAccountParams } from "./LoginAccountParams";
 export type { LoginAccountResponse } from "./LoginAccountResponse";
 export type { LogoutAccountResponse } from "./LogoutAccountResponse";
+export type { MarketplaceAddParams } from "./MarketplaceAddParams";
+export type { MarketplaceAddResponse } from "./MarketplaceAddResponse";
 export type { MarketplaceInterface } from "./MarketplaceInterface";
 export type { MarketplaceLoadErrorInfo } from "./MarketplaceLoadErrorInfo";
 export type { McpAuthStatus } from "./McpAuthStatus";

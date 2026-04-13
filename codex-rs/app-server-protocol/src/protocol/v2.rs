@@ -3329,6 +3329,26 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct MarketplaceAddParams {
+    pub source: String,
+    #[ts(optional = nullable)]
+    pub ref_name: Option<String>,
+    #[ts(optional = nullable)]
+    pub sparse_paths: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceAddResponse {
+    pub marketplace_name: String,
+    pub installed_root: AbsolutePathBuf,
+    pub already_added: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
     /// only home-scoped marketplaces and the official curated marketplace are considered.
@@ -8348,6 +8368,37 @@ mod tests {
             json!({
                 "cwds": null,
                 "forceRemoteSync": true,
+            }),
+        );
+    }
+
+    #[test]
+    fn marketplace_add_params_serialization_uses_optional_ref_name_and_sparse_paths() {
+        assert_eq!(
+            serde_json::to_value(MarketplaceAddParams {
+                source: "owner/repo".to_string(),
+                ref_name: None,
+                sparse_paths: None,
+            })
+            .unwrap(),
+            json!({
+                "source": "owner/repo",
+                "refName": null,
+                "sparsePaths": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceAddParams {
+                source: "owner/repo".to_string(),
+                ref_name: Some("main".to_string()),
+                sparse_paths: Some(vec!["plugins/foo".to_string()]),
+            })
+            .unwrap(),
+            json!({
+                "source": "owner/repo",
+                "refName": "main",
+                "sparsePaths": ["plugins/foo"],
             }),
         );
     }
