@@ -28,8 +28,6 @@ use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
-use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
-use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -4906,6 +4904,8 @@ mod handlers {
     use crate::config_loader::CloudRequirementsLoader;
     use crate::config_loader::LoaderOverrides;
     use crate::config_loader::load_config_layers_state;
+    use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
+    use crate::realtime_context::truncate_realtime_text_to_token_budget;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
