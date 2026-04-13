@@ -1712,7 +1712,7 @@ fn emitted_image_content_item(
 ) -> FunctionCallOutputContentItem {
     FunctionCallOutputContentItem::InputImage {
         image_url,
-        detail: normalize_output_image_detail(turn.features.get(), &turn.model_info, detail),
+        detail: normalize_output_image_detail(&turn.model_info, detail),
     }
 }
 

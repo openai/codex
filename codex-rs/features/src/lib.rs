@@ -132,8 +132,6 @@ pub enum Feature {
     MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Allow the model to request `detail: "original"` image outputs on supported models.
-    ImageDetailOriginal,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Enable collab tools.
@@ -359,6 +357,9 @@ impl Features {
                     );
                 }
                 "tui_app_server" => {
+                    continue;
+                }
+                "image_detail_original" => {
                     continue;
                 }
                 _ => {}
@@ -673,16 +674,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
         stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ImageDetailOriginal,
-        key: "image_detail_original",
-        stage: Stage::Experimental {
-            name: "Original image detail",
-            menu_description: "Let the model inspect tool-emitted images at full resolution on supported models instead of a resized approximation. This affects tool-emitted images such as those produced by `view_image`, not images attached directly in the UI. It is particularly important for localization and precise UI targeting, for reading small text, and for reasoning about precise layout.",
-            announcement: "NEW: Original image detail is now available in /experimental. Enable it to let tools request full-resolution image detail on supported models for CUA and localization tasks.",
-        },
         default_enabled: false,
     },
     FeatureSpec {

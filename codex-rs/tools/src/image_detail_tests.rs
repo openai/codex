@@ -1,6 +1,4 @@
 use super::*;
-use codex_features::Feature;
-use codex_features::Features;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ModelInfo;
 use pretty_assertions::assert_eq;
@@ -42,37 +40,26 @@ fn model_info() -> ModelInfo {
 }
 
 #[test]
-fn image_detail_original_feature_enables_explicit_original_without_force() {
+fn explicit_original_is_allowed_when_model_supports_it() {
     let model_info = model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ImageDetailOriginal);
 
-    assert!(can_request_original_image_detail(&features, &model_info));
+    assert!(can_request_original_image_detail(&model_info));
     assert_eq!(
-        normalize_output_image_detail(&features, &model_info, Some(ImageDetail::Original)),
+        normalize_output_image_detail(&model_info, Some(ImageDetail::Original)),
         Some(ImageDetail::Original)
     );
     assert_eq!(
-        normalize_output_image_detail(&features, &model_info, /*detail*/ None),
+        normalize_output_image_detail(&model_info, /*detail*/ None),
         None
     );
 }
 
 #[test]
-fn explicit_original_is_dropped_without_feature_or_model_support() {
+fn explicit_original_is_dropped_without_model_support() {
     let mut model_info = model_info();
-    let features = Features::with_defaults();
-
-    assert_eq!(
-        normalize_output_image_detail(&features, &model_info, Some(ImageDetail::Original)),
-        None
-    );
-
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ImageDetailOriginal);
     model_info.supports_image_detail_original = false;
     assert_eq!(
-        normalize_output_image_detail(&features, &model_info, Some(ImageDetail::Original)),
+        normalize_output_image_detail(&model_info, Some(ImageDetail::Original)),
         None
     );
 }
@@ -80,11 +67,9 @@ fn explicit_original_is_dropped_without_feature_or_model_support() {
 #[test]
 fn unsupported_non_original_detail_is_dropped() {
     let model_info = model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ImageDetailOriginal);
 
     assert_eq!(
-        normalize_output_image_detail(&features, &model_info, Some(ImageDetail::Low)),
+        normalize_output_image_detail(&model_info, Some(ImageDetail::Low)),
         None
     );
 }
