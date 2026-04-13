@@ -6755,7 +6755,7 @@ impl ChatWidget {
                 self.on_request_permissions(ev);
             }
             EventMsg::RequestPermissionPreset(ev) => {
-                self.on_request_permission_preset(ev, None);
+                self.on_request_permission_preset(ev, /*response_context*/ None);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
