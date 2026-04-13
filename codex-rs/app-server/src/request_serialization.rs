@@ -6,7 +6,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_app_server_protocol::ClientRequestSerializationScope;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::sync::Mutex;
 use tracing::Instrument;
 
@@ -33,13 +32,6 @@ pub(crate) enum RequestSerializationQueueKey {
     FsWatch {
         connection_id: ConnectionId,
         watch_id: String,
-    },
-    Plugin {
-        marketplace_path: AbsolutePathBuf,
-        plugin_name: String,
-    },
-    PluginId {
-        plugin_id: String,
     },
     McpOauth {
         server_name: String,
@@ -68,14 +60,6 @@ impl RequestSerializationQueueKey {
                 connection_id,
                 watch_id,
             },
-            ClientRequestSerializationScope::Plugin {
-                marketplace_path,
-                plugin_name,
-            } => Self::Plugin {
-                marketplace_path,
-                plugin_name,
-            },
-            ClientRequestSerializationScope::PluginId { plugin_id } => Self::PluginId { plugin_id },
             ClientRequestSerializationScope::McpOauth { server_name } => {
                 Self::McpOauth { server_name }
             }
