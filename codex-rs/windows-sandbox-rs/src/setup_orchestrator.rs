@@ -340,10 +340,16 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn should_include_current_exe_read_root(dir: &Path) -> bool {
+    let key = canonical_path_key(dir);
+    !key.starts_with("c:/program files/windowsapps/")
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && should_include_current_exe_read_root(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -840,6 +846,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1031,6 +1038,20 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn current_exe_read_root_skips_windowsapps_store_installs() {
+        assert!(!should_include_current_exe_read_root(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.409.1734.0_x64__2p2nqsd0c76g0\app\resources"
+        )));
+    }
+
+    #[test]
+    fn current_exe_read_root_keeps_non_store_install_dirs() {
+        assert!(should_include_current_exe_read_root(Path::new(
+            r"C:\Users\dev\AppData\Local\Programs\Codex\resources"
+        )));
     }
 
     #[test]
