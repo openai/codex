@@ -1,7 +1,6 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -174,8 +173,7 @@ impl Default for ThreadEntry {
 #[derive(Default)]
 struct ThreadStateManagerInner {
     live_connections: HashSet<ConnectionId>,
-    supported_server_requests_by_connection:
-        HashMap<ConnectionId, HashSet<SupportedServerRequestMethod>>,
+    permission_confirmations_by_connection: HashSet<ConnectionId>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
@@ -193,25 +191,29 @@ impl ThreadStateManager {
     pub(crate) async fn connection_initialized(
         &self,
         connection_id: ConnectionId,
-        supported_server_requests: HashSet<SupportedServerRequestMethod>,
+        permission_confirmations: bool,
     ) {
         let mut state = self.state.lock().await;
         state.live_connections.insert(connection_id);
-        state
-            .supported_server_requests_by_connection
-            .insert(connection_id, supported_server_requests);
+        if permission_confirmations {
+            state
+                .permission_confirmations_by_connection
+                .insert(connection_id);
+        } else {
+            state
+                .permission_confirmations_by_connection
+                .remove(&connection_id);
+        }
     }
 
-    pub(crate) async fn supported_server_requests_for_connection(
+    pub(crate) async fn permission_confirmations_for_connection(
         &self,
         connection_id: ConnectionId,
-    ) -> HashSet<SupportedServerRequestMethod> {
+    ) -> bool {
         let state = self.state.lock().await;
         state
-            .supported_server_requests_by_connection
-            .get(&connection_id)
-            .cloned()
-            .unwrap_or_default()
+            .permission_confirmations_by_connection
+            .contains(&connection_id)
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
@@ -231,10 +233,9 @@ impl ThreadStateManager {
         connection_ids
     }
 
-    pub(crate) async fn subscribed_connection_ids_supporting(
+    pub(crate) async fn subscribed_connection_ids_with_permission_confirmations(
         &self,
         thread_id: ThreadId,
-        method: SupportedServerRequestMethod,
     ) -> Vec<ConnectionId> {
         let state = self.state.lock().await;
         let Some(thread_entry) = state.threads.get(&thread_id) else {
@@ -245,9 +246,8 @@ impl ThreadStateManager {
             .iter()
             .filter(|connection_id| {
                 state
-                    .supported_server_requests_by_connection
-                    .get(connection_id)
-                    .is_some_and(|supported| supported.contains(&method))
+                    .permission_confirmations_by_connection
+                    .contains(connection_id)
             })
             .copied()
             .collect::<Vec<_>>();
@@ -409,7 +409,7 @@ impl ThreadStateManager {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
             state
-                .supported_server_requests_by_connection
+                .permission_confirmations_by_connection
                 .remove(&connection_id);
             let thread_ids = state
                 .thread_ids_by_connection

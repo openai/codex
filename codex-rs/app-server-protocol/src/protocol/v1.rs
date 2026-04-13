@@ -46,24 +46,13 @@ pub struct InitializeCapabilities {
     /// Opt into receiving experimental API methods and fields.
     #[serde(default)]
     pub experimental_api: bool,
-    /// Server request methods this connection knows how to render and answer.
-    #[ts(optional = nullable)]
-    pub supported_server_requests: Option<Vec<SupportedServerRequestMethod>>,
+    /// Opt into model-initiated permission confirmation requests.
+    #[serde(default)]
+    pub permission_confirmations: bool,
     /// Exact notification method names that should be suppressed for this
     /// connection (for example `thread/started`).
     #[ts(optional = nullable)]
     pub opt_out_notification_methods: Option<Vec<String>>,
-}
-
-/// Server-initiated request methods a client can opt into during initialize.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
-pub enum SupportedServerRequestMethod {
-    #[serde(rename = "item/permissions/requestApproval")]
-    #[ts(rename = "item/permissions/requestApproval")]
-    PermissionsRequestApproval,
-    #[serde(rename = "item/permissionPreset/requestApproval")]
-    #[ts(rename = "item/permissionPreset/requestApproval")]
-    PermissionPresetRequestApproval,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

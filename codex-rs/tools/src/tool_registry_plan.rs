@@ -247,9 +247,7 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
-    }
 
-    if config.request_permission_preset_tool_enabled {
         let available_preset_ids = builtin_permission_presets(
             cfg!(target_os = "windows"),
             config.guardian_approval_enabled,

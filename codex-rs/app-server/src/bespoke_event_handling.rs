@@ -920,11 +920,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     turn_id: request.turn_id.clone(),
                     item_id: request.call_id.clone(),
                     preset: request.preset.into(),
-                    label: request.label.clone(),
-                    description: request.description,
-                    approval_policy: request.approval_policy.into(),
-                    approvals_reviewer: request.approvals_reviewer.into(),
-                    sandbox_policy: request.sandbox_policy.into(),
                     reason: request.reason,
                 };
                 let (pending_request_id, rx) = request_permission_preset_outgoing

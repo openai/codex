@@ -55,7 +55,7 @@ async fn accepted_permission_preset_request_returns_model_output() -> Result<()>
         });
         config
             .features
-            .enable(Feature::RequestPermissionPresetTool)
+            .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;

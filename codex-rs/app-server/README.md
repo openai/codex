@@ -89,7 +89,7 @@ Clients must send a single `initialize` request per transport connection before 
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
-Clients can also opt into specific server-initiated request methods through `supportedServerRequests`. This is required for conversational permission confirmations such as `item/permissions/requestApproval` and `item/permissionPreset/requestApproval`: if a connection omits the matching method, app-server does not send that request to the client and the permission change is rejected without changing the session.
+Clients can also opt into model-initiated permission confirmations through `permissionConfirmations: true`. This covers `item/permissions/requestApproval` and `item/permissionPreset/requestApproval`: if a connection omits the capability, app-server does not send those requests to the client and permission changes are rejected without changing the session.
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
@@ -127,10 +127,7 @@ Example with notification opt-out and permission request support:
     },
     "capabilities": {
       "experimentalApi": true,
-      "supportedServerRequests": [
-        "item/permissions/requestApproval",
-        "item/permissionPreset/requestApproval"
-      ],
+      "permissionConfirmations": true,
       "optOutNotificationMethods": ["thread/started", "item/agentMessage/delta"]
     }
   }
@@ -1077,7 +1074,7 @@ the client can offer session-scoped and/or persistent approval choices.
 
 ### Permission requests
 
-Clients must opt into each conversational permission request method by listing it in `initialize.params.capabilities.supportedServerRequests`. The opt-in is per connection and per method. App-server uses this capability before starting a thread so unsupported clients do not expose the model-facing tools that trigger these request methods. Existing clients that do not advertise support keep their current behavior: app-server does not ask the model to use an unsupported approval UI, no permissions are changed, and delivery-time denials are only a fallback if a request is still produced.
+Clients must opt into conversational permission requests with `initialize.params.capabilities.permissionConfirmations: true`. The opt-in is per connection and enables both permission request methods. App-server uses this capability before starting a thread so unsupported clients do not expose the model-facing tools that trigger these requests. Existing clients that do not advertise support keep their current behavior: app-server does not ask the model to use an unsupported approval UI, no permissions are changed, and delivery-time denials are only a fallback if a request is still produced.
 
 The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access.
 
@@ -1121,7 +1118,7 @@ Within the same turn, granted permissions are sticky: later shell-like tool call
 
 If the session approval policy uses `Granular` with `request_permissions: false`, standalone `request_permissions` tool calls are auto-denied and no `item/permissions/requestApproval` prompt is sent. Inline `with_additional_permissions` command requests remain controlled by `sandbox_approval`, and any previously granted permissions remain sticky for later shell-like calls in the same turn.
 
-The built-in `request_permission_preset` tool sends an `item/permissionPreset/requestApproval` JSON-RPC request when a model asks the client to open the permission preset picker. The request includes the resolved preset id, label, description, approval policy, approvals reviewer, sandbox policy, and optional reason so clients can show their native picker with the requested option already selected. Clients respond with `{ "decision": "accepted", "preset": "full-access" }` or `{ "decision": "declined", "preset": "full-access" }`. When the client omits `item/permissionPreset/requestApproval` from `supportedServerRequests`, app-server hides the preset tool for new threads; if a request is still produced, app-server declines it and leaves the active permissions unchanged.
+The built-in `request_permission_preset` tool sends an `item/permissionPreset/requestApproval` JSON-RPC request when a model asks the client to open the permission preset picker. The request includes the requested preset id and optional reason; clients should open their native picker with that preset already selected and may let the user choose a different preset before responding. Clients respond with `{ "decision": "accepted", "preset": "full-access" }` or `{ "decision": "declined", "preset": "full-access" }`. When the client omits `permissionConfirmations`, app-server hides the preset tool for new threads; if a request is still produced, app-server declines it and leaves the active permissions unchanged.
 
 ### Dynamic tool calls (experimental)
 

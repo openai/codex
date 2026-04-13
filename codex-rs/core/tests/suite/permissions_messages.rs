@@ -556,7 +556,6 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         test.config.cwd.as_path(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
-        /*request_permission_preset_tool_enabled*/ false,
     )
     .into_text();
     // Normalize line endings to handle Windows vs Unix differences

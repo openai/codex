@@ -3344,9 +3344,8 @@ impl Session {
 
     /// Sends a permission preset request to the active client and waits for the user's decision.
     ///
-    /// Core resolves and validates the preset before emitting the event so the
-    /// client confirms concrete settings rather than interpreting policy names.
-    /// The settings are not applied by this function; they become active only
+    /// Core validates the preset before emitting the event. The settings are
+    /// not applied by this function; they become active only
     /// when `notify_request_permission_preset_response` receives an accepted
     /// response for the pending call id.
     pub async fn request_permission_preset(
@@ -3416,11 +3415,6 @@ impl Session {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             preset: preset_id,
-            label: preset.label.to_string(),
-            description: preset.description.to_string(),
-            approval_policy: preset.approval,
-            approvals_reviewer: preset.approvals_reviewer,
-            sandbox_policy: preset.sandbox,
             reason: args.reason,
         });
         self.send_event(turn_context, event).await;
@@ -3445,33 +3439,47 @@ impl Session {
         call_id: &str,
         response: RequestPermissionPresetResponse,
     ) {
-        if matches!(response.decision, RequestPermissionPresetDecision::Accepted)
-            && let Some(preset) = self
+        let mut response = response;
+        if matches!(response.decision, RequestPermissionPresetDecision::Accepted) {
+            if let Some(preset) = self
                 .resolve_permission_preset_for_current_session(response.preset)
                 .await
-        {
-            let preset_override = TurnPermissionPresetOverride {
-                approval_policy: preset.approval,
-                approvals_reviewer: preset.approvals_reviewer,
-                sandbox_policy: preset.sandbox.clone(),
-            };
             {
-                let mut active = self.active_turn.lock().await;
-                if let Some(at) = active.as_mut() {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.record_permission_preset_override(preset_override);
-                }
-            }
-            if let Err(err) = self
-                .update_settings(SessionSettingsUpdate {
+                let update = SessionSettingsUpdate {
                     approval_policy: Some(preset.approval),
                     approvals_reviewer: Some(preset.approvals_reviewer),
-                    sandbox_policy: Some(preset.sandbox),
+                    sandbox_policy: Some(preset.sandbox.clone()),
                     ..Default::default()
-                })
-                .await
-            {
-                warn!("failed to apply approved permission preset: {err}");
+                };
+                match self.update_settings(update).await {
+                    Ok(()) => {
+                        let preset_override = TurnPermissionPresetOverride {
+                            approval_policy: preset.approval,
+                            approvals_reviewer: preset.approvals_reviewer,
+                            sandbox_policy: preset.sandbox,
+                        };
+                        let mut active = self.active_turn.lock().await;
+                        if let Some(at) = active.as_mut() {
+                            let mut ts = at.turn_state.lock().await;
+                            ts.record_permission_preset_override(preset_override);
+                        }
+                    }
+                    Err(err) => {
+                        warn!("failed to apply approved permission preset: {err}");
+                        response = RequestPermissionPresetResponse {
+                            decision: RequestPermissionPresetDecision::Declined,
+                            preset: response.preset,
+                            message: format!("failed to apply approved permission preset: {err}"),
+                        };
+                    }
+                }
+            } else {
+                response = RequestPermissionPresetResponse {
+                    decision: RequestPermissionPresetDecision::Declined,
+                    preset: response.preset,
+                    message: "requested permission preset is no longer available in this session"
+                        .to_string(),
+                };
             }
         }
 
@@ -3996,9 +4004,6 @@ impl Session {
                     turn_context
                         .features
                         .enabled(Feature::RequestPermissionsTool),
-                    turn_context
-                        .features
-                        .enabled(Feature::RequestPermissionPresetTool),
                 )
                 .into_text(),
             );

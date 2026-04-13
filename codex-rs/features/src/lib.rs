@@ -95,10 +95,8 @@ pub enum Feature {
     ExecPermissionApprovals,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
-    /// Expose the built-in request_permissions tool.
+    /// Expose built-in conversational permission tools.
     RequestPermissionsTool,
-    /// Expose the built-in request_permission_preset tool.
-    RequestPermissionPresetTool,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -708,12 +706,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestPermissionsTool,
         key: "request_permissions_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::RequestPermissionPresetTool,
-        key: "request_permission_preset_tool",
         stage: Stage::Stable,
         default_enabled: true,
     },

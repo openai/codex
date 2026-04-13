@@ -802,8 +802,7 @@ pub async fn run_main_with_transport(
                                                     connection_id,
                                                     connection_state
                                                         .session
-                                                        .supported_server_requests
-                                                        .clone(),
+                                                        .permission_confirmations,
                                                 )
                                                 .await;
                                             connection_state

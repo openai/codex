@@ -40,26 +40,13 @@
             "null"
           ]
         },
-        "supportedServerRequests": {
-          "description": "Server request methods this connection knows how to render and answer.",
-          "items": {
-            "$ref": "#/definitions/SupportedServerRequestMethod"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "permissionConfirmations": {
+          "default": false,
+          "description": "Opt into model-initiated permission confirmation requests.",
+          "type": "boolean"
         }
       },
       "type": "object"
-    },
-    "SupportedServerRequestMethod": {
-      "description": "Server-initiated request methods a client can opt into during initialize.",
-      "enum": [
-        "item/permissions/requestApproval",
-        "item/permissionPreset/requestApproval"
-      ],
-      "type": "string"
     }
   },
   "properties": {

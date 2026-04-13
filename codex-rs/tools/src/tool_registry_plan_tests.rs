@@ -126,8 +126,6 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     if config.request_permissions_tool_enabled {
         let spec = create_request_permissions_tool(request_permissions_tool_description());
         expected.insert(spec.name().to_string(), spec);
-    }
-    if config.request_permission_preset_tool_enabled {
         let available_preset_ids = if cfg!(target_os = "windows") {
             vec!["auto", "full-access", "read-only"]
         } else {
@@ -594,6 +592,16 @@ fn request_permissions_is_enabled_by_default_and_can_be_disabled() {
         request_permissions_tool.spec,
         create_request_permissions_tool(request_permissions_tool_description())
     );
+    let request_permission_preset_tool = find_tool(&tools, "request_permission_preset");
+    let available_preset_ids = if cfg!(target_os = "windows") {
+        vec!["auto", "full-access", "read-only"]
+    } else {
+        vec!["auto", "full-access"]
+    };
+    assert_eq!(
+        request_permission_preset_tool.spec,
+        create_request_permission_preset_tool(available_preset_ids)
+    );
 
     let mut features = Features::with_defaults();
     features.disable(Feature::RequestPermissionsTool);
@@ -614,60 +622,7 @@ fn request_permissions_is_enabled_by_default_and_can_be_disabled() {
         &[],
     );
     assert_lacks_tool_name(&tools, "request_permissions");
-}
-
-#[test]
-fn request_permission_preset_requires_feature_flag() {
-    let model_info = model_info();
-    let mut features = Features::with_defaults();
-    features.disable(Feature::RequestPermissionPresetTool);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*deferred_mcp_tools*/ None,
-        &[],
-    );
     assert_lacks_tool_name(&tools, "request_permission_preset");
-
-    let mut features = Features::with_defaults();
-    features.enable(Feature::RequestPermissionPresetTool);
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*deferred_mcp_tools*/ None,
-        &[],
-    );
-    let request_permission_preset_tool = find_tool(&tools, "request_permission_preset");
-    let available_preset_ids = if cfg!(target_os = "windows") {
-        vec!["auto", "full-access", "read-only"]
-    } else {
-        vec!["auto", "full-access"]
-    };
-    assert_eq!(
-        request_permission_preset_tool.spec,
-        create_request_permission_preset_tool(available_preset_ids)
-    );
 }
 
 #[test]

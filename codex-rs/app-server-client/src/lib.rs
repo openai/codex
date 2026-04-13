@@ -39,7 +39,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -368,8 +367,8 @@ pub struct InProcessClientStartArgs {
     pub client_version: String,
     /// Whether experimental APIs are requested at initialize time.
     pub experimental_api: bool,
-    /// Server-initiated requests this client can render and answer.
-    pub supported_server_requests: Vec<SupportedServerRequestMethod>,
+    /// Whether the client can render and answer permission confirmations.
+    pub permission_confirmations: bool,
     /// Notification methods this client opts out of receiving.
     pub opt_out_notification_methods: Vec<String>,
     /// Queue capacity for command/event channels (clamped to at least 1).
@@ -381,11 +380,7 @@ impl InProcessClientStartArgs {
     pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
-            supported_server_requests: if self.supported_server_requests.is_empty() {
-                None
-            } else {
-                Some(self.supported_server_requests.clone())
-            },
+            permission_confirmations: self.permission_confirmations,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
                 None
             } else {
@@ -996,7 +991,7 @@ mod tests {
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
-            supported_server_requests: Vec::new(),
+            permission_confirmations: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity,
         })
@@ -1009,11 +1004,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_process_initialize_params_include_supported_server_requests() {
-        let expected_supported = vec![
-            SupportedServerRequestMethod::PermissionsRequestApproval,
-            SupportedServerRequestMethod::PermissionPresetRequestApproval,
-        ];
+    async fn in_process_initialize_params_include_permission_confirmations() {
         let args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config: Arc::new(build_test_config().await),
@@ -1028,7 +1019,7 @@ mod tests {
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
-            supported_server_requests: expected_supported.clone(),
+            permission_confirmations: true,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         };
@@ -1037,10 +1028,7 @@ mod tests {
             .initialize_params()
             .capabilities
             .expect("capabilities should be populated");
-        assert_eq!(
-            capabilities.supported_server_requests,
-            Some(expected_supported)
-        );
+        assert!(capabilities.permission_confirmations);
     }
 
     async fn start_test_remote_server<F, Fut>(handler: F) -> String
@@ -1207,7 +1195,7 @@ mod tests {
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
-            supported_server_requests: Vec::new(),
+            permission_confirmations: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 8,
         }
@@ -1652,7 +1640,7 @@ mod tests {
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
-            supported_server_requests: Vec::new(),
+            permission_confirmations: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 1,
         })
@@ -2046,7 +2034,7 @@ mod tests {
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
-            supported_server_requests: Vec::new(),
+            permission_confirmations: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         }

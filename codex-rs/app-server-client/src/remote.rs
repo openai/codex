@@ -36,7 +36,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -65,7 +64,7 @@ pub struct RemoteAppServerConnectArgs {
     pub client_name: String,
     pub client_version: String,
     pub experimental_api: bool,
-    pub supported_server_requests: Vec<SupportedServerRequestMethod>,
+    pub permission_confirmations: bool,
     pub opt_out_notification_methods: Vec<String>,
     pub channel_capacity: usize,
 }
@@ -74,11 +73,7 @@ impl RemoteAppServerConnectArgs {
     fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
-            supported_server_requests: if self.supported_server_requests.is_empty() {
-                None
-            } else {
-                Some(self.supported_server_requests.clone())
-            },
+            permission_confirmations: self.permission_confirmations,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
                 None
             } else {

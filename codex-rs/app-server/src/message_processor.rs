@@ -56,7 +56,6 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
-use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
@@ -180,7 +179,7 @@ pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
-    pub(crate) supported_server_requests: HashSet<SupportedServerRequestMethod>,
+    pub(crate) permission_confirmations: bool,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) client_version: Option<String>,
 }
@@ -461,10 +460,10 @@ impl MessageProcessor {
     pub(crate) async fn connection_initialized(
         &self,
         connection_id: ConnectionId,
-        supported_server_requests: HashSet<SupportedServerRequestMethod>,
+        permission_confirmations: bool,
     ) {
         self.codex_message_processor
-            .connection_initialized(connection_id, supported_server_requests)
+            .connection_initialized(connection_id, permission_confirmations)
             .await;
     }
 
@@ -570,25 +569,21 @@ impl MessageProcessor {
                 let (
                     experimental_api_enabled,
                     opt_out_notification_methods,
-                    supported_server_requests,
+                    permission_confirmations,
                 ) = match params.capabilities {
                     Some(capabilities) => (
                         capabilities.experimental_api,
                         capabilities
                             .opt_out_notification_methods
                             .unwrap_or_default(),
-                        capabilities
-                            .supported_server_requests
-                            .unwrap_or_default()
-                            .into_iter()
-                            .collect(),
+                        capabilities.permission_confirmations,
                     ),
-                    None => (false, Vec::new(), HashSet::new()),
+                    None => (false, Vec::new(), false),
                 };
                 session.experimental_api_enabled = experimental_api_enabled;
                 session.opted_out_notification_methods =
                     opt_out_notification_methods.into_iter().collect();
-                session.supported_server_requests = supported_server_requests;
+                session.permission_confirmations = permission_confirmations;
                 let ClientInfo {
                     name,
                     title: _title,
@@ -664,10 +659,7 @@ impl MessageProcessor {
                     // initialize handling for the specific connection.
                     outbound_initialized.store(true, Ordering::Release);
                     self.codex_message_processor
-                        .connection_initialized(
-                            connection_id,
-                            session.supported_server_requests.clone(),
-                        )
+                        .connection_initialized(connection_id, session.permission_confirmations)
                         .await;
                 }
                 return;

@@ -117,7 +117,6 @@ use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
-use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -3749,10 +3748,10 @@ impl CodexMessageProcessor {
     pub(crate) async fn connection_initialized(
         &self,
         connection_id: ConnectionId,
-        supported_server_requests: HashSet<SupportedServerRequestMethod>,
+        permission_confirmations: bool,
     ) {
         self.thread_state_manager
-            .connection_initialized(connection_id, supported_server_requests)
+            .connection_initialized(connection_id, permission_confirmations)
             .await;
     }
 
@@ -7558,16 +7557,9 @@ impl CodexMessageProcessor {
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
                             .await;
-                        let request_permissions_connection_ids = thread_state_manager
-                            .subscribed_connection_ids_supporting(
+                        let permission_confirmation_connection_ids = thread_state_manager
+                            .subscribed_connection_ids_with_permission_confirmations(
                                 conversation_id,
-                                SupportedServerRequestMethod::PermissionsRequestApproval,
-                            )
-                            .await;
-                        let request_permission_preset_connection_ids = thread_state_manager
-                            .subscribed_connection_ids_supporting(
-                                conversation_id,
-                                SupportedServerRequestMethod::PermissionPresetRequestApproval,
                             )
                             .await;
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
@@ -7576,9 +7568,9 @@ impl CodexMessageProcessor {
                             conversation_id,
                         );
                         let request_permissions_outgoing = thread_outgoing
-                            .with_connection_ids(request_permissions_connection_ids);
+                            .with_connection_ids(permission_confirmation_connection_ids.clone());
                         let request_permission_preset_outgoing = thread_outgoing
-                            .with_connection_ids(request_permission_preset_connection_ids);
+                            .with_connection_ids(permission_confirmation_connection_ids);
 
                         if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
                             && !raw_events_enabled
@@ -8728,20 +8720,13 @@ async fn apply_surface_capability_feature_gates(
     thread_state_manager: &ThreadStateManager,
     request_id: &ConnectionRequestId,
 ) {
-    let supported_server_requests = thread_state_manager
-        .supported_server_requests_for_connection(request_id.connection_id)
+    let permission_confirmations = thread_state_manager
+        .permission_confirmations_for_connection(request_id.connection_id)
         .await;
     gate_permission_tool_feature(
         config,
         Feature::RequestPermissionsTool,
-        supported_server_requests
-            .contains(&SupportedServerRequestMethod::PermissionsRequestApproval),
-    );
-    gate_permission_tool_feature(
-        config,
-        Feature::RequestPermissionPresetTool,
-        supported_server_requests
-            .contains(&SupportedServerRequestMethod::PermissionPresetRequestApproval),
+        permission_confirmations,
     );
 }
 
@@ -10000,7 +9985,7 @@ mod tests {
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
         manager
-            .connection_initialized(connection, HashSet::new())
+            .connection_initialized(connection, /*permission_confirmations*/ false)
             .await;
         manager
             .try_ensure_connection_subscribed(
@@ -10048,10 +10033,10 @@ mod tests {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
         manager
-            .connection_initialized(connection_a, HashSet::new())
+            .connection_initialized(connection_a, /*permission_confirmations*/ false)
             .await;
         manager
-            .connection_initialized(connection_b, HashSet::new())
+            .connection_initialized(connection_b, /*permission_confirmations*/ false)
             .await;
         manager
             .try_ensure_connection_subscribed(
@@ -10096,7 +10081,7 @@ mod tests {
         let connection = ConnectionId(1);
 
         manager
-            .connection_initialized(connection, HashSet::new())
+            .connection_initialized(connection, /*permission_confirmations*/ false)
             .await;
         let threads_to_unload = manager.remove_connection(connection).await;
         assert_eq!(threads_to_unload, Vec::<ThreadId>::new());

@@ -2296,15 +2296,10 @@
             "null"
           ]
         },
-        "supportedServerRequests": {
-          "description": "Server request methods this connection knows how to render and answer.",
-          "items": {
-            "$ref": "#/definitions/SupportedServerRequestMethod"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "permissionConfirmations": {
+          "default": false,
+          "description": "Opt into model-initiated permission confirmation requests.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3289,21 +3284,9 @@
     },
     "PermissionPresetRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Request sent to app clients when a model asks to switch permission modes.\n\nCore resolves the requested preset before emitting this payload, so clients should render the provided settings and label rather than recomputing policy choices from the preset id.",
+      "description": "Request sent to app clients when a model asks to switch permission modes.\n\nClients should open their local permission picker with the requested preset preselected, allowing the user to accept it or choose a different preset.",
       "properties": {
-        "approvalPolicy": {
-          "$ref": "#/definitions/v2/AskForApproval"
-        },
-        "approvalsReviewer": {
-          "$ref": "#/definitions/v2/ApprovalsReviewer"
-        },
-        "description": {
-          "type": "string"
-        },
         "itemId": {
-          "type": "string"
-        },
-        "label": {
           "type": "string"
         },
         "preset": {
@@ -3315,9 +3298,6 @@
             "null"
           ]
         },
-        "sandboxPolicy": {
-          "$ref": "#/definitions/v2/SandboxPolicy"
-        },
         "threadId": {
           "type": "string"
         },
@@ -3326,13 +3306,8 @@
         }
       },
       "required": [
-        "approvalPolicy",
-        "approvalsReviewer",
-        "description",
         "itemId",
-        "label",
         "preset",
-        "sandboxPolicy",
         "threadId",
         "turnId"
       ],
@@ -4852,14 +4827,6 @@
         }
       ],
       "title": "ServerRequest"
-    },
-    "SupportedServerRequestMethod": {
-      "description": "Server-initiated request methods a client can opt into during initialize.",
-      "enum": [
-        "item/permissions/requestApproval",
-        "item/permissionPreset/requestApproval"
-      ],
-      "type": "string"
     },
     "ToolRequestUserInputAnswer": {
       "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",

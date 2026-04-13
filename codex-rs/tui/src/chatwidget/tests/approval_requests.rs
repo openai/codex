@@ -2,8 +2,6 @@
 //! to keep the primary module under blob-size policy limits.
 
 use super::*;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permission_preset::PermissionPresetId;
 use codex_protocol::request_permission_preset::RequestPermissionPresetEvent;
 use pretty_assertions::assert_eq;
@@ -69,11 +67,6 @@ async fn permission_preset_request_opens_permissions_picker_with_requested_prese
         call_id: "preset-call".into(),
         turn_id: "preset-turn".into(),
         preset: PermissionPresetId::FullAccess,
-        label: "Full access".into(),
-        description: "Run commands without filesystem sandboxing; network access enabled.".into(),
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::DangerFullAccess,
         reason: Some("the user asked to switch into full access mode".into()),
     };
     chat.handle_codex_event(Event {

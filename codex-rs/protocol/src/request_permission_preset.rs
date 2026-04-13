@@ -1,13 +1,10 @@
 //! Protocol types for conversational permission-mode preset requests.
 //!
 //! These messages represent the narrow bridge between a model tool call and a
-//! client-owned confirmation UI. Core resolves a requested preset into concrete
-//! sandbox, approval, and reviewer settings before emitting the event, and the
-//! settings only become active after the client returns an accepted response.
+//! client-owned confirmation UI. Core validates the requested preset before
+//! emitting the event, and the settings only become active after the client
+//! returns an accepted response.
 
-use crate::config_types::ApprovalsReviewer;
-use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -81,11 +78,6 @@ pub struct RequestPermissionPresetEvent {
     #[serde(default)]
     pub turn_id: String,
     pub preset: PermissionPresetId,
-    pub label: String,
-    pub description: String,
-    pub approval_policy: AskForApproval,
-    pub approvals_reviewer: ApprovalsReviewer,
-    pub sandbox_policy: SandboxPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

@@ -10,10 +10,10 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PermissionPresetId as ApiPermissionPresetId;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
-use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -27,8 +27,8 @@ use wiremock::MockServer;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn permission_tools_are_hidden_without_supported_server_requests() -> Result<()> {
-    let body = first_responses_request_body_for_supported_server_requests(Vec::new()).await?;
+async fn permission_tools_are_hidden_without_permission_confirmations() -> Result<()> {
+    let body = first_responses_request_body_for_permission_confirmations(false).await?;
     assert_permission_tool_exposure(
         &body, /*expect_permissions*/ false, /*expect_preset*/ false,
     );
@@ -36,36 +36,8 @@ async fn permission_tools_are_hidden_without_supported_server_requests() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn permission_tools_expose_only_narrow_permission_capability() -> Result<()> {
-    let body = first_responses_request_body_for_supported_server_requests(vec![
-        SupportedServerRequestMethod::PermissionsRequestApproval,
-    ])
-    .await?;
-    assert_permission_tool_exposure(
-        &body, /*expect_permissions*/ true, /*expect_preset*/ false,
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn permission_tools_expose_only_preset_capability() -> Result<()> {
-    let body = first_responses_request_body_for_supported_server_requests(vec![
-        SupportedServerRequestMethod::PermissionPresetRequestApproval,
-    ])
-    .await?;
-    assert_permission_tool_exposure(
-        &body, /*expect_permissions*/ false, /*expect_preset*/ true,
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn permission_tools_expose_both_supported_capabilities() -> Result<()> {
-    let body = first_responses_request_body_for_supported_server_requests(vec![
-        SupportedServerRequestMethod::PermissionsRequestApproval,
-        SupportedServerRequestMethod::PermissionPresetRequestApproval,
-    ])
-    .await?;
+async fn permission_tools_expose_both_with_permission_confirmations() -> Result<()> {
+    let body = first_responses_request_body_for_permission_confirmations(true).await?;
     assert_permission_tool_exposure(
         &body, /*expect_permissions*/ true, /*expect_preset*/ true,
     );
@@ -83,11 +55,7 @@ async fn request_permissions_round_trips_when_client_supports_app_request() -> R
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    initialize_with_supported_server_requests(
-        &mut mcp,
-        vec![SupportedServerRequestMethod::PermissionsRequestApproval],
-    )
-    .await?;
+    initialize_with_permission_confirmations(&mut mcp, true).await?;
 
     let thread_id = start_thread_and_turn(&mut mcp, "pick a directory").await?;
 
@@ -192,11 +160,7 @@ async fn request_permission_preset_round_trips_when_client_supports_app_request(
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    initialize_with_supported_server_requests(
-        &mut mcp,
-        vec![SupportedServerRequestMethod::PermissionPresetRequestApproval],
-    )
-    .await?;
+    initialize_with_permission_confirmations(&mut mcp, true).await?;
 
     let thread_id = start_thread_and_turn(&mut mcp, "make this session full access").await?;
 
@@ -211,7 +175,7 @@ async fn request_permission_preset_round_trips_when_client_supports_app_request(
     };
     assert_eq!(params.thread_id, thread_id);
     assert_eq!(params.item_id, "call1");
-    assert_eq!(params.label, "Full Access");
+    assert_eq!(params.preset, ApiPermissionPresetId::FullAccess);
     let resolved_request_id = request_id.clone();
 
     mcp.send_response(
@@ -291,31 +255,9 @@ async fn request_permission_preset_auto_declines_without_app_request() -> Result
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn request_permission_preset_auto_declines_with_only_permissions_capability() -> Result<()> {
-    let codex_home = tempfile::TempDir::new()?;
-    let responses = vec![
-        create_request_permission_preset_sse_response("call1")?,
-        create_final_assistant_message_sse_response("done")?,
-    ];
-    let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(codex_home.path(), &server.uri())?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    initialize_with_supported_server_requests(
-        &mut mcp,
-        vec![SupportedServerRequestMethod::PermissionsRequestApproval],
-    )
-    .await?;
-
-    start_thread_and_turn(&mut mcp, "make this session full access").await?;
-    wait_for_turn_completed_without_server_request(&mut mcp).await?;
-    Ok(())
-}
-
-async fn initialize_with_supported_server_requests(
+async fn initialize_with_permission_confirmations(
     mcp: &mut McpProcess,
-    supported_server_requests: Vec<SupportedServerRequestMethod>,
+    permission_confirmations: bool,
 ) -> Result<()> {
     let initialized = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -327,7 +269,7 @@ async fn initialize_with_supported_server_requests(
             },
             Some(InitializeCapabilities {
                 experimental_api: true,
-                supported_server_requests: Some(supported_server_requests),
+                permission_confirmations,
                 opt_out_notification_methods: None,
             }),
         ),
@@ -339,8 +281,8 @@ async fn initialize_with_supported_server_requests(
     Ok(())
 }
 
-async fn first_responses_request_body_for_supported_server_requests(
-    supported_server_requests: Vec<SupportedServerRequestMethod>,
+async fn first_responses_request_body_for_permission_confirmations(
+    permission_confirmations: bool,
 ) -> Result<Value> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![create_final_assistant_message_sse_response("done")?];
@@ -348,10 +290,10 @@ async fn first_responses_request_body_for_supported_server_requests(
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    if supported_server_requests.is_empty() {
-        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    if permission_confirmations {
+        initialize_with_permission_confirmations(&mut mcp, true).await?;
     } else {
-        initialize_with_supported_server_requests(&mut mcp, supported_server_requests).await?;
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     }
 
     start_thread_and_turn(&mut mcp, "Hello").await?;
@@ -506,7 +448,6 @@ stream_max_retries = 0
 
 [features]
 request_permissions_tool = true
-request_permission_preset_tool = true
 "#
         ),
     )

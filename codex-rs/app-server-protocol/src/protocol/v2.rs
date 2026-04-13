@@ -6289,9 +6289,8 @@ impl From<CorePermissionPresetId> for PermissionPresetId {
 
 /// Request sent to app clients when a model asks to switch permission modes.
 ///
-/// Core resolves the requested preset before emitting this payload, so clients
-/// should render the provided settings and label rather than recomputing policy
-/// choices from the preset id.
+/// Clients should open their local permission picker with the requested preset
+/// preselected, allowing the user to accept it or choose a different preset.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6300,11 +6299,6 @@ pub struct PermissionPresetRequestApprovalParams {
     pub turn_id: String,
     pub item_id: String,
     pub preset: PermissionPresetId,
-    pub label: String,
-    pub description: String,
-    pub approval_policy: AskForApproval,
-    pub approvals_reviewer: ApprovalsReviewer,
-    pub sandbox_policy: SandboxPolicy,
     pub reason: Option<String>,
 }
 

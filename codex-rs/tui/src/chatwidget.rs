@@ -1589,11 +1589,6 @@ fn request_permission_preset_from_params(
         call_id: params.item_id,
         reason: params.reason,
         preset: params.preset.to_core(),
-        label: params.label,
-        description: params.description,
-        approval_policy: params.approval_policy.to_core(),
-        approvals_reviewer: params.approvals_reviewer.to_core(),
-        sandbox_policy: params.sandbox_policy.to_core(),
     }
 }
 
@@ -8617,22 +8612,24 @@ impl ChatWidget {
         vec![Box::new(move |tx| {
             let sandbox_clone = sandbox.clone();
             let message = format!("Permissions updated to {label}");
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    Some(approval),
-                    Some(approvals_reviewer),
-                    Some(sandbox_clone.clone()),
-                    /*windows_sandbox_level*/ None,
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )
-                .into_core(),
-            ));
+            if response.is_none() {
+                tx.send(AppEvent::CodexOp(
+                    AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        Some(approval),
+                        Some(approvals_reviewer),
+                        Some(sandbox_clone.clone()),
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
+                    )
+                    .into_core(),
+                ));
+            }
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
