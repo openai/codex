@@ -12,9 +12,12 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::ptr;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
@@ -33,11 +36,19 @@ use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
+use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::dpapi_protect;
+use codex_windows_sandbox::quote_windows_arg;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
@@ -76,6 +87,8 @@ pub fn provision_sandbox_users(
     let online_password = random_password();
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
+    initialize_local_user_profile(offline_username, &offline_password, log)?;
+    initialize_local_user_profile(online_username, &online_password, log)?;
     write_secrets(
         codex_home,
         offline_username,
@@ -207,6 +220,80 @@ pub fn ensure_local_group_member(group_name: &str, member_name: &str) -> Result<
             1,
         );
     }
+    Ok(())
+}
+
+fn initialize_local_user_profile(username: &str, password: &str, log: &mut File) -> Result<()> {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let cmd_exe = format!(r"{system_root}\System32\cmd.exe");
+    let bootstrap_cmd = format!("{} /c exit 0", quote_windows_arg(&cmd_exe));
+    let mut cmdline = to_wide(&bootstrap_cmd);
+    let exe_w = to_wide(OsStr::new(&cmd_exe));
+    let user_w = to_wide(OsStr::new(username));
+    let domain_w = to_wide(OsStr::new("."));
+    let password_w = to_wide(OsStr::new(password));
+    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let spawn_ok = unsafe {
+        CreateProcessWithLogonW(
+            user_w.as_ptr(),
+            domain_w.as_ptr(),
+            password_w.as_ptr(),
+            LOGON_WITH_PROFILE,
+            exe_w.as_ptr(),
+            cmdline.as_mut_ptr(),
+            CREATE_NO_WINDOW,
+            ptr::null(),
+            ptr::null(),
+            &si,
+            &mut pi,
+        )
+    };
+    if spawn_ok == 0 {
+        let err = unsafe { GetLastError() };
+        super::log_line(
+            log,
+            &format!("CreateProcessWithLogonW failed for {username} code {err}"),
+        )?;
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("failed to initialize profile for {username}, code {err}"),
+        )));
+    }
+
+    let wait_status = unsafe { WaitForSingleObject(pi.hProcess, 30_000) };
+    let mut exit_code: u32 = 0;
+    let exit_ok = unsafe { GetExitCodeProcess(pi.hProcess, &mut exit_code) };
+    unsafe {
+        if pi.hThread != 0 {
+            CloseHandle(pi.hThread);
+        }
+        if pi.hProcess != 0 {
+            CloseHandle(pi.hProcess);
+        }
+    }
+    if wait_status != WAIT_OBJECT_0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("profile initialization timed out for {username}, wait status {wait_status}"),
+        )));
+    }
+    if exit_ok == 0 {
+        let err = unsafe { GetLastError() };
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("GetExitCodeProcess failed for {username}, code {err}"),
+        )));
+    }
+    if exit_code != 0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("profile initialization exited with code {exit_code} for {username}"),
+        )));
+    }
+
+    super::log_line(log, &format!("initialized local profile for {username}"))?;
     Ok(())
 }
 
