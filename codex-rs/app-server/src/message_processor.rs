@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
+use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -181,6 +182,7 @@ pub(crate) struct MessageProcessor {
 
 #[derive(Debug, Default)]
 pub(crate) struct ConnectionSessionState {
+    rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
@@ -544,7 +546,12 @@ impl MessageProcessor {
         self.codex_message_processor.shutdown_threads().await;
     }
 
-    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_closed(
+        &self,
+        connection_id: ConnectionId,
+        session_state: &ConnectionSessionState,
+    ) {
+        session_state.rpc_gate.shutdown().await;
         self.outgoing.connection_closed(connection_id).await;
         self.fs_watch_manager.connection_closed(connection_id).await;
         self.codex_message_processor
@@ -755,10 +762,12 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
+        let rpc_gate = Arc::clone(&session.rpc_gate);
         let connection_id = connection_request_id.connection_id;
         let processor = Arc::clone(self);
         let span = request_context.span();
         let request = QueuedInitializedRequest::new(
+            rpc_gate,
             async move {
                 processor
                     .handle_initialized_client_request(

@@ -9,6 +9,7 @@ use codex_app_server_protocol::ClientRequestSerializationScope;
 use tokio::sync::Mutex;
 use tracing::Instrument;
 
+use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::outgoing_message::ConnectionId;
 
 type BoxFutureUnit = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -68,18 +69,24 @@ impl RequestSerializationQueueKey {
 }
 
 pub(crate) struct QueuedInitializedRequest {
+    gate: Arc<ConnectionRpcGate>,
     future: BoxFutureUnit,
 }
 
 impl QueuedInitializedRequest {
-    pub(crate) fn new(future: impl Future<Output = ()> + Send + 'static) -> Self {
+    pub(crate) fn new(
+        gate: Arc<ConnectionRpcGate>,
+        future: impl Future<Output = ()> + Send + 'static,
+    ) -> Self {
         Self {
+            gate,
             future: Box::pin(future),
         }
     }
 
     pub(crate) async fn run(self) {
-        self.future.await;
+        let Self { gate, future } = self;
+        gate.run(future).await;
     }
 }
 
@@ -142,15 +149,21 @@ impl RequestSerializationQueues {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
     use tokio::time::Duration;
     use tokio::time::timeout;
 
+    fn gate() -> Arc<ConnectionRpcGate> {
+        Arc::new(ConnectionRpcGate::new())
+    }
+
     #[tokio::test]
     async fn same_key_requests_run_fifo() {
         let queues = RequestSerializationQueues::default();
         let key = RequestSerializationQueueKey::Global("test");
+        let gate = gate();
         let (tx, mut rx) = mpsc::unbounded_channel();
 
         for value in [1, 2, 3] {
@@ -158,7 +171,7 @@ mod tests {
             queues
                 .enqueue(
                     key.clone(),
-                    QueuedInitializedRequest::new(async move {
+                    QueuedInitializedRequest::new(Arc::clone(&gate), async move {
                         tx.send(value).expect("receiver should be open");
                     }),
                 )
@@ -186,7 +199,7 @@ mod tests {
         queues
             .enqueue(
                 RequestSerializationQueueKey::Global("blocked"),
-                QueuedInitializedRequest::new(async move {
+                QueuedInitializedRequest::new(gate(), async move {
                     let _ = blocked_rx.await;
                 }),
             )
@@ -194,7 +207,7 @@ mod tests {
         queues
             .enqueue(
                 RequestSerializationQueueKey::Global("other"),
-                QueuedInitializedRequest::new(async move {
+                QueuedInitializedRequest::new(gate(), async move {
                     ran_tx.send(()).expect("receiver should be open");
                 }),
             )
@@ -207,5 +220,72 @@ mod tests {
         blocked_tx
             .send(())
             .expect("blocked request should be waiting");
+    }
+
+    #[tokio::test]
+    async fn closed_gate_request_is_skipped_and_following_requests_continue() {
+        let queues = RequestSerializationQueues::default();
+        let key = RequestSerializationQueueKey::Global("test");
+        let live_gate = gate();
+        let closed_gate = gate();
+        closed_gate.shutdown().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (blocked_tx, blocked_rx) = oneshot::channel::<()>();
+
+        {
+            let tx = tx.clone();
+            queues
+                .enqueue(
+                    key.clone(),
+                    QueuedInitializedRequest::new(Arc::clone(&live_gate), async move {
+                        tx.send(1).expect("receiver should be open");
+                        let _ = blocked_rx.await;
+                    }),
+                )
+                .await;
+        }
+        {
+            let tx = tx.clone();
+            queues
+                .enqueue(
+                    key.clone(),
+                    QueuedInitializedRequest::new(closed_gate, async move {
+                        tx.send(2).expect("receiver should be open");
+                    }),
+                )
+                .await;
+        }
+        {
+            let tx = tx.clone();
+            queues
+                .enqueue(
+                    key,
+                    QueuedInitializedRequest::new(live_gate, async move {
+                        tx.send(3).expect("receiver should be open");
+                    }),
+                )
+                .await;
+        }
+        drop(tx);
+
+        assert_eq!(
+            timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .expect("timed out waiting for first request"),
+            Some(1)
+        );
+        blocked_tx
+            .send(())
+            .expect("blocked request should be waiting");
+
+        let mut values = Vec::new();
+        while let Some(value) = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for queue to drain")
+        {
+            values.push(value);
+        }
+
+        assert_eq!(values, vec![3]);
     }
 }

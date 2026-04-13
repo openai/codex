@@ -69,6 +69,7 @@ mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;
 mod config_api;
+mod connection_rpc_gate;
 mod dynamic_tools;
 mod error_code;
 mod external_agent_config_api;
@@ -748,9 +749,9 @@ pub async fn run_main_with_transport(
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
-                                if connections.remove(&connection_id).is_none() {
+                                let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
-                                }
+                                };
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
@@ -758,7 +759,7 @@ pub async fn run_main_with_transport(
                                 {
                                     break;
                                 }
-                                processor.connection_closed(connection_id).await;
+                                processor.connection_closed(connection_id, &connection_state.session).await;
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
                                 }
