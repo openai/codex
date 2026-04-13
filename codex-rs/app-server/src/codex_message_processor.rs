@@ -2331,6 +2331,13 @@ impl CodexMessageProcessor {
             };
         }
 
+        apply_surface_capability_feature_gates(
+            &mut config,
+            &listener_task_context.thread_state_manager,
+            &request_id,
+        )
+        .await;
+
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
@@ -3886,7 +3893,7 @@ impl CodexMessageProcessor {
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
-        let config = match derive_config_for_cwd(
+        let mut config = match derive_config_for_cwd(
             &cli_overrides,
             request_overrides,
             typesafe_overrides,
@@ -3904,6 +3911,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        apply_surface_capability_feature_gates(
+            &mut config,
+            &self.thread_state_manager,
+            &request_id,
+        )
+        .await;
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
@@ -4444,7 +4457,7 @@ impl CodexMessageProcessor {
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
-        let config = match derive_config_for_cwd(
+        let mut config = match derive_config_for_cwd(
             &cli_overrides,
             request_overrides,
             typesafe_overrides,
@@ -4463,6 +4476,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        apply_surface_capability_feature_gates(
+            &mut config,
+            &self.thread_state_manager,
+            &request_id,
+        )
+        .await;
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
@@ -7539,11 +7558,19 @@ impl CodexMessageProcessor {
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
                             .await;
+                        let request_permissions_connection_ids = thread_state_manager
+                            .subscribed_connection_ids_supporting(
+                                conversation_id,
+                                SupportedServerRequestMethod::PermissionsRequestApproval,
+                            )
+                            .await;
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                             outgoing_for_task.clone(),
                             subscribed_connection_ids,
                             conversation_id,
                         );
+                        let request_permissions_outgoing = thread_outgoing
+                            .with_connection_ids(request_permissions_connection_ids);
 
                         if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
                             && !raw_events_enabled
@@ -7565,6 +7592,7 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             thread_manager.clone(),
                             thread_outgoing,
+                            request_permissions_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
                             api_version,
@@ -8684,6 +8712,45 @@ async fn derive_config_from_params(
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
     Ok(config)
+}
+
+async fn apply_surface_capability_feature_gates(
+    config: &mut Config,
+    thread_state_manager: &ThreadStateManager,
+    request_id: &ConnectionRequestId,
+) {
+    let supported_server_requests = thread_state_manager
+        .supported_server_requests_for_connection(request_id.connection_id)
+        .await;
+    gate_permission_tool_feature(
+        config,
+        Feature::RequestPermissionsTool,
+        supported_server_requests
+            .contains(&SupportedServerRequestMethod::PermissionsRequestApproval),
+    );
+    gate_permission_tool_feature(
+        config,
+        Feature::RequestPermissionPresetTool,
+        /*surface_supports_tool*/ false,
+    );
+}
+
+fn gate_permission_tool_feature(
+    config: &mut Config,
+    feature: Feature,
+    surface_supports_tool: bool,
+) {
+    if surface_supports_tool || !config.features.get().enabled(feature) {
+        return;
+    }
+
+    if let Err(err) = config.features.disable(feature) {
+        warn!(
+            ?feature,
+            error = %err,
+            "failed to gate permission tool feature for unsupported app-server surface"
+        );
+    }
 }
 
 async fn derive_config_for_cwd(
