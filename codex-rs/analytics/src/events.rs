@@ -342,6 +342,8 @@ pub(crate) struct CodexCompactionEventRequest {
 pub(crate) struct CodexTurnEventParams {
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
+    // TODO(rhan-oai): Populate once queued/default submission type is plumbed from
+    // the turn/start callsites instead of always being reported as None.
     pub(crate) submission_type: Option<TurnSubmissionType>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
@@ -366,6 +368,8 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) steer_count: Option<usize>,
+    // TODO(rhan-oai): Populate these once tool-call accounting is emitted from
+    // core; the schema is reserved but these fields are currently always None.
     pub(crate) total_tool_call_count: Option<usize>,
     pub(crate) shell_command_count: Option<usize>,
     pub(crate) file_change_count: Option<usize>,
