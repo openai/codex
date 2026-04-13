@@ -308,6 +308,16 @@ fn request_permissions_tool_includes_full_permission_schema() {
             )),
         ),
         ("permissions".to_string(), permission_profile_schema()),
+        (
+            "scope".to_string(),
+            JsonSchema::string_enum(
+                vec![serde_json::json!("turn"), serde_json::json!("session")],
+                Some(
+                    "How long the granted permissions should apply. Use \"session\" when the user explicitly asks for access in this session; defaults to \"turn\"."
+                        .to_string(),
+                ),
+            ),
+        ),
     ]);
 
     assert_eq!(
@@ -325,6 +335,14 @@ fn request_permissions_tool_includes_full_permission_schema() {
             output_schema: None,
         })
     );
+}
+
+#[test]
+fn request_permissions_tool_description_marks_returned_decision_as_resolved() {
+    let description = request_permissions_tool_description();
+
+    assert!(description.contains("the user has already approved or denied the request"));
+    assert!(description.contains("do not ask the user to approve the same request again"));
 }
 
 #[test]

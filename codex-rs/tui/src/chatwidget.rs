@@ -1572,6 +1572,7 @@ fn request_permissions_from_params(
         call_id: params.item_id,
         reason: params.reason,
         permissions: params.permissions.into(),
+        suggested_scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
     }
 }
 

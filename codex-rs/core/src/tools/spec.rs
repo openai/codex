@@ -72,6 +72,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::RequestPermissionPresetHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -139,6 +140,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
     let request_permissions_handler = Arc::new(RequestPermissionsHandler);
+    let request_permission_preset_handler = Arc::new(RequestPermissionPresetHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
@@ -208,6 +210,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::RequestPermissions => {
                 builder.register_handler(handler.name, request_permissions_handler.clone());
+            }
+            ToolHandlerKind::RequestPermissionPreset => {
+                builder.register_handler(handler.name, request_permission_preset_handler.clone());
             }
             ToolHandlerKind::RequestUserInput => {
                 builder.register_handler(handler.name, request_user_input_handler.clone());

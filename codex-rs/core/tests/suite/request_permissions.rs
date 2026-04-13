@@ -115,6 +115,21 @@ fn request_permissions_tool_event(
     Ok(ev_function_call(call_id, "request_permissions", &args_str))
 }
 
+fn request_permissions_tool_event_with_scope(
+    call_id: &str,
+    reason: &str,
+    permissions: &RequestPermissionProfile,
+    scope: PermissionGrantScope,
+) -> Result<Value> {
+    let args = json!({
+        "reason": reason,
+        "permissions": permissions,
+        "scope": scope,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "request_permissions", &args_str))
+}
+
 fn shell_command_event(call_id: &str, command: &str) -> Result<Value> {
     let args = json!({
         "command": command,
@@ -312,6 +327,90 @@ fn normalized_directory_write_permissions(path: &Path) -> Result<RequestPermissi
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn request_permissions_tool_output_tells_model_decision_is_resolved() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let requested_dir = test.workspace_path("resolved-permissions-output");
+    fs::create_dir_all(&requested_dir)?;
+    let requested_permissions = requested_directory_write_permissions(&requested_dir);
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-resolved-permissions-1"),
+                request_permissions_tool_event_with_scope(
+                    "permissions-call",
+                    "Allow writing outside the workspace",
+                    &requested_permissions,
+                    PermissionGrantScope::Session,
+                )?,
+                ev_completed("resp-resolved-permissions-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-resolved-permissions-2"),
+                ev_assistant_message("msg-resolved-permissions-1", "done"),
+                ev_completed("resp-resolved-permissions-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow writing outside the workspace in this session",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: granted_permissions.clone(),
+                scope: PermissionGrantScope::Session,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let output = responses
+        .function_call_output_text("permissions-call")
+        .expect("request_permissions tool output");
+    let output_json: Value = serde_json::from_str(&output)?;
+    let message = output_json["message"]
+        .as_str()
+        .expect("model-facing resolution message");
+    assert_eq!(output_json["status"], json!("granted"));
+    assert_eq!(output_json["scope"], json!("session"));
+    assert_eq!(
+        output_json["permissions"],
+        serde_json::to_value(&granted_permissions)?
+    );
+    assert!(message.contains("already approved"));
+    assert!(message.contains("active now"));
+    assert!(message.contains("do not ask"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn with_additional_permissions_requires_approval_under_on_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -475,6 +574,8 @@ async fn request_permissions_tool_is_auto_denied_when_granular_request_permissio
     );
 
     let call_output = results.single_request().function_call_output(call_id);
+    let output_json: Value =
+        serde_json::from_str(call_output["output"].as_str().unwrap_or_default())?;
     let result: RequestPermissionsResponse =
         serde_json::from_str(call_output["output"].as_str().unwrap_or_default())?;
     assert_eq!(
@@ -483,6 +584,13 @@ async fn request_permissions_tool_is_auto_denied_when_granular_request_permissio
             permissions: RequestPermissionProfile::default(),
             scope: PermissionGrantScope::Turn,
         }
+    );
+    assert_eq!(output_json["status"], json!("denied"));
+    assert!(
+        output_json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("already denied")
     );
 
     Ok(())
