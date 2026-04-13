@@ -62,6 +62,9 @@ use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContex
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PermissionPresetApprovalDecision;
+use codex_app_server_protocol::PermissionPresetRequestApprovalParams;
+use codex_app_server_protocol::PermissionPresetRequestApprovalResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::PlanDeltaNotification;
@@ -131,6 +134,9 @@ use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::request_permission_preset::PermissionPresetId;
+use codex_protocol::request_permission_preset::RequestPermissionPresetDecision as CoreRequestPermissionPresetDecision;
+use codex_protocol::request_permission_preset::RequestPermissionPresetResponse as CoreRequestPermissionPresetResponse;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
@@ -169,6 +175,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     thread_manager: Arc<ThreadManager>,
     outgoing: ThreadScopedOutgoingMessageSender,
     request_permissions_outgoing: ThreadScopedOutgoingMessageSender,
+    request_permission_preset_outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
     api_version: ApiVersion,
@@ -903,6 +910,59 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await
                 {
                     error!("failed to submit RequestPermissionsResponse: {err}");
+                }
+            }
+        }
+        EventMsg::RequestPermissionPreset(request) => {
+            if matches!(api_version, ApiVersion::V2)
+                && !request_permission_preset_outgoing.is_empty()
+            {
+                let params = PermissionPresetRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id.clone(),
+                    item_id: request.call_id.clone(),
+                    preset: request.preset.into(),
+                    label: request.label.clone(),
+                    description: request.description,
+                    approval_policy: request.approval_policy.into(),
+                    approvals_reviewer: request.approvals_reviewer.into(),
+                    sandbox_policy: request.sandbox_policy.into(),
+                    reason: request.reason,
+                };
+                let (pending_request_id, rx) = request_permission_preset_outgoing
+                    .send_request(ServerRequestPayload::PermissionPresetRequestApproval(
+                        params,
+                    ))
+                    .await;
+                tokio::spawn(async move {
+                    on_request_permission_preset_response(
+                        request.call_id,
+                        request.preset,
+                        pending_request_id,
+                        rx,
+                        conversation,
+                        thread_state,
+                    )
+                    .await;
+                });
+            } else {
+                warn!(
+                    "request_permission_preset is not supported by this app-server client (call_id: {})",
+                    request.call_id
+                );
+                let declined = CoreRequestPermissionPresetResponse {
+                    decision: CoreRequestPermissionPresetDecision::Declined,
+                    preset: request.preset,
+                    message: "permission confirmation UI is not available in this client; no permissions were changed".to_string(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::RequestPermissionPresetResponse {
+                        id: request.call_id,
+                        response: declined,
+                    })
+                    .await
+                {
+                    error!("failed to submit RequestPermissionPresetResponse: {err}");
                 }
             }
         }
@@ -2518,6 +2578,85 @@ async fn on_request_permissions_response(
     }
 }
 
+async fn on_request_permission_preset_response(
+    call_id: String,
+    preset: PermissionPresetId,
+    pending_request_id: RequestId,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+) {
+    let response = receiver.await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    let response = request_permission_preset_response_from_client_result(preset, response);
+
+    if let Err(err) = conversation
+        .submit(Op::RequestPermissionPresetResponse {
+            id: call_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit RequestPermissionPresetResponse: {err}");
+    }
+}
+
+fn request_permission_preset_response_from_client_result(
+    preset: PermissionPresetId,
+    response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
+) -> CoreRequestPermissionPresetResponse {
+    let value = match response {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => {
+            return CoreRequestPermissionPresetResponse {
+                decision: CoreRequestPermissionPresetDecision::Declined,
+                preset,
+                message: "turn transitioned before the permission preset request was resolved"
+                    .to_string(),
+            };
+        }
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            return CoreRequestPermissionPresetResponse {
+                decision: CoreRequestPermissionPresetDecision::Declined,
+                preset,
+                message: "permission preset request failed".to_string(),
+            };
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            return CoreRequestPermissionPresetResponse {
+                decision: CoreRequestPermissionPresetDecision::Declined,
+                preset,
+                message: "permission preset request failed".to_string(),
+            };
+        }
+    };
+
+    let response = serde_json::from_value::<PermissionPresetRequestApprovalResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize PermissionPresetRequestApprovalResponse: {err}");
+            PermissionPresetRequestApprovalResponse {
+                decision: PermissionPresetApprovalDecision::Declined,
+                preset: preset.into(),
+            }
+        });
+    let decision = response.decision.to_core();
+    let selected_preset = response.preset.to_core();
+    CoreRequestPermissionPresetResponse {
+        decision,
+        preset: selected_preset,
+        message: match decision {
+            CoreRequestPermissionPresetDecision::Accepted => {
+                "permission preset request accepted".to_string()
+            }
+            CoreRequestPermissionPresetDecision::Declined => {
+                "permission preset request declined".to_string()
+            }
+        },
+    }
+}
+
 fn request_permissions_response_from_client_result(
     requested_permissions: CoreRequestPermissionProfile,
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
@@ -3062,6 +3201,7 @@ mod tests {
                 self.conversation_id,
                 self.conversation.clone(),
                 self.thread_manager.clone(),
+                self.outgoing.clone(),
                 self.outgoing.clone(),
                 self.outgoing.clone(),
                 self.thread_state.clone(),

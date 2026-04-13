@@ -3270,6 +3270,93 @@
       ],
       "type": "string"
     },
+    "PermissionPresetApprovalDecision": {
+      "enum": [
+        "accepted",
+        "declined"
+      ],
+      "type": "string"
+    },
+    "PermissionPresetId": {
+      "description": "A built-in permission-mode preset that app clients can confirm.",
+      "enum": [
+        "auto",
+        "full-access",
+        "read-only",
+        "guardian-approvals"
+      ],
+      "type": "string"
+    },
+    "PermissionPresetRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Request sent to app clients when a model asks to switch permission modes.\n\nCore resolves the requested preset before emitting this payload, so clients should render the provided settings and label rather than recomputing policy choices from the preset id.",
+      "properties": {
+        "approvalPolicy": {
+          "$ref": "#/definitions/v2/AskForApproval"
+        },
+        "approvalsReviewer": {
+          "$ref": "#/definitions/v2/ApprovalsReviewer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "preset": {
+          "$ref": "#/definitions/PermissionPresetId"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandboxPolicy": {
+          "$ref": "#/definitions/v2/SandboxPolicy"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approvalPolicy",
+        "approvalsReviewer",
+        "description",
+        "itemId",
+        "label",
+        "preset",
+        "sandboxPolicy",
+        "threadId",
+        "turnId"
+      ],
+      "title": "PermissionPresetRequestApprovalParams",
+      "type": "object"
+    },
+    "PermissionPresetRequestApprovalResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Response from an app client after the permission preset picker resolves.",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/PermissionPresetApprovalDecision"
+        },
+        "preset": {
+          "$ref": "#/definitions/PermissionPresetId"
+        }
+      },
+      "required": [
+        "decision",
+        "preset"
+      ],
+      "title": "PermissionPresetRequestApprovalResponse",
+      "type": "object"
+    },
     "PermissionsRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4635,6 +4722,31 @@
             "params"
           ],
           "title": "Item/permissions/requestApprovalRequest",
+          "type": "object"
+        },
+        {
+          "description": "Request the client to open its permission preset picker.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "item/permissionPreset/requestApproval"
+              ],
+              "title": "Item/permissionPreset/requestApprovalRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PermissionPresetRequestApprovalParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/permissionPreset/requestApprovalRequest",
           "type": "object"
         },
         {

@@ -7564,6 +7564,12 @@ impl CodexMessageProcessor {
                                 SupportedServerRequestMethod::PermissionsRequestApproval,
                             )
                             .await;
+                        let request_permission_preset_connection_ids = thread_state_manager
+                            .subscribed_connection_ids_supporting(
+                                conversation_id,
+                                SupportedServerRequestMethod::PermissionPresetRequestApproval,
+                            )
+                            .await;
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                             outgoing_for_task.clone(),
                             subscribed_connection_ids,
@@ -7571,6 +7577,8 @@ impl CodexMessageProcessor {
                         );
                         let request_permissions_outgoing = thread_outgoing
                             .with_connection_ids(request_permissions_connection_ids);
+                        let request_permission_preset_outgoing = thread_outgoing
+                            .with_connection_ids(request_permission_preset_connection_ids);
 
                         if let EventMsg::RawResponseItem(raw_response_item_event) = &event.msg
                             && !raw_events_enabled
@@ -7593,6 +7601,7 @@ impl CodexMessageProcessor {
                             thread_manager.clone(),
                             thread_outgoing,
                             request_permissions_outgoing,
+                            request_permission_preset_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
                             api_version,
@@ -8731,7 +8740,8 @@ async fn apply_surface_capability_feature_gates(
     gate_permission_tool_feature(
         config,
         Feature::RequestPermissionPresetTool,
-        /*surface_supports_tool*/ false,
+        supported_server_requests
+            .contains(&SupportedServerRequestMethod::PermissionPresetRequestApproval),
     );
 }
 
