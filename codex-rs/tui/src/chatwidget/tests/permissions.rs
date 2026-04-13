@@ -77,7 +77,9 @@ async fn full_access_confirmation_popup_snapshot() {
         .into_iter()
         .find(|preset| preset.id == "full-access")
         .expect("full access preset");
-    chat.open_full_access_confirmation(preset, /*return_to_permissions*/ false);
+    chat.open_full_access_confirmation(
+        preset, /*return_to_permissions*/ false, /*permission_preset_context*/ None,
+    );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("full_access_confirmation_popup", popup);
@@ -669,8 +671,10 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,
+                permission_preset_context,
             } => {
-                open_confirmation_event = Some((preset, return_to_permissions));
+                open_confirmation_event =
+                    Some((preset, return_to_permissions, permission_preset_context));
             }
             _ => {}
         }
@@ -681,9 +685,9 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             "did not expect history cell before confirming full access"
         );
     }
-    let (preset, return_to_permissions) =
+    let (preset, return_to_permissions, permission_preset_context) =
         open_confirmation_event.expect("expected full access confirmation event");
-    chat.open_full_access_confirmation(preset, return_to_permissions);
+    chat.open_full_access_confirmation(preset, return_to_permissions, permission_preset_context);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
