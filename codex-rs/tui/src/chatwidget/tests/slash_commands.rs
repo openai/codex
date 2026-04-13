@@ -1,4 +1,5 @@
 use super::*;
+use codex_terminal_detection::Multiplexer;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -435,9 +436,42 @@ async fn slash_resume_opens_picker() {
 async fn slash_fork_requests_current_fork() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.dispatch_command(SlashCommand::Fork);
+    chat.dispatch_fork_command(/*multiplexer*/ None);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ForkCurrentSession { placement: None })
+    );
+}
+
+#[tokio::test]
+async fn slash_fork_opens_tmux_popup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_fork_command(Some(&Multiplexer::Tmux { version: None }));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected /fork in tmux to open a popup instead of dispatching immediately"
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("fork_selection_popup_tmux", popup);
+}
+
+#[tokio::test]
+async fn slash_fork_opens_zellij_popup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_fork_command(Some(&Multiplexer::Zellij {}));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected /fork in zellij to open a popup instead of dispatching immediately"
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("fork_selection_popup_zellij", popup);
 }
 
 #[tokio::test]
