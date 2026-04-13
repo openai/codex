@@ -23,6 +23,10 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
@@ -77,6 +81,22 @@ impl ApplyPatchRuntime {
             use_legacy_landlock: attempt.use_legacy_landlock,
             additional_permissions: req.additional_permissions.clone(),
         })
+    }
+
+    async fn emit_output_delta(ctx: &ToolCtx, stream: ExecOutputStream, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+
+        let event = Event {
+            id: ctx.turn.sub_id.clone(),
+            msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                call_id: ctx.call_id.clone(),
+                stream,
+                chunk: chunk.to_vec(),
+            }),
+        };
+        let _ = ctx.session.get_tx_event().send(event).await;
     }
 }
 
@@ -195,6 +215,8 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         .await;
         let stdout = String::from_utf8_lossy(&stdout).into_owned();
         let stderr = String::from_utf8_lossy(&stderr).into_owned();
+        Self::emit_output_delta(ctx, ExecOutputStream::Stdout, stdout.as_bytes()).await;
+        Self::emit_output_delta(ctx, ExecOutputStream::Stderr, stderr.as_bytes()).await;
         let exit_code = if result.is_ok() { 0 } else { 1 };
         let output = ExecToolCallOutput {
             exit_code,
