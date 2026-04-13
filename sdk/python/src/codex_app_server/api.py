@@ -146,7 +146,6 @@ class Codex:
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
         service_tier: ServiceTier | None = None,
-        session_start_source: ThreadStartSource | None = None,
     ) -> Thread:
         params = ThreadStartParams(
             approval_policy=approval_policy,
@@ -162,7 +161,6 @@ class Codex:
             sandbox=sandbox,
             service_name=service_name,
             service_tier=service_tier,
-            session_start_source=session_start_source,
         )
         started = self._client.thread_start(params)
         return Thread(self._client, started.thread.id)
@@ -338,7 +336,6 @@ class AsyncCodex:
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
         service_tier: ServiceTier | None = None,
-        session_start_source: ThreadStartSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
         params = ThreadStartParams(
@@ -355,7 +352,6 @@ class AsyncCodex:
             sandbox=sandbox,
             service_name=service_name,
             service_tier=service_tier,
-            session_start_source=session_start_source,
         )
         started = await self._client.thread_start(params)
         return AsyncThread(self, started.thread.id)

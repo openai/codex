@@ -2,7 +2,7 @@
 
 Experimental Python SDK for `codex app-server` JSON-RPC v2 over stdio, with a small default surface optimized for real scripts and apps.
 
-The generated wire-model layer is currently sourced from the bundled v2 schema and exposed as Pydantic models with snake_case Python fields that serialize back to the app-server’s camelCase wire format.
+The generated wire-model layer is sourced from the pinned runtime's `codex app-server generate-json-schema` output and exposed as Pydantic models with snake_case Python fields that serialize back to the app-server’s camelCase wire format.
 
 ## Install
 
@@ -87,6 +87,7 @@ python scripts/update_sdk_artifacts.py \
 This supports the CI release flow:
 
 - run `generate-types` before packaging
+- generate types from the pinned runtime schema, then convert that schema to Python
 - stage `openai-codex` once with an exact `openai-codex-cli-bin==...` dependency
 - stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
 - build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist

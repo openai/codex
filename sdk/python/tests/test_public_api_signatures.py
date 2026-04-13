@@ -56,7 +56,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "sandbox",
             "service_name",
             "service_tier",
-            "session_start_source",
         ],
         Codex.thread_list: [
             "archived",
@@ -132,7 +131,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "sandbox",
             "service_name",
             "service_tier",
-            "session_start_source",
         ],
         AsyncCodex.thread_list: [
             "archived",

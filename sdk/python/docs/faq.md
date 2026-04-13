@@ -60,8 +60,10 @@ Common causes:
 - incompatible/old app-server
 
 Maintainers stage releases by building the SDK once and the runtime once per
-platform with the same pinned runtime version. Publish `openai-codex-cli-bin`
-as platform wheels only; do not publish an sdist:
+platform with the same pinned runtime version. `generate-types` first asks that
+pinned runtime to emit the app-server JSON schema, then converts the emitted
+schema to Python. Publish `openai-codex-cli-bin` as platform wheels only; do not
+publish an sdist:
 
 ```bash
 cd sdk/python
