@@ -16,11 +16,8 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
         if argv1 == Some(CODEX_CORE_APPLY_PATCH_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
-        // Helper re-execs inherit this ctor too, but they may run inside a
-        // sandbox where creating another CODEX_HOME tempdir under /tmp is not
-        // allowed.
         if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
-            return TestBinaryDispatchMode::Skip;
+            return TestBinaryDispatchMode::DispatchArg0Only;
         }
         TestBinaryDispatchMode::InstallAliases
     })
