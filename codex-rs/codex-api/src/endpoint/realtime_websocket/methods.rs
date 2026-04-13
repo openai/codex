@@ -1220,13 +1220,21 @@ mod tests {
                 ],
                 in_progress_parts: vec![
                     ActiveTranscriptPart {
-                        key: transcript_part_key("user", None, None, None),
+                        key: transcript_part_key(
+                            "user", /*item_id*/ None, /*output_index*/ None,
+                            /*content_index*/ None,
+                        ),
                         entry_index: 1,
                         start: 0,
                         end: "delegated query".len(),
                     },
                     ActiveTranscriptPart {
-                        key: transcript_part_key("assistant", None, None, None),
+                        key: transcript_part_key(
+                            "assistant",
+                            /*item_id*/ None,
+                            /*output_index*/ None,
+                            /*content_index*/ None,
+                        ),
                         entry_index: 2,
                         start: 0,
                         end: "assist confirm".len(),
