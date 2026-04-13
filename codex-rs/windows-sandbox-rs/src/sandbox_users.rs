@@ -12,9 +12,12 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
@@ -33,6 +36,14 @@ use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
+use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -76,6 +87,8 @@ pub fn provision_sandbox_users(
     let online_password = random_password();
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
+    initialize_user_profile(offline_username, &offline_password, log)?;
+    initialize_user_profile(online_username, &online_password, log)?;
     write_secrets(
         codex_home,
         offline_username,
@@ -85,6 +98,107 @@ pub fn provision_sandbox_users(
         proxy_ports,
         allow_local_binding,
     )?;
+    Ok(())
+}
+
+fn initialize_user_profile(username: &str, password: &str, log: &mut File) -> Result<()> {
+    let profile_dir = PathBuf::from(format!(r"C:\Users\{username}"));
+    if profile_dir.exists() {
+        super::log_line(
+            log,
+            &format!("sandbox user profile already initialized for {username}"),
+        )?;
+        return Ok(());
+    }
+
+    let exe = r"C:\Windows\System32\cmd.exe";
+    let command = format!(r#""{exe}" /c exit 0"#);
+    let user_w = to_wide(OsStr::new(username));
+    let domain_w = to_wide(".");
+    let password_w = to_wide(OsStr::new(password));
+    let exe_w = to_wide(OsStr::new(exe));
+    let mut command_w = to_wide(command.as_str());
+    let mut startup_info: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup_info.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process_info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    super::log_line(
+        log,
+        &format!("initializing sandbox user profile for {username}"),
+    )?;
+
+    let launched = unsafe {
+        CreateProcessWithLogonW(
+            user_w.as_ptr(),
+            domain_w.as_ptr(),
+            password_w.as_ptr(),
+            LOGON_WITH_PROFILE,
+            exe_w.as_ptr(),
+            command_w.as_mut_ptr(),
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup_info,
+            &mut process_info,
+        )
+    };
+    if launched == 0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!(
+                "CreateProcessWithLogonW failed for {username}: {}",
+                unsafe { GetLastError() }
+            ),
+        )));
+    }
+
+    let wait_result = unsafe {
+        if process_info.hThread != 0 {
+            CloseHandle(process_info.hThread);
+        }
+        WaitForSingleObject(process_info.hProcess, INFINITE)
+    };
+
+    let mut exit_code: u32 = 1;
+    let got_exit_code = unsafe { GetExitCodeProcess(process_info.hProcess, &mut exit_code) };
+    unsafe {
+        if process_info.hProcess != 0 {
+            CloseHandle(process_info.hProcess);
+        }
+    }
+    if wait_result == WAIT_TIMEOUT {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("profile bootstrap timed out for {username}"),
+        )));
+    }
+    if wait_result != WAIT_OBJECT_0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("WaitForSingleObject failed for {username}: {wait_result}"),
+        )));
+    }
+    if got_exit_code == 0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("GetExitCodeProcess failed for {username}: {}", unsafe {
+                GetLastError()
+            }),
+        )));
+    }
+    if exit_code != 0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("profile bootstrap command exited with {exit_code} for {username}"),
+        )));
+    }
+    if !profile_dir.exists() {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("profile directory was not created for {username}"),
+        )));
+    }
+
     Ok(())
 }
 
