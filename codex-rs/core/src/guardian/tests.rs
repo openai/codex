@@ -718,6 +718,14 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     assert!(warnings.is_empty());
 }
 
+#[test]
+fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
+    let message = guardian_timeout_message();
+    assert!(message.contains("did not finish before its deadline"));
+    assert!(message.contains("retry once"));
+    assert!(!message.contains("unacceptable risk"));
+}
+
 #[tokio::test]
 async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
     let (_session, mut turn) = crate::codex::make_session_and_context().await;

@@ -843,6 +843,20 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
     };
     assert!(message.contains("Reason: too risky"));
     assert!(message.contains("The agent must not attempt to achieve the same outcome"));
+    let timeout = mcp_tool_approval_decision_from_guardian(
+        session.as_ref(),
+        "review-id",
+        ReviewDecision::TimedOut,
+    )
+    .await;
+    let McpToolApprovalDecision::Decline {
+        message: Some(message),
+    } = timeout
+    else {
+        panic!("guardian timeout should carry a timeout message");
+    };
+    assert!(message.contains("did not finish before its deadline"));
+    assert!(!message.contains("unacceptable risk"));
     assert_eq!(
         mcp_tool_approval_decision_from_guardian(
             session.as_ref(),

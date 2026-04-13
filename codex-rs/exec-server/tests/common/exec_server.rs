@@ -41,12 +41,13 @@ impl Drop for ExecServerHarness {
 }
 
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
-    let binary = cargo_bin("codex-exec-server")?;
+    let binary = cargo_bin("codex")?;
     let mut child = Command::new(binary);
-    child.args(["--listen", "ws://127.0.0.1:0"]);
+    child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());
+    child.kill_on_drop(true);
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;
@@ -140,6 +141,9 @@ impl ExecServerHarness {
 
     pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.child.start_kill()?;
+        timeout(CONNECT_TIMEOUT, self.child.wait())
+            .await
+            .map_err(|_| anyhow!("timed out waiting for exec-server shutdown"))??;
         Ok(())
     }
 

@@ -928,6 +928,8 @@ fn search_tool_registers_namespaced_mcp_tool_aliases() {
     assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
     assert!(registry.has_handler(&app_alias));
     assert!(registry.has_handler(&mcp_alias));
+    assert!(registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
+    assert!(registry.has_handler(&ToolName::plain("mcp__rmcp__echo")));
 }
 
 #[test]

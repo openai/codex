@@ -38,6 +38,12 @@ const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "Otherwise, stop and request user input.",
 );
 
+const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
+    "The automatic permission approval review did not finish before its deadline. ",
+    "Do not assume the action is unsafe based on the timeout alone. ",
+    "You may retry once, or ask the user for guidance or explicit approval.",
+);
+
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -61,6 +67,10 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
             GUARDIAN_REJECTION_INSTRUCTIONS
         ),
     }
+}
+
+pub(crate) fn guardian_timeout_message() -> String {
+    GUARDIAN_TIMEOUT_INSTRUCTIONS.to_string()
 }
 
 #[derive(Debug)]
@@ -97,8 +107,9 @@ pub(crate) fn is_guardian_reviewer_source(
     )
 }
 
-/// This function always fails closed: any timeout, review-session failure, or
-/// parse failure is treated as a high-risk denial.
+/// This function always fails closed: timeouts, review-session failures, and
+/// parse failures all block execution, but timeouts are still surfaced to the
+/// caller as distinct from explicit guardian denials.
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -170,14 +181,36 @@ async fn run_guardian_review(
             outcome: GuardianAssessmentOutcome::Deny,
             rationale: format!("Automatic approval review failed: {err}"),
         },
-        GuardianReviewOutcome::TimedOut => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            user_authorization: GuardianUserAuthorization::Unknown,
-            outcome: GuardianAssessmentOutcome::Deny,
-            rationale:
+        GuardianReviewOutcome::TimedOut => {
+            let rationale =
                 "Automatic approval review timed out while evaluating the requested approval."
-                    .to_string(),
-        },
+                    .to_string();
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::Warning(WarningEvent {
+                        message: rationale.clone(),
+                    }),
+                )
+                .await;
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                        id: review_id,
+                        target_item_id,
+                        turn_id: assessment_turn_id,
+                        status: GuardianAssessmentStatus::TimedOut,
+                        risk_level: None,
+                        user_authorization: None,
+                        rationale: Some(rationale),
+                        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+                        action: terminal_action,
+                    }),
+                )
+                .await;
+            return ReviewDecision::TimedOut;
+        }
         GuardianReviewOutcome::Aborted => {
             session
                 .send_event(
