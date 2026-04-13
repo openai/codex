@@ -65,6 +65,7 @@ pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::GuardianAssessmentAction;
+pub use crate::approvals::GuardianAssessmentDecisionSource;
 pub use crate::approvals::GuardianAssessmentEvent;
 pub use crate::approvals::GuardianAssessmentStatus;
 pub use crate::approvals::GuardianCommandSource;
@@ -314,6 +315,16 @@ pub struct RealtimeResponseCancelled {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseCreated {
+    pub response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseDone {
+    pub response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
         session_id: String,
@@ -323,7 +334,9 @@ pub enum RealtimeEvent {
     InputTranscriptDelta(RealtimeTranscriptDelta),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
     AudioOut(RealtimeAudioFrame),
+    ResponseCreated(RealtimeResponseCreated),
     ResponseCancelled(RealtimeResponseCancelled),
+    ResponseDone(RealtimeResponseDone),
     ConversationItemAdded(Value),
     ConversationItemDone {
         item_id: String,
@@ -381,6 +394,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -654,6 +670,7 @@ impl From<Vec<UserInput>> for Op {
         Op::UserInput {
             items: value,
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         }
     }
 }
@@ -2407,6 +2424,7 @@ pub struct ResumedHistory {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub enum InitialHistory {
     New,
+    Cleared,
     Resumed(ResumedHistory),
     Forked(Vec<RolloutItem>),
 }
@@ -2414,7 +2432,7 @@ pub enum InitialHistory {
 impl InitialHistory {
     pub fn forked_from_id(&self) -> Option<ThreadId> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
@@ -2430,7 +2448,7 @@ impl InitialHistory {
 
     pub fn session_cwd(&self) -> Option<PathBuf> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => session_cwd_from_items(&resumed.history),
             InitialHistory::Forked(items) => session_cwd_from_items(items),
         }
@@ -2438,7 +2456,7 @@ impl InitialHistory {
 
     pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
         match self {
-            InitialHistory::New => Vec::new(),
+            InitialHistory::New | InitialHistory::Cleared => Vec::new(),
             InitialHistory::Resumed(resumed) => resumed.history.clone(),
             InitialHistory::Forked(items) => items.clone(),
         }
@@ -2446,7 +2464,7 @@ impl InitialHistory {
 
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => Some(
                 resumed
                     .history
@@ -2472,7 +2490,7 @@ impl InitialHistory {
     pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
         // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
@@ -2488,7 +2506,7 @@ impl InitialHistory {
 
     pub fn get_dynamic_tools(&self) -> Option<Vec<DynamicToolSpec>> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
@@ -3476,6 +3494,9 @@ pub enum ReviewDecision {
     #[default]
     Denied,
 
+    /// Automatic approval review timed out before reaching a decision.
+    TimedOut,
+
     /// User has denied this command and the agent should not do anything until
     /// the user's next command.
     Abort,
@@ -3496,6 +3517,7 @@ impl ReviewDecision {
                 NetworkPolicyRuleAction::Deny => "denied_with_network_policy_deny",
             },
             ReviewDecision::Denied => "denied",
+            ReviewDecision::TimedOut => "timed_out",
             ReviewDecision::Abort => "abort",
         }
     }
@@ -4132,7 +4154,8 @@ mod tests {
     #[test]
     fn restricted_file_system_policy_treats_root_with_carveouts_as_scoped_access() {
         let cwd = TempDir::new().expect("tempdir");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let root = AbsolutePathBuf::from_absolute_path(&canonical_cwd)
             .expect("absolute canonical tempdir")
             .as_path()
@@ -4142,8 +4165,7 @@ mod tests {
             .expect("filesystem root");
         let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path());
         let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            cwd.path()
-                .canonicalize()
+            codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
                 .expect("canonicalize cwd")
                 .join("blocked"),
         )
@@ -4188,7 +4210,8 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");
         std::fs::create_dir_all(cwd.path().join(".codex")).expect("create .codex");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let cwd_absolute =
             AbsolutePathBuf::from_absolute_path(&canonical_cwd).expect("absolute tempdir");
         let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path());
@@ -4255,7 +4278,8 @@ mod tests {
     #[test]
     fn restricted_file_system_policy_treats_read_entries_as_read_only_subpaths() {
         let cwd = TempDir::new().expect("tempdir");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let docs_public = AbsolutePathBuf::resolve_path_against_base("docs/public", cwd.path());
         let expected_docs = AbsolutePathBuf::from_absolute_path(canonical_cwd.join("docs"))
@@ -4302,7 +4326,8 @@ mod tests {
     fn legacy_workspace_write_nested_readable_root_stays_writable() {
         let cwd = TempDir::new().expect("tempdir");
         let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
         let policy = SandboxPolicy::WorkspaceWrite {
@@ -4704,6 +4729,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4721,6 +4747,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             }
         );
 
@@ -4740,6 +4767,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4751,6 +4779,33 @@ mod tests {
                 "final_output_json_schema": schema,
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: None,
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "fiber_run_id".to_string(),
+                "fiber-123".to_string(),
+            )])),
+        };
+
+        let json_op = serde_json::to_value(&op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "responsesapi_client_metadata": {
+                    "fiber_run_id": "fiber-123",
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Op>(json_op)?, op);
 
         Ok(())
     }

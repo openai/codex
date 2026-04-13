@@ -1414,6 +1414,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
@@ -1508,6 +1509,7 @@ dependencies = [
  "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
+ "codex-utils-rustls-provider",
  "futures",
  "pretty_assertions",
  "serde",
@@ -2095,9 +2097,10 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "base64 0.22.1",
- "clap",
  "codex-app-server-protocol",
+ "codex-config",
  "codex-protocol",
+ "codex-sandboxing",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
@@ -2105,12 +2108,14 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "test-case",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2842,7 +2847,6 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
- "codex-core",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",
@@ -2928,6 +2932,7 @@ name = "codex-utils-absolute-path"
 version = "0.0.0"
 dependencies = [
  "dirs",
+ "dunce",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",

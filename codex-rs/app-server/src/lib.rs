@@ -44,6 +44,7 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
@@ -360,7 +361,12 @@ pub async fn run_main_with_transport(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(EnvironmentManager::from_env());
+    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
+        ExecServerRuntimePaths::from_optional_paths(
+            arg0_paths.codex_self_exe.clone(),
+            arg0_paths.codex_linux_sandbox_exe.clone(),
+        )?,
+    )));
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -646,7 +652,7 @@ pub async fn run_main_with_transport(
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
-        let mut processor = MessageProcessor::new(MessageProcessorArgs {
+        let processor = MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),

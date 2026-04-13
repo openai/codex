@@ -130,7 +130,7 @@ fn normalize_additional_permissions_preserves_network() {
 
 #[cfg(unix)]
 #[test]
-fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
+fn normalize_additional_permissions_preserves_symlinked_write_paths() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let real_root = temp_dir.path().join("real");
     let link_root = temp_dir.path().join("link");
@@ -140,11 +140,6 @@ fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
 
     let link_write_dir =
         AbsolutePathBuf::from_absolute_path(link_root.join("write")).expect("link write dir");
-    let expected_write_dir = AbsolutePathBuf::from_absolute_path(
-        write_dir.canonicalize().expect("canonicalize write dir"),
-    )
-    .expect("absolute canonical write dir");
-
     let permissions = normalize_additional_permissions(PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
@@ -158,7 +153,10 @@ fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
         permissions.file_system,
         Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![expected_write_dir]),
+            write: Some(vec![
+                AbsolutePathBuf::from_absolute_path(link_root.join("write"))
+                    .expect("link write dir")
+            ]),
         })
     );
 }

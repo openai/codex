@@ -7,6 +7,7 @@ use crate::agent::AgentControl;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
+use crate::guardian::GuardianRejection;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
@@ -47,7 +48,7 @@ pub(crate) struct SessionServices {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
-    pub(crate) guardian_rejection_rationales: Mutex<HashMap<String, String>>,
+    pub(crate) guardian_rejections: Mutex<HashMap<String, GuardianRejection>>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,

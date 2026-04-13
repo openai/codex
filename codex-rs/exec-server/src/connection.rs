@@ -4,6 +4,7 @@ use futures::StreamExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -28,6 +29,7 @@ pub(crate) enum JsonRpcConnectionEvent {
 pub(crate) struct JsonRpcConnection {
     outgoing_tx: mpsc::Sender<JSONRPCMessage>,
     incoming_rx: mpsc::Receiver<JsonRpcConnectionEvent>,
+    disconnected_rx: watch::Receiver<bool>,
     task_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -40,9 +42,11 @@ impl JsonRpcConnection {
     {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (disconnected_tx, disconnected_rx) = watch::channel(false);
 
         let reader_label = connection_label.clone();
         let incoming_tx_for_reader = incoming_tx.clone();
+        let disconnected_tx_for_reader = disconnected_tx.clone();
         let reader_task = tokio::spawn(async move {
             let mut lines = BufReader::new(reader).lines();
             loop {
@@ -73,12 +77,18 @@ impl JsonRpcConnection {
                         }
                     }
                     Ok(None) => {
-                        send_disconnected(&incoming_tx_for_reader, /*reason*/ None).await;
+                        send_disconnected(
+                            &incoming_tx_for_reader,
+                            &disconnected_tx_for_reader,
+                            /*reason*/ None,
+                        )
+                        .await;
                         break;
                     }
                     Err(err) => {
                         send_disconnected(
                             &incoming_tx_for_reader,
+                            &disconnected_tx_for_reader,
                             Some(format!(
                                 "failed to read JSON-RPC message from {reader_label}: {err}"
                             )),
@@ -96,6 +106,7 @@ impl JsonRpcConnection {
                 if let Err(err) = write_jsonrpc_line_message(&mut writer, &message).await {
                     send_disconnected(
                         &incoming_tx,
+                        &disconnected_tx,
                         Some(format!(
                             "failed to write JSON-RPC message to {connection_label}: {err}"
                         )),
@@ -109,6 +120,7 @@ impl JsonRpcConnection {
         Self {
             outgoing_tx,
             incoming_rx,
+            disconnected_rx,
             task_handles: vec![reader_task, writer_task],
         }
     }
@@ -119,10 +131,12 @@ impl JsonRpcConnection {
     {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (disconnected_tx, disconnected_rx) = watch::channel(false);
         let (mut websocket_writer, mut websocket_reader) = stream.split();
 
         let reader_label = connection_label.clone();
         let incoming_tx_for_reader = incoming_tx.clone();
+        let disconnected_tx_for_reader = disconnected_tx.clone();
         let reader_task = tokio::spawn(async move {
             loop {
                 match websocket_reader.next().await {
@@ -171,7 +185,12 @@ impl JsonRpcConnection {
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
-                        send_disconnected(&incoming_tx_for_reader, /*reason*/ None).await;
+                        send_disconnected(
+                            &incoming_tx_for_reader,
+                            &disconnected_tx_for_reader,
+                            /*reason*/ None,
+                        )
+                        .await;
                         break;
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
@@ -179,6 +198,7 @@ impl JsonRpcConnection {
                     Some(Err(err)) => {
                         send_disconnected(
                             &incoming_tx_for_reader,
+                            &disconnected_tx_for_reader,
                             Some(format!(
                                 "failed to read websocket JSON-RPC message from {reader_label}: {err}"
                             )),
@@ -187,7 +207,12 @@ impl JsonRpcConnection {
                         break;
                     }
                     None => {
-                        send_disconnected(&incoming_tx_for_reader, /*reason*/ None).await;
+                        send_disconnected(
+                            &incoming_tx_for_reader,
+                            &disconnected_tx_for_reader,
+                            /*reason*/ None,
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -202,6 +227,7 @@ impl JsonRpcConnection {
                         {
                             send_disconnected(
                                 &incoming_tx,
+                                &disconnected_tx,
                                 Some(format!(
                                     "failed to write websocket JSON-RPC message to {connection_label}: {err}"
                                 )),
@@ -213,6 +239,7 @@ impl JsonRpcConnection {
                     Err(err) => {
                         send_disconnected(
                             &incoming_tx,
+                            &disconnected_tx,
                             Some(format!(
                                 "failed to serialize JSON-RPC message for {connection_label}: {err}"
                             )),
@@ -227,6 +254,7 @@ impl JsonRpcConnection {
         Self {
             outgoing_tx,
             incoming_rx,
+            disconnected_rx,
             task_handles: vec![reader_task, writer_task],
         }
     }
@@ -236,16 +264,24 @@ impl JsonRpcConnection {
     ) -> (
         mpsc::Sender<JSONRPCMessage>,
         mpsc::Receiver<JsonRpcConnectionEvent>,
+        watch::Receiver<bool>,
         Vec<tokio::task::JoinHandle<()>>,
     ) {
-        (self.outgoing_tx, self.incoming_rx, self.task_handles)
+        (
+            self.outgoing_tx,
+            self.incoming_rx,
+            self.disconnected_rx,
+            self.task_handles,
+        )
     }
 }
 
 async fn send_disconnected(
     incoming_tx: &mpsc::Sender<JsonRpcConnectionEvent>,
+    disconnected_tx: &watch::Sender<bool>,
     reason: Option<String>,
 ) {
+    let _ = disconnected_tx.send(true);
     let _ = incoming_tx
         .send(JsonRpcConnectionEvent::Disconnected { reason })
         .await;

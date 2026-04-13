@@ -30,16 +30,16 @@ use crate::server::ExecServerHandler;
 
 pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     let mut router = RpcRouter::new();
-    router.request(
-        INITIALIZE_METHOD,
-        |handler: Arc<ExecServerHandler>, _params: InitializeParams| async move {
-            handler.initialize()
-        },
-    );
     router.notification(
         INITIALIZED_METHOD,
         |handler: Arc<ExecServerHandler>, _params: serde_json::Value| async move {
             handler.initialized()
+        },
+    );
+    router.request(
+        INITIALIZE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: InitializeParams| async move {
+            handler.initialize(params).await
         },
     );
     router.request(

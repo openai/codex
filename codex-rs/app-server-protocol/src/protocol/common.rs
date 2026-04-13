@@ -388,6 +388,7 @@ client_request_definitions! {
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
+        inspect_params: true,
         response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {
@@ -467,6 +468,11 @@ client_request_definitions! {
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
         response: v2::McpResourceReadResponse,
+    },
+
+    McpServerToolCall => "mcpServer/tool/call" {
+        params: v2::McpServerToolCallParams,
+        response: v2::McpServerToolCallResponse,
     },
 
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
@@ -1399,6 +1405,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd: PathBuf::from("/tmp"),
+                instruction_sources: vec![PathBuf::from("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
@@ -1438,6 +1445,7 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": "/tmp",
+                    "instructionSources": ["/tmp/AGENTS.md"],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
