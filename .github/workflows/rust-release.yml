@@ -338,6 +338,37 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
+      - name: Setup Python for runtime wheel
+        if: ${{ runner.os == 'macOS' || matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build Python runtime wheel
+        if: ${{ runner.os == 'macOS' || matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#rust-v}"
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          rm -rf "$stage_dir"
+
+          python -m pip install --upgrade pip
+          python -m pip install build hatchling
+          python ../sdk/python/scripts/update_sdk_artifacts.py \
+            stage-runtime \
+            "$stage_dir" \
+            "target/${{ matrix.target }}/release" \
+            --runtime-version "$version"
+          CODEX_PYTHON_RUNTIME_TARGET="${{ matrix.target }}" python -m build --wheel "$stage_dir"
+
+      - name: Upload Python runtime wheel
+        if: ${{ runner.os == 'macOS' || matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-runtime-${{ matrix.target }}
+          path: ${{ runner.temp }}/openai-codex-cli-bin-${{ matrix.target }}/dist/*.whl
+
       - name: Compress artifacts
         shell: bash
         run: |
@@ -389,6 +420,45 @@ jobs:
       release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
     secrets: inherit
 
+  build-python-sdk:
+    needs: tag-check
+    name: Build Python SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build Python SDK artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#rust-v}"
+          stage_dir="${RUNNER_TEMP}/openai-codex"
+          rm -rf "$stage_dir"
+
+          python -m pip install --upgrade pip
+          python -m pip install build hatchling datamodel-code-generator==0.31.2 "ruff>=0.11"
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-sdk \
+            "$stage_dir" \
+            --sdk-version "$version" \
+            --runtime-version "$version"
+          python -m build "$stage_dir"
+
+      - name: Upload Python SDK artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-sdk
+          path: ${{ runner.temp }}/openai-codex/dist/*
+
   argument-comment-lint-release-assets:
     name: argument-comment-lint release assets
     needs: tag-check
@@ -405,6 +475,7 @@ jobs:
     needs:
       - build
       - build-windows
+      - build-python-sdk
       - argument-comment-lint-release-assets
       - zsh-release-assets
     name: release
@@ -416,6 +487,7 @@ jobs:
       version: ${{ steps.release_name.outputs.name }}
       tag: ${{ github.ref_name }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
+      should_publish_pypi: ${{ steps.npm_publish_settings.outputs.should_publish_pypi }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
 
     steps:
@@ -482,12 +554,19 @@ jobs:
 
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish_pypi=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
           elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish_pypi=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "should_publish_pypi=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
           else
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "should_publish_pypi=false" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
           fi
 
@@ -675,6 +754,63 @@ jobs:
 
             exit "${publish_status}"
           done
+
+  publish-pypi-runtime:
+    if: ${{ needs.release.outputs.should_publish_pypi == 'true' }}
+    name: publish-pypi-runtime
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+
+    steps:
+      - name: Download Python runtime wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: python-runtime-*
+          path: dist/python-runtime
+          merge-multiple: true
+
+      - name: List Python runtime wheels
+        run: ls -R dist/python-runtime
+
+      - name: Publish Python runtime wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/python-runtime
+          skip-existing: true
+
+  publish-pypi-sdk:
+    if: ${{ needs.release.outputs.should_publish_pypi == 'true' }}
+    name: publish-pypi-sdk
+    needs:
+      - release
+      - publish-pypi-runtime
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+
+    steps:
+      - name: Download Python SDK artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: python-sdk
+          path: dist/python-sdk
+
+      - name: List Python SDK artifacts
+        run: ls -R dist/python-sdk
+
+      - name: Publish Python SDK to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/python-sdk
+          skip-existing: true
 
   winget:
     name: winget
