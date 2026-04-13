@@ -99,6 +99,14 @@ pub enum GuardianUserAuthorization {
     High,
 }
 
+/// Final allow/deny outcome returned by the guardian reviewer.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianAssessmentOutcome {
+    Allow,
+    Deny,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianAssessmentStatus {
