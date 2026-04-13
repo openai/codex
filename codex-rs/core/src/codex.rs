@@ -28,6 +28,8 @@ use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
+use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
+use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -5121,6 +5123,10 @@ mod handlers {
 
     async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
         let text = UserMessageItem::new(items).message();
+        if text.is_empty() {
+            return;
+        }
+        let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
         if text.is_empty() {
             return;
         }
