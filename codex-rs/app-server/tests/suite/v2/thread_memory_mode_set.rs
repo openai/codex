@@ -57,16 +57,7 @@ async fn thread_memory_mode_set_updates_loaded_thread_state() -> Result<()> {
     .await??;
     let _: ThreadMemoryModeSetResponse = to_response::<ThreadMemoryModeSetResponse>(set_resp)?;
 
-    let memory_mode = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let memory_mode = state_db.get_thread_memory_mode(thread_uuid).await?;
-            if memory_mode.as_deref() == Some("disabled") {
-                break Ok::<_, anyhow::Error>(memory_mode);
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
+    let memory_mode = state_db.get_thread_memory_mode(thread_uuid).await?;
     assert_eq!(memory_mode.as_deref(), Some("disabled"));
     Ok(())
 }

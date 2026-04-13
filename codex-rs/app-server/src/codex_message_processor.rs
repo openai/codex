@@ -2803,16 +2803,7 @@ impl CodexMessageProcessor {
                 return;
             }
 
-            if let Err(err) = self
-                .submit_core_op(
-                    &request_id,
-                    thread.as_ref(),
-                    Op::SetThreadMemoryMode {
-                        mode: mode.to_core(),
-                    },
-                )
-                .await
-            {
+            if let Err(err) = thread.set_thread_memory_mode(mode.to_core()).await {
                 self.send_internal_error(
                     request_id,
                     format!("failed to set thread memory mode: {err}"),

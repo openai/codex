@@ -742,6 +742,17 @@ impl Codex {
         Ok(())
     }
 
+    /// Persist a thread-level memory mode update for the active session.
+    ///
+    /// This is a local-only operation that updates rollout metadata directly
+    /// and does not involve the model.
+    pub async fn set_thread_memory_mode(
+        &self,
+        mode: codex_protocol::protocol::ThreadMemoryMode,
+    ) -> anyhow::Result<()> {
+        handlers::persist_thread_memory_mode_update(&self.session, mode).await
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         let session_loop_termination = self.session_loop_termination.clone();
         match self.submit(Op::Shutdown).await {
@@ -5659,7 +5670,7 @@ mod handlers {
         Ok(msg)
     }
 
-    async fn persist_thread_memory_mode_update(
+    pub(super) async fn persist_thread_memory_mode_update(
         sess: &Arc<Session>,
         mode: ThreadMemoryMode,
     ) -> anyhow::Result<()> {
