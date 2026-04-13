@@ -1972,6 +1972,7 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     // active WebSocket session.
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
