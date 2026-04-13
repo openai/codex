@@ -78,6 +78,7 @@ macro_rules! client_request_definitions {
             $(#[experimental($reason:expr)])?
             $(#[doc = $variant_doc:literal])*
             $variant:ident $(=> $wire:literal)? {
+                $(aliases: [$($alias:literal),* $(,)?],)?
                 params: $(#[$params_meta:meta])* $params:ty,
                 $(inspect_params: $inspect_params:tt,)?
                 response: $response:ty,
@@ -91,6 +92,9 @@ macro_rules! client_request_definitions {
             $(
                 $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $($(
+                    #[serde(alias = $alias)]
+                )*)?
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -390,6 +394,12 @@ client_request_definitions! {
         params: v2::TurnStartParams,
         inspect_params: true,
         response: v2::TurnStartResponse,
+    },
+    /// Append raw Responses API items to the thread history without starting a user turn.
+    TurnInjectItems => "turn/inject_items" {
+        aliases: ["turn/injet_items"],
+        params: v2::TurnInjectItemsParams,
+        response: v2::TurnInjectItemsResponse,
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
@@ -1175,6 +1185,31 @@ mod tests {
                 },
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_turn_inject_items_typo_alias() -> Result<()> {
+        let request: ClientRequest = serde_json::from_value(json!({
+            "method": "turn/injet_items",
+            "id": 42,
+            "params": {
+                "threadId": "thread-1",
+                "items": []
+            }
+        }))?;
+
+        assert_eq!(
+            request,
+            ClientRequest::TurnInjectItems {
+                request_id: RequestId::Integer(42),
+                params: v2::TurnInjectItemsParams {
+                    thread_id: "thread-1".to_string(),
+                    items: Vec::new(),
+                },
+            },
+        );
+        assert_eq!(request.method(), "turn/inject_items");
         Ok(())
     }
 

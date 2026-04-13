@@ -337,6 +337,8 @@ export type { Turn } from "./Turn";
 export type { TurnCompletedNotification } from "./TurnCompletedNotification";
 export type { TurnDiffUpdatedNotification } from "./TurnDiffUpdatedNotification";
 export type { TurnError } from "./TurnError";
+export type { TurnInjectItemsParams } from "./TurnInjectItemsParams";
+export type { TurnInjectItemsResponse } from "./TurnInjectItemsResponse";
 export type { TurnInterruptParams } from "./TurnInterruptParams";
 export type { TurnInterruptResponse } from "./TurnInterruptResponse";
 export type { TurnPlanStep } from "./TurnPlanStep";
