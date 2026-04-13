@@ -9,8 +9,12 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
-use crate::tools::approval::guardian_review_id_for_turn;
-use crate::tools::approval::route_approval;
+use crate::tools::approval::ApprovalCache;
+use crate::tools::approval::ApprovalPlan;
+use crate::tools::approval::CommandApprovalRequest;
+use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::UserApprovalRequest;
+use crate::tools::approval::request_approval_for_turn;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -390,46 +394,44 @@ impl CoreShellActionProvider {
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
-        let guardian_review_id = guardian_review_id_for_turn(&turn);
-        let user_session = session.clone();
-        let user_turn = turn.clone();
         Ok(stopwatch
             .pause_for(async move {
-                let decision = route_approval(
+                let outcome = request_approval_for_turn(
                     &session,
                     &turn,
-                    guardian_review_id.clone(),
-                    None::<(&'static str, Vec<String>)>,
-                    GuardianApprovalRequest::Execve {
-                        id: call_id.clone(),
-                        source,
-                        program: program.to_string_lossy().into_owned(),
-                        argv: argv.to_vec(),
-                        cwd: workdir.clone(),
-                        additional_permissions: additional_permissions.clone(),
-                    },
-                    /*retry_reason*/ None,
-                    || async move {
-                        user_session
-                            .request_command_approval(
-                                &user_turn,
-                                call_id,
-                                approval_id,
-                                command,
-                                workdir,
-                                /*reason*/ None,
-                                /*network_approval_context*/ None,
-                                /*proposed_execpolicy_amendment*/ None,
+                    ApprovalPlan {
+                        cache: ApprovalCache::<String>::None,
+                        user: UserApprovalRequest::Command(CommandApprovalRequest {
+                            call_id: call_id.clone(),
+                            approval_id,
+                            command: command.clone(),
+                            cwd: workdir.clone(),
+                            reason: None,
+                            network_approval_context: None,
+                            proposed_execpolicy_amendment: None,
+                            additional_permissions: additional_permissions.clone(),
+                            available_decisions: Some(vec![
+                                ReviewDecision::Approved,
+                                ReviewDecision::Abort,
+                            ]),
+                        }),
+                        guardian: GuardianApproval::new(
+                            GuardianApprovalRequest::Execve {
+                                id: call_id,
+                                source,
+                                program: program.to_string_lossy().into_owned(),
+                                argv: argv.to_vec(),
+                                cwd: workdir,
                                 additional_permissions,
-                                Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                            )
-                            .await
+                            },
+                            /*retry_reason*/ None,
+                        ),
                     },
                 )
                 .await;
                 PromptDecision {
-                    decision,
-                    guardian_review_id,
+                    decision: outcome.decision,
+                    guardian_review_id: outcome.guardian_review_id,
                 }
             })
             .await)

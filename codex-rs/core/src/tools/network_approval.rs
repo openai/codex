@@ -3,8 +3,12 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::network_policy_decision::denied_network_policy_message;
-use crate::tools::approval::guardian_review_id_for_turn;
-use crate::tools::approval::route_approval;
+use crate::tools::approval::ApprovalCache;
+use crate::tools::approval::ApprovalPlan;
+use crate::tools::approval::CommandApprovalRequest;
+use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::UserApprovalRequest;
+use crate::tools::approval::request_approval_for_turn;
 use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
@@ -369,45 +373,41 @@ impl NetworkApprovalService {
             protocol,
         };
         let owner_call = self.resolve_single_active_call().await;
-        let guardian_review_id = guardian_review_id_for_turn(&turn_context);
-        let approval_id = Self::approval_id_for_key(&key);
-        let user_session = Arc::clone(&session);
-        let user_turn_context = Arc::clone(&turn_context);
-        let user_network_approval_context = network_approval_context.clone();
-        let approval_decision = route_approval(
+        let approval_outcome = request_approval_for_turn(
             &session,
             &turn_context,
-            guardian_review_id.clone(),
-            None::<(&'static str, Vec<String>)>,
-            GuardianApprovalRequest::NetworkAccess {
-                id: approval_id.clone(),
-                turn_id: owner_call
-                    .as_ref()
-                    .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
-                target: target.clone(),
-                host: request.host,
-                protocol,
-                port: key.port,
-            },
-            Some(policy_denial_message.clone()),
-            || async move {
-                user_session
-                    .request_command_approval(
-                        user_turn_context.as_ref(),
-                        approval_id,
-                        /*approval_id*/ None,
-                        vec!["network-access".to_string(), target],
-                        user_turn_context.cwd.to_path_buf(),
-                        Some(prompt_reason),
-                        Some(user_network_approval_context),
-                        /*proposed_execpolicy_amendment*/ None,
-                        /*additional_permissions*/ None,
-                        None,
-                    )
-                    .await
+            ApprovalPlan {
+                cache: ApprovalCache::<String>::None,
+                user: UserApprovalRequest::Command(CommandApprovalRequest {
+                    call_id: Self::approval_id_for_key(&key),
+                    approval_id: None,
+                    command: vec!["network-access".to_string(), target.clone()],
+                    cwd: turn_context.cwd.to_path_buf(),
+                    reason: Some(prompt_reason),
+                    network_approval_context: Some(network_approval_context.clone()),
+                    proposed_execpolicy_amendment: None,
+                    additional_permissions: None,
+                    available_decisions: None,
+                }),
+                guardian: GuardianApproval::new(
+                    GuardianApprovalRequest::NetworkAccess {
+                        id: Self::approval_id_for_key(&key),
+                        turn_id: owner_call.as_ref().map_or_else(
+                            || turn_context.sub_id.clone(),
+                            |call| call.turn_id.clone(),
+                        ),
+                        target,
+                        host: request.host,
+                        protocol,
+                        port: key.port,
+                    },
+                    Some(policy_denial_message.clone()),
+                ),
             },
         )
         .await;
+        let guardian_review_id = approval_outcome.guardian_review_id;
+        let approval_decision = approval_outcome.decision;
 
         let mut cache_session_deny = false;
         let resolved = match approval_decision {

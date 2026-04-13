@@ -13,10 +13,15 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::state::SessionServices;
+use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use futures::Future;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone, Default, Debug)]
@@ -41,6 +46,70 @@ impl ApprovalStore {
             self.map.insert(s, value);
         }
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum ApprovalCache<K> {
+    None,
+    SessionApproveOnly {
+        tool_name: &'static str,
+        keys: Vec<K>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct ApprovalOutcome {
+    pub decision: ReviewDecision,
+    pub guardian_review_id: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CommandApprovalRequest {
+    pub call_id: String,
+    pub approval_id: Option<String>,
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+    pub reason: Option<String>,
+    pub network_approval_context: Option<NetworkApprovalContext>,
+    pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub available_decisions: Option<Vec<ReviewDecision>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PatchApprovalRequest {
+    pub call_id: String,
+    pub changes: HashMap<PathBuf, FileChange>,
+    pub reason: Option<String>,
+    pub grant_root: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(crate) enum UserApprovalRequest {
+    Command(CommandApprovalRequest),
+    Patch(PatchApprovalRequest),
+}
+
+#[derive(Debug)]
+pub(crate) struct GuardianApproval {
+    pub request: GuardianApprovalRequest,
+    pub retry_reason: Option<String>,
+}
+
+impl GuardianApproval {
+    pub(crate) fn new(request: GuardianApprovalRequest, retry_reason: Option<String>) -> Self {
+        Self {
+            request,
+            retry_reason,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ApprovalPlan<K> {
+    pub cache: ApprovalCache<K>,
+    pub user: UserApprovalRequest,
+    pub guardian: GuardianApproval,
 }
 
 pub(crate) fn guardian_review_id_for_turn(turn: &crate::codex::TurnContext) -> Option<String> {
@@ -99,28 +168,94 @@ where
     decision
 }
 
-pub(crate) async fn route_approval<K, F, Fut>(
+async fn dispatch_user_approval(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    request: UserApprovalRequest,
+) -> ReviewDecision {
+    match request {
+        UserApprovalRequest::Command(request) => {
+            session
+                .request_command_approval(
+                    turn.as_ref(),
+                    request.call_id,
+                    request.approval_id,
+                    request.command,
+                    request.cwd,
+                    request.reason,
+                    request.network_approval_context,
+                    request.proposed_execpolicy_amendment,
+                    request.additional_permissions,
+                    request.available_decisions,
+                )
+                .await
+        }
+        UserApprovalRequest::Patch(request) => {
+            let rx_approve = session
+                .request_patch_approval(
+                    turn.as_ref(),
+                    request.call_id,
+                    request.changes,
+                    request.reason,
+                    request.grant_root,
+                )
+                .await;
+            rx_approve.await.unwrap_or_default()
+        }
+    }
+}
+
+pub(crate) async fn request_approval<K>(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     guardian_review_id: Option<String>,
-    cache: Option<(&'static str, Vec<K>)>,
-    guardian_request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
-    user: F,
-) -> ReviewDecision
+    plan: ApprovalPlan<K>,
+) -> ApprovalOutcome
 where
     K: Serialize,
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = ReviewDecision>,
 {
-    if let Some(review_id) = guardian_review_id {
-        return review_approval_request(session, turn, review_id, guardian_request, retry_reason)
-            .await;
+    let ApprovalPlan {
+        cache,
+        user,
+        guardian,
+    } = plan;
+    if let Some(review_id) = guardian_review_id.clone() {
+        return ApprovalOutcome {
+            decision: review_approval_request(
+                session,
+                turn,
+                review_id,
+                guardian.request,
+                guardian.retry_reason,
+            )
+            .await,
+            guardian_review_id,
+        };
     }
 
-    if let Some((tool_name, keys)) = cache {
-        with_cached_approval(&session.services, tool_name, keys, user).await
-    } else {
-        user().await
+    let decision = match cache {
+        ApprovalCache::None => dispatch_user_approval(session, turn, user).await,
+        ApprovalCache::SessionApproveOnly { tool_name, keys } => {
+            with_cached_approval(&session.services, tool_name, keys, || {
+                dispatch_user_approval(session, turn, user)
+            })
+            .await
+        }
+    };
+
+    ApprovalOutcome {
+        decision,
+        guardian_review_id: None,
     }
+}
+
+pub(crate) async fn request_approval_for_turn<K>(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    plan: ApprovalPlan<K>,
+) -> ApprovalOutcome
+where
+    K: Serialize,
+{
+    request_approval(session, turn, guardian_review_id_for_turn(turn), plan).await
 }

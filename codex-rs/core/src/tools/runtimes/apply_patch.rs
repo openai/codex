@@ -9,7 +9,12 @@ use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::execute_env;
-use crate::tools::approval::route_approval;
+use crate::tools::approval::ApprovalCache;
+use crate::tools::approval::ApprovalPlan;
+use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::PatchApprovalRequest;
+use crate::tools::approval::UserApprovalRequest;
+use crate::tools::approval::request_approval;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -150,46 +155,51 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason.clone() {
-                return route_approval(
+                return request_approval(
                     session,
                     turn,
                     ctx.guardian_review_id.clone(),
-                    None::<(&'static str, Vec<AbsolutePathBuf>)>,
-                    ApplyPatchRuntime::build_guardian_review_request(req, &call_id),
-                    retry_reason,
-                    || async move {
-                        let rx_approve = session
-                            .request_patch_approval(
-                                turn,
-                                call_id,
-                                changes.clone(),
-                                Some(reason),
-                                /*grant_root*/ None,
-                            )
-                            .await;
-                        rx_approve.await.unwrap_or_default()
+                    ApprovalPlan {
+                        cache: ApprovalCache::<AbsolutePathBuf>::None,
+                        user: UserApprovalRequest::Patch(PatchApprovalRequest {
+                            call_id: call_id.clone(),
+                            changes: changes.clone(),
+                            reason: Some(reason),
+                            grant_root: None,
+                        }),
+                        guardian: GuardianApproval::new(
+                            ApplyPatchRuntime::build_guardian_review_request(req, &call_id),
+                            retry_reason,
+                        ),
                     },
                 )
-                .await;
+                .await
+                .decision;
             }
 
-            route_approval(
+            request_approval(
                 session,
                 turn,
                 ctx.guardian_review_id.clone(),
-                Some(("apply_patch", approval_keys)),
-                ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id),
-                retry_reason,
-                || async move {
-                    let rx_approve = session
-                        .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
-                        )
-                        .await;
-                    rx_approve.await.unwrap_or_default()
+                ApprovalPlan {
+                    cache: ApprovalCache::SessionApproveOnly {
+                        tool_name: "apply_patch",
+                        keys: approval_keys,
+                    },
+                    user: UserApprovalRequest::Patch(PatchApprovalRequest {
+                        call_id: call_id.clone(),
+                        changes,
+                        reason: None,
+                        grant_root: None,
+                    }),
+                    guardian: GuardianApproval::new(
+                        ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id),
+                        retry_reason,
+                    ),
                 },
             )
             .await
+            .decision
         })
     }
 
