@@ -1888,10 +1888,10 @@ fn realtime_tool_ok_command() -> Vec<String> {
     #[cfg(windows)]
     {
         vec![
-            "powershell.exe".to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            "[Console]::Write('realtime-tool-ok')".to_string(),
+            "cmd.exe".to_string(),
+            "/D".to_string(),
+            "/C".to_string(),
+            "echo|set /p dummy=realtime-tool-ok".to_string(),
         ]
     }
 

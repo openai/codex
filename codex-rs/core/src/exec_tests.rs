@@ -291,6 +291,51 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn exec_expiration_observes_already_exited_child_before_timing_out() -> Result<()> {
+    #[cfg(windows)]
+    let command = vec![
+        "cmd.exe".to_string(),
+        "/D".to_string(),
+        "/C".to_string(),
+        "echo|set /p dummy=hello".to_string(),
+    ];
+    #[cfg(not(windows))]
+    let command = vec!["printf".to_string(), "hello".to_string()];
+
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+    let output = exec(
+        ExecParams {
+            command,
+            cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()?,
+            expiration: ExecExpiration::Cancellation(cancel_token),
+            capture_policy: ExecCapturePolicy::ShellTool,
+            env: std::env::vars().collect(),
+            network: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            justification: None,
+            arg0: None,
+        },
+        SandboxType::None,
+        &SandboxPolicy::DangerFullAccess,
+        &FileSystemSandboxPolicy::unrestricted(),
+        /*windows_sandbox_filesystem_overrides*/ None,
+        NetworkSandboxPolicy::Enabled,
+        /*stdout_stream*/ None,
+        Some(Box::new(|| std::thread::sleep(Duration::from_secs(1)))),
+    )
+    .await?;
+
+    assert_eq!(output.stdout.from_utf8_lossy().text, "hello");
+    assert_eq!(output.exit_status.code(), Some(0));
+    assert!(!output.timed_out);
+
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_pipe_open()
