@@ -9,6 +9,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::thread::sleep;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
@@ -38,6 +41,7 @@ pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
+const SETUP_HELPER_TIMEOUT: Duration = Duration::from_secs(120);
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
@@ -611,17 +615,59 @@ fn report_helper_failure(
     }
 }
 
+fn helper_timeout_failure() -> anyhow::Error {
+    failure(
+        SetupErrorCode::OrchestratorHelperTimedOut,
+        format!(
+            "setup helper did not finish within {}s; it may be stuck during sandbox initialization",
+            SETUP_HELPER_TIMEOUT.as_secs()
+        ),
+    )
+}
+
+fn wait_for_non_elevated_setup_helper(
+    mut child: std::process::Child,
+    codex_home: &Path,
+    cleared_report: bool,
+) -> Result<()> {
+    let deadline = Instant::now() + SETUP_HELPER_TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorHelperLaunchFailed,
+                format!("failed to poll setup helper status: {err}"),
+            )
+        })? {
+            if !status.success() {
+                return Err(report_helper_failure(
+                    codex_home,
+                    cleared_report,
+                    status.code(),
+                ));
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(helper_timeout_failure());
+        }
+        sleep(Duration::from_millis(200));
+    }
+}
+
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
     codex_home: &Path,
 ) -> Result<()> {
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::INFINITE;
+    use windows_sys::Win32::System::Threading::TerminateProcess;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::WAIT_TIMEOUT;
     let exe = find_setup_exe();
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
@@ -642,28 +688,21 @@ fn run_setup_exe(
             false
         }
     };
-
     if !needs_elevation {
-        let status = Command::new(&exe)
+        let child = Command::new(&exe)
             .arg(&payload_b64)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
+            .spawn()
             .map_err(|err| {
                 failure(
                     SetupErrorCode::OrchestratorHelperLaunchFailed,
                     format!("failed to launch setup helper (non-elevated): {err}"),
                 )
             })?;
-        if !status.success() {
-            return Err(report_helper_failure(
-                codex_home,
-                cleared_report,
-                status.code(),
-            ));
-        }
+        wait_for_non_elevated_setup_helper(child, codex_home, cleared_report)?;
         if let Err(err) = clear_setup_error_report(codex_home) {
             log_note(
                 &format!(
@@ -701,7 +740,13 @@ fn run_setup_exe(
         ));
     }
     unsafe {
-        WaitForSingleObject(sei.hProcess, INFINITE);
+        let timeout_ms = SETUP_HELPER_TIMEOUT.as_millis().min(u32::MAX as u128) as u32;
+        let wait_result = WaitForSingleObject(sei.hProcess, timeout_ms);
+        if wait_result == WAIT_TIMEOUT {
+            let _ = TerminateProcess(sei.hProcess, 1);
+            CloseHandle(sei.hProcess);
+            return Err(helper_timeout_failure());
+        }
         let mut code: u32 = 1;
         GetExitCodeProcess(sei.hProcess, &mut code);
         CloseHandle(sei.hProcess);
@@ -721,7 +766,6 @@ fn run_setup_exe(
     }
     Ok(())
 }
-
 pub fn run_elevated_setup(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
