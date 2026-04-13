@@ -271,15 +271,6 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
-    /// Base URL for agent identity registration requests.
-    pub agent_identity_base_url: Option<String>,
-
-    /// Base URL for minting human biscuits used by agent identity registration requests.
-    pub agent_identity_biscuit_base_url: Option<String>,
-
-    /// Target URL used when minting the human biscuit for agent identity registration.
-    pub agent_identity_biscuit_target_url: Option<String>,
-
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
 
