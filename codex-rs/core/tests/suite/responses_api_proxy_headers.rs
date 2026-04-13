@@ -140,6 +140,10 @@ async fn responses_api_proxy_dumps_parent_and_subagent_identity_headers() -> Res
         config.model_provider.base_url = Some(proxy_base_url);
         config
             .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
             .disable(Feature::EnableRequestCompression)
             .expect("test config should allow feature update");
     });
@@ -179,7 +183,23 @@ async fn responses_api_proxy_dumps_parent_and_subagent_identity_headers() -> Res
 }
 
 fn request_body_contains(req: &wiremock::Request, text: &str) -> bool {
-    std::str::from_utf8(&req.body).is_ok_and(|body| body.contains(text))
+    let is_zstd = req
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let bytes = if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&req.body)).ok()
+    } else {
+        Some(req.body.clone())
+    };
+    bytes
+        .and_then(|body| String::from_utf8(body).ok())
+        .is_some_and(|body| body.contains(text))
 }
 
 fn wait_for_proxy_request_dumps(dump_dir: &Path) -> Result<Vec<Value>> {
