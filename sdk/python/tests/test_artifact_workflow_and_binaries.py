@@ -29,7 +29,22 @@ def _load_runtime_setup_module():
     runtime_setup_path = ROOT / "_runtime_setup.py"
     spec = importlib.util.spec_from_file_location("_runtime_setup", runtime_setup_path)
     if spec is None or spec.loader is None:
-        raise AssertionError(f"Failed to load runtime setup module: {runtime_setup_path}")
+        raise AssertionError(
+            f"Failed to load runtime setup module: {runtime_setup_path}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_runtime_package_module(package_root: Path):
+    runtime_init = package_root / "src" / "codex_cli_bin" / "__init__.py"
+    spec = importlib.util.spec_from_file_location(
+        "codex_cli_bin_under_test", runtime_init
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Failed to load runtime package module: {runtime_init}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -168,7 +183,9 @@ def test_examples_readme_matches_pinned_runtime_version() -> None:
     )
 
 
-def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_metadata_retries_without_invalid_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime_setup = _load_runtime_setup_module()
     authorizations: list[str | None] = []
 
@@ -198,6 +215,14 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
     )
     hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
     hook_tree = ast.parse(hook_source)
+    platform_tag_assignment = next(
+        node
+        for node in hook_tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "PLATFORM_TAG_BY_TARGET"
+    )
     initialize_fn = next(
         node
         for node in ast.walk(hook_tree)
@@ -235,6 +260,7 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
         and isinstance(node.value, ast.Constant)
     }
 
+    assert pyproject["project"]["name"] == "openai-codex-cli-bin"
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
         "packages": ["src/codex_cli_bin"],
         "include": ["src/codex_cli_bin/bin/**"],
@@ -244,23 +270,51 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
         "hooks": {"custom": {}},
     }
     assert sdist_guard is not None
-    assert build_data_assignments == {"pure_python": False, "infer_tag": True}
+    assert build_data_assignments == {"pure_python": False}
+    assert ast.literal_eval(platform_tag_assignment.value) == {
+        "aarch64-apple-darwin": "macosx_11_0_arm64",
+        "x86_64-apple-darwin": "macosx_10_12_x86_64",
+        "aarch64-unknown-linux-musl": "musllinux_1_2_aarch64",
+        "x86_64-unknown-linux-musl": "musllinux_1_2_x86_64",
+        "aarch64-pc-windows-msvc": "win_arm64",
+        "x86_64-pc-windows-msvc": "win_amd64",
+    }
+    assert "CODEX_PYTHON_RUNTIME_TARGET" in hook_source
+    assert '"infer_tag"' in hook_source
+    assert '"tag"' in hook_source
 
 
-def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) -> None:
+def test_python_release_version_normalization() -> None:
     script = _load_update_script_module()
-    fake_binary = tmp_path / script.runtime_binary_name()
+
+    assert script.normalize_python_package_version("1.2.3") == "1.2.3"
+    assert script.normalize_python_package_version("1.2.3-alpha.4") == "1.2.3a4"
+    assert script.normalize_python_package_version("1.2.3-beta.5") == "1.2.3b5"
+    assert script.normalize_python_package_version("1.2.3a4") == "1.2.3a4"
+    assert script.normalize_python_package_version("0.0.0.dev0") == "0.0.0.dev0"
+
+    with pytest.raises(RuntimeError, match="Unsupported Python package version"):
+        script.normalize_python_package_version("1.2.3-rc.1")
+
+
+def test_stage_runtime_release_copies_bundle_and_sets_version(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    fake_binary = bundle_dir / script.runtime_binary_name()
     fake_binary.write_text("fake codex\n")
 
     staged = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
-        "1.2.3",
-        fake_binary,
+        "1.2.3-alpha.4",
+        bundle_dir,
     )
 
     assert staged == tmp_path / "runtime-stage"
     assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
-    assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
+    pyproject = (staged / "pyproject.toml").read_text()
+    assert 'name = "openai-codex-cli-bin"' in pyproject
+    assert 'version = "1.2.3a4"' in pyproject
 
 
 def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
@@ -270,13 +324,15 @@ def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> 
     old_file.parent.mkdir(parents=True)
     old_file.write_text("stale")
 
-    fake_binary = tmp_path / script.runtime_binary_name()
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    fake_binary = bundle_dir / script.runtime_binary_name()
     fake_binary.write_text("fake codex\n")
 
     staged = script.stage_python_runtime_package(
         staging_dir,
         "1.2.3",
-        fake_binary,
+        bundle_dir,
     )
 
     assert staged == staging_dir
@@ -284,13 +340,132 @@ def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> 
     assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
 
 
-def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
+def test_stage_runtime_release_normalizes_target_suffixed_names(
+    tmp_path: Path,
+) -> None:
     script = _load_update_script_module()
-    staged = script.stage_python_sdk_package(tmp_path / "sdk-stage", "0.2.1", "1.2.3")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "codex-x86_64-unknown-linux-musl").write_text("fake codex\n")
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        bundle_dir,
+    )
+
+    assert (staged / "src" / "codex_cli_bin" / "bin" / "codex").read_text() == (
+        "fake codex\n"
+    )
+
+
+def test_stage_runtime_release_requires_complete_windows_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _load_update_script_module()
+    monkeypatch.setattr(script.platform, "system", lambda: "Windows")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "codex-x86_64-pc-windows-msvc.exe").write_text("codex\n")
+    (bundle_dir / "codex-command-runner-x86_64-pc-windows-msvc.exe").write_text(
+        "runner\n"
+    )
+    (bundle_dir / "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe").write_text(
+        "setup\n"
+    )
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        bundle_dir,
+    )
+    bin_dir = staged / "src" / "codex_cli_bin" / "bin"
+
+    assert (bin_dir / "codex.exe").read_text() == "codex\n"
+    assert (bin_dir / "codex-command-runner.exe").read_text() == "runner\n"
+    assert (bin_dir / "codex-windows-sandbox-setup.exe").read_text() == "setup\n"
+
+
+def test_stage_runtime_release_fails_for_missing_required_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _load_update_script_module()
+    monkeypatch.setattr(script.platform, "system", lambda: "Windows")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "codex.exe").write_text("codex\n")
+
+    with pytest.raises(RuntimeError, match="codex-command-runner.exe"):
+        script.stage_python_runtime_package(
+            tmp_path / "runtime-stage",
+            "1.2.3",
+            bundle_dir,
+        )
+
+
+def test_runtime_package_helpers_return_packaged_paths(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "codex").write_text("fake codex\n")
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        bundle_dir,
+    )
+
+    runtime_module = _load_runtime_package_module(staged)
+
+    assert runtime_module.PACKAGE_NAME == "openai-codex-cli-bin"
+    assert runtime_module.bundled_bin_dir() == staged / "src" / "codex_cli_bin" / "bin"
+    assert runtime_module.bundled_runtime_files() == (
+        staged / "src" / "codex_cli_bin" / "bin" / "codex",
+    )
+    assert runtime_module.bundled_codex_path() == (
+        staged / "src" / "codex_cli_bin" / "bin" / "codex"
+    )
+
+
+def test_runtime_package_helpers_report_missing_binary(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "codex").write_text("fake codex\n")
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        bundle_dir,
+    )
+    (staged / "src" / "codex_cli_bin" / "bin" / "codex").unlink()
+
+    runtime_module = _load_runtime_package_module(staged)
+
+    with pytest.raises(FileNotFoundError, match="openai-codex-cli-bin"):
+        runtime_module.bundled_codex_path()
+
+
+def test_stage_sdk_release_injects_exact_runtime_pin_and_versions(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    staged = script.stage_python_sdk_package(
+        tmp_path / "sdk-stage",
+        "0.2.1-beta.2",
+        "1.2.3-alpha.4",
+    )
 
     pyproject = (staged / "pyproject.toml").read_text()
-    assert 'version = "0.2.1"' in pyproject
-    assert '"codex-cli-bin==1.2.3"' in pyproject
+    assert 'name = "openai-codex"' in pyproject
+    assert 'version = "0.2.1b2"' in pyproject
+    assert '"openai-codex-cli-bin==1.2.3a4"' in pyproject
+    assert (
+        '__version__ = "0.2.1b2"'
+        in (staged / "src" / "codex_app_server" / "__init__.py").read_text()
+    )
+    assert (
+        'client_version: str = "0.2.1b2"'
+        in (staged / "src" / "codex_app_server" / "client.py").read_text()
+    )
     assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
 
 
@@ -329,7 +504,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
         return tmp_path / "sdk-stage"
 
     def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+        _staging_dir: Path, _runtime_version: str, _runtime_bundle_dir: Path
     ) -> Path:
         raise AssertionError("runtime staging should not run for stage-sdk")
 
@@ -350,14 +525,15 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
 def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:
     script = _load_update_script_module()
-    fake_binary = tmp_path / script.runtime_binary_name()
-    fake_binary.write_text("fake codex\n")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / script.runtime_binary_name()).write_text("fake codex\n")
     calls: list[str] = []
     args = script.parse_args(
         [
             "stage-runtime",
             str(tmp_path / "runtime-stage"),
-            str(fake_binary),
+            str(bundle_dir),
             "--runtime-version",
             "1.2.3",
         ]
@@ -372,7 +548,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
         raise AssertionError("sdk staging should not run for stage-runtime")
 
     def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+        _staging_dir: Path, _runtime_version: str, _runtime_bundle_dir: Path
     ) -> Path:
         calls.append("stage_runtime")
         return tmp_path / "runtime-stage"

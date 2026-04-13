@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-PACKAGE_NAME = "codex-cli-bin"
+PACKAGE_NAME = "openai-codex-cli-bin"
 PINNED_RUNTIME_VERSION = "0.116.0-alpha.1"
 REPO_SLUG = "openai/codex"
 
@@ -39,17 +39,20 @@ def ensure_runtime_package_installed(
         installed_version = _installed_runtime_version(python_executable)
     normalized_requested = _normalized_package_version(requested_version)
 
-    if installed_version is not None and _normalized_package_version(installed_version) == normalized_requested:
+    if (
+        installed_version is not None
+        and _normalized_package_version(installed_version) == normalized_requested
+    ):
         return requested_version
 
     with tempfile.TemporaryDirectory(prefix="codex-python-runtime-") as temp_root_str:
         temp_root = Path(temp_root_str)
         archive_path = _download_release_archive(requested_version, temp_root)
-        runtime_binary = _extract_runtime_binary(archive_path, temp_root)
+        runtime_bundle_dir = _extract_runtime_bundle(archive_path, temp_root)
         staged_runtime_dir = _stage_runtime_package(
             sdk_python_dir,
             requested_version,
-            runtime_binary,
+            runtime_bundle_dir,
             temp_root / "runtime-stage",
         )
         _install_runtime_package(python_executable, staged_runtime_dir, install_target)
@@ -61,7 +64,10 @@ def ensure_runtime_package_installed(
         importlib.invalidate_caches()
 
     installed_version = _installed_runtime_version(python_executable)
-    if installed_version is None or _normalized_package_version(installed_version) != normalized_requested:
+    if (
+        installed_version is None
+        or _normalized_package_version(installed_version) != normalized_requested
+    ):
         raise RuntimeSetupError(
             f"Expected {PACKAGE_NAME} {requested_version} in {python_executable}, "
             f"but found {installed_version!r} after installation."
@@ -105,7 +111,7 @@ def _installed_runtime_version(python_executable: str | Path) -> str | None:
         "try:\n"
         "    from codex_cli_bin import bundled_codex_path\n"
         "    bundled_codex_path()\n"
-        "    print(json.dumps({'version': importlib.metadata.version('codex-cli-bin')}))\n"
+        f"    print(json.dumps({{'version': importlib.metadata.version({PACKAGE_NAME!r})}}))\n"
         "except Exception:\n"
         "    sys.exit(1)\n"
     )
@@ -172,7 +178,9 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
     metadata = _release_metadata(version)
     assets = metadata.get("assets")
     if not isinstance(assets, list):
-        raise RuntimeSetupError(f"Release rust-v{version} returned malformed assets metadata.")
+        raise RuntimeSetupError(
+            f"Release rust-v{version} returned malformed assets metadata."
+        )
     asset = next(
         (
             item
@@ -198,7 +206,10 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
                 headers=_github_api_headers("application/octet-stream"),
             )
             try:
-                with urllib.request.urlopen(request) as response, archive_path.open("wb") as fh:
+                with (
+                    urllib.request.urlopen(request) as response,
+                    archive_path.open("wb") as fh,
+                ):
                     shutil.copyfileobj(response, fh)
                 return archive_path
             except urllib.error.HTTPError:
@@ -236,7 +247,7 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
     return archive_path
 
 
-def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
+def _extract_runtime_bundle(archive_path: Path, temp_root: Path) -> Path:
     extract_dir = temp_root / "extracted"
     extract_dir.mkdir(parents=True, exist_ok=True)
     if archive_path.name.endswith(".tar.gz"):
@@ -249,38 +260,24 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         with zipfile.ZipFile(archive_path) as zip_file:
             zip_file.extractall(extract_dir)
     else:
-        raise RuntimeSetupError(f"Unsupported release archive format: {archive_path.name}")
-
-    binary_name = runtime_binary_name()
-    archive_stem = archive_path.name.removesuffix(".tar.gz").removesuffix(".zip")
-    candidates = [
-        path
-        for path in extract_dir.rglob("*")
-        if path.is_file()
-        and (
-            path.name == binary_name
-            or path.name == archive_stem
-            or path.name.startswith("codex-")
-        )
-    ]
-    if not candidates:
         raise RuntimeSetupError(
-            f"Failed to find {binary_name} in extracted runtime archive {archive_path.name}."
+            f"Unsupported release archive format: {archive_path.name}"
         )
-    return candidates[0]
+
+    return extract_dir
 
 
 def _stage_runtime_package(
     sdk_python_dir: Path,
     runtime_version: str,
-    runtime_binary: Path,
+    runtime_bundle_dir: Path,
     staging_dir: Path,
 ) -> Path:
     script_module = _load_update_script_module(sdk_python_dir)
     return script_module.stage_python_runtime_package(  # type: ignore[no-any-return]
         staging_dir,
         runtime_version,
-        runtime_binary.resolve(),
+        runtime_bundle_dir.resolve(),
     )
 
 
