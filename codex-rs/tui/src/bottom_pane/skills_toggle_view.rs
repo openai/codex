@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -38,7 +37,7 @@ pub(crate) struct SkillsToggleItem {
     pub skill_name: String,
     pub description: String,
     pub enabled: bool,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
 }
 
 pub(crate) struct SkillsToggleView {
@@ -381,6 +380,8 @@ fn skills_toggle_hint_line() -> Line<'static> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -418,14 +419,14 @@ mod tests {
                 skill_name: "repo_scout".to_string(),
                 description: "Summarize the repo layout".to_string(),
                 enabled: true,
-                path: PathBuf::from("/tmp/skills/repo_scout.toml"),
+                path: test_path_buf("/tmp/skills/repo_scout.toml").abs(),
             },
             SkillsToggleItem {
                 name: "Changelog Writer".to_string(),
                 skill_name: "changelog_writer".to_string(),
                 description: "Draft release notes".to_string(),
                 enabled: false,
-                path: PathBuf::from("/tmp/skills/changelog_writer.toml"),
+                path: test_path_buf("/tmp/skills/changelog_writer.toml").abs(),
             },
         ];
         let view = SkillsToggleView::new(items, tx);

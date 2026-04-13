@@ -2,6 +2,7 @@ use super::LoadedPlugin;
 use super::PluginLoadOutcome;
 use super::PluginManifestPaths;
 use super::curated_plugins_repo_path;
+use super::installed_marketplaces::installed_marketplace_roots_from_config;
 use super::load_plugin_manifest;
 use super::manifest::PluginManifestInterface;
 use super::marketplace::MarketplaceError;
@@ -167,7 +168,7 @@ pub struct PluginDetail {
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
-    pub disabled_skill_paths: HashSet<PathBuf>,
+    pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
 }
@@ -422,7 +423,7 @@ impl PluginsManager {
         &self,
         config_layer_stack: &ConfigLayerStack,
         plugins_feature_enabled: bool,
-    ) -> Vec<PathBuf> {
+    ) -> Vec<AbsolutePathBuf> {
         if !plugins_feature_enabled {
             return Vec::new();
         }
@@ -586,7 +587,7 @@ impl PluginsManager {
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
                 &result.plugin_id,
-                result.installed_path.as_path(),
+                &result.installed_path,
             ));
         }
 
@@ -874,7 +875,8 @@ impl PluginsManager {
         }
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let marketplace_outcome = list_marketplaces(&self.marketplace_roots(additional_roots))?;
+        let marketplace_outcome =
+            list_marketplaces(&self.marketplace_roots(config, additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -950,13 +952,6 @@ impl PluginsManager {
                 marketplace_name,
             });
         };
-        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
-            return Err(MarketplaceError::PluginNotFound {
-                plugin_name: request.plugin_name.clone(),
-                marketplace_name,
-            });
-        }
-
         let plugin_id = PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(
             |err| match err {
                 PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
@@ -964,6 +959,51 @@ impl PluginsManager {
         )?;
         let plugin_key = plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let plugin = self.read_plugin_detail_for_marketplace_plugin(
+            config,
+            &marketplace.name,
+            ConfiguredMarketplacePlugin {
+                id: plugin_key.clone(),
+                name: plugin.name,
+                source: plugin.source,
+                policy: plugin.policy,
+                interface: plugin.interface,
+                installed: installed_plugins.contains(&plugin_key),
+                enabled: enabled_plugins.contains(&plugin_key),
+            },
+        )?;
+
+        Ok(PluginReadOutcome {
+            marketplace_name: if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
+                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
+            } else {
+                marketplace.name
+            },
+            marketplace_path: marketplace.path,
+            plugin,
+        })
+    }
+
+    pub(crate) fn read_plugin_detail_for_marketplace_plugin(
+        &self,
+        config: &Config,
+        marketplace_name: &str,
+        plugin: ConfiguredMarketplacePlugin,
+    ) -> Result<PluginDetail, MarketplaceError> {
+        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
+            return Err(MarketplaceError::PluginNotFound {
+                plugin_name: plugin.name,
+                marketplace_name: marketplace_name.to_string(),
+            });
+        }
+
+        let plugin_id =
+            PluginId::new(plugin.name.clone(), marketplace_name.to_string()).map_err(|err| {
+                match err {
+                    PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+                }
+            })?;
+        let plugin_key = plugin_id.as_key();
         let source_path = match &plugin.source {
             MarketplacePluginSource::Local { path } => path.clone(),
         };
@@ -981,7 +1021,7 @@ impl PluginsManager {
         let manifest_paths = &manifest.paths;
         let skill_config_rules = skill_config_rules_from_stack(&config.config_layer_stack);
         let resolved_skills = load_plugin_skills(
-            source_path.as_path(),
+            &source_path,
             manifest_paths,
             self.restriction_product,
             &skill_config_rules,
@@ -999,27 +1039,19 @@ impl PluginsManager {
         mcp_server_names.sort_unstable();
         mcp_server_names.dedup();
 
-        Ok(PluginReadOutcome {
-            marketplace_name: if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
-                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
-            } else {
-                marketplace.name
-            },
-            marketplace_path: marketplace.path,
-            plugin: PluginDetail {
-                id: plugin_key.clone(),
-                name: plugin.name,
-                description,
-                source: plugin.source,
-                policy: plugin.policy,
-                interface: plugin.interface,
-                installed: installed_plugins.contains(&plugin_key),
-                enabled: enabled_plugins.contains(&plugin_key),
-                skills: resolved_skills.skills,
-                disabled_skill_paths: resolved_skills.disabled_skill_paths,
-                apps,
-                mcp_server_names,
-            },
+        Ok(PluginDetail {
+            id: plugin_key,
+            name: plugin.name,
+            description,
+            source: plugin.source,
+            policy: plugin.policy,
+            interface: plugin.interface,
+            installed: plugin.installed,
+            enabled: plugin.enabled,
+            skills: resolved_skills.skills,
+            disabled_skill_paths: resolved_skills.disabled_skill_paths,
+            apps,
+            mcp_server_names,
         })
     }
 
@@ -1059,7 +1091,7 @@ impl PluginsManager {
         roots: &[AbsolutePathBuf],
     ) {
         let mut roots = roots.to_vec();
-        roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+        roots.sort_unstable();
         roots.dedup();
         if roots.is_empty() {
             return;
@@ -1218,17 +1250,25 @@ impl PluginsManager {
         (installed_plugins, enabled_plugins)
     }
 
-    fn marketplace_roots(&self, additional_roots: &[AbsolutePathBuf]) -> Vec<AbsolutePathBuf> {
+    fn marketplace_roots(
+        &self,
+        config: &Config,
+        additional_roots: &[AbsolutePathBuf],
+    ) -> Vec<AbsolutePathBuf> {
         // Treat the curated catalog as an extra marketplace root so plugin listing can surface it
         // without requiring every caller to know where it is stored.
         let mut roots = additional_roots.to_vec();
+        roots.extend(installed_marketplace_roots_from_config(
+            config,
+            self.codex_home.as_path(),
+        ));
         let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
         if curated_repo_root.is_dir()
             && let Ok(curated_repo_root) = AbsolutePathBuf::try_from(curated_repo_root)
         {
             roots.push(curated_repo_root);
         }
-        roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+        roots.sort_unstable();
         roots.dedup();
         roots
     }
@@ -1693,9 +1733,9 @@ fn load_plugin(
         .map(str::to_string)
         .or_else(|| Some(manifest.name.clone()));
     loaded_plugin.manifest_description = manifest.description.clone();
-    loaded_plugin.skill_roots = plugin_skill_roots(plugin_root.as_path(), manifest_paths);
+    loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
     let resolved_skills = load_plugin_skills(
-        plugin_root.as_path(),
+        &plugin_root,
         manifest_paths,
         restriction_product,
         skill_config_rules,
@@ -1724,7 +1764,7 @@ fn load_plugin(
 
 struct ResolvedPluginSkills {
     skills: Vec<SkillMetadata>,
-    disabled_skill_paths: HashSet<PathBuf>,
+    disabled_skill_paths: HashSet<AbsolutePathBuf>,
     had_errors: bool,
 }
 
@@ -1740,7 +1780,7 @@ impl ResolvedPluginSkills {
 }
 
 fn load_plugin_skills(
-    plugin_root: &Path,
+    plugin_root: &AbsolutePathBuf,
     manifest_paths: &PluginManifestPaths,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
@@ -1768,17 +1808,20 @@ fn load_plugin_skills(
     }
 }
 
-fn plugin_skill_roots(plugin_root: &Path, manifest_paths: &PluginManifestPaths) -> Vec<PathBuf> {
+fn plugin_skill_roots(
+    plugin_root: &AbsolutePathBuf,
+    manifest_paths: &PluginManifestPaths,
+) -> Vec<AbsolutePathBuf> {
     let mut paths = default_skill_roots(plugin_root);
     if let Some(path) = &manifest_paths.skills {
-        paths.push(path.to_path_buf());
+        paths.push(path.clone());
     }
     paths.sort_unstable();
     paths.dedup();
     paths
 }
 
-fn default_skill_roots(plugin_root: &Path) -> Vec<PathBuf> {
+fn default_skill_roots(plugin_root: &AbsolutePathBuf) -> Vec<AbsolutePathBuf> {
     let skills_dir = plugin_root.join(DEFAULT_SKILLS_DIR_NAME);
     if skills_dir.is_dir() {
         vec![skills_dir]
@@ -1805,8 +1848,8 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     {
         paths.push(default_path);
     }
-    paths.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
-    paths.dedup_by(|left, right| left.as_path() == right.as_path());
+    paths.sort_unstable();
+    paths.dedup();
     paths
 }
 
@@ -1838,8 +1881,8 @@ fn default_app_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     {
         paths.push(default_path);
     }
-    paths.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
-    paths.dedup_by(|left, right| left.as_path() == right.as_path());
+    paths.sort_unstable();
+    paths.dedup();
     paths
 }
 
@@ -1884,18 +1927,18 @@ fn load_apps_from_paths(
 
 pub fn plugin_telemetry_metadata_from_root(
     plugin_id: &PluginId,
-    plugin_root: &Path,
+    plugin_root: &AbsolutePathBuf,
 ) -> PluginTelemetryMetadata {
-    let Some(manifest) = load_plugin_manifest(plugin_root) else {
+    let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
         return PluginTelemetryMetadata::from_plugin_id(plugin_id);
     };
 
     let manifest_paths = &manifest.paths;
     let has_skills = !plugin_skill_roots(plugin_root, manifest_paths).is_empty();
     let mut mcp_server_names = Vec::new();
-    for path in plugin_mcp_config_paths(plugin_root, manifest_paths) {
+    for path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         mcp_server_names.extend(
-            load_mcp_servers_from_file(plugin_root, &path)
+            load_mcp_servers_from_file(plugin_root.as_path(), &path)
                 .mcp_servers
                 .into_keys(),
         );
@@ -1911,7 +1954,7 @@ pub fn plugin_telemetry_metadata_from_root(
             description: None,
             has_skills,
             mcp_server_names,
-            app_connector_ids: load_plugin_apps(plugin_root),
+            app_connector_ids: load_plugin_apps(plugin_root.as_path()),
         }),
     }
 }
@@ -1941,7 +1984,7 @@ pub fn installed_plugin_telemetry_metadata(
         return PluginTelemetryMetadata::from_plugin_id(plugin_id);
     };
 
-    plugin_telemetry_metadata_from_root(plugin_id, plugin_root.as_path())
+    plugin_telemetry_metadata_from_root(plugin_id, &plugin_root)
 }
 
 fn load_mcp_servers_from_file(

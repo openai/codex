@@ -7,6 +7,7 @@ retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
@@ -158,6 +159,9 @@ impl ToolOrchestrator {
                             "rejected by user".to_string()
                         };
                         return Err(ToolError::Rejected(reason));
+                    }
+                    ReviewDecision::TimedOut => {
+                        return Err(ToolError::Rejected(guardian_timeout_message()));
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -314,6 +318,9 @@ impl ToolOrchestrator {
                                 "rejected by user".to_string()
                             };
                             return Err(ToolError::Rejected(reason));
+                        }
+                        ReviewDecision::TimedOut => {
+                            return Err(ToolError::Rejected(guardian_timeout_message()));
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }

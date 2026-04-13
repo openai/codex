@@ -3,6 +3,22 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+use crate::legacy_core::check_execpolicy_for_warnings;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config::ConfigBuilder;
+use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::find_codex_home;
+use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
+use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::config_loader::CloudRequirementsLoader;
+use crate::legacy_core::config_loader::ConfigLoadError;
+use crate::legacy_core::config_loader::LoaderOverrides;
+use crate::legacy_core::config_loader::format_config_error_with_source;
+use crate::legacy_core::find_thread_meta_by_name_str;
+use crate::legacy_core::format_exec_policy_error_with_source;
+use crate::legacy_core::path_utils;
+use crate::legacy_core::read_session_meta_line;
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
@@ -22,23 +38,8 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
-use codex_core::check_execpolicy_for_warnings;
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::resolve_oss_provider;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigLoadError;
-use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::format_config_error_with_source;
-use codex_core::find_thread_meta_by_name_str;
-use codex_core::format_exec_policy_error_with_source;
-use codex_core::path_utils;
-use codex_core::read_session_meta_line;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -73,6 +74,8 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
+
+pub(crate) use codex_app_server_client::legacy_core;
 
 mod additional_dirs;
 mod app;
@@ -166,7 +169,7 @@ mod voice;
 #[allow(dead_code)]
 mod voice {
     use crate::app_event_sender::AppEventSender;
-    use codex_core::config::Config;
+    use crate::legacy_core::config::Config;
     use codex_protocol::protocol::RealtimeAudioFrame;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -720,7 +723,12 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::from_env());
+    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
+        ExecServerRuntimePaths::from_optional_paths(
+            arg0_paths.codex_self_exe.clone(),
+            arg0_paths.codex_linux_sandbox_exe.clone(),
+        )?,
+    )));
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
@@ -751,9 +759,11 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) =
-        codex_core::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
-            .await
+    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
+        &codex_home,
+        &config_toml,
+    )
+    .await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
@@ -860,7 +870,7 @@ pub async fn run_main(
     if matches!(app_server_target, AppServerTarget::Embedded) {
         #[allow(clippy::print_stderr)]
         if let Err(err) = enforce_login_restrictions(&AuthConfig {
-            codex_home: config.codex_home.clone(),
+            codex_home: config.codex_home.to_path_buf(),
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
@@ -870,7 +880,7 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = codex_core::config::log_dir(&config)?;
+    let log_dir = crate::legacy_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -931,7 +941,7 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(
+        crate::legacy_core::otel_init::build_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
@@ -1127,7 +1137,7 @@ async fn run_ratatui_app(
         // status detection edge cases.
         if show_login_screen && !remote_mode {
             cloud_requirements = cloud_requirements_loader_for_storage(
-                initial_config.codex_home.clone(),
+                initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
@@ -1368,7 +1378,7 @@ async fn run_ratatui_app(
     // this must happen after the last possible reload.
     if let Some(w) = crate::render::highlight::set_theme_override(
         config.tui_theme.clone(),
-        find_codex_home().ok(),
+        find_codex_home().ok().map(AbsolutePathBuf::into_path_buf),
     ) {
         config.startup_warnings.push(w);
     }
@@ -1520,13 +1530,7 @@ async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
-    match (
-        path_utils::normalize_for_path_comparison(current_cwd),
-        path_utils::normalize_for_path_comparison(session_cwd),
-    ) {
-        (Ok(current), Ok(session)) => current != session,
-        _ => current_cwd != session_cwd,
-    }
+    !path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 pub(crate) enum ResolveCwdOutcome {
@@ -1732,13 +1736,13 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::legacy_core::config::ConfigBuilder;
+    use crate::legacy_core::config::ConfigOverrides;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::ConfigOverrides;
     use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
@@ -2048,7 +2052,7 @@ mod tests {
         std::fs::write(&rollout_path, "")?;
 
         let state_runtime = codex_state::StateRuntime::init(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             config.model_provider_id.clone(),
         )
         .await
@@ -2477,7 +2481,7 @@ trust_level = "untrusted"
         )?;
 
         let runtime = codex_state::StateRuntime::init(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             config.model_provider_id.clone(),
         )
         .await

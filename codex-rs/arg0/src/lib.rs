@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
@@ -93,6 +94,9 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 
     let argv1 = args.next().unwrap_or_default();
+    if argv1 == CODEX_FS_HELPER_ARG1 {
+        codex_exec_server::run_fs_helper_main();
+    }
     if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {
@@ -116,6 +120,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                     &mut stdout,
                     &mut stderr,
                     codex_exec_server::LOCAL_FS.as_ref(),
+                    /*sandbox*/ None,
                 )) {
                     Ok(()) => 0,
                     Err(_) => 1,
@@ -325,13 +330,13 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         #[cfg(windows)]
         {
             let batch_script = path.join(format!("{filename}.bat"));
+            let exe = exe.display();
             std::fs::write(
                 &batch_script,
                 format!(
                     r#"@echo off
-"{}" {CODEX_CORE_APPLY_PATCH_ARG1} %*
+"{exe}" {CODEX_CORE_APPLY_PATCH_ARG1} %*
 "#,
-                    exe.display()
                 ),
             )?;
         }

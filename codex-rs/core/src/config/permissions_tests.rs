@@ -63,7 +63,7 @@ fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()>
             main_execve_wrapper_exe: Some(execve_wrapper),
             ..Default::default()
         },
-        codex_home,
+        AbsolutePathBuf::from_absolute_path(&codex_home)?,
     )?;
 
     let expected_zsh = AbsolutePathBuf::try_from(zsh_path)?;

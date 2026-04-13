@@ -312,11 +312,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &assessment,
                 );
                 outgoing.send_server_notification(notification).await;
-                if matches!(
-                    assessment.status,
+                let completion_status = match assessment.status {
                     codex_protocol::protocol::GuardianAssessmentStatus::Denied
-                        | codex_protocol::protocol::GuardianAssessmentStatus::Aborted
-                ) && let Some((target_item_id, completion_item)) = pending_command_execution
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+                        Some(CommandExecutionStatus::Declined)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                        Some(CommandExecutionStatus::Failed)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::InProgress
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Approved => None,
+                };
+                if let Some(completion_status) = completion_status
+                    && let Some((target_item_id, completion_item)) = pending_command_execution
                 {
                     complete_command_execution_item(
                         &conversation_id,
@@ -327,7 +335,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         /*process_id*/ None,
                         CommandExecutionSource::Agent,
                         completion_item.command_actions,
-                        CommandExecutionStatus::Declined,
+                        completion_status,
                         &outgoing,
                         &thread_state,
                     )
@@ -1295,6 +1303,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ContextCompacted(..) => {
+            // Core still fans out this deprecated event for legacy clients;
+            // v2 clients receive the canonical ContextCompaction item instead.
+            if matches!(api_version, ApiVersion::V2) {
+                return;
+            }
             let notification = ContextCompactedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
@@ -1591,6 +1604,17 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
+            if matches!(api_version, ApiVersion::V2)
+                && matches!(
+                    exec_command_begin_event.source,
+                    codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
+                )
+            {
+                // TerminalInteraction is the v2 surface for unified exec
+                // stdin/poll events. Suppress the legacy CommandExecution
+                // item so clients do not render the same wait twice.
+                return;
+            }
             let item_id = exec_command_begin_event.call_id.clone();
             let command_actions = exec_command_begin_event
                 .parsed_cmd
@@ -1693,6 +1717,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .turn_summary
                     .command_execution_started
                     .remove(&call_id);
+            }
+            if matches!(api_version, ApiVersion::V2)
+                && matches!(
+                    exec_command_end_event.source,
+                    codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
+                )
+            {
+                // The paired begin event is suppressed above; keep the
+                // completion out of v2 as well so no orphan legacy item is
+                // emitted for unified exec interactions.
+                return;
             }
 
             let item = build_command_execution_end_item(&exec_command_end_event);
@@ -3000,6 +3035,9 @@ mod tests {
                 Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 Some("too risky".to_string()),
             ),
+            GuardianAssessmentStatus::TimedOut => {
+                (None, None, Some("review timed out".to_string()))
+            }
             GuardianAssessmentStatus::Aborted => (None, None, None),
         };
         GuardianAssessmentEvent {
@@ -3345,7 +3383,7 @@ mod tests {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::new(
                     /*exec_server_url*/ None,
                 )),

@@ -6,11 +6,11 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 /**
  * Filesystem watch notification emitted for `fs/watch` subscribers.
  */
-export type FsChangedNotification = { 
+export type FsChangedNotification = {
 /**
  * Watch identifier previously provided to `fs/watch`.
  */
-watchId: string, 
+watchId: string,
 /**
  * File or directory paths associated with this event.
  */

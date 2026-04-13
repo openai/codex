@@ -7,10 +7,6 @@ license.workspace = true
 [lib]
 doctest = false
 
-[[bin]]
-name = "codex-exec-server"
-path = "src/bin/codex-exec-server.rs"
-
 [lints]
 workspace = true
 
@@ -18,9 +14,10 @@ workspace = true
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
+codex-config = { workspace = true }
 codex-protocol = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 futures = { workspace = true }
@@ -46,5 +43,6 @@ uuid = { workspace = true, features = ["v4"] }
 anyhow = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"

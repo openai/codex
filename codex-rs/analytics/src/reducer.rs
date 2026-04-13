@@ -6,6 +6,9 @@ use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::GuardianReviewEventParams;
+use crate::events::GuardianReviewEventPayload;
+use crate::events::GuardianReviewEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::ThreadInitializationMode;
@@ -120,6 +123,9 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
                 }
+                CustomAnalyticsFact::GuardianReview(input) => {
+                    self.ingest_guardian_review(*input, out);
+                }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
                 }
@@ -172,6 +178,42 @@ impl AnalyticsReducer {
         out.push(TrackEventRequest::ThreadInitialized(
             subagent_thread_started_event_request(input),
         ));
+    }
+
+    fn ingest_guardian_review(
+        &mut self,
+        input: GuardianReviewEventParams,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(connection_id) = self.thread_connections.get(&input.thread_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                review_id = %input.review_id,
+                "dropping guardian analytics event: missing thread connection metadata"
+            );
+            return;
+        };
+        let Some(connection_state) = self.connections.get(connection_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                review_id = %input.review_id,
+                connection_id,
+                "dropping guardian analytics event: missing connection metadata"
+            );
+            return;
+        };
+        out.push(TrackEventRequest::GuardianReview(Box::new(
+            GuardianReviewEventRequest {
+                event_type: "codex_guardian_review",
+                event_params: GuardianReviewEventPayload {
+                    app_server_client: connection_state.app_server_client.clone(),
+                    runtime: connection_state.runtime.clone(),
+                    guardian_review: input,
+                },
+            },
+        )));
     }
 
     async fn ingest_skill_invoked(

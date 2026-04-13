@@ -1,4 +1,8 @@
 use crate::bottom_pane::FeedbackAudience;
+#[cfg(test)]
+use crate::legacy_core::append_message_history_entry;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::message_history_metadata;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerClient;
@@ -65,10 +69,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
-#[cfg(test)]
-use codex_core::append_message_history_entry;
-use codex_core::config::Config;
-use codex_core::message_history_metadata;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -132,6 +132,7 @@ pub(crate) struct ThreadSessionState {
     pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) cwd: PathBuf,
+    pub(crate) instruction_source_paths: Vec<PathBuf>,
     pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     pub(crate) history_log_id: u64,
     pub(crate) history_entry_count: u64,
@@ -993,6 +994,7 @@ async fn thread_session_state_from_thread_start_response(
         response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
+        response.instruction_sources.clone(),
         response.reasoning_effort,
         config,
     )
@@ -1015,6 +1017,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
+        response.instruction_sources.clone(),
         response.reasoning_effort,
         config,
     )
@@ -1037,6 +1040,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
+        response.instruction_sources.clone(),
         response.reasoning_effort,
         config,
     )
@@ -1078,6 +1082,7 @@ async fn thread_session_state_from_thread_response(
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
     cwd: PathBuf,
+    instruction_source_paths: Vec<PathBuf>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
@@ -1102,6 +1107,7 @@ async fn thread_session_state_from_thread_response(
         approvals_reviewer,
         sandbox_policy,
         cwd,
+        instruction_source_paths,
         reasoning_effort,
         history_log_id,
         history_entry_count,
@@ -1161,10 +1167,10 @@ fn app_server_credits_snapshot_to_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::legacy_core::config::ConfigBuilder;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
-    use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -1326,6 +1332,7 @@ mod tests {
             model_provider: "openai".to_string(),
             service_tier: None,
             cwd: PathBuf::from("/tmp/project"),
+            instruction_sources: vec![PathBuf::from("/tmp/project/AGENTS.md")],
             approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: codex_protocol::protocol::SandboxPolicy::new_read_only_policy().into(),
@@ -1336,6 +1343,10 @@ mod tests {
             .await
             .expect("resume response should map");
         assert_eq!(started.session.forked_from_id, Some(forked_from_id));
+        assert_eq!(
+            started.session.instruction_source_paths,
+            response.instruction_sources
+        );
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
     }
@@ -1365,6 +1376,7 @@ mod tests {
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
             PathBuf::from("/tmp/project"),
+            Vec::new(),
             /*reasoning_effort*/ None,
             &config,
         )
@@ -1394,6 +1406,7 @@ mod tests {
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
             PathBuf::from("/tmp/project"),
+            Vec::new(),
             /*reasoning_effort*/ None,
             &config,
         )

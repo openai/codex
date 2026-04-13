@@ -8,6 +8,7 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_protocol::ThreadId;
 use std::collections::HashMap;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -244,6 +245,13 @@ impl ThreadWatchManager {
         }
     }
 
+    pub(crate) async fn subscribe(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<watch::Receiver<ThreadStatus>> {
+        Some(self.state.lock().await.subscribe(thread_id.to_string()))
+    }
+
     async fn note_active_guard_released(
         &self,
         thread_id: String,
@@ -295,6 +303,7 @@ pub(crate) fn resolve_thread_status(
 #[derive(Default)]
 struct ThreadWatchState {
     runtime_by_thread_id: HashMap<String, RuntimeFacts>,
+    status_watcher_by_thread_id: HashMap<String, watch::Sender<ThreadStatus>>,
 }
 
 impl ThreadWatchState {
@@ -309,6 +318,7 @@ impl ThreadWatchState {
             .entry(thread_id.clone())
             .or_default();
         runtime.is_loaded = true;
+        self.update_status_watcher_for_thread(&thread_id);
         if emit_notification {
             self.status_changed_notification(thread_id, previous_status)
         } else {
@@ -319,6 +329,7 @@ impl ThreadWatchState {
     fn remove_thread(&mut self, thread_id: &str) -> Option<ThreadStatusChangedNotification> {
         let previous_status = self.status_for(thread_id);
         self.runtime_by_thread_id.remove(thread_id);
+        self.update_status_watcher(thread_id, &ThreadStatus::NotLoaded);
         if previous_status.is_some() && previous_status != Some(ThreadStatus::NotLoaded) {
             Some(ThreadStatusChangedNotification {
                 thread_id: thread_id.to_string(),
@@ -344,6 +355,7 @@ impl ThreadWatchState {
             .or_default();
         runtime.is_loaded = true;
         mutate(runtime);
+        self.update_status_watcher_for_thread(thread_id);
         self.status_changed_notification(thread_id.to_string(), previous_status)
     }
 
@@ -356,6 +368,40 @@ impl ThreadWatchState {
     fn loaded_status_for_thread(&self, thread_id: &str) -> ThreadStatus {
         self.status_for(thread_id)
             .unwrap_or(ThreadStatus::NotLoaded)
+    }
+
+    fn subscribe(&mut self, thread_id: String) -> watch::Receiver<ThreadStatus> {
+        let status = self.loaded_status_for_thread(&thread_id);
+        let sender = self
+            .status_watcher_by_thread_id
+            .entry(thread_id)
+            .or_insert_with(|| watch::channel(status.clone()).0);
+        sender.subscribe()
+    }
+
+    fn update_status_watcher_for_thread(&mut self, thread_id: &str) {
+        let status = self.loaded_status_for_thread(thread_id);
+        self.update_status_watcher(thread_id, &status);
+    }
+
+    fn update_status_watcher(&mut self, thread_id: &str, status: &ThreadStatus) {
+        let remove_watcher = if let Some(sender) = self.status_watcher_by_thread_id.get(thread_id) {
+            let status = status.clone();
+            let _ = sender.send_if_modified(|current| {
+                if *current == status {
+                    false
+                } else {
+                    *current = status;
+                    true
+                }
+            });
+            sender.receiver_count() == 0
+        } else {
+            false
+        };
+        if remove_watcher {
+            self.status_watcher_by_thread_id.remove(thread_id);
+        }
     }
 
     fn status_changed_notification(
@@ -750,6 +796,55 @@ mod tests {
                 },
             },
         );
+    }
+
+    #[tokio::test]
+    async fn status_watchers_receive_only_their_thread_updates() {
+        let manager = ThreadWatchManager::new();
+        manager
+            .upsert_thread(test_thread(
+                INTERACTIVE_THREAD_ID,
+                codex_app_server_protocol::SessionSource::Cli,
+            ))
+            .await;
+        manager
+            .upsert_thread(test_thread(
+                NON_INTERACTIVE_THREAD_ID,
+                codex_app_server_protocol::SessionSource::AppServer,
+            ))
+            .await;
+        let interactive_thread_id = ThreadId::from_string(INTERACTIVE_THREAD_ID)
+            .expect("interactive thread id should parse");
+        let non_interactive_thread_id = ThreadId::from_string(NON_INTERACTIVE_THREAD_ID)
+            .expect("non-interactive thread id should parse");
+        let mut interactive_rx = manager
+            .subscribe(interactive_thread_id)
+            .await
+            .expect("interactive status watcher should subscribe");
+        let mut non_interactive_rx = manager
+            .subscribe(non_interactive_thread_id)
+            .await
+            .expect("non-interactive status watcher should subscribe");
+
+        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+
+        timeout(Duration::from_secs(1), interactive_rx.changed())
+            .await
+            .expect("timed out waiting for interactive status update")
+            .expect("interactive status watcher should remain open");
+        assert_eq!(
+            *interactive_rx.borrow(),
+            ThreadStatus::Active {
+                active_flags: vec![],
+            },
+        );
+        assert!(
+            timeout(Duration::from_millis(100), non_interactive_rx.changed())
+                .await
+                .is_err(),
+            "unrelated thread watcher should not receive an update"
+        );
+        assert_eq!(*non_interactive_rx.borrow(), ThreadStatus::Idle);
     }
 
     async fn wait_for_status(

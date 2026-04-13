@@ -140,9 +140,10 @@ Example with notification opt-out:
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
+- `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
-- `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
+- `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
@@ -189,6 +190,7 @@ Example with notification opt-out:
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools and auth status, plus resources/resource templates for `full` detail; supports cursor+limit pagination. If `detail` is omitted, the server defaults to `full`.
 - `mcpServer/resource/read` — read a resource from a thread's configured MCP server by `threadId`, `server`, and `uri`, returning text/blob resource `contents`.
+- `mcpServer/tool/call` — call a tool on a thread's configured MCP server by `threadId`, `server`, `tool`, optional `arguments`, and optional `_meta`, returning the MCP tool result.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `config/read` — fetch the effective config on disk after resolving config layering.
@@ -336,11 +338,16 @@ When `nextCursor` is `null`, you’ve reached the final page.
 - `notSubscribed` when the connection was not subscribed to that thread.
 - `notLoaded` when the thread is not loaded.
 
-If this was the last subscriber, the server unloads the thread and emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
+If this was the last subscriber, the server does not unload the thread immediately. It unloads the thread after the thread has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
 
 ```json
 { "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123" } }
 { "id": 22, "result": { "status": "unsubscribed" } }
+```
+
+Later, after the idle unload timeout:
+
+```json
 { "method": "thread/status/changed", "params": {
     "threadId": "thr_123",
     "status": { "type": "notLoaded" }
@@ -392,6 +399,16 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
         "gitInfo": null
     }
 } }
+```
+
+Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
+
+```json
+{ "method": "thread/memoryMode/set", "id": 26, "params": {
+    "threadId": "thr_123",
+    "mode": "disabled"
+} }
+{ "id": 26, "result": {} }
 ```
 
 ### Example: Archive a thread

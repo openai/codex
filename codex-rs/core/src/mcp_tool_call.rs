@@ -24,6 +24,7 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -983,6 +984,9 @@ async fn mcp_tool_approval_decision_from_guardian(
         ReviewDecision::Denied => McpToolApprovalDecision::Decline {
             message: Some(guardian_rejection_message(sess, review_id).await),
         },
+        ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
+            message: Some(guardian_timeout_message()),
+        },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
 }
@@ -1541,7 +1545,7 @@ async fn persist_custom_mcp_tool_approval(
         if !servers.contains_key(server) {
             anyhow::bail!("MCP server `{server}` is not configured in config.toml");
         }
-        config.codex_home.clone()
+        config.codex_home.to_path_buf()
     };
 
     ConfigEditsBuilder::new(&config_folder)
