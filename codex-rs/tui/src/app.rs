@@ -6881,6 +6881,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let approval_request =
+            exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
+        app.enqueue_thread_request(thread_id, approval_request)
+            .await?;
+
+        let resolved = app
+            .pending_app_server_requests
+            .resolve_notification(&AppServerRequestId::Integer(1))
+            .expect("matching app-server request should resolve");
+        app.chat_widget.dismiss_app_server_request(&resolved);
+        while app_event_rx.try_recv().is_ok() {}
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        let event = time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("timed out waiting for buffered approval event")
+            .expect("channel closed unexpectedly");
+
+        assert!(matches!(
+            &event,
+            ThreadBufferedEvent::Request(ServerRequest::CommandExecutionRequestApproval {
+                params,
+                ..
+            }) if params.turn_id == "turn-1"
+        ));
+
+        app.handle_thread_event_now(event);
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        while let Ok(app_event) = app_event_rx.try_recv() {
+            assert!(
+                !matches!(app_event, AppEvent::SubmitThreadOp { .. }),
+                "resolved buffered approval should not become actionable"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_submit()
     -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
