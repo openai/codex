@@ -77,6 +77,10 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MarketplaceInterface;
+use codex_app_server_protocol::MarketplaceListEntry;
+use codex_app_server_protocol::MarketplaceListParams;
+use codex_app_server_protocol::MarketplaceListResponse;
+use codex_app_server_protocol::MarketplaceSourceType as ApiMarketplaceSourceType;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
@@ -193,6 +197,8 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_config::types::MarketplaceConfig;
+use codex_config::types::MarketplaceSourceType as ConfigMarketplaceSourceType;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
@@ -235,6 +241,8 @@ use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::load_plugin_apps;
 use codex_core::plugins::load_plugin_mcp_servers;
+use codex_core::plugins::marketplace_install_root;
+use codex_core::plugins::validate_plugin_segment;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
@@ -923,6 +931,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::MarketplaceList { request_id, params } => {
+                self.marketplace_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginList { request_id, params } => {
@@ -6327,6 +6339,75 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn marketplace_list(
+        &self,
+        request_id: ConnectionRequestId,
+        params: MarketplaceListParams,
+    ) {
+        let MarketplaceListParams { cursor, limit } = params;
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let data =
+            configured_marketplace_entries_from_config(&config, self.config.codex_home.as_path());
+        let total = data.len();
+        if total == 0 {
+            self.outgoing
+                .send_response(
+                    request_id,
+                    MarketplaceListResponse {
+                        data: Vec::new(),
+                        next_cursor: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = effective_limit.min(total);
+        let start = match cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("invalid cursor: {cursor}"),
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            self.send_invalid_request_error(
+                request_id,
+                format!("cursor {start} exceeds total marketplaces {total}"),
+            )
+            .await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = data[start..end].to_vec();
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        self.outgoing
+            .send_response(request_id, MarketplaceListResponse { data, next_cursor })
+            .await;
+    }
+
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
@@ -8859,6 +8940,83 @@ fn plugin_interface_to_info(
 fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginSource {
     match source {
         MarketplacePluginSource::Local { path } => PluginSource::Local { path },
+    }
+}
+
+fn configured_marketplace_entries_from_config(
+    config: &Config,
+    codex_home: &Path,
+) -> Vec<MarketplaceListEntry> {
+    let Some(user_layer) = config.config_layer_stack.get_user_layer() else {
+        return Vec::new();
+    };
+    let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
+        return Vec::new();
+    };
+    let Some(marketplaces) = marketplaces_value.as_table() else {
+        warn!("invalid marketplaces config: expected table");
+        return Vec::new();
+    };
+
+    let install_root = marketplace_install_root(codex_home);
+    let mut data = marketplaces
+        .iter()
+        .filter_map(|(marketplace_name, marketplace_value)| {
+            if let Err(err) = validate_plugin_segment(marketplace_name, "marketplace name") {
+                warn!(
+                    marketplace_name,
+                    error = %err,
+                    "ignoring invalid configured marketplace name"
+                );
+                return None;
+            }
+            if !marketplace_value.is_table() {
+                warn!(
+                    marketplace_name,
+                    "ignoring invalid configured marketplace entry"
+                );
+                return None;
+            }
+
+            let marketplace = match marketplace_value.clone().try_into::<MarketplaceConfig>() {
+                Ok(marketplace) => marketplace,
+                Err(err) => {
+                    warn!(
+                        marketplace_name,
+                        error = %err,
+                        "ignoring invalid configured marketplace entry"
+                    );
+                    return None;
+                }
+            };
+
+            let path = AbsolutePathBuf::try_from(
+                install_root
+                    .join(marketplace_name)
+                    .join(".agents/plugins/marketplace.json"),
+            )
+            .ok()?;
+
+            Some(MarketplaceListEntry {
+                name: marketplace_name.clone(),
+                path,
+                last_updated: marketplace.last_updated,
+                source_type: marketplace.source_type.map(marketplace_source_type_to_info),
+                source: marketplace.source,
+                ref_name: marketplace.ref_name,
+                sparse_paths: marketplace.sparse_paths.unwrap_or_default(),
+            })
+        })
+        .collect::<Vec<_>>();
+    data.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    data
+}
+
+fn marketplace_source_type_to_info(
+    source_type: ConfigMarketplaceSourceType,
+) -> ApiMarketplaceSourceType {
+    match source_type {
+        ConfigMarketplaceSourceType::Git => ApiMarketplaceSourceType::Git,
     }
 }
 
