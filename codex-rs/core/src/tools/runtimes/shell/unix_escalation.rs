@@ -5,13 +5,16 @@ use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
-use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approval::ApprovalCache;
+use crate::tools::approval::ApprovalPlan;
+use crate::tools::approval::CommandApprovalRequest;
+use crate::tools::approval::GuardianApproval;
+use crate::tools::approval::UserApprovalRequest;
+use crate::tools::approval::request_approval_for_turn;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -391,47 +394,44 @@ impl CoreShellActionProvider {
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
-        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
-                if let Some(review_id) = guardian_review_id.clone() {
-                    let decision = review_approval_request(
-                        &session,
-                        &turn,
-                        review_id,
-                        GuardianApprovalRequest::Execve {
-                            id: call_id.clone(),
-                            source,
-                            program: program.to_string_lossy().into_owned(),
-                            argv: argv.to_vec(),
-                            cwd: workdir,
-                            additional_permissions,
-                        },
-                        /*retry_reason*/ None,
-                    )
-                    .await;
-                    return PromptDecision {
-                        decision,
-                        guardian_review_id,
-                    };
-                }
-                let decision = session
-                    .request_command_approval(
-                        &turn,
-                        call_id,
-                        approval_id,
-                        command,
-                        workdir,
-                        /*reason*/ None,
-                        /*network_approval_context*/ None,
-                        /*proposed_execpolicy_amendment*/ None,
-                        additional_permissions,
-                        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                    )
-                    .await;
+                let outcome = request_approval_for_turn(
+                    &session,
+                    &turn,
+                    ApprovalPlan {
+                        cache: ApprovalCache::<String>::None,
+                        user: UserApprovalRequest::Command(CommandApprovalRequest {
+                            call_id: call_id.clone(),
+                            approval_id,
+                            command: command.clone(),
+                            cwd: workdir.clone(),
+                            reason: None,
+                            network_approval_context: None,
+                            proposed_execpolicy_amendment: None,
+                            additional_permissions: additional_permissions.clone(),
+                            available_decisions: Some(vec![
+                                ReviewDecision::Approved,
+                                ReviewDecision::Abort,
+                            ]),
+                        }),
+                        guardian: GuardianApproval::new(
+                            GuardianApprovalRequest::Execve {
+                                id: call_id,
+                                source,
+                                program: program.to_string_lossy().into_owned(),
+                                argv: argv.to_vec(),
+                                cwd: workdir,
+                                additional_permissions,
+                            },
+                            /*retry_reason*/ None,
+                        ),
+                    },
+                )
+                .await;
                 PromptDecision {
-                    decision,
-                    guardian_review_id: None,
+                    decision: outcome.decision,
+                    guardian_review_id: outcome.guardian_review_id,
                 }
             })
             .await)
