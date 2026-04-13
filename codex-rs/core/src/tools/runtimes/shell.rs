@@ -15,12 +15,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
-use crate::tools::approval::ApprovalCache;
-use crate::tools::approval::ApprovalPlan;
-use crate::tools::approval::CommandApprovalRequest;
-use crate::tools::approval::GuardianApproval;
-use crate::tools::approval::UserApprovalRequest;
-use crate::tools::approval::request_approval;
+use crate::tools::approval::route_approval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -156,44 +151,41 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            request_approval(
+            let guardian_request = GuardianApprovalRequest::Shell {
+                id: call_id.clone(),
+                command: command.clone(),
+                cwd: cwd.clone(),
+                sandbox_permissions: req.sandbox_permissions,
+                additional_permissions: req.additional_permissions.clone(),
+                justification: req.justification.clone(),
+            };
+            route_approval(
                 session,
                 turn,
                 ctx.guardian_review_id.clone(),
-                ApprovalPlan {
-                    cache: ApprovalCache::SessionApproveOnly {
-                        tool_name: "shell",
-                        keys,
-                    },
-                    user: UserApprovalRequest::Command(CommandApprovalRequest {
-                        call_id: call_id.clone(),
-                        approval_id: None,
-                        command: command.clone(),
-                        cwd: cwd.clone(),
-                        reason,
-                        network_approval_context: ctx.network_approval_context.clone(),
-                        proposed_execpolicy_amendment: req
-                            .exec_approval_requirement
-                            .proposed_execpolicy_amendment()
-                            .cloned(),
-                        additional_permissions: req.additional_permissions.clone(),
-                        available_decisions: None,
-                    }),
-                    guardian: GuardianApproval::new(
-                        GuardianApprovalRequest::Shell {
-                            id: call_id,
+                Some(("shell", keys)),
+                guardian_request,
+                retry_reason,
+                || async move {
+                    session
+                        .request_command_approval(
+                            turn,
+                            call_id,
+                            /*approval_id*/ None,
                             command,
                             cwd,
-                            sandbox_permissions: req.sandbox_permissions,
-                            additional_permissions: req.additional_permissions.clone(),
-                            justification: req.justification.clone(),
-                        },
-                        retry_reason,
-                    ),
+                            reason,
+                            ctx.network_approval_context.clone(),
+                            req.exec_approval_requirement
+                                .proposed_execpolicy_amendment()
+                                .cloned(),
+                            req.additional_permissions.clone(),
+                            None,
+                        )
+                        .await
                 },
             )
             .await
-            .decision
         })
     }
 
