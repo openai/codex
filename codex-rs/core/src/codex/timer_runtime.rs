@@ -59,6 +59,13 @@ const TIMER_DB_SYNC_INTERVAL: Duration = Duration::from_secs(15);
 const TIMER_DB_MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const TIMER_DUE_PERSIST_RETRY_DELAY: Duration = Duration::from_secs(1);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TimerDbSyncStatus {
+    Failed,
+    Unchanged,
+    Changed,
+}
+
 fn db_timer_to_persisted_timer(row: codex_state::ThreadTimer) -> Option<PersistedTimer> {
     let trigger = match serde_json::from_str(&row.trigger_json) {
         Ok(trigger) => trigger,
@@ -355,12 +362,16 @@ impl Session {
                         .persist_timer_due_best_effort(&id, due_at_timestamp)
                         .await
                 {
-                    if !session.sync_timers_from_db(/*emit_update*/ true).await
+                    let sync_status = session.sync_timers_from_db(/*emit_update*/ true).await;
+                    if matches!(sync_status, TimerDbSyncStatus::Failed)
                         && session.timers.lock().await.persisted_timer(&id).is_some()
                     {
                         due_persist_retry_at = Some(due_at_timestamp);
                         delay = TIMER_DUE_PERSIST_RETRY_DELAY;
                         continue;
+                    }
+                    if !matches!(sync_status, TimerDbSyncStatus::Failed) {
+                        session.maybe_start_pending_timer().await;
                     }
                     let next_timer_spec = session
                         .timers
@@ -587,12 +598,12 @@ impl Session {
         });
     }
 
-    async fn sync_timers_from_db(self: &Arc<Self>, emit_update: bool) -> bool {
+    async fn sync_timers_from_db(self: &Arc<Self>, emit_update: bool) -> TimerDbSyncStatus {
         if !self.timers_feature_enabled() {
-            return false;
+            return TimerDbSyncStatus::Failed;
         }
         let Ok(state_db) = self.timer_state_db().await else {
-            return false;
+            return TimerDbSyncStatus::Failed;
         };
         self.start_timer_db_sync_task(state_db.clone());
         let thread_id = self.thread_id_string();
@@ -600,7 +611,7 @@ impl Session {
             Ok(timers) => timers,
             Err(err) => {
                 warn!("failed to load timers from sqlite for thread {thread_id}: {err}");
-                return false;
+                return TimerDbSyncStatus::Failed;
             }
         };
         let persisted = db_timers
@@ -616,7 +627,11 @@ impl Session {
         if changed && emit_update {
             self.emit_timer_updated_notification().await;
         }
-        changed
+        if changed {
+            TimerDbSyncStatus::Changed
+        } else {
+            TimerDbSyncStatus::Unchanged
+        }
     }
 
     fn timers_feature_enabled(&self) -> bool {
