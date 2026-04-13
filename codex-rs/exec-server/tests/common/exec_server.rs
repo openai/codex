@@ -47,6 +47,7 @@ pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());
+    child.kill_on_drop(true);
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;
@@ -140,6 +141,9 @@ impl ExecServerHarness {
 
     pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.child.start_kill()?;
+        timeout(CONNECT_TIMEOUT, self.child.wait())
+            .await
+            .map_err(|_| anyhow!("timed out waiting for exec-server shutdown"))??;
         Ok(())
     }
 

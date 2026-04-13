@@ -210,6 +210,8 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
     let mut context = create_process_context(/*use_remote*/ true).await?;
     let session = context
@@ -255,6 +257,8 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     assert_exec_process_starts_and_exits(use_remote).await
 }
@@ -262,6 +266,8 @@ async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_streams_output(use_remote: bool) -> Result<()> {
     assert_exec_process_streams_output(use_remote).await
 }
@@ -269,6 +275,8 @@ async fn exec_process_streams_output(use_remote: bool) -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
     assert_exec_process_write_then_read(use_remote).await
 }
@@ -276,6 +284,8 @@ async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_preserves_queued_events_before_subscribe(use_remote: bool) -> Result<()> {
     assert_exec_process_preserves_queued_events_before_subscribe(use_remote).await
 }

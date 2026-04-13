@@ -42,5 +42,6 @@ uuid = { workspace = true, features = ["v4"] }
 anyhow = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
