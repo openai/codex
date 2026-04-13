@@ -213,6 +213,7 @@ use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_state;
+use codex_core::config_loader::project_trust_key;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
@@ -2291,38 +2292,60 @@ impl CodexMessageProcessor {
         {
             let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
                 .unwrap_or_else(|| config.cwd.to_path_buf());
-            if let Err(err) = codex_core::config::set_project_trust_level(
-                &listener_task_context.codex_home,
-                trust_target.as_path(),
-                TrustLevel::Trusted,
-            ) {
+            let cli_overrides_with_trust;
+            let cli_overrides_for_reload = if let Err(err) =
+                codex_core::config::set_project_trust_level(
+                    &listener_task_context.codex_home,
+                    trust_target.as_path(),
+                    TrustLevel::Trusted,
+                ) {
                 warn!(
                     "failed to persist trusted project state for {}; continuing with in-memory trust for this thread: {err}",
                     trust_target.display()
                 );
-                config.active_project.trust_level = Some(TrustLevel::Trusted);
+                let mut project = toml::map::Map::new();
+                project.insert(
+                    "trust_level".to_string(),
+                    TomlValue::String("trusted".to_string()),
+                );
+                let mut projects = toml::map::Map::new();
+                projects.insert(
+                    project_trust_key(trust_target.as_path()),
+                    TomlValue::Table(project),
+                );
+                cli_overrides_with_trust = cli_overrides
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once((
+                        "projects".to_string(),
+                        TomlValue::Table(projects),
+                    )))
+                    .collect::<Vec<_>>();
+                cli_overrides_with_trust.as_slice()
             } else {
-                config = match derive_config_from_params(
-                    &cli_overrides,
-                    config_overrides,
-                    typesafe_overrides,
-                    &cloud_requirements,
-                    &listener_task_context.codex_home,
-                    &runtime_feature_enablement,
-                )
-                .await
-                {
-                    Ok(config) => config,
-                    Err(err) => {
-                        let error = config_load_error(&err);
-                        listener_task_context
-                            .outgoing
-                            .send_error(request_id, error)
-                            .await;
-                        return;
-                    }
-                };
-            }
+                &cli_overrides
+            };
+
+            config = match derive_config_from_params(
+                cli_overrides_for_reload,
+                config_overrides,
+                typesafe_overrides,
+                &cloud_requirements,
+                &listener_task_context.codex_home,
+                &runtime_feature_enablement,
+            )
+            .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = config_load_error(&err);
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+            };
         }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
