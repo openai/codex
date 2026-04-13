@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -119,6 +120,14 @@ impl AuthStorageBackend for FileAuthStorage {
 
 const KEYRING_SERVICE: &str = "Codex Auth";
 
+// Const for each field of AuthDotJson, only when used on windows
+// if more fields are added to struct, then update these consts
+//  and windows storage functions.
+const AUTH_MODE_FIELD: &str = "auth_mode";
+const OPENAI_API_KEY_FIELD: &str = "openai_api_key";
+const TOKENS_FIELD: &str = "tokens";
+const LAST_REFRESH_FIELD: &str = "last_refresh";
+
 // turns codex_home path into a stable, short key string
 fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
     let canonical = codex_home
@@ -175,19 +184,139 @@ impl KeyringAuthStorage {
             }
         }
     }
+
+    fn field_key(key: &str, field_name: &str) -> String {
+        format!("{key}|{field_name}")
+    }
+
+    fn save_windows_auth_to_keyring(&self, key: &str, auth: &AuthDotJson) -> std::io::Result<()> {
+        let fields = [
+            (
+                AUTH_MODE_FIELD,
+                serde_json::to_string(&auth.auth_mode).map_err(std::io::Error::other)?,
+            ),
+            (
+                OPENAI_API_KEY_FIELD,
+                serde_json::to_string(&auth.openai_api_key).map_err(std::io::Error::other)?,
+            ),
+            (
+                TOKENS_FIELD,
+                serde_json::to_string(&auth.tokens).map_err(std::io::Error::other)?,
+            ),
+            (
+                LAST_REFRESH_FIELD,
+                serde_json::to_string(&auth.last_refresh).map_err(std::io::Error::other)?,
+            ),
+        ];
+
+        for (field_name, serialized) in fields {
+            self.save_to_keyring(&Self::field_key(key, field_name), &serialized)?;
+        }
+
+        if let Err(err) = self.keyring_store.delete(KEYRING_SERVICE, key) {
+            warn!("failed to remove legacy CLI auth from keyring: {err}");
+        }
+        Ok(())
+    }
+
+    fn load_windows_auth_from_keyring(&self, key: &str) -> std::io::Result<Option<AuthDotJson>> {
+        fn load_auth_field_from_keyring<T>(
+            keyring_store: &dyn KeyringStore,
+            key: &str,
+        ) -> std::io::Result<Option<T>>
+        where
+            T: DeserializeOwned,
+        {
+            match keyring_store.load(KEYRING_SERVICE, key) {
+                Ok(Some(serialized)) => {
+                    serde_json::from_str(&serialized).map(Some).map_err(|err| {
+                        std::io::Error::other(format!(
+                            "failed to deserialize CLI auth field from keyring: {err}"
+                        ))
+                    })
+                }
+                Ok(None) => Ok(None),
+                Err(error) => Err(std::io::Error::other(format!(
+                    "failed to load CLI auth from keyring: {}",
+                    error.message()
+                ))),
+            }
+        }
+
+        let auth_mode = load_auth_field_from_keyring::<Option<AuthMode>>(
+            self.keyring_store.as_ref(),
+            &Self::field_key(key, AUTH_MODE_FIELD),
+        )?;
+        let openai_api_key = load_auth_field_from_keyring::<Option<String>>(
+            self.keyring_store.as_ref(),
+            &Self::field_key(key, OPENAI_API_KEY_FIELD),
+        )?;
+        let tokens = load_auth_field_from_keyring::<Option<TokenData>>(
+            self.keyring_store.as_ref(),
+            &Self::field_key(key, TOKENS_FIELD),
+        )?;
+        let last_refresh = load_auth_field_from_keyring::<Option<DateTime<Utc>>>(
+            self.keyring_store.as_ref(),
+            &Self::field_key(key, LAST_REFRESH_FIELD),
+        )?;
+
+        if auth_mode.is_none()
+            && openai_api_key.is_none()
+            && tokens.is_none()
+            && last_refresh.is_none()
+        {
+            return Ok(None);
+        }
+
+        Ok(Some(AuthDotJson {
+            auth_mode: auth_mode.flatten(),
+            openai_api_key: openai_api_key.flatten(),
+            tokens: tokens.flatten(),
+            last_refresh: last_refresh.flatten(),
+        }))
+    }
+
+    fn delete_windows_auth_from_keyring(&self, key: &str) -> std::io::Result<bool> {
+        let field_keys = [
+            Self::field_key(key, AUTH_MODE_FIELD),
+            Self::field_key(key, OPENAI_API_KEY_FIELD),
+            Self::field_key(key, TOKENS_FIELD),
+            Self::field_key(key, LAST_REFRESH_FIELD),
+            key.to_string(),
+        ];
+        let mut removed = false;
+
+        for field_key in field_keys {
+            removed |= self
+                .keyring_store
+                .delete(KEYRING_SERVICE, &field_key)
+                .map_err(|err| {
+                    std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
+                })?;
+        }
+
+        Ok(removed)
+    }
 }
 
 impl AuthStorageBackend for KeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let key = compute_store_key(&self.codex_home)?;
-        self.load_from_keyring(&key)
+        if cfg!(windows) {
+            self.load_windows_auth_from_keyring(&key)
+        } else {
+            self.load_from_keyring(&key)
+        }
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
         let key = compute_store_key(&self.codex_home)?;
-        // Simpler error mapping per style: prefer method reference over closure
-        let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
-        self.save_to_keyring(&key, &serialized)?;
+        if cfg!(windows) {
+            self.save_windows_auth_to_keyring(&key, auth)?;
+        } else {
+            let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
+            self.save_to_keyring(&key, &serialized)?;
+        }
         if let Err(err) = delete_file_if_exists(&self.codex_home) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
@@ -196,12 +325,15 @@ impl AuthStorageBackend for KeyringAuthStorage {
 
     fn delete(&self) -> std::io::Result<bool> {
         let key = compute_store_key(&self.codex_home)?;
-        let keyring_removed = self
-            .keyring_store
-            .delete(KEYRING_SERVICE, &key)
-            .map_err(|err| {
-                std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
-            })?;
+        let keyring_removed = if cfg!(windows) {
+            self.delete_windows_auth_from_keyring(&key)?
+        } else {
+            self.keyring_store
+                .delete(KEYRING_SERVICE, &key)
+                .map_err(|err| {
+                    std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
+                })?
+        };
         let file_removed = delete_file_if_exists(&self.codex_home)?;
         Ok(keyring_removed || file_removed)
     }

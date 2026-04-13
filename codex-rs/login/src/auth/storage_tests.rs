@@ -126,6 +126,34 @@ where
     Ok(())
 }
 
+fn seed_windows_keyring_with_auth(
+    mock_keyring: &MockKeyringStore,
+    key: &str,
+    auth: &AuthDotJson,
+) -> anyhow::Result<()> {
+    mock_keyring.save(
+        KEYRING_SERVICE,
+        &KeyringAuthStorage::field_key(key, AUTH_MODE_FIELD),
+        &serde_json::to_string(&auth.auth_mode)?,
+    )?;
+    mock_keyring.save(
+        KEYRING_SERVICE,
+        &KeyringAuthStorage::field_key(key, OPENAI_API_KEY_FIELD),
+        &serde_json::to_string(&auth.openai_api_key)?,
+    )?;
+    mock_keyring.save(
+        KEYRING_SERVICE,
+        &KeyringAuthStorage::field_key(key, TOKENS_FIELD),
+        &serde_json::to_string(&auth.tokens)?,
+    )?;
+    mock_keyring.save(
+        KEYRING_SERVICE,
+        &KeyringAuthStorage::field_key(key, LAST_REFRESH_FIELD),
+        &serde_json::to_string(&auth.last_refresh)?,
+    )?;
+    Ok(())
+}
+
 fn assert_keyring_saved_auth_and_removed_fallback(
     mock_keyring: &MockKeyringStore,
     key: &str,
@@ -137,6 +165,44 @@ fn assert_keyring_saved_auth_and_removed_fallback(
         .expect("keyring entry should exist");
     let expected_serialized = serde_json::to_string(expected).expect("serialize expected auth");
     assert_eq!(saved_value, expected_serialized);
+    let auth_file = get_auth_file(codex_home);
+    assert!(
+        !auth_file.exists(),
+        "fallback auth.json should be removed after keyring save"
+    );
+}
+
+fn assert_windows_keyring_saved_auth_and_removed_fallback(
+    mock_keyring: &MockKeyringStore,
+    key: &str,
+    codex_home: &Path,
+    expected: &AuthDotJson,
+) {
+    let auth_mode_key = KeyringAuthStorage::field_key(key, AUTH_MODE_FIELD);
+    let openai_api_key_key = KeyringAuthStorage::field_key(key, OPENAI_API_KEY_FIELD);
+    let tokens_key = KeyringAuthStorage::field_key(key, TOKENS_FIELD);
+    let last_refresh_key = KeyringAuthStorage::field_key(key, LAST_REFRESH_FIELD);
+
+    assert_eq!(
+        mock_keyring.saved_value(&auth_mode_key),
+        Some(serde_json::to_string(&expected.auth_mode).expect("serialize auth_mode")),
+    );
+    assert_eq!(
+        mock_keyring.saved_value(&openai_api_key_key),
+        Some(serde_json::to_string(&expected.openai_api_key).expect("serialize openai_api_key")),
+    );
+    assert_eq!(
+        mock_keyring.saved_value(&tokens_key),
+        Some(serde_json::to_string(&expected.tokens).expect("serialize tokens")),
+    );
+    assert_eq!(
+        mock_keyring.saved_value(&last_refresh_key),
+        Some(serde_json::to_string(&expected.last_refresh).expect("serialize last_refresh")),
+    );
+    assert!(
+        mock_keyring.saved_value(key).is_none(),
+        "legacy whole-auth key should be removed after windows keyring save"
+    );
     let auth_file = get_auth_file(codex_home);
     assert!(
         !auth_file.exists(),
@@ -272,6 +338,108 @@ fn keyring_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> 
         !auth_file.exists(),
         "fallback auth.json should be removed after keyring delete"
     );
+    Ok(())
+}
+
+#[test]
+fn keyring_auth_storage_windows_load_combines_split_entries() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let storage = KeyringAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    let expected = auth_with_prefix("windows-load");
+    let key = compute_store_key(codex_home.path())?;
+    seed_windows_keyring_with_auth(&mock_keyring, &key, &expected)?;
+
+    let loaded = storage.load_windows_auth_from_keyring(&key)?;
+
+    assert_eq!(Some(expected), loaded);
+    Ok(())
+}
+
+#[test]
+fn keyring_auth_storage_windows_load_ignores_legacy_entry() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let storage = KeyringAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    let expected = auth_with_prefix("windows-legacy");
+    let key = compute_store_key(codex_home.path())?;
+    seed_keyring_with_auth(&mock_keyring, || Ok(key.clone()), &expected)?;
+
+    let loaded = storage.load_windows_auth_from_keyring(&key)?;
+
+    assert_eq!(None, loaded);
+    Ok(())
+}
+
+#[test]
+fn keyring_auth_storage_windows_save_persists_split_entries() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let storage = KeyringAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    let auth_file = get_auth_file(codex_home.path());
+    std::fs::write(&auth_file, "stale")?;
+    let auth = auth_with_prefix("windows-save");
+    let key = compute_store_key(codex_home.path())?;
+    mock_keyring.save(KEYRING_SERVICE, &key, "legacy-auth")?;
+
+    storage.save_windows_auth_to_keyring(&key, &auth)?;
+    if let Err(err) = delete_file_if_exists(codex_home.path()) {
+        panic!("failed to remove fallback auth file in test: {err}");
+    }
+
+    assert_windows_keyring_saved_auth_and_removed_fallback(
+        &mock_keyring,
+        &key,
+        codex_home.path(),
+        &auth,
+    );
+    Ok(())
+}
+
+#[test]
+fn keyring_auth_storage_windows_delete_removes_split_entries_and_file() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let storage = KeyringAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    let key = compute_store_key(codex_home.path())?;
+    let auth = auth_with_prefix("windows-delete");
+    seed_windows_keyring_with_auth(&mock_keyring, &key, &auth)?;
+    mock_keyring.save(KEYRING_SERVICE, &key, "legacy-auth")?;
+    let auth_file = get_auth_file(codex_home.path());
+    std::fs::write(&auth_file, "stale")?;
+
+    let removed = storage.delete_windows_auth_from_keyring(&key)?;
+    let file_removed = delete_file_if_exists(codex_home.path())?;
+
+    assert!(removed, "delete should report removal");
+    assert!(file_removed, "fallback auth.json should be removed");
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
+        key.as_str(),
+        AUTH_MODE_FIELD
+    )));
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
+        key.as_str(),
+        OPENAI_API_KEY_FIELD,
+    )));
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(key.as_str(), TOKENS_FIELD)));
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
+        key.as_str(),
+        LAST_REFRESH_FIELD,
+    )));
+    assert!(!mock_keyring.contains(&key));
+    assert!(!auth_file.exists());
     Ok(())
 }
 
