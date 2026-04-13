@@ -1174,10 +1174,6 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     assert_eq!(
         hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "attempt": {
-                "stage": "initial",
-                "retryReason": null,
-            },
             "policy": {
                 "sandboxPermissions": "use_default",
                 "additionalPermissions": null,
@@ -1281,10 +1277,6 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     assert_eq!(
         hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "attempt": {
-                "stage": "initial",
-                "retryReason": null,
-            },
             "policy": {
                 "sandboxPermissions": "use_default",
                 "additionalPermissions": null,
@@ -1453,10 +1445,6 @@ allow_local_binding = true
     assert_eq!(
         hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "attempt": {
-                "stage": "initial",
-                "retryReason": null,
-            },
             "policy": {
                 "sandboxPermissions": "use_default",
                 "additionalPermissions": null,
@@ -1552,10 +1540,6 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     assert_eq!(
         hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "attempt": {
-                "stage": "retry",
-                "retryReason": "command failed; retry without sandbox?",
-            },
             "policy": {
                 "sandboxPermissions": "use_default",
                 "additionalPermissions": null,
