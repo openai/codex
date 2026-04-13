@@ -180,7 +180,7 @@ fn upgrade_configured_git_marketplace(
             )
         })?;
 
-    clone_git_source(
+    let activated_revision = clone_git_source(
         &marketplace.source,
         marketplace.ref_name.as_deref(),
         &marketplace.sparse_paths,
@@ -195,12 +195,12 @@ fn upgrade_configured_git_marketplace(
             marketplace.name
         ));
     }
-    write_activated_marketplace_metadata(staged_dir.path(), marketplace, &remote_revision)?;
+    write_activated_marketplace_metadata(staged_dir.path(), marketplace, &activated_revision)?;
 
     let last_updated = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let update = MarketplaceConfigUpdate {
         last_updated: &last_updated,
-        last_revision: Some(&remote_revision),
+        last_revision: Some(&activated_revision),
         source_type: "git",
         source: &marketplace.source,
         ref_name: marketplace.ref_name.as_deref(),
@@ -373,7 +373,7 @@ fn clone_git_source(
     sparse_paths: &[String],
     destination: &Path,
     timeout: Duration,
-) -> Result<(), String> {
+) -> Result<String, String> {
     if sparse_paths.is_empty() {
         let output = run_git_command_with_timeout(
             git_command().arg("clone").arg(source).arg(destination),
@@ -393,7 +393,7 @@ fn clone_git_source(
             )?;
             ensure_git_success(&output, "git checkout marketplace ref")?;
         }
-        return Ok(());
+        return git_worktree_revision(destination, timeout);
     }
 
     let output = run_git_command_with_timeout(
@@ -431,7 +431,28 @@ fn clone_git_source(
         "git checkout marketplace ref",
         timeout,
     )?;
-    ensure_git_success(&output, "git checkout marketplace ref")
+    ensure_git_success(&output, "git checkout marketplace ref")?;
+    git_worktree_revision(destination, timeout)
+}
+
+fn git_worktree_revision(destination: &Path, timeout: Duration) -> Result<String, String> {
+    let output = run_git_command_with_timeout(
+        git_command()
+            .arg("-C")
+            .arg(destination)
+            .arg("rev-parse")
+            .arg("HEAD"),
+        "git rev-parse marketplace revision",
+        timeout,
+    )?;
+    ensure_git_success(&output, "git rev-parse marketplace revision")?;
+
+    let revision = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if revision.is_empty() {
+        Err("git rev-parse returned empty revision for marketplace source".to_string())
+    } else {
+        Ok(revision)
+    }
 }
 
 fn git_command() -> Command {
