@@ -8,6 +8,10 @@
 name: rust-release
 on:
   push:
+    branches:
+      # Temporary validation trigger for the draft PR that exercises build,
+      # signing, and notarization without publishing.
+      - "shijie/rust-release-timeout-no-publish"
     tags:
       - "rust-v*.*.*"
 
@@ -25,7 +29,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "::group::Tag validation"
+          echo "::group::Release trigger validation"
+
+          validation_branch="shijie/rust-release-timeout-no-publish"
+          if [[ "${GITHUB_REF_TYPE}" == "branch" ]]; then
+            [[ "${GITHUB_REF_NAME}" == "${validation_branch}" ]] \
+              || { echo "❌  Unexpected branch '${GITHUB_REF_NAME}'"; exit 1; }
+
+            echo "✅  Temporary validation branch '${GITHUB_REF_NAME}' accepted"
+            echo "::endgroup::"
+            exit 0
+          fi
 
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
@@ -49,7 +63,7 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write
@@ -383,7 +397,9 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-windows:
+    # Temporarily disabled while validating macOS build/sign/notarize timeout behavior.
     needs: tag-check
+    if: ${{ false }}
     uses: ./.github/workflows/rust-release-windows.yml
     with:
       release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
@@ -391,17 +407,23 @@ jobs:
 
   argument-comment-lint-release-assets:
     name: argument-comment-lint release assets
+    # Temporarily disabled while validating macOS build/sign/notarize timeout behavior.
     needs: tag-check
+    if: ${{ false }}
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
     with:
       publish: true
 
   zsh-release-assets:
     name: zsh release assets
+    # Temporarily disabled while validating macOS build/sign/notarize timeout behavior.
     needs: tag-check
+    if: ${{ false }}
     uses: ./.github/workflows/rust-release-zsh.yml
 
   release:
+    # Temporarily disabled so validation tags can build, sign, and notarize without publishing.
+    if: ${{ false }}
     needs:
       - build
       - build-windows
