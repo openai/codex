@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import platform
 import re
@@ -33,19 +34,18 @@ def python_runtime_root() -> Path:
     return repo_root() / "sdk" / "python-runtime"
 
 
-def schema_bundle_path() -> Path:
-    return (
-        repo_root()
-        / "codex-rs"
-        / "app-server-protocol"
-        / "schema"
-        / "json"
-        / "codex_app_server_protocol.v2.schemas.json"
-    )
+def schema_bundle_path(schema_dir: Path | None = None) -> Path:
+    return schema_root_dir(schema_dir) / "codex_app_server_protocol.v2.schemas.json"
 
 
-def schema_root_dir() -> Path:
+def schema_root_dir(schema_dir: Path | None = None) -> Path:
+    if schema_dir is not None:
+        return schema_dir
     return repo_root() / "codex-rs" / "app-server-protocol" / "schema" / "json"
+
+
+def runtime_setup_path() -> Path:
+    return sdk_root() / "_runtime_setup.py"
 
 
 def _is_windows(system_name: str | None = None) -> bool:
@@ -297,6 +297,68 @@ def _find_runtime_bundle_file(runtime_bundle_dir: Path, destination_name: str) -
     )
 
 
+def _load_runtime_setup_module() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "_codex_python_runtime_setup", runtime_setup_path()
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load {runtime_setup_path()}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _bundled_codex_path_from_install_target(install_target: Path) -> Path:
+    package_init = install_target / "codex_cli_bin" / "__init__.py"
+    spec = importlib.util.spec_from_file_location(
+        "_codex_cli_bin_for_schema",
+        package_init,
+        submodule_search_locations=[str(package_init.parent)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load installed runtime package: {package_init}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.bundled_codex_path()
+
+
+def _run_runtime_schema_generator(codex_bin: Path, out_dir: Path) -> None:
+    run(
+        [
+            str(codex_bin),
+            "app-server",
+            "generate-json-schema",
+            "--out",
+            str(out_dir),
+        ],
+        cwd=repo_root(),
+    )
+
+
+def _generate_json_schema_from_runtime(
+    out_dir: Path, runtime_version: str | None = None
+) -> str:
+    runtime_setup = _load_runtime_setup_module()
+    requested_version = runtime_version or runtime_setup.pinned_runtime_version()
+    with tempfile.TemporaryDirectory(prefix="codex-python-schema-runtime-") as td:
+        install_target = Path(td) / "runtime-package"
+        original_pinned_runtime_version = runtime_setup.PINNED_RUNTIME_VERSION
+        runtime_setup.PINNED_RUNTIME_VERSION = requested_version
+        try:
+            runtime_setup.ensure_runtime_package_installed(
+                sys.executable,
+                sdk_root(),
+                install_target,
+            )
+        finally:
+            runtime_setup.PINNED_RUNTIME_VERSION = original_pinned_runtime_version
+        codex_bin = _bundled_codex_path_from_install_target(install_target)
+        _run_runtime_schema_generator(codex_bin, out_dir)
+    return requested_version
+
+
 def _flatten_string_enum_one_of(definition: dict[str, Any]) -> bool:
     branches = definition.get("oneOf")
     if not isinstance(branches, list) or not branches:
@@ -533,8 +595,8 @@ def _annotate_schema(value: Any, base: str | None = None) -> None:
         _annotate_schema(child, base)
 
 
-def _normalized_schema_bundle_text() -> str:
-    schema = json.loads(schema_bundle_path().read_text())
+def _normalized_schema_bundle_text(schema_dir: Path | None = None) -> str:
+    schema = json.loads(schema_bundle_path(schema_dir).read_text())
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
         for definition in definitions.values():
@@ -546,7 +608,7 @@ def _normalized_schema_bundle_text() -> str:
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
-def generate_v2_all() -> None:
+def generate_v2_all(schema_dir: Path | None = None) -> None:
     out_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
     out_dir = out_path.parent
     old_package_dir = out_dir / "v2_all"
@@ -554,8 +616,8 @@ def generate_v2_all() -> None:
         shutil.rmtree(old_package_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as td:
-        normalized_bundle = Path(td) / schema_bundle_path().name
-        normalized_bundle.write_text(_normalized_schema_bundle_text())
+        normalized_bundle = Path(td) / schema_bundle_path(schema_dir).name
+        normalized_bundle.write_text(_normalized_schema_bundle_text(schema_dir))
         run_python_module(
             "datamodel_code_generator",
             [
@@ -592,9 +654,9 @@ def generate_v2_all() -> None:
     _normalize_generated_timestamps(out_path)
 
 
-def _notification_specs() -> list[tuple[str, str]]:
+def _notification_specs(schema_dir: Path | None = None) -> list[tuple[str, str]]:
     server_notifications = json.loads(
-        (schema_root_dir() / "ServerNotification.json").read_text()
+        (schema_root_dir(schema_dir) / "ServerNotification.json").read_text()
     )
     one_of = server_notifications.get("oneOf", [])
     generated_source = (
@@ -631,7 +693,7 @@ def _notification_specs() -> list[tuple[str, str]]:
     return specs
 
 
-def generate_notification_registry() -> None:
+def generate_notification_registry(schema_dir: Path | None = None) -> None:
     out = (
         sdk_root()
         / "src"
@@ -639,7 +701,7 @@ def generate_notification_registry() -> None:
         / "generated"
         / "notification_registry.py"
     )
-    specs = _notification_specs()
+    specs = _notification_specs(schema_dir)
     class_names = sorted({class_name for _, class_name in specs})
 
     lines = [
@@ -694,7 +756,7 @@ class PublicFieldSpec:
 
 @dataclass(frozen=True)
 class CliOps:
-    generate_types: Callable[[], None]
+    generate_types: Callable[[str | None], None]
     stage_python_sdk_package: Callable[[Path, str, str], Path]
     stage_python_runtime_package: Callable[[Path, str, Path], Path]
     current_sdk_version: Callable[[], str]
@@ -1038,19 +1100,29 @@ def generate_public_api_flat_methods() -> None:
     public_api_path.write_text(source)
 
 
-def generate_types() -> None:
-    # v2_all is the authoritative generated surface.
-    generate_v2_all()
-    generate_notification_registry()
-    generate_public_api_flat_methods()
+def generate_types(runtime_version: str | None = None) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-python-schema-") as schema_root:
+        schema_dir = Path(schema_root)
+        _generate_json_schema_from_runtime(schema_dir, runtime_version)
+        # v2_all is the authoritative generated surface.
+        generate_v2_all(schema_dir)
+        generate_notification_registry(schema_dir)
+        generate_public_api_flat_methods()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Single SDK maintenance entrypoint")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser(
+    generate_types_parser = subparsers.add_parser(
         "generate-types", help="Regenerate Python protocol-derived types"
+    )
+    generate_types_parser.add_argument(
+        "--runtime-version",
+        help=(
+            "Runtime release version used to emit app-server JSON schema "
+            "(defaults to sdk/python/_runtime_setup.py's pinned version)"
+        ),
     )
 
     stage_sdk_parser = subparsers.add_parser(
@@ -1109,9 +1181,9 @@ def default_cli_ops() -> CliOps:
 
 def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
-        ops.generate_types()
+        ops.generate_types(args.runtime_version)
     elif args.command == "stage-sdk":
-        ops.generate_types()
+        ops.generate_types(None)
         ops.stage_python_sdk_package(
             args.staging_dir,
             args.sdk_version or ops.current_sdk_version(),

@@ -2,7 +2,7 @@
 
 Experimental Python SDK for `codex app-server` JSON-RPC v2 over stdio, with a small default surface optimized for real scripts and apps.
 
-The generated wire-model layer is currently sourced from the bundled v2 schema and exposed as Pydantic models with snake_case Python fields that serialize back to the app-server’s camelCase wire format.
+The generated wire-model layer is sourced from the pinned runtime's `codex app-server generate-json-schema` output and exposed as Pydantic models with snake_case Python fields that serialize back to the app-server’s camelCase wire format.
 
 ## Install
 
@@ -11,10 +11,16 @@ cd sdk/python
 python -m pip install -e .
 ```
 
-Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
-repo development, either pass `AppServerConfig(codex_bin=...)` to point at a
-local build explicitly, or use the repo examples/notebook bootstrap which
-installs the pinned runtime package automatically.
+Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency.
+For local repo development, either pass `AppServerConfig(codex_bin=...)` to
+point at a local build explicitly, or use the repo examples/notebook bootstrap
+which installs the pinned runtime package automatically.
+
+When published, normal installs should use:
+
+```bash
+python -m pip install openai-codex
+```
 
 ## Quickstart
 
@@ -53,9 +59,9 @@ python examples/01_quickstart_constructor/async.py
 
 The repo no longer checks `codex` binaries into `sdk/python`.
 
-Published SDK builds are pinned to an exact `codex-cli-bin` package version,
-and that runtime package carries the platform-specific binary for the target
-wheel.
+Published SDK builds are pinned to an exact `openai-codex-cli-bin` package
+version, and that runtime package carries the platform-specific binary bundle
+for the target wheel.
 
 For local repo development, the checked-in `sdk/python-runtime` package is only
 a template for staged release artifacts. Editable installs should use an
@@ -69,30 +75,34 @@ cd sdk/python
 python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
-  /tmp/codex-python-release/codex-app-server-sdk \
+  /tmp/codex-python-release/openai-codex \
   --runtime-version 1.2.3
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
-  /tmp/codex-python-release/codex-cli-bin \
-  /path/to/codex \
+  /tmp/codex-python-release/openai-codex-cli-bin \
+  /path/to/runtime-bundle-dir \
   --runtime-version 1.2.3
 ```
 
 This supports the CI release flow:
 
 - run `generate-types` before packaging
-- stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
-- stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
-- build and publish `codex-cli-bin` as platform wheels only; do not publish an sdist
+- generate types from the pinned runtime schema, then convert that schema to Python
+- stage `openai-codex` once with an exact `openai-codex-cli-bin==...` dependency
+- stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
+- build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist
 
 ## Compatibility and versioning
 
-- Package: `codex-app-server-sdk`
-- Runtime package: `codex-cli-bin`
+- Package: `openai-codex`
+- Runtime package: `openai-codex-cli-bin`
 - Current SDK version in this repo: `0.2.0`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2
-- Recommendation: keep SDK and `codex` CLI reasonably up to date together
+- Release tags map to Python package versions as follows: `rust-v1.2.3` ->
+  `1.2.3`, `rust-v1.2.3-alpha.4` -> `1.2.3a4`, and
+  `rust-v1.2.3-beta.5` -> `1.2.3b5`.
+- Recommendation: keep SDK and `codex` CLI at the exact same published version.
 
 ## Notes
 

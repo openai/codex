@@ -70,18 +70,18 @@ def test_generate_types_wires_all_generation_steps() -> None:
     )
     assert generate_types_fn is not None
 
-    calls: list[str] = []
-    for node in generate_types_fn.body:
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            fn = node.value.func
-            if isinstance(fn, ast.Name):
-                calls.append(fn.id)
+    calls = {
+        node.func.id
+        for node in ast.walk(generate_types_fn)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
 
-    assert calls == [
+    assert {
+        "_generate_json_schema_from_runtime",
         "generate_v2_all",
         "generate_notification_registry",
         "generate_public_api_flat_methods",
-    ]
+    } <= calls
 
 
 def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
@@ -494,8 +494,8 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
         ]
     )
 
-    def fake_generate_types() -> None:
-        calls.append("generate_types")
+    def fake_generate_types(runtime_version: str | None) -> None:
+        calls.append(f"generate_types:{runtime_version}")
 
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
@@ -520,7 +520,72 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     script.run_command(args, ops)
 
-    assert calls == ["generate_types", "stage_sdk"]
+    assert calls == ["generate_types:None", "stage_sdk"]
+
+
+def test_generate_types_accepts_runtime_version_override() -> None:
+    script = _load_update_script_module()
+    calls: list[str] = []
+    args = script.parse_args(
+        [
+            "generate-types",
+            "--runtime-version",
+            "1.2.3-alpha.4",
+        ]
+    )
+
+    def fake_generate_types(runtime_version: str | None) -> None:
+        calls.append(f"generate_types:{runtime_version}")
+
+    def fake_stage_sdk_package(
+        _staging_dir: Path, _sdk_version: str, _runtime_version: str
+    ) -> Path:
+        raise AssertionError("sdk staging should not run for generate-types")
+
+    def fake_stage_runtime_package(
+        _staging_dir: Path, _runtime_version: str, _runtime_bundle_dir: Path
+    ) -> Path:
+        raise AssertionError("runtime staging should not run for generate-types")
+
+    def fake_current_sdk_version() -> str:
+        return "0.2.0"
+
+    ops = script.CliOps(
+        generate_types=fake_generate_types,
+        stage_python_sdk_package=fake_stage_sdk_package,
+        stage_python_runtime_package=fake_stage_runtime_package,
+        current_sdk_version=fake_current_sdk_version,
+    )
+
+    script.run_command(args, ops)
+
+    assert calls == ["generate_types:1.2.3-alpha.4"]
+
+
+def test_runtime_schema_generator_uses_app_server_json_schema_command(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    codex_bin = tmp_path / "codex"
+    out_dir = tmp_path / "schema"
+    args_path = tmp_path / "args.txt"
+    codex_bin.write_text(
+        "#!/usr/bin/env sh\n"
+        f'printf \'%s\\n\' "$@" > "{args_path}"\n'
+        'mkdir -p "$4"\n'
+        "printf '{}' > \"$4/codex_app_server_protocol.v2.schemas.json\"\n"
+        "printf '{}' > \"$4/ServerNotification.json\"\n"
+    )
+    codex_bin.chmod(0o755)
+
+    script._run_runtime_schema_generator(codex_bin, out_dir)
+
+    assert args_path.read_text().splitlines() == [
+        "app-server",
+        "generate-json-schema",
+        "--out",
+        str(out_dir),
+    ]
 
 
 def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:
@@ -539,7 +604,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
         ]
     )
 
-    def fake_generate_types() -> None:
+    def fake_generate_types(_runtime_version: str | None) -> None:
         calls.append("generate_types")
 
     def fake_stage_sdk_package(
