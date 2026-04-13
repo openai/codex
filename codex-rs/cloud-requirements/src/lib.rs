@@ -2084,7 +2084,7 @@ enabled = false
             },
         );
 
-        let retryable_error = Err(request_error_with_status(503));
+        let retryable_error = Err(request_error_with_status(/*status_code*/ 503));
         let fetcher = Arc::new(SequenceFetcher::new(vec![
             retryable_error;
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS
@@ -2129,7 +2129,7 @@ enabled = false
             },
         );
 
-        let retryable_error = Err(request_error_with_status(503));
+        let retryable_error = Err(request_error_with_status(/*status_code*/ 503));
         let fetcher = Arc::new(SequenceFetcher::new(vec![
             retryable_error;
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS
