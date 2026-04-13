@@ -48,6 +48,8 @@ use tokio::time::timeout;
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
+const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
+const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
 
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
     let script_path = home.join("stop_hook.py");
@@ -323,6 +325,15 @@ elif mode == "exit_2":
     Ok(())
 }
 
+fn install_allow_permission_request_hook(home: &Path) -> Result<()> {
+    write_permission_request_hook(
+        home,
+        Some(PERMISSION_REQUEST_HOOK_MATCHER),
+        "allow",
+        PERMISSION_REQUEST_ALLOW_REASON,
+    )
+}
+
 fn write_post_tool_use_hook(
     home: &Path,
     matcher: Option<&str>,
@@ -490,6 +501,37 @@ fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Va
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse permission request hook log line"))
         .collect()
+}
+
+fn assert_permission_request_hook_input(
+    hook_input: &Value,
+    command: &str,
+    description: Option<&str>,
+) {
+    assert_eq!(hook_input["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_input["tool_name"], "Bash");
+    assert_eq!(hook_input["tool_input"]["command"], command);
+    assert_eq!(
+        hook_input["tool_input"]["description"],
+        description.map_or(Value::Null, Value::from)
+    );
+    assert!(hook_input.get("approval_attempt").is_none());
+    assert!(hook_input.get("sandbox_permissions").is_none());
+    assert!(hook_input.get("additional_permissions").is_none());
+    assert!(hook_input.get("justification").is_none());
+    assert!(hook_input.get("host").is_none());
+    assert!(hook_input.get("protocol").is_none());
+}
+
+fn assert_single_permission_request_hook_input(
+    home: &Path,
+    command: &str,
+    description: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
+    let hook_inputs = read_permission_request_hook_inputs(home)?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_permission_request_hook_input(&hook_inputs[0], command, description);
+    Ok(hook_inputs)
 }
 
 fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -1132,12 +1174,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_permission_request_hook(
-                home,
-                Some("^Bash$"),
-                "allow",
-                "should not be used for allow",
-            ) {
+            if let Err(error) = install_allow_permission_request_hook(home) {
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
@@ -1166,21 +1203,8 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         "approved command should remove marker file"
     );
 
-    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
-    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
-    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(
-        hook_inputs[0]["tool_input"]["description"],
-        serde_json::Value::Null
-    );
-    assert!(hook_inputs[0].get("approval_attempt").is_none());
-    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
-    assert!(hook_inputs[0].get("additional_permissions").is_none());
-    assert!(hook_inputs[0].get("justification").is_none());
-    assert!(hook_inputs[0].get("host").is_none());
-    assert!(hook_inputs[0].get("protocol").is_none());
+    let hook_inputs =
+        assert_single_permission_request_hook_input(test.codex_home_path(), &command, None)?;
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
@@ -1232,12 +1256,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_permission_request_hook(
-                home,
-                Some("^Bash$"),
-                "allow",
-                "should not be used for allow",
-            ) {
+            if let Err(error) = install_allow_permission_request_hook(home) {
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
@@ -1271,18 +1290,11 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
         "approved exec command should remove marker file"
     );
 
-    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
-    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
-    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(hook_inputs[0]["tool_input"]["description"], justification);
-    assert!(hook_inputs[0].get("approval_attempt").is_none());
-    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
-    assert!(hook_inputs[0].get("additional_permissions").is_none());
-    assert!(hook_inputs[0].get("justification").is_none());
-    assert!(hook_inputs[0].get("host").is_none());
-    assert!(hook_inputs[0].get("protocol").is_none());
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        Some(justification),
+    )?;
 
     Ok(())
 }
@@ -1338,12 +1350,7 @@ allow_local_binding = true
     let test = test_codex()
         .with_home(Arc::clone(&home))
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_permission_request_hook(
-                home,
-                Some("^Bash$"),
-                "allow",
-                "should not be used for allow",
-            ) {
+            if let Err(error) = install_allow_permission_request_hook(home) {
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
@@ -1432,21 +1439,11 @@ allow_local_binding = true
         "expected the network approval hook to bypass the approval prompt"
     );
 
-    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
-    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
-    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(
-        hook_inputs[0]["tool_input"]["description"],
-        "network-access codex-network-test.invalid"
-    );
-    assert!(hook_inputs[0].get("approval_attempt").is_none());
-    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
-    assert!(hook_inputs[0].get("additional_permissions").is_none());
-    assert!(hook_inputs[0].get("justification").is_none());
-    assert!(hook_inputs[0].get("host").is_none());
-    assert!(hook_inputs[0].get("protocol").is_none());
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        command,
+        Some("network-access codex-network-test.invalid"),
+    )?;
 
     test.codex.submit(Op::Shutdown {}).await?;
     wait_for_event(&test.codex, |event| {
@@ -1490,12 +1487,7 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_permission_request_hook(
-                home,
-                Some("^Bash$"),
-                "allow",
-                "should not be used for allow",
-            ) {
+            if let Err(error) = install_allow_permission_request_hook(home) {
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
@@ -1524,20 +1516,7 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
         "retry"
     );
 
-    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
-    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(
-        hook_inputs[0]["tool_input"]["description"],
-        serde_json::Value::Null
-    );
-    assert!(hook_inputs[0].get("approval_attempt").is_none());
-    assert!(hook_inputs[0].get("sandbox_permissions").is_none());
-    assert!(hook_inputs[0].get("additional_permissions").is_none());
-    assert!(hook_inputs[0].get("justification").is_none());
-    assert!(hook_inputs[0].get("host").is_none());
-    assert!(hook_inputs[0].get("protocol").is_none());
+    assert_single_permission_request_hook_input(test.codex_home_path(), &command, None)?;
 
     Ok(())
 }

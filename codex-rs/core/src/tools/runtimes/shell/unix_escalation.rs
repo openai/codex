@@ -412,8 +412,6 @@ impl CoreShellActionProvider {
                     &effective_approval_id,
                     permission_request,
                     PermissionRequestApprovalAttempt::Initial,
-                    /*retry_reason*/ None,
-                    /*network_approval_context*/ None,
                 )
                 .await
                 {

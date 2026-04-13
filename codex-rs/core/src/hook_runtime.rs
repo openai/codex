@@ -12,7 +12,6 @@ use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
-use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -160,8 +159,6 @@ pub(crate) async fn run_permission_request_hooks(
     request_id: &str,
     payload: PermissionRequestPayload,
     approval_attempt: PermissionRequestApprovalAttempt,
-    _retry_reason: Option<String>,
-    _network_approval_context: Option<NetworkApprovalContext>,
 ) -> Option<PermissionRequestDecision> {
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,

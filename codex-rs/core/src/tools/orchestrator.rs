@@ -376,8 +376,6 @@ impl ToolOrchestrator {
                 approval_ctx.call_id,
                 permission_request,
                 approval_attempt,
-                approval_ctx.retry_reason.clone(),
-                approval_ctx.network_approval_context.clone(),
             )
             .await
             {

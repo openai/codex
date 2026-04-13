@@ -389,11 +389,9 @@ impl NetworkApprovalService {
             PermissionRequestPayload {
                 tool_name: "Bash".to_string(),
                 command,
-                description: Some(format!("network-access {}", request.host)),
+                description: Some(format!("network-access {target}")),
             },
             PermissionRequestApprovalAttempt::Initial,
-            /*retry_reason*/ None,
-            Some(network_approval_context.clone()),
         )
         .await
         {
