@@ -109,7 +109,7 @@ impl AgentIdentityManager {
         Self {
             auth_manager,
             secrets_manager: SecretsManager::new(
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 SecretsBackendKind::Local,
             ),
             chatgpt_base_url: config.chatgpt_base_url.clone(),
