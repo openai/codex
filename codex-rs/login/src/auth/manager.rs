@@ -291,6 +291,12 @@ impl CodexAuth {
         self.get_current_token_data().and_then(|t| t.account_id)
     }
 
+    /// Returns false if `is_chatgpt_auth()` is false or the token omits the FedRAMP claim.
+    pub fn is_fedramp_account(&self) -> bool {
+        self.get_current_token_data()
+            .is_some_and(|t| t.id_token.is_fedramp_account())
+    }
+
     /// Returns `None` if `is_chatgpt_auth()` is false.
     pub fn get_account_email(&self) -> Option<String> {
         self.get_current_token_data().and_then(|t| t.id_token.email)
