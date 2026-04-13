@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -33,6 +34,12 @@ use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
+use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -76,6 +83,8 @@ pub fn provision_sandbox_users(
     let online_password = random_password();
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
+    initialize_user_profile(offline_username, &offline_password, log)?;
+    initialize_user_profile(online_username, &online_password, log)?;
     write_secrets(
         codex_home,
         offline_username,
@@ -155,6 +164,63 @@ pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<(
             )?;
         }
     }
+    Ok(())
+}
+
+fn initialize_user_profile(username: &str, password: &str, log: &mut File) -> Result<()> {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let cmd_path = format!(r"{system_root}\System32\cmd.exe");
+    let mut cmdline = to_wide(format!(r#""{cmd_path}" /c exit 0"#));
+    let application_name = to_wide(OsStr::new(&cmd_path));
+    let username_w = to_wide(OsStr::new(username));
+    let domain_w = to_wide(OsStr::new("."));
+    let password_w = to_wide(OsStr::new(password));
+    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    let ok = unsafe {
+        CreateProcessWithLogonW(
+            username_w.as_ptr(),
+            domain_w.as_ptr(),
+            password_w.as_ptr(),
+            LOGON_WITH_PROFILE,
+            application_name.as_ptr(),
+            cmdline.as_mut_ptr(),
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &si,
+            &mut pi,
+        )
+    };
+    if ok == 0 {
+        let err = unsafe { GetLastError() };
+        super::log_line(
+            log,
+            &format!(
+                "CreateProcessWithLogonW failed while initializing profile for {username}: {err}"
+            ),
+        )?;
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProvisionFailed,
+            format!("failed to initialize sandbox user profile for {username}: {err}"),
+        )));
+    }
+
+    unsafe {
+        WaitForSingleObject(pi.hProcess, 5000);
+        if pi.hThread != 0 {
+            CloseHandle(pi.hThread);
+        }
+        if pi.hProcess != 0 {
+            CloseHandle(pi.hProcess);
+        }
+    }
+    super::log_line(
+        log,
+        &format!("initialized sandbox user profile for {username}"),
+    )?;
     Ok(())
 }
 
