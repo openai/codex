@@ -2296,38 +2296,33 @@ impl CodexMessageProcessor {
                 trust_target.as_path(),
                 TrustLevel::Trusted,
             ) {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to persist trusted project state: {err}"),
-                    data: None,
+                warn!(
+                    "failed to persist trusted project state for {}; continuing with in-memory trust for this thread: {err}",
+                    trust_target.display()
+                );
+                config.active_project.trust_level = Some(TrustLevel::Trusted);
+            } else {
+                config = match derive_config_from_params(
+                    &cli_overrides,
+                    config_overrides,
+                    typesafe_overrides,
+                    &cloud_requirements,
+                    &listener_task_context.codex_home,
+                    &runtime_feature_enablement,
+                )
+                .await
+                {
+                    Ok(config) => config,
+                    Err(err) => {
+                        let error = config_load_error(&err);
+                        listener_task_context
+                            .outgoing
+                            .send_error(request_id, error)
+                            .await;
+                        return;
+                    }
                 };
-                listener_task_context
-                    .outgoing
-                    .send_error(request_id, error)
-                    .await;
-                return;
             }
-
-            config = match derive_config_from_params(
-                &cli_overrides,
-                config_overrides,
-                typesafe_overrides,
-                &cloud_requirements,
-                &listener_task_context.codex_home,
-                &runtime_feature_enablement,
-            )
-            .await
-            {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = config_load_error(&err);
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-            };
         }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
