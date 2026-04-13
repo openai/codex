@@ -266,6 +266,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             sandbox: None,
             config: None,
             service_name: None,
+            user_instructions: None,
             base_instructions: None,
             developer_instructions: None,
             personality: None,

@@ -12235,6 +12235,12 @@
               "type": "null"
             }
           ]
+        },
+        "userInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "title": "ThreadStartParams",

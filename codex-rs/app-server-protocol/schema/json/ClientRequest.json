@@ -3257,6 +3257,12 @@
               "type": "null"
             }
           ]
+        },
+        "userInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

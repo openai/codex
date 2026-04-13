@@ -1257,6 +1257,7 @@ pub struct ConfigOverrides {
     pub js_repl_node_path: Option<PathBuf>,
     pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
     pub zsh_path: Option<PathBuf>,
+    pub user_instructions: Option<Option<String>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -1442,10 +1443,6 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let (user_instructions, user_instructions_path) =
-            Self::load_instructions(Some(&codex_home))
-                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
-                .unwrap_or((None, None));
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1465,6 +1462,7 @@ impl Config {
             js_repl_node_path: js_repl_node_path_override,
             js_repl_node_module_dirs: js_repl_node_module_dirs_override,
             zsh_path: zsh_path_override,
+            user_instructions,
             base_instructions,
             developer_instructions,
             personality,
@@ -1847,6 +1845,20 @@ impl Config {
         });
 
         let commit_attribution = cfg.commit_attribution;
+        let (user_instructions, user_instructions_path) = match user_instructions {
+            Some(Some(value)) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    (None, None)
+                } else {
+                    (Some(trimmed.to_string()), None)
+                }
+            }
+            Some(None) => (None, None),
+            None => Self::load_instructions(Some(&codex_home))
+                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
+                .unwrap_or((None, None)),
+        };
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
