@@ -284,8 +284,12 @@ async fn file_system_write_file_reports_missing_parent(use_remote: bool) -> Resu
         Ok(()) => anyhow::bail!("write should fail when parent directory is absent"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-    assert!(!missing_parent_path.exists());
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::NotFound,
+        "mode={use_remote}"
+    );
+    assert!(!missing_parent_path.exists(), "mode={use_remote}");
 
     Ok(())
 }
