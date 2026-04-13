@@ -1,27 +1,124 @@
 use anyhow::Result;
+use anyhow::bail;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_request_permissions_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::PermissionGrantScope;
-use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use serde_json::Value;
+use serde_json::json;
 use tokio::time::timeout;
+use wiremock::MockServer;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn request_permissions_round_trip() -> Result<()> {
+async fn permission_tools_are_hidden_without_supported_server_requests() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(Vec::new()).await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ false, /*expect_preset*/ false,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_tools_expose_only_narrow_permission_capability() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(vec![
+        SupportedServerRequestMethod::PermissionsRequestApproval,
+    ])
+    .await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ true, /*expect_preset*/ false,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_tools_keep_preset_hidden_without_delivery_support() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(vec![
+        SupportedServerRequestMethod::PermissionPresetRequestApproval,
+    ])
+    .await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ false, /*expect_preset*/ false,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_tools_expose_only_the_narrow_flow_for_now() -> Result<()> {
+    let body = first_responses_request_body_for_supported_server_requests(vec![
+        SupportedServerRequestMethod::PermissionsRequestApproval,
+        SupportedServerRequestMethod::PermissionPresetRequestApproval,
+    ])
+    .await?;
+    assert_permission_tool_exposure(
+        &body, /*expect_permissions*/ true, /*expect_preset*/ false,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_permissions_round_trips_when_client_supports_app_request() -> Result<()> {
+    let codex_home = tempfile::TempDir::new()?;
+    let responses = vec![
+        create_request_permissions_sse_response("call1")?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_with_supported_server_requests(
+        &mut mcp,
+        vec![SupportedServerRequestMethod::PermissionsRequestApproval],
+    )
+    .await?;
+
+    let thread_id = start_thread_and_turn(&mut mcp, "pick a directory").await?;
+
+    let server_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::PermissionsRequestApproval { request_id, params } = server_request else {
+        bail!("expected PermissionsRequestApproval request");
+    };
+    assert_eq!(params.thread_id, thread_id);
+    assert_eq!(params.item_id, "call1");
+    assert_eq!(params.reason.as_deref(), Some("Select a workspace root"));
+    let resolved_request_id = request_id.clone();
+
+    mcp.send_response(
+        request_id,
+        json!({
+            "permissions": {},
+            "scope": "turn",
+        }),
+    )
+    .await?;
+
+    wait_for_server_request_resolved_then_turn_completed(&mut mcp, &thread_id, resolved_request_id)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_permissions_auto_declines_without_app_request() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
         create_request_permissions_sse_response("call1")?,
@@ -62,44 +159,173 @@ async fn request_permissions_round_trip() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
     )
     .await??;
-    let TurnStartResponse { turn, .. } = to_response(turn_start_resp)?;
+    let TurnStartResponse { .. } = to_response(turn_start_resp)?;
 
-    let server_req = timeout(
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        match message {
+            JSONRPCMessage::Request(request) => {
+                let server_request: ServerRequest = request.try_into()?;
+                bail!("unexpected app-server request: {server_request:?}");
+            }
+            JSONRPCMessage::Notification(notification)
+                if notification.method == "turn/completed" =>
+            {
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+async fn initialize_with_supported_server_requests(
+    mcp: &mut McpProcess,
+    supported_server_requests: Vec<SupportedServerRequestMethod>,
+) -> Result<()> {
+    let initialized = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_request_message(),
+        mcp.initialize_with_capabilities(
+            ClientInfo {
+                name: "codex_vscode".to_string(),
+                title: Some("Codex VS Code Extension".to_string()),
+                version: "0.1.0".to_string(),
+            },
+            Some(InitializeCapabilities {
+                experimental_api: true,
+                supported_server_requests: Some(supported_server_requests),
+                opt_out_notification_methods: None,
+            }),
+        ),
     )
     .await??;
-    let ServerRequest::PermissionsRequestApproval { request_id, params } = server_req else {
-        panic!("expected PermissionsRequestApproval request, got: {server_req:?}");
+    let JSONRPCMessage::Response(_) = initialized else {
+        bail!("expected initialize response, got {initialized:?}");
     };
+    Ok(())
+}
 
-    assert_eq!(params.thread_id, thread.id);
-    assert_eq!(params.turn_id, turn.id);
-    assert_eq!(params.item_id, "call1");
-    assert_eq!(params.reason, Some("Select a workspace root".to_string()));
-    let requested_writes = params
-        .permissions
-        .file_system
-        .and_then(|file_system| file_system.write)
-        .expect("request should include write permissions");
-    assert_eq!(requested_writes.len(), 2);
-    let resolved_request_id = request_id.clone();
+async fn first_responses_request_body_for_supported_server_requests(
+    supported_server_requests: Vec<SupportedServerRequestMethod>,
+) -> Result<Value> {
+    let codex_home = tempfile::TempDir::new()?;
+    let responses = vec![create_final_assistant_message_sse_response("done")?];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(codex_home.path(), &server.uri())?;
 
-    mcp.send_response(
-        request_id,
-        serde_json::to_value(PermissionsRequestApprovalResponse {
-            permissions: codex_app_server_protocol::GrantedPermissionProfile {
-                network: None,
-                file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
-                    read: None,
-                    write: Some(vec![requested_writes[0].clone()]),
-                }),
-            },
-            scope: PermissionGrantScope::Turn,
-        })?,
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    if supported_server_requests.is_empty() {
+        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    } else {
+        initialize_with_supported_server_requests(&mut mcp, supported_server_requests).await?;
+    }
+
+    start_thread_and_turn(&mut mcp, "Hello").await?;
+    wait_for_turn_completed_without_server_request(&mut mcp).await?;
+
+    first_responses_request_body(&server).await
+}
+
+async fn first_responses_request_body(server: &MockServer) -> Result<Value> {
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::format_err!("failed to fetch received requests"))?;
+    requests
+        .into_iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .ok_or_else(|| anyhow::format_err!("expected a /responses request"))?
+        .body_json()
+        .map_err(Into::into)
+}
+
+fn assert_permission_tool_exposure(body: &Value, expect_permissions: bool, expect_preset: bool) {
+    let tool_names = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_names.contains(&"request_permissions"),
+        expect_permissions
+    );
+    assert_eq!(
+        tool_names.contains(&"request_permission_preset"),
+        expect_preset
+    );
+
+    let body_text = body.to_string();
+    assert_eq!(
+        body_text.contains("# request_permissions Tool"),
+        expect_permissions
+    );
+    assert_eq!(
+        body_text.contains("# request_permission_preset Tool"),
+        expect_preset
+    );
+}
+
+async fn start_thread_and_turn(mcp: &mut McpProcess, input: &str) -> Result<String> {
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
     )
-    .await?;
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
 
+    let turn_start_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: input.to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
+    )
+    .await??;
+    let TurnStartResponse { .. } = to_response(turn_start_resp)?;
+    Ok(thread.id)
+}
+
+async fn wait_for_turn_completed_without_server_request(mcp: &mut McpProcess) -> Result<()> {
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        match message {
+            JSONRPCMessage::Request(request) => {
+                let server_request: ServerRequest = request.try_into()?;
+                bail!("unexpected app-server request: {server_request:?}");
+            }
+            JSONRPCMessage::Notification(notification)
+                if notification.method == "turn/completed" =>
+            {
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+async fn wait_for_server_request_resolved_then_turn_completed(
+    mcp: &mut McpProcess,
+    thread_id: &str,
+    request_id: RequestId,
+) -> Result<()> {
     let mut saw_resolved = false;
     loop {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
@@ -108,14 +334,12 @@ async fn request_permissions_round_trip() -> Result<()> {
         };
         match notification.method.as_str() {
             "serverRequest/resolved" => {
-                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
-                    notification
-                        .params
-                        .clone()
-                        .expect("serverRequest/resolved params"),
-                )?;
-                assert_eq!(resolved.thread_id, thread.id);
-                assert_eq!(resolved.request_id, resolved_request_id);
+                let Some(params) = notification.params.clone() else {
+                    bail!("serverRequest/resolved notification missing params");
+                };
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(params)?;
+                assert_eq!(resolved.thread_id, thread_id);
+                assert_eq!(resolved.request_id, request_id);
                 saw_resolved = true;
             }
             "turn/completed" => {
@@ -125,7 +349,6 @@ async fn request_permissions_round_trip() -> Result<()> {
             _ => {}
         }
     }
-
     Ok(())
 }
 
@@ -150,6 +373,7 @@ stream_max_retries = 0
 
 [features]
 request_permissions_tool = true
+request_permission_preset_tool = true
 "#
         ),
     )

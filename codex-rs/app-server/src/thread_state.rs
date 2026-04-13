@@ -202,13 +202,57 @@ impl ThreadStateManager {
             .insert(connection_id, supported_server_requests);
     }
 
-    pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
+    pub(crate) async fn supported_server_requests_for_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) -> HashSet<SupportedServerRequestMethod> {
         let state = self.state.lock().await;
         state
+            .supported_server_requests_by_connection
+            .get(&connection_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        let mut connection_ids = state
             .threads
             .get(&thread_id)
-            .map(|thread_entry| thread_entry.connection_ids.iter().copied().collect())
-            .unwrap_or_default()
+            .map(|thread_entry| {
+                thread_entry
+                    .connection_ids
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        sort_connection_ids(&mut connection_ids);
+        connection_ids
+    }
+
+    pub(crate) async fn subscribed_connection_ids_supporting(
+        &self,
+        thread_id: ThreadId,
+        method: SupportedServerRequestMethod,
+    ) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        let Some(thread_entry) = state.threads.get(&thread_id) else {
+            return Vec::new();
+        };
+        let mut connection_ids = thread_entry
+            .connection_ids
+            .iter()
+            .filter(|connection_id| {
+                state
+                    .supported_server_requests_by_connection
+                    .get(connection_id)
+                    .is_some_and(|supported| supported.contains(&method))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        sort_connection_ids(&mut connection_ids);
+        connection_ids
     }
 
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
@@ -387,4 +431,8 @@ impl ThreadStateManager {
                 .collect::<Vec<_>>()
         }
     }
+}
+
+fn sort_connection_ids(connection_ids: &mut [ConnectionId]) {
+    connection_ids.sort_by_key(|connection_id| connection_id.0);
 }
