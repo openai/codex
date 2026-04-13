@@ -191,7 +191,11 @@
         </div>
       </section>
       <form id="prompt-form">
-        <input id="prompt" value="write hello world" autocomplete="off" />
+        <input
+          id="prompt"
+          value="write hello world in JavaScript, execute it with exec_js, and tell me the result"
+          autocomplete="off"
+        />
         <button type="submit">Run turn</button>
       </form>
       <section id="events" aria-live="polite"></section>
@@ -209,9 +213,11 @@
       const clearApiKeyButton = document.querySelector("#clear-api-key");
       const API_KEY_STORAGE_KEY = "codexWasmHarness.apiKey";
       const codex = new BrowserCodex(readStoredApiKey());
+      const sandbox = createSandboxKernel();
 
       apiKeyInput.value = readStoredApiKey();
       updateApiKeyStatus();
+      codex.set_code_executor(async (code) => sandbox.execute(code));
 
       apiKeyInput.addEventListener("input", () => {
         const apiKey = apiKeyInput.value.trim();
@@ -230,7 +236,31 @@
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         events.replaceChildren();
-        await codex.submit_turn(input.value, renderEvent);
+        try {
+          await codex.submit_turn(input.value, renderEvent);
+        } catch (error) {
+          renderEvent({
+            type: "page_error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+
+      window.addEventListener("error", (event) => {
+        renderEvent({
+          type: "window_error",
+          message: event.message,
+        });
+      });
+
+      window.addEventListener("unhandledrejection", (event) => {
+        renderEvent({
+          type: "unhandled_rejection",
+          message:
+            event.reason instanceof Error
+              ? event.reason.message
+              : String(event.reason),
+        });
       });
 
       function readStoredApiKey() {
@@ -269,6 +299,112 @@
         body.textContent = JSON.stringify(event, null, 2);
         card.append(title, body);
         events.append(card);
+      }
+
+      function createSandboxKernel() {
+        const iframe = document.createElement("iframe");
+        iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
+        iframe.style.display = "none";
+        iframe.srcdoc = `
+<!doctype html>
+<html>
+  <body>
+    <script>
+      function formatValue(value) {
+        if (typeof value === "string") {
+          return value;
+        }
+        if (value === undefined || value === null) {
+          return "";
+        }
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return String(value);
+        }
+      }
+
+      window.addEventListener("message", async (event) => {
+        const data = event.data;
+        if (!data || data.type !== "exec_js") {
+          return;
+        }
+
+        const logs = [];
+        const consoleProxy = {
+          log: (...args) => logs.push(args.map(formatValue).join(" ")),
+          error: (...args) => logs.push(args.map(formatValue).join(" ")),
+        };
+
+        try {
+          const runner = new Function(
+            "console",
+            "return (async () => {\\n" + data.code + "\\n})();",
+          );
+          const result = await runner(consoleProxy);
+          const outputParts = logs.filter(Boolean);
+          const formattedResult = formatValue(result);
+          if (formattedResult) {
+            outputParts.push(formattedResult);
+          }
+          parent.postMessage(
+            {
+              type: "exec_js_result",
+              requestId: data.requestId,
+              ok: true,
+              output: outputParts.join("\\n"),
+            },
+            "*",
+          );
+        } catch (error) {
+          parent.postMessage(
+            {
+              type: "exec_js_result",
+              requestId: data.requestId,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "*",
+          );
+        }
+      });
+    <\/script>
+  </body>
+</html>`;
+        document.body.append(iframe);
+
+        let nextRequestId = 0;
+        const pending = new Map();
+
+        window.addEventListener("message", (event) => {
+          const data = event.data;
+          if (!data || data.type !== "exec_js_result") {
+            return;
+          }
+          const entry = pending.get(data.requestId);
+          if (!entry) {
+            return;
+          }
+          pending.delete(data.requestId);
+          if (data.ok) {
+            entry.resolve(data.output ?? "");
+          } else {
+            entry.reject(new Error(data.error ?? "sandbox execution failed"));
+          }
+        });
+
+        return {
+          execute(code) {
+            return new Promise((resolve, reject) => {
+              nextRequestId += 1;
+              pending.set(nextRequestId, { resolve, reject });
+              iframe.contentWindow.postMessage(
+                { type: "exec_js", requestId: nextRequestId, code },
+                "*",
+              );
+            });
+          },
+        };
       }
     </script>
   </body>
