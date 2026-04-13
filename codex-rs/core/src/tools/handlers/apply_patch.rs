@@ -218,7 +218,6 @@ impl ToolHandler for ApplyPatchHandler {
                                 .additional_permissions,
                             permissions_preapproved: effective_additional_permissions
                                 .permissions_preapproved,
-                            timeout_ms: None,
                         };
 
                         let mut orchestrator = ToolOrchestrator::new();
@@ -275,7 +274,6 @@ pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    timeout_ms: Option<u64>,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
@@ -328,7 +326,6 @@ pub(crate) async fn intercept_apply_patch(
                             .additional_permissions,
                         permissions_preapproved: effective_additional_permissions
                             .permissions_preapproved,
-                        timeout_ms,
                     };
 
                     let mut orchestrator = ToolOrchestrator::new();

@@ -60,7 +60,6 @@ fn guardian_review_request_includes_patch_context() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
-        timeout_ms: None,
     };
 
     let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1");
@@ -98,7 +97,6 @@ fn file_system_sandbox_context_uses_active_attempt() {
         },
         additional_permissions: Some(additional_permissions.clone()),
         permissions_preapproved: false,
-        timeout_ms: None,
     };
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
@@ -145,7 +143,6 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
-        timeout_ms: None,
     };
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);

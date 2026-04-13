@@ -40,7 +40,6 @@ pub struct ApplyPatchRequest {
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
-    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Default)]

@@ -286,7 +286,6 @@ impl ToolHandler for UnifiedExecHandler {
                     &command,
                     &cwd,
                     fs.as_ref(),
-                    Some(yield_time_ms),
                     context.session.clone(),
                     context.turn.clone(),
                     Some(&tracker),
