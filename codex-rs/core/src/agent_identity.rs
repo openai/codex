@@ -35,16 +35,12 @@ use crate::config::Config;
 const AGENT_IDENTITY_SECRET_NAME: &str = "AGENT_IDENTITY";
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const AGENT_IDENTITY_BISCUIT_TIMEOUT: Duration = Duration::from_secs(15);
-#[cfg(test)]
-const AGENT_IDENTITY_BISCUIT_TARGET_URL: &str = "https://api.openai.com/v1/responses";
 
 #[derive(Clone)]
 pub(crate) struct AgentIdentityManager {
     auth_manager: Arc<AuthManager>,
     secrets_manager: SecretsManager,
-    agent_identity_base_url: String,
-    agent_identity_biscuit_base_url: String,
-    agent_identity_biscuit_target_url: String,
+    chatgpt_base_url: String,
     feature_enabled: bool,
     abom: AgentBillOfMaterials,
     ensure_lock: Arc<Mutex<()>>,
@@ -53,15 +49,7 @@ pub(crate) struct AgentIdentityManager {
 impl std::fmt::Debug for AgentIdentityManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentIdentityManager")
-            .field("agent_identity_base_url", &self.agent_identity_base_url)
-            .field(
-                "agent_identity_biscuit_base_url",
-                &self.agent_identity_biscuit_base_url,
-            )
-            .field(
-                "agent_identity_biscuit_target_url",
-                &self.agent_identity_biscuit_target_url,
-            )
+            .field("chatgpt_base_url", &self.chatgpt_base_url)
             .field("feature_enabled", &self.feature_enabled)
             .field("abom", &self.abom)
             .finish_non_exhaustive()
@@ -124,9 +112,7 @@ impl AgentIdentityManager {
                 config.codex_home.clone(),
                 SecretsBackendKind::Local,
             ),
-            agent_identity_base_url: config.agent_identity_base_url.clone(),
-            agent_identity_biscuit_base_url: config.agent_identity_biscuit_base_url.clone(),
-            agent_identity_biscuit_target_url: config.agent_identity_biscuit_target_url.clone(),
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
             feature_enabled: config.features.enabled(Feature::UseAgentIdentity),
             abom: build_abom(session_source),
             ensure_lock: Arc::new(Mutex::new(())),
@@ -181,9 +167,9 @@ impl AgentIdentityManager {
             capabilities: Vec::new(),
         };
 
-        let human_biscuit = self.mint_human_biscuit(binding).await?;
+        let url = agent_registration_url(&self.chatgpt_base_url);
+        let human_biscuit = self.mint_human_biscuit(binding, &url).await?;
         let client = create_client();
-        let url = agent_registration_url(&self.agent_identity_base_url);
         let response = client
             .post(&url)
             .header("X-OpenAI-Authorization", human_biscuit)
@@ -223,12 +209,12 @@ impl AgentIdentityManager {
         anyhow::bail!("agent identity registration failed with status {status} from {url}: {body}")
     }
 
-    async fn mint_human_biscuit(&self, binding: &AgentIdentityBinding) -> Result<String> {
-        anyhow::ensure!(
-            !self.agent_identity_biscuit_base_url.trim().is_empty(),
-            "`agent_identity_biscuit_base_url` must be configured when `features.use_agent_identity` is enabled"
-        );
-        let url = agent_identity_biscuit_url(&self.agent_identity_biscuit_base_url);
+    async fn mint_human_biscuit(
+        &self,
+        binding: &AgentIdentityBinding,
+        target_url: &str,
+    ) -> Result<String> {
+        let url = agent_identity_biscuit_url(&self.chatgpt_base_url);
         let request_id = agent_identity_request_id()?;
         let client = create_client();
         let response = client
@@ -236,7 +222,7 @@ impl AgentIdentityManager {
             .bearer_auth(&binding.access_token)
             .header("X-Request-Id", request_id.clone())
             .header("X-Original-Method", "GET")
-            .header("X-Original-Url", &self.agent_identity_biscuit_target_url)
+            .header("X-Original-Url", target_url)
             .timeout(AGENT_IDENTITY_BISCUIT_TIMEOUT)
             .send()
             .await
@@ -331,16 +317,14 @@ impl AgentIdentityManager {
     fn new_for_tests(
         auth_manager: Arc<AuthManager>,
         feature_enabled: bool,
-        agent_identity_base_url: String,
+        chatgpt_base_url: String,
         session_source: SessionSource,
         secrets_manager: SecretsManager,
     ) -> Self {
         Self {
             auth_manager,
             secrets_manager,
-            agent_identity_biscuit_base_url: agent_identity_base_url.clone(),
-            agent_identity_base_url,
-            agent_identity_biscuit_target_url: AGENT_IDENTITY_BISCUIT_TARGET_URL.to_string(),
+            chatgpt_base_url,
             feature_enabled,
             abom: build_abom(session_source),
             ensure_lock: Arc::new(Mutex::new(())),
@@ -458,13 +442,13 @@ fn secret_scope(binding: &AgentIdentityBinding) -> Result<SecretScope> {
         .context("agent identity binding must be a valid secrets scope")
 }
 
-fn agent_registration_url(agent_identity_base_url: &str) -> String {
-    let trimmed = agent_identity_base_url.trim_end_matches('/');
+fn agent_registration_url(chatgpt_base_url: &str) -> String {
+    let trimmed = chatgpt_base_url.trim_end_matches('/');
     format!("{trimmed}/v1/agent/register")
 }
 
-fn agent_identity_biscuit_url(agent_identity_biscuit_base_url: &str) -> String {
-    let trimmed = agent_identity_biscuit_base_url.trim_end_matches('/');
+fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
+    let trimmed = chatgpt_base_url.trim_end_matches('/');
     format!("{trimmed}/authenticate_app_v2")
 }
 
@@ -545,7 +529,8 @@ mod tests {
     #[tokio::test]
     async fn ensure_registered_identity_registers_and_reuses_cached_identity() {
         let server = MockServer::start().await;
-        mount_human_biscuit(&server).await;
+        let chatgpt_base_url = server.uri();
+        mount_human_biscuit(&server, &chatgpt_base_url).await;
         Mock::given(method("POST"))
             .and(path("/v1/agent/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
@@ -568,7 +553,7 @@ mod tests {
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            server.uri(),
+            chatgpt_base_url,
             SessionSource::Cli,
             secrets_manager,
         );
@@ -594,7 +579,8 @@ mod tests {
     #[tokio::test]
     async fn ensure_registered_identity_deletes_invalid_cached_identity_and_reregisters() {
         let server = MockServer::start().await;
-        mount_human_biscuit(&server).await;
+        let chatgpt_base_url = server.uri();
+        mount_human_biscuit(&server, &chatgpt_base_url).await;
         Mock::given(method("POST"))
             .and(path("/v1/agent/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
@@ -617,7 +603,7 @@ mod tests {
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            server.uri(),
+            chatgpt_base_url,
             SessionSource::Cli,
             secrets_manager.clone(),
         );
@@ -649,11 +635,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_registered_identity_uses_agent_identity_base_url() {
+    async fn ensure_registered_identity_uses_chatgpt_base_url() {
         let server = MockServer::start().await;
-        mount_human_biscuit(&server).await;
+        let chatgpt_base_url = format!("{}/backend-api", server.uri());
+        mount_human_biscuit(&server, &chatgpt_base_url).await;
         Mock::given(method("POST"))
-            .and(path("/v1/agent/register"))
+            .and(path("/backend-api/v1/agent/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "agent_runtime_id": "agent_canonical",
@@ -674,7 +661,7 @@ mod tests {
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            server.uri(),
+            chatgpt_base_url,
             SessionSource::Cli,
             secrets_manager,
         );
@@ -687,12 +674,18 @@ mod tests {
         assert_eq!(stored.agent_runtime_id, "agent_canonical");
     }
 
-    async fn mount_human_biscuit(server: &MockServer) {
+    async fn mount_human_biscuit(server: &MockServer, chatgpt_base_url: &str) {
+        let biscuit_url = agent_identity_biscuit_url(chatgpt_base_url);
+        let biscuit_path = reqwest::Url::parse(&biscuit_url)
+            .expect("biscuit URL parses")
+            .path()
+            .to_string();
+        let target_url = agent_registration_url(chatgpt_base_url);
         Mock::given(method("GET"))
-            .and(path("/authenticate_app_v2"))
+            .and(path(biscuit_path))
             .and(header("authorization", "Bearer access-token-account-123"))
             .and(header("x-original-method", "GET"))
-            .and(header("x-original-url", AGENT_IDENTITY_BISCUIT_TARGET_URL))
+            .and(header("x-original-url", target_url))
             .respond_with(
                 ResponseTemplate::new(200).insert_header("x-openai-authorization", "human-biscuit"),
             )
