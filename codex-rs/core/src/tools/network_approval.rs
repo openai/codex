@@ -5,8 +5,13 @@ use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
+use crate::sandboxing::SandboxPermissions;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
+use codex_hooks::PermissionRequestApprovalAttempt;
+use codex_hooks::PermissionRequestDecision;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::NetworkDecision;
@@ -32,6 +37,8 @@ use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tracing::warn;
 use uuid::Uuid;
+
+const NETWORK_ACCESS_HOOK_TOOL_NAME: &str = "NetworkAccess";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NetworkApprovalMode {
@@ -371,6 +378,48 @@ impl NetworkApprovalService {
         };
         let owner_call = self.resolve_single_active_call().await;
         let guardian_approval_id = Self::approval_id_for_key(&key);
+        let prompt_command = vec!["network-access".to_string(), target.clone()];
+        if let Some(permission_request_decision) = run_permission_request_hooks(
+            &session,
+            &turn_context,
+            &guardian_approval_id,
+            PermissionRequestPayload {
+                tool_name: NETWORK_ACCESS_HOOK_TOOL_NAME.to_string(),
+                command: prompt_command.join(" "),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                justification: Some(prompt_reason.clone()),
+            },
+            PermissionRequestApprovalAttempt::Initial,
+            /*retry_reason*/ None,
+            Some(network_approval_context.clone()),
+        )
+        .await
+        {
+            match permission_request_decision {
+                PermissionRequestDecision::Allow => {
+                    pending
+                        .set_decision(PendingApprovalDecision::AllowOnce)
+                        .await;
+                    let mut pending_approvals = self.pending_host_approvals.lock().await;
+                    pending_approvals.remove(&key);
+                    return NetworkDecision::Allow;
+                }
+                PermissionRequestDecision::Deny { message } => {
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.record_call_outcome(
+                            &owner_call.registration_id,
+                            NetworkApprovalOutcome::DeniedByPolicy(message),
+                        )
+                        .await;
+                    }
+                    pending.set_decision(PendingApprovalDecision::Deny).await;
+                    let mut pending_approvals = self.pending_host_approvals.lock().await;
+                    pending_approvals.remove(&key);
+                    return NetworkDecision::deny(REASON_NOT_ALLOWED);
+                }
+            }
+        }
         let use_guardian = routes_approval_to_guardian(&turn_context);
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
@@ -392,13 +441,11 @@ impl NetworkApprovalService {
             )
             .await
         } else {
-            let approval_id = Self::approval_id_for_key(&key);
-            let prompt_command = vec!["network-access".to_string(), target.clone()];
             let available_decisions = None;
             session
                 .request_command_approval(
                     turn_context.as_ref(),
-                    approval_id,
+                    guardian_approval_id,
                     /*approval_id*/ None,
                     prompt_command,
                     turn_context.cwd.to_path_buf(),

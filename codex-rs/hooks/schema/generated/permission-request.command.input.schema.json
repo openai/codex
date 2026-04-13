@@ -177,7 +177,10 @@
       "$ref": "#/definitions/PermissionRequestToolInput"
     },
     "tool_name": {
-      "const": "Bash",
+      "enum": [
+        "Bash",
+        "NetworkAccess"
+      ],
       "type": "string"
     },
     "transcript_path": {

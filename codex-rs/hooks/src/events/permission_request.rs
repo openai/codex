@@ -203,7 +203,7 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
         hook_event_name: "PermissionRequest".to_string(),
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),
-        tool_name: "Bash".to_string(),
+        tool_name: request.tool_name.clone(),
         tool_input: PermissionRequestToolInput {
             command: request.command.clone(),
         },

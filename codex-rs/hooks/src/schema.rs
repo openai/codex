@@ -578,7 +578,7 @@ fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 }
 
 fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
+    string_enum_schema(&["Bash", "NetworkAccess"])
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

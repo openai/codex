@@ -3,6 +3,13 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::config::Constrained;
+use codex_core::config_loader::ConfigLayerStack;
+use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::NetworkConstraints;
+use codex_core::config_loader::NetworkRequirementsToml;
+use codex_core::config_loader::RequirementSource;
+use codex_core::config_loader::Sourced;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
@@ -12,9 +19,11 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
@@ -29,9 +38,12 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
+use tokio::time::timeout;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
@@ -1273,6 +1285,177 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
             "network_approval_context": null,
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_allows_network_approval_without_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
+    )?;
+    let call_id = "permissionrequest-network-approval";
+    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=2).read().decode(errors='replace'))""#;
+    let args = serde_json::json!({ "command": command });
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request hook allowed network access"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let approval_policy = AskForApproval::OnFailure;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: true,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let test = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some("^NetworkAccess$"),
+                "allow",
+                "should not be used for allow",
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.permissions.sandbox_policy =
+                Constrained::allow_any(sandbox_policy_for_config.clone());
+            let layers = config
+                .config_layer_stack
+                .get_layers(
+                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ true,
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+            let mut requirements = config.config_layer_stack.requirements().clone();
+            requirements.network = Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allow_local_binding: Some(true),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            ));
+            let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+            requirements_toml.network = Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            });
+            config.config_layer_stack =
+                ConfigLayerStack::new(layers, requirements, requirements_toml)
+                    .expect("rebuild config layer stack with network requirements");
+        })
+        .build(&server)
+        .await?;
+    assert!(
+        test.config.managed_network_requirements_enabled(),
+        "expected managed network requirements to be enabled"
+    );
+    assert!(
+        test.config.permissions.network.is_some(),
+        "expected managed network proxy config to be present"
+    );
+    test.session_configured
+        .network_proxy
+        .as_ref()
+        .expect("expected runtime managed network proxy addresses");
+
+    test.submit_turn_with_policies(
+        "run the shell command after network hook approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if test
+                .codex_home_path()
+                .join("permission_request_hook_log.jsonl")
+                .exists()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("expected network approval hook to run");
+
+    assert!(
+        timeout(
+            Duration::from_secs(2),
+            wait_for_event(&test.codex, |event| matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "expected the network approval hook to bypass the approval prompt"
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "NetworkAccess");
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["command"],
+        "network-access http://codex-network-test.invalid:80"
+    );
+    assert_eq!(
+        hook_inputs[0]["approval_context"]["network_approval_context"],
+        serde_json::json!({
+            "host": "codex-network-test.invalid",
+            "protocol": "http",
+        })
+    );
+
+    test.codex.submit(Op::Shutdown {}).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
 
     Ok(())
 }
