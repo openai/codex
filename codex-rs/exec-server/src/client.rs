@@ -71,6 +71,7 @@ impl Default for ExecServerClientConnectOptions {
         Self {
             client_name: "codex-core".to_string(),
             initialize_timeout: INITIALIZE_TIMEOUT,
+            resume_session_id: None,
         }
     }
 }
@@ -80,6 +81,7 @@ impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
         Self {
             client_name: value.client_name,
             initialize_timeout: value.initialize_timeout,
+            resume_session_id: value.resume_session_id,
         }
     }
 }
@@ -91,6 +93,7 @@ impl RemoteExecServerConnectArgs {
             client_name,
             connect_timeout: CONNECT_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,
+            resume_session_id: None,
         }
     }
 }
@@ -118,6 +121,7 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
+    session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -190,14 +194,29 @@ impl ExecServerClient {
         let ExecServerClientConnectOptions {
             client_name,
             initialize_timeout,
+            resume_session_id,
         } = options;
 
         timeout(initialize_timeout, async {
-            let response = self
+            let response: InitializeResponse = self
                 .inner
                 .client
-                .call(INITIALIZE_METHOD, &InitializeParams { client_name })
+                .call(
+                    INITIALIZE_METHOD,
+                    &InitializeParams {
+                        client_name,
+                        resume_session_id,
+                    },
+                )
                 .await?;
+            {
+                let mut session_id = self
+                    .inner
+                    .session_id
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *session_id = Some(response.session_id.clone());
+            }
             self.notify_initialized().await?;
             Ok(response)
         })
@@ -350,6 +369,14 @@ impl ExecServerClient {
         self.inner.remove_session(process_id).await;
     }
 
+    pub fn session_id(&self) -> Option<String> {
+        self.inner
+            .session_id
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
@@ -388,6 +415,7 @@ impl ExecServerClient {
                 client: rpc_client,
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
+                session_id: std::sync::RwLock::new(None),
                 reader_task,
             }
         });
@@ -693,8 +721,10 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
-                    result: serde_json::to_value(InitializeResponse {})
-                        .expect("initialize response should serialize"),
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "session-1".to_string(),
+                    })
+                    .expect("initialize response should serialize"),
                 }),
             )
             .await;

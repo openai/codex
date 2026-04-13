@@ -87,7 +87,11 @@ fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> 
 async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
     test.fs()
-        .create_directory(&abs_path, CreateDirectoryOptions { recursive: true })
+        .create_directory(
+            &abs_path,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
         .await?;
     Ok(abs_path.into_path_buf())
 }
@@ -100,10 +104,16 @@ async fn write_workspace_file(
     let abs_path = test.config.cwd.join(rel_path);
     if let Some(parent) = abs_path.parent() {
         test.fs()
-            .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+            .create_directory(
+                &parent,
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
             .await?;
     }
-    test.fs().write_file(&abs_path, contents).await?;
+    test.fs()
+        .write_file(&abs_path, contents, /*sandbox*/ None)
+        .await?;
     Ok(abs_path.into_path_buf())
 }
 

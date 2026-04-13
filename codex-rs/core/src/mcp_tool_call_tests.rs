@@ -59,6 +59,7 @@ fn approval_metadata(
         tool_title: tool_title.map(str::to_string),
         tool_description: tool_description.map(str::to_string),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     }
 }
 
@@ -597,6 +598,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             .cloned()
             .expect("_codex_apps metadata should be an object"),
         ),
+        openai_file_input_params: None,
     };
 
     assert_eq!(
@@ -744,6 +746,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         tool_title: None,
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -813,21 +816,22 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
     assert_eq!(
         mcp_tool_approval_decision_from_guardian(
             session.as_ref(),
-            "approval-id",
+            "review-id",
             ReviewDecision::Approved
         )
         .await,
         McpToolApprovalDecision::Accept
     );
-    session
-        .services
-        .guardian_rejection_rationales
-        .lock()
-        .await
-        .insert("approval-id".to_string(), "too risky".to_string());
+    session.services.guardian_rejections.lock().await.insert(
+        "review-id".to_string(),
+        crate::guardian::GuardianRejection {
+            rationale: "too risky".to_string(),
+            source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+        },
+    );
     let denial = mcp_tool_approval_decision_from_guardian(
         session.as_ref(),
-        "approval-id",
+        "review-id",
         ReviewDecision::Denied,
     )
     .await;
@@ -839,10 +843,24 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
     };
     assert!(message.contains("Reason: too risky"));
     assert!(message.contains("The agent must not attempt to achieve the same outcome"));
+    let timeout = mcp_tool_approval_decision_from_guardian(
+        session.as_ref(),
+        "review-id",
+        ReviewDecision::TimedOut,
+    )
+    .await;
+    let McpToolApprovalDecision::Decline {
+        message: Some(message),
+    } = timeout
+    else {
+        panic!("guardian timeout should carry a timeout message");
+    };
+    assert!(message.contains("did not finish before its deadline"));
+    assert!(!message.contains("unacceptable risk"));
     assert_eq!(
         mcp_tool_approval_decision_from_guardian(
             session.as_ref(),
-            "approval-id",
+            "review-id",
             ReviewDecision::Abort
         )
         .await,
@@ -1265,6 +1283,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1305,7 +1324,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -1332,6 +1351,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1379,7 +1399,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -1402,6 +1422,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Reads calendar data.".to_string()),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1452,6 +1473,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let mut approval_task = {
@@ -1528,6 +1550,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1597,6 +1620,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1666,6 +1690,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1743,6 +1768,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     for approval_mode in [
@@ -1821,7 +1847,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
@@ -1844,6 +1870,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_input_params: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(

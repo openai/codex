@@ -71,6 +71,8 @@ use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
+const V2_STEERING_ACKNOWLEDGEMENT: &str =
+    "This was sent to steer the previous background agent task.";
 
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
@@ -165,14 +167,15 @@ struct StartedWebrtcRealtime {
     sdp: ThreadRealtimeSdpNotification,
 }
 
-// Scripted SSE responses for the normal Codex agent loop. Realtime can ask for a delegated
-// Codex turn; that turn talks to this mock `/responses` endpoint and may request ordinary tools.
+// Scripted SSE responses for the normal background agent loop. Realtime can ask for a delegated
+// background agent turn; that turn talks to this mock `/responses` endpoint and may request
+// ordinary tools.
 struct MainLoopResponsesScript {
     responses: Vec<String>,
 }
 
 // Scripted server events for the direct realtime sideband WebSocket. This mock is the realtime
-// session app-server joins after call creation; it is not the main-loop Responses stream.
+// session app-server joins after call creation; it is not the background agent Responses stream.
 struct RealtimeSidebandScript {
     connections: Vec<WebSocketConnectionConfig>,
 }
@@ -328,6 +331,8 @@ impl RealtimeE2eHarness {
         read_notification(&mut self.mcp, method).await
     }
 
+    /// Returns the nth JSON message app-server wrote to the fake Realtime API
+    /// sideband websocket.
     async fn sideband_outbound_request(&self, request_index: usize) -> Value {
         self.realtime_server
             .wait_for_request(/*connection_index*/ 0, request_index)
@@ -425,13 +430,13 @@ fn session_updated(session_id: &str) -> Value {
     })
 }
 
-fn v2_codex_tool_call(call_id: &str, prompt: &str) -> Value {
+fn v2_background_agent_tool_call(call_id: &str, prompt: &str) -> Value {
     json!({
         "type": "conversation.item.done",
         "item": {
             "id": format!("item_{call_id}"),
             "type": "function_call",
-            "name": "codex",
+            "name": "background_agent",
             "call_id": call_id,
             "arguments": json!({ "prompt": prompt }).to_string()
         }
@@ -478,7 +483,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "item": {
                     "id": "item_2",
                     "type": "function_call",
-                    "name": "codex",
+                    "name": "background_agent",
                     "call_id": "handoff_1",
                     "arguments": "{\"input_transcript\":\"delegate now\"}"
                 }
@@ -656,7 +661,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let connections = realtime_server.connections();
     assert_eq!(connections.len(), 1);
     let connection = &connections[0];
-    assert_eq!(connection.len(), 4);
+    assert_eq!(connection.len(), 3);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
@@ -674,10 +679,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .as_str()
             .context("expected websocket request type")?
             .to_string(),
-        connection[3].body_json()["type"]
-            .as_str()
-            .context("expected websocket request type")?
-            .to_string(),
     ];
     request_types.sort();
     assert_eq!(
@@ -685,7 +686,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         [
             "conversation.item.create".to_string(),
             "input_audio_buffer.append".to_string(),
-            "response.create".to_string(),
         ]
     );
 
@@ -973,7 +973,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"codex","description":"Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to Codex."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
     assert_eq!(
         body,
         format!(
@@ -1089,7 +1089,7 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
 
-    // Phase 2: wait for the delegated Codex turn that is launched by the handoff request.
+    // Phase 2: wait for the delegated background agent turn that is launched by the handoff request.
     let turn_started = harness
         .read_notification::<TurnStartedNotification>("turn/started")
         .await?;
@@ -1148,7 +1148,6 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
                     "samples_per_channel": 512
                 }),
             ],
-            vec![],
         ])]),
     )
     .await?;
@@ -1180,7 +1179,6 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     let requests = [
         harness.sideband_outbound_request(/*request_index*/ 1).await,
         harness.sideband_outbound_request(/*request_index*/ 2).await,
-        harness.sideband_outbound_request(/*request_index*/ 3).await,
     ];
     assert!(
         requests
@@ -1203,12 +1201,152 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     Ok(())
 }
 
+/// Regression coverage for Realtime V2 text input while a response is active.
+///
+/// Text input is append-only, so app-server should send the user message without
+/// requesting a new realtime response.
 #[tokio::test]
-async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Result<()> {
+async fn webrtc_v2_text_input_is_append_only_while_response_is_active() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    // Phase 1: script a v2 codex function call and a delegated Responses turn that returns final
-    // assistant text.
+    // Phase 1: script a server-side response that becomes active after the first
+    // user text turn, then finishes only after a later audio input.
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V2,
+        no_main_loop_responses(),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_v2_response_queue")],
+            vec![
+                json!({
+                    "type": "response.created",
+                    "response": { "id": "resp_active" }
+                }),
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "active response started"
+                }),
+            ],
+            vec![],
+            vec![json!({
+                "type": "response.done",
+                "response": { "id": "resp_active" }
+            })],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+
+    // From here on, `sideband_outbound_request(n)` reads outbound messages to
+    // the fake Realtime API sideband websocket. These are not client-facing
+    // notifications; they are the protocol frames app-server sends upstream.
+    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+
+    // Phase 2: send the first text turn. Text input is append-only, so this
+    // sends only the user text item.
+    let thread_id = started.started.thread_id.clone();
+    harness.append_text(thread_id.clone(), "first").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "first",
+    );
+    let transcript = harness
+        .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+            "thread/realtime/transcriptUpdated",
+        )
+        .await?;
+    assert_eq!(transcript.text, "active response started");
+
+    // Phase 3: send a second text turn while `resp_active` is still open. The
+    // user message must reach realtime without requesting another response.
+    harness.append_text(thread_id.clone(), "second").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 2).await,
+        "second",
+    );
+
+    // Phase 4: audio still forwards normally after text input.
+    harness.append_audio(thread_id).await?;
+
+    let audio = harness.sideband_outbound_request(/*request_index*/ 3).await;
+    assert_eq!(audio["type"], "input_audio_buffer.append");
+    assert_eq!(audio["audio"], "BQYH");
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+/// Regression coverage for append-only Realtime V2 text input when the active
+/// response is cancelled instead of completed.
+#[tokio::test]
+async fn webrtc_v2_text_input_is_append_only_when_response_is_cancelled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Phase 1: script a server-side response that becomes active after the first
+    // text turn, then is cancelled only after a later audio input.
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V2,
+        no_main_loop_responses(),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![session_updated("sess_v2_response_cancel_queue")],
+            vec![json!({
+                "type": "response.created",
+                "response": { "id": "resp_cancelled" }
+            })],
+            vec![],
+            vec![json!({
+                "type": "response.cancelled",
+                "response": { "id": "resp_cancelled" }
+            })],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+
+    // Phase 2: send the first text turn. Text input is append-only, so this
+    // sends only the user text item.
+    let thread_id = started.started.thread_id.clone();
+    harness.append_text(thread_id.clone(), "first").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "first",
+    );
+
+    // Phase 3: send a second text turn while `resp_cancelled` is still open.
+    // The user message must reach realtime without requesting another response.
+    harness.append_text(thread_id.clone(), "second").await?;
+    assert_v2_user_text_item(
+        &harness.sideband_outbound_request(/*request_index*/ 2).await,
+        "second",
+    );
+
+    // Phase 4: audio still forwards normally after text input.
+    harness.append_audio(thread_id).await?;
+
+    let audio = harness.sideband_outbound_request(/*request_index*/ 3).await;
+    assert_eq!(audio["type"], "input_audio_buffer.append");
+    assert_eq!(audio["audio"], "BQYH");
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+/// Regression coverage for the Realtime V2 background-agent final-output path.
+///
+/// Once the background agent finishes, app-server sends the final function-call
+/// output to realtime and then requests a new `response.create` so realtime can
+/// react to that final output.
+#[tokio::test]
+async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_output() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    // Phase 1: script a v2 background agent function call and a delegated Responses turn that
+    // returns final assistant text.
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V2,
         main_loop_responses(vec![create_final_assistant_message_sse_response(
@@ -1217,8 +1355,10 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_tool"),
-                v2_codex_tool_call("call_v2", "delegate from v2"),
+                v2_background_agent_tool_call("call_v2", "delegate from v2"),
             ],
+            vec![],
+            vec![],
             vec![],
         ])]),
     )
@@ -1237,8 +1377,8 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
-    // Phase 3: assert the delegated prompt went to Responses and the result returned as exactly one
-    // v2 function-call output event on the sideband.
+    // Phase 3: assert the delegated prompt went to Responses and the result
+    // returned as exactly one v2 function-call output event on the sideband.
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
@@ -1247,8 +1387,146 @@ async fn webrtc_v2_codex_tool_call_delegates_and_returns_function_output() -> Re
         requests[0]
     );
 
-    let tool_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_progress_update(&progress, "delegated from v2");
+
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
     assert_v2_function_call_output(&tool_output, "call_v2", "delegated from v2");
+    assert_eq!(
+        function_call_output_sideband_requests(&harness.realtime_server).len(),
+        1
+    );
+
+    // Phase 4: after the final function-call output, realtime needs an explicit
+    // `response.create` to produce the next user-visible response.
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 3).await);
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+/// Regression coverage for Realtime V2 steering while a background-agent task is
+/// already active.
+///
+/// The second background-agent tool call is treated as guidance for the active
+/// task. App-server acknowledges that steering message to realtime and then
+/// emits `response.create` so realtime can speak that acknowledgement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webrtc_v2_background_agent_steering_ack_requests_response_create() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Phase 1: gate the delegated Responses turn from the first tool call so
+    // the background-agent handoff stays active while realtime sends a second
+    // tool call that should steer the active task.
+    let main_loop_responses_server = responses::start_mock_server().await;
+    let (gate_completed_tx, gate_completed_rx) = mpsc::channel();
+    let gated_response = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "first task finished"),
+        responses::ev_completed("resp-1"),
+    ]);
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(GatedSseResponse {
+            gate_rx: Mutex::new(Some(gate_completed_rx)),
+            response: gated_response,
+        })
+        .expect(2)
+        .mount(&main_loop_responses_server)
+        .await;
+
+    let mut harness = RealtimeE2eHarness::new_with_main_loop_responses_server(
+        RealtimeTestVersion::V2,
+        main_loop_responses_server,
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v2_steering_ack"),
+                v2_background_agent_tool_call("call_active", "start a task"),
+                v2_background_agent_tool_call("call_steer", "steer the active task"),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+    assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
+    let turn_started = harness
+        .read_notification::<TurnStartedNotification>("turn/started")
+        .await?;
+    assert_eq!(turn_started.thread_id, harness.thread_id);
+
+    // Phase 2: the second tool call happens while `call_active` is still
+    // running, so app-server sends a steering acknowledgement as a function-call
+    // output for the second call.
+    assert_v2_function_call_output(
+        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        "call_steer",
+        V2_STEERING_ACKNOWLEDGEMENT,
+    );
+
+    // Phase 3: realtime needs a `response.create` after the steering
+    // acknowledgement so it can surface that acknowledgement to the user.
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
+
+    // Phase 4: release the gated delegated turn. Codex should then continue
+    // the same run with the steering text included in the follow-up Responses
+    // request, proving realtime did not merely acknowledge and drop it.
+    let _ = gate_completed_tx.send(());
+    let turn_completed = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+    assert_eq!(turn_completed.thread_id, harness.thread_id);
+
+    let requests = harness.main_loop_responses_requests().await?;
+    assert_eq!(requests.len(), 2);
+    assert!(
+        response_request_contains_text(&requests[1], "steer the active task"),
+        "follow-up Responses request should contain steering prompt: {}",
+        requests[1]
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V2,
+        main_loop_responses(vec![create_final_assistant_message_sse_response(
+            "progress before final",
+        )?]),
+        realtime_sideband(vec![realtime_sideband_connection(vec![
+            vec![
+                session_updated("sess_v2_progress_before_final"),
+                v2_background_agent_tool_call("call_progress_order", "stream progress"),
+            ],
+            vec![],
+            vec![],
+        ])]),
+    )
+    .await?;
+
+    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
+
+    let turn_completed = harness
+        .read_notification::<TurnCompletedNotification>("turn/completed")
+        .await?;
+    assert_eq!(turn_completed.thread_id, harness.thread_id);
+
+    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_progress_update(&progress, "progress before final");
+
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_function_call_output(&tool_output, "call_progress_order", "progress before final");
 
     harness.shutdown().await;
     Ok(())
@@ -1259,8 +1537,8 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     skip_if_no_network!(Ok(()));
 
     // Phase 1: keep the two mocked OpenAI conversations explicit. The realtime sideband only
-    // calls the `codex` function; the shell command is requested by the delegated main-loop
-    // Responses turn that app-server starts after receiving that function call.
+    // calls the `background_agent` function; the shell command is requested by the delegated
+    // background agent Responses turn that app-server starts after receiving that function call.
     let main_loop = main_loop_responses(vec![
         create_shell_command_sse_response(
             realtime_tool_ok_command(),
@@ -1273,8 +1551,9 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     let realtime = realtime_sideband(vec![realtime_sideband_connection(vec![
         vec![
             session_updated("sess_v2_shell"),
-            v2_codex_tool_call("call_shell", "run shell through delegated turn"),
+            v2_background_agent_tool_call("call_shell", "run shell through delegated turn"),
         ],
+        vec![],
         vec![],
     ])]);
 
@@ -1288,7 +1567,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
 
     let _ = harness.start_webrtc_realtime("v=offer\r\n").await?;
 
-    // Phase 2: observe the delegated main-loop turn executing the requested shell command.
+    // Phase 2: observe the delegated background agent turn executing the requested shell command.
     let started_command = wait_for_started_command_execution(&mut harness.mcp).await?;
     let ThreadItem::CommandExecution { id, status, .. } = started_command.item else {
         unreachable!("helper returns command execution items");
@@ -1327,7 +1606,10 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         requests[1]
     );
 
-    let tool_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_progress_update(&progress, "shell tool finished");
+
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
     assert_v2_function_call_output(&tool_output, "call_shell", "shell tool finished");
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
@@ -1367,7 +1649,7 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_nonblocking"),
-                v2_codex_tool_call("call_audio", "delegate while audio continues"),
+                v2_background_agent_tool_call("call_audio", "delegate while audio continues"),
                 json!({
                     "type": "response.output_audio.delta",
                     "delta": "CQoL",
@@ -1376,6 +1658,7 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
                     "samples_per_channel": 256
                 }),
             ],
+            vec![],
             vec![],
         ])]),
     )
@@ -1403,7 +1686,10 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
-    let tool_output = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
+    assert_v2_progress_update(&progress, "late delegated result");
+
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
     assert_v2_function_call_output(&tool_output, "call_audio", "late delegated result");
 
     harness.shutdown().await;
@@ -1641,6 +1927,49 @@ fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_outpu
     );
 }
 
+fn assert_v2_progress_update(request: &Value, expected_text: &str) {
+    assert_eq!(
+        request,
+        &json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("{expected_text}\n\nUpdate from background agent (task hasn't finished yet):")
+                }]
+            }
+        })
+    );
+}
+
+fn assert_v2_user_text_item(request: &Value, expected_text: &str) {
+    assert_eq!(
+        request,
+        &json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": expected_text
+                }]
+            }
+        })
+    );
+}
+
+fn assert_v2_response_create(request: &Value) {
+    assert_eq!(
+        request,
+        &json!({
+            "type": "response.create"
+        })
+    );
+}
+
 fn assert_v1_session_update(request: &Value) -> Result<()> {
     assert_eq!(request["type"].as_str(), Some("session.update"));
     assert_eq!(request["session"]["type"].as_str(), Some("quicksilver"));
@@ -1669,7 +1998,7 @@ fn assert_v2_session_update(request: &Value) -> Result<()> {
     );
     assert_eq!(
         request["session"]["tools"][0]["name"].as_str(),
-        Some("codex")
+        Some("background_agent")
     );
     Ok(())
 }

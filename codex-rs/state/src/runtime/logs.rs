@@ -638,6 +638,7 @@ mod tests {
         .await
         .expect("insert legacy log row");
         pool.close().await;
+        drop(pool);
 
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await

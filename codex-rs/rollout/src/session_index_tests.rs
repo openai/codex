@@ -73,7 +73,7 @@ fn find_thread_id_by_name_prefers_latest_entry() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn find_thread_path_by_name_str_skips_newest_entry_without_rollout() -> std::io::Result<()> {
+async fn find_thread_meta_by_name_str_skips_newest_entry_without_rollout() -> std::io::Result<()> {
     // A newer unsaved name entry should not shadow an older persisted rollout with the same name.
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
@@ -99,14 +99,17 @@ async fn find_thread_path_by_name_str_skips_newest_entry_without_rollout() -> st
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_path_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same").await?;
 
-    assert_eq!(found, Some(saved_rollout_path));
+    assert_eq!(
+        found.map(|(path, session_meta)| (path, session_meta.meta.id)),
+        Some((saved_rollout_path, saved_id))
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn find_thread_path_by_name_str_skips_partial_rollout() -> std::io::Result<()> {
+async fn find_thread_meta_by_name_str_skips_partial_rollout() -> std::io::Result<()> {
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
     let saved_id = ThreadId::new();
@@ -133,14 +136,14 @@ async fn find_thread_path_by_name_str_skips_partial_rollout() -> std::io::Result
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_path_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same").await?;
 
-    assert_eq!(found, Some(saved_rollout_path));
+    assert_eq!(found.map(|(path, _)| path), Some(saved_rollout_path));
     Ok(())
 }
 
 #[tokio::test]
-async fn find_thread_path_by_name_str_ignores_historical_name_after_rename() -> std::io::Result<()>
+async fn find_thread_meta_by_name_str_ignores_historical_name_after_rename() -> std::io::Result<()>
 {
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
@@ -171,9 +174,9 @@ async fn find_thread_path_by_name_str_ignores_historical_name_after_rename() -> 
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_path_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same").await?;
 
-    assert_eq!(found, Some(current_rollout_path));
+    assert_eq!(found.map(|(path, _)| path), Some(current_rollout_path));
     Ok(())
 }
 

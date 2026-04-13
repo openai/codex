@@ -1,9 +1,9 @@
+use crate::legacy_core::config::Config;
+#[cfg(target_os = "windows")]
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ServerNotification;
-use codex_core::config::Config;
-#[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;
@@ -90,7 +90,12 @@ impl OnboardingScreen {
             .config_layer_stack
             .get_user_config_file()
             .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
-            .unwrap_or_else(|| config.codex_home.join(codex_core::config::CONFIG_TOML_FILE));
+            .unwrap_or_else(|| {
+                config
+                    .codex_home
+                    .join(crate::legacy_core::config::CONFIG_TOML_FILE)
+                    .to_path_buf()
+            });
         let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(

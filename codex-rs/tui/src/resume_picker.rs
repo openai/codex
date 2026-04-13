@@ -7,6 +7,15 @@ use std::sync::Arc;
 use crate::app_server_session::AppServerSession;
 use crate::diff_render::display_path_for;
 use crate::key_hint;
+use crate::legacy_core::Cursor;
+use crate::legacy_core::INTERACTIVE_SESSION_SOURCES;
+use crate::legacy_core::RolloutRecorder;
+use crate::legacy_core::ThreadItem;
+use crate::legacy_core::ThreadSortKey;
+use crate::legacy_core::ThreadsPage;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::find_thread_names_by_ids;
+use crate::legacy_core::path_utils;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -17,15 +26,6 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_core::Cursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
-use codex_core::ThreadItem;
-use codex_core::ThreadSortKey;
-use codex_core::ThreadsPage;
-use codex_core::config::Config;
-use codex_core::find_thread_names_by_ids;
-use codex_core::path_utils;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -1148,13 +1148,7 @@ fn thread_list_params(
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(a),
-        path_utils::normalize_for_path_comparison(b),
-    ) {
-        return ca == cb;
-    }
-    a == b
+    path_utils::paths_match_after_normalization(a, b)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

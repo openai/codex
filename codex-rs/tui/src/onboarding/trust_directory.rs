@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codex_core::config::edit::ConfigEditsBuilder;
+use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;

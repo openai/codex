@@ -8,6 +8,9 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::PathBufExt;
+use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::fs;
@@ -57,9 +60,24 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: path,
+        path_to_skills_md: path
+            .abs()
+            .canonicalize()
+            .expect("skill path should canonicalize"),
         scope: SkillScope::User,
     }
+}
+
+fn write_demo_skill(tempdir: &TempDir) -> PathBuf {
+    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    fs::create_dir_all(skill_path.parent().expect("skill path should have parent"))
+        .expect("create skill dir");
+    fs::write(
+        &skill_path,
+        "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
+    )
+    .expect("write skill");
+    skill_path
 }
 
 fn user_config_layer(codex_home: &TempDir, config_toml: &str) -> ConfigLayerEntry {
@@ -125,8 +143,11 @@ fn skills_for_config_with_stack(
     effective_skill_roots: &[PathBuf],
 ) -> SkillLoadOutcome {
     let skills_input = SkillsLoadInput::new(
-        cwd.path().to_path_buf(),
-        effective_skill_roots.to_vec(),
+        cwd.path().abs(),
+        effective_skill_roots
+            .iter()
+            .map(codex_utils_absolute_path::test_support::PathBufExt::abs)
+            .collect(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(config_layer_stack),
     );
@@ -142,7 +163,7 @@ fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
         .expect("write stale system skill");
 
     let _skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
+        codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
     );
 
@@ -158,7 +179,7 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     let cwd = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
     let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
+        codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
 
@@ -199,7 +220,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .expect("plugin skill should live under a skills root")
         .to_path_buf();
     let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
+        codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
 
@@ -214,7 +235,9 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .iter()
         .find(|skill| skill.name == "sample:sample-search")
         .expect("plugin skill should load");
-    let skill_path = dunce::canonicalize(skill_path).expect("skill path should canonicalize");
+    let skill_path = dunce::canonicalize(skill_path)
+        .expect("skill path should canonicalize")
+        .abs();
 
     assert_eq!(skill.path_to_skills_md, skill_path);
     assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
@@ -233,15 +256,15 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
     let extra_root = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
     let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
+        codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
     let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
 
     write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
-    let extra_root_path = extra_root.path().to_path_buf();
+    let extra_root_path = extra_root.path().abs();
     let base_input = SkillsLoadInput::new(
-        cwd.path().to_path_buf(),
+        cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(&config_layer_stack),
@@ -269,7 +292,7 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
     // The cwd-only API returns the current cached entry for this cwd, even when that entry
     // was produced with extra roots.
     let base_input = SkillsLoadInput::new(
-        cwd.path().to_path_buf(),
+        cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(&config_layer_stack),
@@ -294,7 +317,7 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
     .expect("write bundled skill");
     let config_layer_stack = config_stack(&codex_home, "[skills.bundled]\nenabled = false\n");
     let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
+        codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
     );
 
@@ -330,7 +353,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     let extra_root_b = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
     let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
+        codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
     let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
@@ -338,9 +361,9 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     write_user_skill(&extra_root_a, "x", "extra-skill-a", "from extra root a");
     write_user_skill(&extra_root_b, "x", "extra-skill-b", "from extra root b");
 
-    let extra_root_a_path = extra_root_a.path().to_path_buf();
+    let extra_root_a_path = extra_root_a.path().abs();
     let base_input = SkillsLoadInput::new(
-        cwd.path().to_path_buf(),
+        cwd.path().abs(),
         Vec::new(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(&config_layer_stack),
@@ -365,7 +388,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
             .all(|skill| skill.name != "extra-skill-b")
     );
 
-    let extra_root_b_path = extra_root_b.path().to_path_buf();
+    let extra_root_b_path = extra_root_b.path().abs();
     let outcome_b = skills_manager
         .skills_for_cwd_with_extra_user_roots(
             &base_input,
@@ -409,8 +432,8 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
 
 #[test]
 fn normalize_extra_user_roots_is_stable_for_equivalent_inputs() {
-    let a = PathBuf::from("/tmp/a");
-    let b = PathBuf::from("/tmp/b");
+    let a = test_path_buf("/tmp/a").abs();
+    let b = test_path_buf("/tmp/b").abs();
 
     let first = normalize_extra_user_roots(&[a.clone(), b.clone(), a.clone()]);
     let second = normalize_extra_user_roots(&[b, a]);
@@ -422,7 +445,7 @@ fn normalize_extra_user_roots_is_stable_for_equivalent_inputs() {
 #[test]
 fn disabled_paths_for_skills_allows_session_flags_to_override_user_layer() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill_path = write_demo_skill(&tempdir);
     let skill = test_skill("demo-skill", skill_path.clone());
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
@@ -454,7 +477,7 @@ fn disabled_paths_for_skills_allows_session_flags_to_override_user_layer() {
 #[test]
 fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill_path = write_demo_skill(&tempdir);
     let skill = test_skill("demo-skill", skill_path.clone());
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
@@ -478,7 +501,10 @@ fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill(
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path])
+        HashSet::from([skill_path
+            .abs()
+            .canonicalize()
+            .expect("skill path should canonicalize")])
     );
 }
 
@@ -486,7 +512,7 @@ fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill(
 #[test]
 fn disabled_paths_for_skills_disables_matching_name_selectors() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill_path = write_demo_skill(&tempdir);
     let skill = test_skill("github:yeet", skill_path.clone());
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
@@ -505,7 +531,10 @@ fn disabled_paths_for_skills_disables_matching_name_selectors() {
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path])
+        HashSet::from([skill_path
+            .abs()
+            .canonicalize()
+            .expect("skill path should canonicalize")])
     );
 }
 
@@ -513,7 +542,7 @@ fn disabled_paths_for_skills_disables_matching_name_selectors() {
 #[test]
 fn disabled_paths_for_skills_allows_name_selector_to_override_path_selector() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill_path = write_demo_skill(&tempdir);
     let skill = test_skill("github:yeet", skill_path.clone());
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
@@ -560,11 +589,11 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
     let child_stack =
         config_stack_with_session_flags(&codex_home, &disabled_skill_config, &enabled_skill_config);
     let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
+        codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
     let parent_input = SkillsLoadInput::new(
-        cwd.path().to_path_buf(),
+        cwd.path().abs(),
         Vec::new(),
         parent_stack.clone(),
         bundled_skills_enabled_from_stack(&parent_stack),
