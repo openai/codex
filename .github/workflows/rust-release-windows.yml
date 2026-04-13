@@ -181,6 +181,34 @@ jobs:
           account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
+      - name: Setup Python for runtime wheel
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build Python runtime wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#rust-v}"
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          rm -rf "$stage_dir"
+
+          python -m pip install --upgrade pip
+          python -m pip install build hatchling
+          python ../sdk/python/scripts/update_sdk_artifacts.py \
+            stage-runtime \
+            "$stage_dir" \
+            "target/${{ matrix.target }}/release" \
+            --runtime-version "$version"
+          CODEX_PYTHON_RUNTIME_TARGET="${{ matrix.target }}" python -m build --wheel "$stage_dir"
+
+      - name: Upload Python runtime wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-runtime-${{ matrix.target }}
+          path: ${{ runner.temp }}/openai-codex-cli-bin-${{ matrix.target }}/dist/*.whl
+
       - name: Stage artifacts
         shell: bash
         run: |
