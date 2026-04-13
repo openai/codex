@@ -45,6 +45,7 @@ pub(crate) async fn run_queue_command(
     let thread_id = resolve_queue_thread_id(config.codex_home.as_path(), &cmd.thread).await?;
     let state_db =
         StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
+    ensure_queue_thread_belongs_to_state_db(&state_db, &thread_id).await?;
     let delivery = TimerDelivery::AfterTurn;
 
     let message_params = codex_state::ExternalMessageCreateParams::new(
@@ -69,6 +70,21 @@ pub(crate) async fn run_queue_command(
         message_params.id, message_params.thread_id
     );
     Ok(())
+}
+
+async fn ensure_queue_thread_belongs_to_state_db(
+    state_db: &StateRuntime,
+    thread_id: &str,
+) -> anyhow::Result<()> {
+    let thread_id = ThreadId::from_string(thread_id)
+        .map_err(|err| anyhow::anyhow!("invalid resolved thread id `{thread_id}`: {err}"))?;
+    if state_db.get_thread(thread_id).await?.is_some() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "thread `{thread_id}` is not present in the configured sqlite state database; run codex queue with the profile that owns the thread"
+    );
 }
 
 async fn remove_queued_message_if_thread_missing(
@@ -195,6 +211,29 @@ mod tests {
         features.enable(Feature::QueuedMessages);
         validate_queue_feature_flags(&features)
             .expect("queued messages feature should permit immediate queue command");
+    }
+
+    #[tokio::test]
+    async fn queue_requires_thread_in_configured_state_db() {
+        let sqlite_home = TempDir::new().expect("sqlite home tempdir");
+        let runtime = StateRuntime::init(
+            sqlite_home.path().to_path_buf(),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize state runtime");
+        let thread_id = ThreadId::new().to_string();
+
+        let err = ensure_queue_thread_belongs_to_state_db(&runtime, &thread_id)
+            .await
+            .expect_err("missing state thread should fail");
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "thread `{thread_id}` is not present in the configured sqlite state database; run codex queue with the profile that owns the thread"
+            )
+        );
     }
 
     #[tokio::test]
