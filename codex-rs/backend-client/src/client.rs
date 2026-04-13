@@ -144,7 +144,7 @@ impl Client {
             client = client.with_chatgpt_account_id(account_id);
         }
         if auth.is_fedramp_account() {
-            client = client.with_fedramp_routing_cookie();
+            client = client.with_fedramp_routing_header();
         }
         Ok(client)
     }
@@ -166,7 +166,7 @@ impl Client {
         self
     }
 
-    pub fn with_fedramp_routing_cookie(mut self) -> Self {
+    pub fn with_fedramp_routing_header(mut self) -> Self {
         self.chatgpt_account_is_fedramp = true;
         self
     }
@@ -196,9 +196,9 @@ impl Client {
             h.insert(name, hv);
         }
         if self.chatgpt_account_is_fedramp
-            && let Ok(name) = HeaderName::from_bytes(b"Cookie")
+            && let Ok(name) = HeaderName::from_bytes(b"X-OpenAI-Fedramp")
         {
-            h.insert(name, HeaderValue::from_static("_account_is_fedramp=true"));
+            h.insert(name, HeaderValue::from_static("true"));
         }
         h
     }
