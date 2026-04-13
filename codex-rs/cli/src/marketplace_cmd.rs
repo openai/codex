@@ -21,23 +21,17 @@ pub struct MarketplaceCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum MarketplaceSubcommand {
-    /// Add a remote marketplace repository.
     Add(AddMarketplaceArgs),
-
-    /// Upgrade configured Git marketplaces.
     Upgrade(UpgradeMarketplaceArgs),
 }
 
 #[derive(Debug, Parser)]
 struct AddMarketplaceArgs {
-    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, or SSH URLs.
     source: String,
 
-    /// Git ref to check out. Overrides any @ref or #ref suffix in SOURCE.
     #[arg(long = "ref", value_name = "REF")]
     ref_name: Option<String>,
 
-    /// Sparse-checkout path to use while cloning git sources. Repeat to include multiple paths.
     #[arg(
         long = "sparse",
         value_name = "PATH",
@@ -48,7 +42,6 @@ struct AddMarketplaceArgs {
 
 #[derive(Debug, Parser)]
 struct UpgradeMarketplaceArgs {
-    /// Upgrade only one configured marketplace. When omitted, upgrades all configured Git marketplaces.
     marketplace_name: Option<String>,
 }
 
@@ -59,8 +52,6 @@ impl MarketplaceCli {
             subcommand,
         } = self;
 
-        // Validate overrides now. This command writes to CODEX_HOME only; marketplace discovery
-        // happens from that cache root after the next plugin/list or app-server start.
         let overrides = config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?;

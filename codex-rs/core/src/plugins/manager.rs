@@ -15,6 +15,9 @@ use super::marketplace::ResolvedMarketplacePlugin;
 use super::marketplace::list_marketplaces;
 use super::marketplace::load_marketplace;
 use super::marketplace::resolve_marketplace_plugin;
+use super::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
+use super::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
+use super::marketplace_upgrade::configured_git_marketplace_names;
 use super::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use super::read_curated_plugins_sha;
 use super::remote::RemotePluginFetchError;
@@ -1144,16 +1147,24 @@ impl PluginsManager {
         }
 
         let manager = Arc::clone(self);
-        let codex_home = self.codex_home.clone();
         let config = config.clone();
         if let Err(err) = std::thread::Builder::new()
             .name("plugins-marketplace-auto-upgrade".to_string())
             .spawn(move || {
-                let outcome = upgrade_configured_git_marketplaces(codex_home.as_path(), &config);
-                if !outcome.upgraded_roots.is_empty() {
-                    manager.maybe_start_non_curated_plugin_cache_force_reinstall_for_roots(
-                        &outcome.upgraded_roots,
-                    );
+                let outcome = manager.upgrade_configured_marketplaces_for_config(&config, None);
+                match outcome {
+                    Ok(outcome) => {
+                        for error in outcome.errors {
+                            warn!(
+                                marketplace = error.marketplace_name,
+                                error = %error.message,
+                                "failed to auto-upgrade configured marketplace"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        warn!("failed to auto-upgrade configured marketplaces: {err}");
+                    }
                 }
 
                 let mut state = match manager.configured_marketplace_upgrade_state.write() {
@@ -1172,6 +1183,37 @@ impl PluginsManager {
         }
     }
 
+    pub fn upgrade_configured_marketplaces_for_config(
+        &self,
+        config: &Config,
+        marketplace_name: Option<&str>,
+    ) -> Result<ConfiguredMarketplaceUpgradeOutcome, String> {
+        if let Some(marketplace_name) = marketplace_name
+            && !configured_git_marketplace_names(config)
+                .iter()
+                .any(|name| name == marketplace_name)
+        {
+            return Err(format!(
+                "marketplace `{marketplace_name}` is not configured as a Git marketplace"
+            ));
+        }
+
+        let mut outcome = upgrade_configured_git_marketplaces(
+            self.codex_home.as_path(),
+            config,
+            marketplace_name,
+        );
+        if let Err(err) = self.refresh_upgraded_marketplace_plugin_cache(&outcome.upgraded_roots) {
+            outcome.errors.push(ConfiguredMarketplaceUpgradeError {
+                marketplace_name: marketplace_name
+                    .unwrap_or("all configured marketplaces")
+                    .to_string(),
+                message: err,
+            });
+        }
+        Ok(outcome)
+    }
+
     pub fn maybe_start_non_curated_plugin_cache_refresh_for_roots(
         self: &Arc<Self>,
         roots: &[AbsolutePathBuf],
@@ -1179,16 +1221,6 @@ impl PluginsManager {
         self.maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
             roots,
             NonCuratedCacheRefreshMode::IfVersionChanged,
-        );
-    }
-
-    fn maybe_start_non_curated_plugin_cache_force_reinstall_for_roots(
-        self: &Arc<Self>,
-        roots: &[AbsolutePathBuf],
-    ) {
-        self.maybe_start_non_curated_plugin_cache_refresh_for_roots_with_mode(
-            roots,
-            NonCuratedCacheRefreshMode::ForceReinstall,
         );
     }
 
@@ -1253,6 +1285,34 @@ impl PluginsManager {
             state.in_flight = false;
             state.requested = None;
             warn!("failed to start non-curated plugin cache refresh task: {err}");
+        }
+    }
+
+    fn refresh_upgraded_marketplace_plugin_cache(
+        &self,
+        roots: &[AbsolutePathBuf],
+    ) -> Result<(), String> {
+        if roots.is_empty() {
+            return Ok(());
+        }
+
+        match refresh_non_curated_plugin_cache(
+            self.codex_home.as_path(),
+            roots,
+            NonCuratedCacheRefreshMode::ForceReinstall,
+        ) {
+            Ok(cache_refreshed) => {
+                if cache_refreshed {
+                    self.clear_cache();
+                }
+                Ok(())
+            }
+            Err(err) => {
+                self.clear_cache();
+                Err(format!(
+                    "failed to refresh installed plugin cache after marketplace upgrade: {err}"
+                ))
+            }
         }
     }
 

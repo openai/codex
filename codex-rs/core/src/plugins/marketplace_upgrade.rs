@@ -23,10 +23,17 @@ use crate::config::Config;
 
 const MARKETPLACE_UPGRADE_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct ConfiguredMarketplaceUpgradeOutcome {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredMarketplaceUpgradeError {
+    pub marketplace_name: String,
+    pub message: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ConfiguredMarketplaceUpgradeOutcome {
+    pub selected_marketplaces: Vec<String>,
     pub upgraded_roots: Vec<AbsolutePathBuf>,
-    pub all_succeeded: bool,
+    pub errors: Vec<ConfiguredMarketplaceUpgradeError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,40 +45,58 @@ struct ConfiguredGitMarketplace {
     last_revision: Option<String>,
 }
 
-pub(super) fn upgrade_configured_git_marketplaces(
+impl ConfiguredMarketplaceUpgradeOutcome {
+    pub fn all_succeeded(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+pub fn configured_git_marketplace_names(config: &Config) -> Vec<String> {
+    let mut names = configured_git_marketplaces(config)
+        .into_iter()
+        .map(|marketplace| marketplace.name)
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names
+}
+
+pub fn upgrade_configured_git_marketplaces(
     codex_home: &Path,
     config: &Config,
+    marketplace_name: Option<&str>,
 ) -> ConfiguredMarketplaceUpgradeOutcome {
-    let marketplaces = configured_git_marketplaces(config);
+    let marketplaces = configured_git_marketplaces(config)
+        .into_iter()
+        .filter(|marketplace| marketplace_name.is_none_or(|name| marketplace.name.as_str() == name))
+        .collect::<Vec<_>>();
     if marketplaces.is_empty() {
-        return ConfiguredMarketplaceUpgradeOutcome {
-            all_succeeded: true,
-            ..Default::default()
-        };
+        return ConfiguredMarketplaceUpgradeOutcome::default();
     }
 
     let install_root = marketplace_install_root(codex_home);
+    let selected_marketplaces = marketplaces
+        .iter()
+        .map(|marketplace| marketplace.name.clone())
+        .collect();
     let mut upgraded_roots = Vec::new();
-    let mut all_succeeded = true;
+    let mut errors = Vec::new();
     for marketplace in marketplaces {
         match upgrade_configured_git_marketplace(codex_home, &install_root, &marketplace) {
             Ok(Some(upgraded_root)) => upgraded_roots.push(upgraded_root),
             Ok(None) => {}
             Err(err) => {
-                all_succeeded = false;
-                warn!(
-                    marketplace = marketplace.name,
-                    source = marketplace.source,
-                    error = %err,
-                    "failed to auto-upgrade configured marketplace"
-                );
+                errors.push(ConfiguredMarketplaceUpgradeError {
+                    marketplace_name: marketplace.name,
+                    message: err,
+                });
             }
         }
     }
 
     ConfiguredMarketplaceUpgradeOutcome {
+        selected_marketplaces,
         upgraded_roots,
-        all_succeeded,
+        errors,
     }
 }
 
@@ -289,18 +314,19 @@ mod tests {
         );
 
         let config = load_plugins_config(codex_home.path()).await;
-        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config, None);
 
         assert_eq!(
             outcome,
             ConfiguredMarketplaceUpgradeOutcome {
+                selected_marketplaces: vec!["debug".to_string()],
                 upgraded_roots: vec![
                     AbsolutePathBuf::try_from(
                         marketplace_install_root(codex_home.path()).join("debug")
                     )
                     .unwrap()
                 ],
-                all_succeeded: true,
+                errors: Vec::new(),
             }
         );
         assert_eq!(
@@ -330,13 +356,14 @@ mod tests {
         );
 
         let config = load_plugins_config(codex_home.path()).await;
-        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config, None);
 
         assert_eq!(
             outcome,
             ConfiguredMarketplaceUpgradeOutcome {
+                selected_marketplaces: vec!["debug".to_string()],
                 upgraded_roots: Vec::new(),
-                all_succeeded: true,
+                errors: Vec::new(),
             }
         );
         assert_eq!(
@@ -361,18 +388,19 @@ mod tests {
         );
 
         let config = load_plugins_config(codex_home.path()).await;
-        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config, None);
 
         assert_eq!(
             outcome,
             ConfiguredMarketplaceUpgradeOutcome {
+                selected_marketplaces: vec!["debug".to_string()],
                 upgraded_roots: vec![
                     AbsolutePathBuf::try_from(
                         marketplace_install_root(codex_home.path()).join("debug")
                     )
                     .unwrap()
                 ],
-                all_succeeded: true,
+                errors: Vec::new(),
             }
         );
         assert_eq!(
@@ -395,15 +423,12 @@ mod tests {
         );
 
         let config = load_plugins_config(codex_home.path()).await;
-        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config, None);
 
-        assert_eq!(
-            outcome,
-            ConfiguredMarketplaceUpgradeOutcome {
-                upgraded_roots: Vec::new(),
-                all_succeeded: false,
-            }
-        );
+        assert_eq!(outcome.selected_marketplaces, vec!["debug".to_string()]);
+        assert!(outcome.upgraded_roots.is_empty());
+        assert_eq!(outcome.errors.len(), 1);
+        assert_eq!(outcome.errors[0].marketplace_name, "debug");
         assert_eq!(
             std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt")).unwrap(),
             "old"
@@ -422,15 +447,12 @@ mod tests {
         );
 
         let config = load_plugins_config(codex_home.path()).await;
-        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config, None);
 
-        assert_eq!(
-            outcome,
-            ConfiguredMarketplaceUpgradeOutcome {
-                upgraded_roots: Vec::new(),
-                all_succeeded: false,
-            }
-        );
+        assert_eq!(outcome.selected_marketplaces, vec!["debug".to_string()]);
+        assert!(outcome.upgraded_roots.is_empty());
+        assert_eq!(outcome.errors.len(), 1);
+        assert_eq!(outcome.errors[0].marketplace_name, "debug");
         assert_eq!(
             std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt")).unwrap(),
             "old"
@@ -458,15 +480,12 @@ mod tests {
             &marketplace_config(changed_source_repo.path(), "changed-revision"),
         );
 
-        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config, None);
 
-        assert_eq!(
-            outcome,
-            ConfiguredMarketplaceUpgradeOutcome {
-                upgraded_roots: Vec::new(),
-                all_succeeded: false,
-            }
-        );
+        assert_eq!(outcome.selected_marketplaces, vec!["debug".to_string()]);
+        assert!(outcome.upgraded_roots.is_empty());
+        assert_eq!(outcome.errors.len(), 1);
+        assert_eq!(outcome.errors[0].marketplace_name, "debug");
         assert_eq!(
             std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt")).unwrap(),
             "old"
@@ -488,13 +507,14 @@ plugins = true
         );
 
         let config = load_plugins_config(codex_home.path()).await;
-        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config);
+        let outcome = upgrade_configured_git_marketplaces(codex_home.path(), &config, None);
 
         assert_eq!(
             outcome,
             ConfiguredMarketplaceUpgradeOutcome {
+                selected_marketplaces: Vec::new(),
                 upgraded_roots: Vec::new(),
-                all_succeeded: true,
+                errors: Vec::new(),
             }
         );
         assert!(
