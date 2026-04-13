@@ -452,6 +452,49 @@ fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
         .collect()
 }
 
+#[test]
+fn explicit_connectors_missing_from_tools_requests_startup_wait() {
+    let connector_ids = HashSet::from(["slack".to_string()]);
+
+    assert!(explicitly_enabled_connectors_missing_from_tools(
+        &connector_ids,
+        &HashMap::new(),
+    ));
+}
+
+#[test]
+fn explicit_connectors_present_in_tools_skip_startup_wait() {
+    let connector_ids = HashSet::from(["slack".to_string()]);
+    let mcp_tools = HashMap::from([(
+        "mcp__codex_apps__slack_search".to_string(),
+        make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "slack_search",
+            Some("slack"),
+            Some("Slack"),
+        ),
+    )]);
+
+    assert!(!explicitly_enabled_connectors_missing_from_tools(
+        &connector_ids,
+        &mcp_tools,
+    ));
+}
+
+#[test]
+fn explicit_connectors_ignore_non_app_tool_matches() {
+    let connector_ids = HashSet::from(["slack".to_string()]);
+    let mcp_tools = HashMap::from([(
+        "mcp__rmcp__slack_search".to_string(),
+        make_mcp_tool("rmcp", "slack_search", Some("slack"), Some("Slack")),
+    )]);
+
+    assert!(explicitly_enabled_connectors_missing_from_tools(
+        &connector_ids,
+        &mcp_tools,
+    ));
+}
+
 fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests(

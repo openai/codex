@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -75,6 +76,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
 use codex_mcp::ToolInfo;
@@ -444,6 +446,7 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+const EXPLICIT_APPS_READY_TIMEOUT: Duration = Duration::from_secs(3);
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -5994,6 +5997,24 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
+// Explicit plugin mentions can imply app usage even when the user did not
+// mention `app://...` directly. If those connectors are still missing from the
+// current `codex_apps` snapshot, give startup a bounded chance to finish
+// before we build plugin guidance and first-turn tool exposure.
+fn explicitly_enabled_connectors_missing_from_tools(
+    connector_ids: &HashSet<String>,
+    mcp_tools: &HashMap<String, ToolInfo>,
+) -> bool {
+    let accessible_connector_ids = connectors::accessible_connectors_from_mcp_tools(mcp_tools)
+        .into_iter()
+        .map(|connector| connector.id)
+        .collect::<HashSet<_>>();
+
+    connector_ids
+        .iter()
+        .any(|connector_id| !accessible_connector_ids.contains(connector_id))
+}
+
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
@@ -6050,15 +6071,25 @@ pub(crate) async fn run_turn(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
+    let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
+    let mut connectors_requiring_startup = explicitly_enabled_connectors.clone();
+    if turn_context.apps_enabled() {
+        // `plugin://...` mentions carry app provenance through plugin metadata,
+        // so treat those declared connectors as explicit startup dependencies
+        // for this turn as well.
+        connectors_requiring_startup.extend(mentioned_plugins.iter().flat_map(|plugin| {
+            plugin
+                .app_connector_ids
+                .iter()
+                .map(|connector_id| connector_id.0.clone())
+        }));
+    }
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
-        match sess
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+        let mut mcp_tools = match mcp_connection_manager
             .list_all_tools()
             .or_cancel(&cancellation_token)
             .await
@@ -6066,7 +6097,38 @@ pub(crate) async fn run_turn(
             Ok(mcp_tools) => mcp_tools,
             Err(_) if turn_context.apps_enabled() => return None,
             Err(_) => HashMap::new(),
+        };
+        if turn_context.apps_enabled()
+            && !connectors_requiring_startup.is_empty()
+            && explicitly_enabled_connectors_missing_from_tools(
+                &connectors_requiring_startup,
+                &mcp_tools,
+            )
+        {
+            // The caller explicitly asked for one of these app-backed surfaces,
+            // but the first snapshot still does not expose it. That usually
+            // means `codex_apps` is still hydrating from startup, so wait
+            // briefly and then rebuild the tool view for this turn.
+            let codex_apps_ready = match mcp_connection_manager
+                .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, EXPLICIT_APPS_READY_TIMEOUT)
+                .or_cancel(&cancellation_token)
+                .await
+            {
+                Ok(codex_apps_ready) => codex_apps_ready,
+                Err(_) => return None,
+            };
+            if codex_apps_ready {
+                mcp_tools = match mcp_connection_manager
+                    .list_all_tools()
+                    .or_cancel(&cancellation_token)
+                    .await
+                {
+                    Ok(mcp_tools) => mcp_tools,
+                    Err(_) => return None,
+                };
+            }
         }
+        mcp_tools
     } else {
         HashMap::new()
     };
@@ -6140,7 +6202,7 @@ pub(crate) async fn run_turn(
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
         .collect::<Vec<_>>();
 
-    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
+    let mut explicitly_enabled_connectors = explicitly_enabled_connectors;
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
         &skill_items,
         &available_connectors,

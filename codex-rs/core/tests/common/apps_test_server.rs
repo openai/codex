@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 use serde_json::json;
+use std::time::Duration;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -36,6 +37,13 @@ impl AppsTestServer {
     }
 
     pub async fn mount_searchable(server: &MockServer) -> Result<Self> {
+        Self::mount_searchable_with_tools_list_delay(server, Duration::ZERO).await
+    }
+
+    pub async fn mount_searchable_with_tools_list_delay(
+        server: &MockServer,
+        tools_list_delay: Duration,
+    ) -> Result<Self> {
         mount_oauth_metadata(server).await;
         mount_connectors_directory(server).await;
         mount_streamable_http_json_rpc(
@@ -43,6 +51,7 @@ impl AppsTestServer {
             CONNECTOR_NAME.to_string(),
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
+            tools_list_delay,
         )
         .await;
         Ok(Self {
@@ -54,6 +63,15 @@ impl AppsTestServer {
         server: &MockServer,
         connector_name: &str,
     ) -> Result<Self> {
+        Self::mount_with_connector_name_and_tools_list_delay(server, connector_name, Duration::ZERO)
+            .await
+    }
+
+    pub async fn mount_with_connector_name_and_tools_list_delay(
+        server: &MockServer,
+        connector_name: &str,
+        tools_list_delay: Duration,
+    ) -> Result<Self> {
         mount_oauth_metadata(server).await;
         mount_connectors_directory(server).await;
         mount_streamable_http_json_rpc(
@@ -61,6 +79,7 @@ impl AppsTestServer {
             connector_name.to_string(),
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
+            tools_list_delay,
         )
         .await;
         Ok(Self {
@@ -117,6 +136,7 @@ async fn mount_streamable_http_json_rpc(
     connector_name: String,
     connector_description: String,
     searchable: bool,
+    tools_list_delay: Duration,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
@@ -124,6 +144,7 @@ async fn mount_streamable_http_json_rpc(
             connector_name,
             connector_description,
             searchable,
+            tools_list_delay,
         })
         .mount(server)
         .await;
@@ -133,6 +154,7 @@ struct CodexAppsJsonRpcResponder {
     connector_name: String,
     connector_description: String,
     searchable: bool,
+    tools_list_delay: Duration,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -302,7 +324,9 @@ impl Respond for CodexAppsJsonRpcResponder {
                         }));
                     }
                 }
-                ResponseTemplate::new(200).set_body_json(response)
+                ResponseTemplate::new(200)
+                    .set_delay(self.tools_list_delay)
+                    .set_body_json(response)
             }
             "tools/call" => {
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
