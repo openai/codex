@@ -310,23 +310,19 @@ impl Session {
     }
 
     async fn inject_timer_into_active_turn(&self, item: PendingInputItem) -> bool {
-        let turn_state = {
-            let active = self.active_turn.lock().await;
-            let Some(active_turn) = active.as_ref() else {
-                return false;
-            };
-
-            match active_turn.tasks.first().map(|(_, task)| task.kind) {
-                Some(crate::state::TaskKind::Regular) => Arc::clone(&active_turn.turn_state),
-                Some(crate::state::TaskKind::Review | crate::state::TaskKind::Compact) | None => {
-                    return false;
-                }
-            }
+        let active = self.active_turn.lock().await;
+        let Some(active_turn) = active.as_ref() else {
+            return false;
         };
 
-        let mut turn_state = turn_state.lock().await;
-        turn_state.push_pending_input(item);
-        true
+        match active_turn.tasks.first().map(|(_, task)| task.kind) {
+            Some(crate::state::TaskKind::Regular) => {
+                let mut turn_state = active_turn.turn_state.lock().await;
+                turn_state.push_pending_input(item);
+                true
+            }
+            Some(crate::state::TaskKind::Review | crate::state::TaskKind::Compact) | None => false,
+        }
     }
 
     fn spawn_timer_task(
