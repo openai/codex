@@ -1,10 +1,28 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use dirs_next::home_dir;
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+pub const PROFILE_ENV_KEYS: &[&str] = &[
+    "APPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "HOME",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+];
+
+pub fn is_profile_env_key(key: &str) -> bool {
+    PROFILE_ENV_KEYS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(key))
+}
 
 pub fn normalize_null_device_env(env_map: &mut HashMap<String, String>) {
     let keys: Vec<String> = env_map.keys().cloned().collect();
@@ -39,6 +57,14 @@ pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
         && let Ok(pathext) = env::var("PATHEXT")
     {
         env_map.insert("PATHEXT".into(), pathext);
+    }
+}
+
+pub fn overlay_current_user_profile_env(env_map: &mut HashMap<String, String>) {
+    for key in PROFILE_ENV_KEYS {
+        if let Ok(value) = env::var(key) {
+            env_map.insert((*key).to_string(), value);
+        }
     }
 }
 

@@ -21,6 +21,7 @@ mod windows_impl {
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
+    use crate::env::is_profile_env_key;
     use crate::env::normalize_null_device_env;
     use crate::helper_materialization::HelperExecutable;
     use crate::helper_materialization::resolve_helper_for_launch;
@@ -58,10 +59,13 @@ mod windows_impl {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Security::Authentication::Identity::LogonUserW;
     use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
     use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
+    use windows_sys::Win32::System::Environment::CreateEnvironmentBlock;
+    use windows_sys::Win32::System::Environment::DestroyEnvironmentBlock;
     use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
     use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
     const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
@@ -208,6 +212,93 @@ mod windows_impl {
 
     pub use crate::windows_impl::CaptureResult;
 
+    fn make_env_block(env_map: &HashMap<String, String>) -> Vec<u16> {
+        let mut items: Vec<(String, String)> = env_map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        items.sort_by(|a, b| {
+            a.0.to_uppercase()
+                .cmp(&b.0.to_uppercase())
+                .then(a.0.cmp(&b.0))
+        });
+        let mut wide: Vec<u16> = Vec::new();
+        for (key, value) in items {
+            let mut pair = to_wide(format!("{key}={value}"));
+            pair.pop();
+            wide.extend_from_slice(&pair);
+            wide.push(0);
+        }
+        wide.push(0);
+        wide
+    }
+
+    fn build_logon_environment_block(
+        username: &[u16],
+        domain: &[u16],
+        password: &[u16],
+        extra_env: &HashMap<String, String>,
+    ) -> Result<Vec<u16>> {
+        let mut logon_token: HANDLE = 0;
+        let logon_ok = unsafe {
+            LogonUserW(
+                username.as_ptr(),
+                domain.as_ptr(),
+                password.as_ptr(),
+                2, // LOGON32_LOGON_INTERACTIVE
+                0, // LOGON32_PROVIDER_DEFAULT
+                &mut logon_token,
+            )
+        };
+        if logon_ok == 0 {
+            return Err(anyhow::anyhow!("LogonUserW failed: {}", unsafe {
+                GetLastError()
+            }));
+        }
+
+        let mut raw_block: *mut c_void = ptr::null_mut();
+        let ok = unsafe { CreateEnvironmentBlock(&mut raw_block, logon_token, 0) };
+        if ok == 0 {
+            unsafe {
+                CloseHandle(logon_token);
+            }
+            return Err(anyhow::anyhow!(
+                "CreateEnvironmentBlock failed: {}",
+                unsafe { GetLastError() }
+            ));
+        }
+
+        let mut env_map: HashMap<String, String> = HashMap::new();
+        unsafe {
+            let mut cursor = raw_block as *const u16;
+            loop {
+                let mut len = 0usize;
+                while *cursor.add(len) != 0 {
+                    len += 1;
+                }
+                if len == 0 {
+                    break;
+                }
+                let entry = String::from_utf16_lossy(std::slice::from_raw_parts(cursor, len));
+                if let Some((key, value)) = entry.split_once('=') {
+                    env_map.insert(key.to_string(), value.to_string());
+                }
+                cursor = cursor.add(len + 1);
+            }
+            DestroyEnvironmentBlock(raw_block);
+            CloseHandle(logon_token);
+        }
+
+        for (key, value) in extra_env {
+            if is_profile_env_key(key) && env_map.contains_key(key) {
+                continue;
+            }
+            env_map.insert(key.clone(), value.clone());
+        }
+
+        Ok(make_env_block(&env_map))
+    }
+
     fn read_spawn_ready(pipe_read: &mut File) -> Result<()> {
         let msg = read_frame(pipe_read)?
             .ok_or_else(|| anyhow::anyhow!("runner pipe closed before spawn_ready"))?;
@@ -315,7 +406,12 @@ mod windows_impl {
         let cwd_w: Vec<u16> = to_wide(cwd);
 
         // Minimal CPWL launch: inherit env, no desktop override, no handle inheritance.
-        let env_block: Option<Vec<u16>> = None;
+        let env_block = Some(build_logon_environment_block(
+            &user_w,
+            &domain_w,
+            &password_w,
+            &env_map,
+        )?);
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
