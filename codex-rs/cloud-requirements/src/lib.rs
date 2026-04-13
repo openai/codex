@@ -332,7 +332,11 @@ impl CloudRequirementsService {
             return Ok(None);
         };
         if !auth.is_chatgpt_auth()
-            || !(plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
+            || !(plan_type.is_business_like()
+                || matches!(
+                    plan_type,
+                    PlanType::Enterprise | PlanType::SelfServeBusinessUsageBased
+                ))
         {
             return Ok(None);
         }
@@ -552,7 +556,11 @@ impl CloudRequirementsService {
             return false;
         };
         if !auth.is_chatgpt_auth()
-            || !(plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
+            || !(plan_type.is_business_like()
+                || matches!(
+                    plan_type,
+                    PlanType::Enterprise | PlanType::SelfServeBusinessUsageBased
+                ))
         {
             return false;
         }
@@ -1134,10 +1142,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_cloud_requirements_skips_team_like_usage_based_plan() {
+    async fn fetch_cloud_requirements_skips_team_plan() {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("self_serve_business_usage_based"),
+            auth_manager_with_plan("team"),
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1181,6 +1189,35 @@ mod tests {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("enterprise_cbp_usage_based"),
+            Arc::new(StaticFetcher {
+                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
+            }),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+        assert_eq!(
+            service.fetch().await,
+            Ok(Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
+                allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
+                guardian_policy_config: None,
+                feature_requirements: None,
+                mcp_servers: None,
+                apps: None,
+                rules: None,
+                enforce_residency: None,
+                network: None,
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_allows_self_serve_business_usage_based_plan() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("self_serve_business_usage_based"),
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
