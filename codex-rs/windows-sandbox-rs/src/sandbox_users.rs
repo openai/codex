@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -33,6 +34,15 @@ use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
+use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::System::Threading::WAIT_FAILED;
+use windows_sys::Win32::System::Threading::WAIT_TIMEOUT;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -76,6 +86,8 @@ pub fn provision_sandbox_users(
     let online_password = random_password();
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
+    initialize_local_user_profile(offline_username, &offline_password, log)?;
+    initialize_local_user_profile(online_username, &online_password, log)?;
     write_secrets(
         codex_home,
         offline_username,
@@ -155,6 +167,88 @@ pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<(
             )?;
         }
     }
+    Ok(())
+}
+
+fn initialize_local_user_profile(name: &str, password: &str, log: &mut File) -> Result<()> {
+    let cmd_exe =
+        std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
+    let cmdline = format!("{cmd_exe} /d /c exit 0");
+    let user_w = to_wide(OsStr::new(name));
+    let domain_w = to_wide(OsStr::new("."));
+    let password_w = to_wide(OsStr::new(password));
+    let exe_w = to_wide(OsStr::new(&cmd_exe));
+    let mut cmdline_w = to_wide(OsStr::new(&cmdline));
+    let mut startup_info: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup_info.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process_info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    super::log_line(
+        log,
+        &format!("initializing sandbox user profile for {name}"),
+    )?;
+    let spawn_ok = unsafe {
+        CreateProcessWithLogonW(
+            user_w.as_ptr(),
+            domain_w.as_ptr(),
+            password_w.as_ptr(),
+            LOGON_WITH_PROFILE,
+            exe_w.as_ptr(),
+            cmdline_w.as_mut_ptr(),
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup_info,
+            &mut process_info,
+        )
+    };
+    if spawn_ok == 0 {
+        let err = unsafe { GetLastError() };
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("CreateProcessWithLogonW failed while initializing {name} profile: {err}"),
+        )));
+    }
+
+    let wait_status = unsafe { WaitForSingleObject(process_info.hProcess, 30_000) };
+    let mut exit_code = 0u32;
+    let exit_ok = unsafe { GetExitCodeProcess(process_info.hProcess, &mut exit_code) };
+    unsafe {
+        if process_info.hThread != 0 {
+            CloseHandle(process_info.hThread);
+        }
+        if process_info.hProcess != 0 {
+            CloseHandle(process_info.hProcess);
+        }
+    }
+
+    if wait_status == WAIT_FAILED {
+        let err = unsafe { GetLastError() };
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("WaitForSingleObject failed while initializing {name} profile: {err}"),
+        )));
+    }
+    if wait_status == WAIT_TIMEOUT {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("profile initialization command for {name} timed out"),
+        )));
+    }
+    if exit_ok == 0 {
+        let err = unsafe { GetLastError() };
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("GetExitCodeProcess failed while initializing {name} profile: {err}"),
+        )));
+    }
+    if exit_code != 0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserCreateOrUpdateFailed,
+            format!("profile initialization command for {name} exited with code {exit_code}"),
+        )));
+    }
+
     Ok(())
 }
 
