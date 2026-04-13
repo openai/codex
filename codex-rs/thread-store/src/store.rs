@@ -2,12 +2,10 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
-use crate::DynamicToolsParams;
 use crate::FindThreadByNameParams;
 use crate::FindThreadSpawnByPathParams;
 use crate::ListThreadSpawnEdgesParams;
@@ -16,11 +14,9 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
 use crate::ResolveLegacyPathParams;
 use crate::ResumeThreadRecorderParams;
-use crate::SetThreadMemoryModeParams;
 use crate::SetThreadNameParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
-use crate::ThreadMemoryModeParams;
 use crate::ThreadPage;
 use crate::ThreadRecorder;
 use crate::ThreadSpawnEdge;
@@ -86,27 +82,6 @@ pub trait ThreadStore: Send + Sync {
         &self,
         params: ResolveLegacyPathParams,
     ) -> ThreadStoreResult<Option<ThreadId>>;
-
-    /// Reads dynamic tools persisted for a thread.
-    async fn dynamic_tools(
-        &self,
-        params: DynamicToolsParams,
-    ) -> ThreadStoreResult<Option<Vec<DynamicToolSpec>>>;
-
-    /// Reads a thread's memory mode.
-    async fn memory_mode(
-        &self,
-        params: ThreadMemoryModeParams,
-    ) -> ThreadStoreResult<Option<String>>;
-
-    /// Updates a thread's memory mode.
-    async fn set_memory_mode(&self, params: SetThreadMemoryModeParams) -> ThreadStoreResult<()>;
-
-    /// Marks a thread's memory context as polluted.
-    async fn mark_memory_mode_polluted(
-        &self,
-        params: ThreadMemoryModeParams,
-    ) -> ThreadStoreResult<()>;
 
     /// Persists or replaces a thread-spawn parent-child edge.
     async fn upsert_thread_spawn_edge(&self, edge: ThreadSpawnEdge) -> ThreadStoreResult<()>;

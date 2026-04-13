@@ -198,6 +198,7 @@ use codex_core::ArchiveThreadParams as StoreArchiveThreadParams;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
 use codex_core::GitInfoPatch;
+use codex_core::MissingThreadMetadata;
 use codex_core::NewThread;
 use codex_core::ReadThreadParams as StoreReadThreadParams;
 use codex_core::RolloutRecorder;
@@ -210,13 +211,12 @@ use codex_core::StoredThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadMetadataPatch;
+use codex_core::ThreadMetadataSeed;
 use codex_core::ThreadOwner;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::ThreadStore;
 use codex_core::ThreadStoreError;
 use codex_core::UpdateThreadMetadataParams as StoreUpdateThreadMetadataParams;
-use codex_core::WorkspaceRole as CoreWorkspaceRole;
-use codex_core::append_thread_name;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -232,10 +232,8 @@ use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
-use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::local_thread_store;
-use codex_core::parse_cursor;
 use codex_core::path_utils;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSource;
@@ -313,11 +311,9 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;
-use codex_state::StateRuntime;
-use codex_state::ThreadMetadata;
-use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_json_to_toml::json_to_toml;
@@ -334,7 +330,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
-use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -2982,8 +2977,8 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let state_db_ctx = open_state_db_for_direct_thread_lookup(&self.config).await;
-        reconcile_rollout(
+        let state_db_ctx = get_state_db(&self.config).await;
+        codex_rollout::state_db::reconcile_rollout(
             state_db_ctx.as_deref(),
             rollout_path.as_path(),
             self.config.model_provider_id.as_str(),
@@ -3090,7 +3085,7 @@ impl CodexMessageProcessor {
             None => None,
         };
 
-        if let Ok(loaded_thread) = self.thread_manager.get_thread(thread_uuid).await {
+        let missing = if let Ok(loaded_thread) = self.thread_manager.get_thread(thread_uuid).await {
             let Some(rollout_path) = loaded_thread.rollout_path() else {
                 self.send_invalid_request_error(
                     request_id,
@@ -3099,60 +3094,27 @@ impl CodexMessageProcessor {
                 .await;
                 return;
             };
-            let state_db = match loaded_thread.state_db() {
-                Some(state_db) => Some(state_db),
-                None => get_state_db(&self.config).await,
-            };
-            let Some(state_db) = state_db else {
-                self.send_internal_error(
-                    request_id,
-                    format!("sqlite state db unavailable for thread {thread_uuid}"),
-                )
-                .await;
-                return;
-            };
-            match state_db.get_thread(thread_uuid).await {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    let config_snapshot = loaded_thread.config_snapshot().await;
-                    let model_provider = config_snapshot.model_provider_id.clone();
-                    let mut builder = ThreadMetadataBuilder::new(
-                        thread_uuid,
-                        rollout_path,
-                        Utc::now(),
-                        config_snapshot.session_source.clone(),
-                    );
-                    builder.model_provider = Some(model_provider.clone());
-                    builder.cwd = config_snapshot.cwd.clone();
-                    builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-                    builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
-                    builder.approval_mode = config_snapshot.approval_policy;
-                    let metadata = builder.build(model_provider.as_str());
-                    if let Err(err) = state_db.insert_thread_if_absent(&metadata).await {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to create thread metadata for {thread_uuid}: {err}"),
-                        )
-                        .await;
-                        return;
-                    }
-                }
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!("failed to load thread metadata for {thread_uuid}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            }
-        }
+            let config_snapshot = loaded_thread.config_snapshot().await;
+            MissingThreadMetadata::Create(ThreadMetadataSeed {
+                rollout_path,
+                created_at: Utc::now(),
+                source: config_snapshot.session_source.clone(),
+                model_provider: config_snapshot.model_provider_id.clone(),
+                cwd: config_snapshot.cwd.clone(),
+                cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                sandbox_policy: config_snapshot.sandbox_policy.clone(),
+                approval_mode: config_snapshot.approval_policy,
+            })
+        } else {
+            MissingThreadMetadata::Error
+        };
 
         let thread_store = local_thread_store(&self.config);
         let stored_thread = match thread_store
             .update_thread_metadata(StoreUpdateThreadMetadataParams {
                 thread_id: thread_uuid,
                 owner: ThreadOwner::default(),
+                missing,
                 patch: ThreadMetadataPatch {
                     name: None,
                     git_info: Some(GitInfoPatch {
@@ -3599,13 +3561,19 @@ impl CodexMessageProcessor {
                 }
             }
         }
-        let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
-        let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
-            read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
-        } else {
-            read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
-        };
-        let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
+        let thread_store = local_thread_store(&self.config);
+        let stored_thread = thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id: thread_uuid,
+                owner: ThreadOwner::default(),
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .ok();
+        let mut rollout_path = stored_thread
+            .as_ref()
+            .and_then(|thread| thread.legacy_path.clone());
         if rollout_path.is_none() || include_turns {
             rollout_path =
                 match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
@@ -3630,7 +3598,7 @@ impl CodexMessageProcessor {
                 };
         }
 
-        if include_turns && rollout_path.is_none() && db_summary.is_some() {
+        if include_turns && rollout_path.is_none() && stored_thread.is_some() {
             self.send_internal_error(
                 request_id,
                 format!("failed to locate rollout for thread {thread_uuid}"),
@@ -3639,8 +3607,8 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let mut thread = if let Some(summary) = db_summary {
-            summary_to_thread(summary)
+        let mut thread = if let Some(stored_thread) = stored_thread {
+            stored_thread_to_api_thread(stored_thread)
         } else if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
@@ -4019,16 +3987,20 @@ impl CodexMessageProcessor {
         thread_history: &InitialHistory,
         request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: &mut ConfigOverrides,
-    ) -> Option<ThreadMetadata> {
+    ) -> Option<StoredThread> {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        let state_db_ctx = get_state_db(&self.config).await?;
-        let persisted_metadata = state_db_ctx
-            .get_thread(resumed_history.conversation_id)
+        let thread_store = local_thread_store(&self.config);
+        let persisted_metadata = thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id: resumed_history.conversation_id,
+                owner: ThreadOwner::default(),
+                include_archived: true,
+                include_history: false,
+            })
             .await
-            .ok()
-            .flatten()?;
+            .ok()?;
         merge_persisted_resume_metadata(request_overrides, typesafe_overrides, &persisted_metadata);
         Some(persisted_metadata)
     }
@@ -4298,7 +4270,7 @@ impl CodexMessageProcessor {
         thread_history: &InitialHistory,
         rollout_path: &Path,
         fallback_provider: &str,
-        persisted_resume_metadata: Option<&ThreadMetadata>,
+        persisted_resume_metadata: Option<&StoredThread>,
     ) -> std::result::Result<Thread, String> {
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
@@ -4340,7 +4312,7 @@ impl CodexMessageProcessor {
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        if let Some(title) = title_from_state_db(&self.config, thread_id).await {
+        if let Some(title) = thread_name_from_thread_store(&self.config, thread_id).await {
             set_thread_name_from_title(thread, title);
         }
     }
@@ -4404,9 +4376,12 @@ impl CodexMessageProcessor {
             }
         };
 
-        let history_cwd =
-            read_history_cwd_from_state_db(&self.config, source_thread_id, rollout_path.as_path())
-                .await;
+        let history_cwd = read_history_cwd_from_thread_store(
+            &self.config,
+            source_thread_id,
+            rollout_path.as_path(),
+        )
+        .await;
 
         // Persist Windows sandbox mode.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
@@ -4654,7 +4629,7 @@ impl CodexMessageProcessor {
     ) {
         if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
             && let Some(summary) =
-                read_summary_from_state_db_by_thread_id(&self.config, *conversation_id).await
+                read_stored_thread_summary_by_thread_id(&self.config, *conversation_id).await
         {
             let response = GetConversationSummaryResponse { summary };
             self.outgoing.send_response(request_id, response).await;
@@ -8315,7 +8290,7 @@ fn collect_resume_override_mismatches(
 fn merge_persisted_resume_metadata(
     request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: &mut ConfigOverrides,
-    persisted_metadata: &ThreadMetadata,
+    persisted_metadata: &StoredThread,
 ) {
     if has_model_resume_override(request_overrides.as_ref(), typesafe_overrides) {
         return;
@@ -8626,16 +8601,15 @@ async fn derive_config_for_cwd(
     Ok(config)
 }
 
-async fn read_history_cwd_from_state_db(
+async fn read_history_cwd_from_thread_store(
     config: &Config,
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config).await
-        && let Some(thread_id) = thread_id
-        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
+    if let Some(thread_id) = thread_id
+        && let Some(thread) = read_stored_thread_by_thread_id(config, thread_id).await
     {
-        return Some(metadata.cwd);
+        return Some(thread.cwd);
     }
 
     match read_session_meta_line(rollout_path).await {
@@ -8648,58 +8622,35 @@ async fn read_history_cwd_from_state_db(
     }
 }
 
-async fn read_summary_from_state_db_by_thread_id(
+async fn read_stored_thread_by_thread_id(
+    config: &Config,
+    thread_id: ThreadId,
+) -> Option<StoredThread> {
+    let thread_store = local_thread_store(config);
+    thread_store
+        .read_thread(StoreReadThreadParams {
+            thread_id,
+            owner: ThreadOwner::default(),
+            include_archived: true,
+            include_history: false,
+        })
+        .await
+        .ok()
+}
+
+async fn read_stored_thread_summary_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = open_state_db_for_direct_thread_lookup(config).await;
-    read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
-}
-
-async fn read_summary_from_state_db_context_by_thread_id(
-    state_db_ctx: Option<&StateDbHandle>,
-    thread_id: ThreadId,
-) -> Option<ConversationSummary> {
-    let state_db_ctx = state_db_ctx?;
-
-    let metadata = match state_db_ctx.get_thread(thread_id).await {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) | Err(_) => return None,
-    };
-    Some(summary_from_thread_metadata(&metadata))
-}
-
-async fn title_from_state_db(config: &Config, thread_id: ThreadId) -> Option<String> {
-    if let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await
-        && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
-        && let Some(title) = distinct_title(&metadata)
-    {
-        return Some(title);
-    }
-    find_thread_name_by_id(&config.codex_home, &thread_id)
+    read_stored_thread_by_thread_id(config, thread_id)
         .await
-        .ok()
-        .flatten()
+        .map(stored_thread_to_conversation_summary)
 }
 
-async fn open_state_db_for_direct_thread_lookup(config: &Config) -> Option<StateDbHandle> {
-    StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+async fn thread_name_from_thread_store(config: &Config, thread_id: ThreadId) -> Option<String> {
+    read_stored_thread_by_thread_id(config, thread_id)
         .await
-        .ok()
-}
-
-fn non_empty_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = metadata.title.trim();
-    (!title.is_empty()).then(|| title.to_string())
-}
-
-fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = non_empty_title(metadata)?;
-    if metadata.first_user_message.as_deref().map(str::trim) == Some(title.as_str()) {
-        None
-    } else {
-        Some(title)
-    }
+        .and_then(|thread| thread.name)
 }
 
 fn set_thread_name_from_title(thread: &mut Thread, title: String) {
@@ -8709,72 +8660,29 @@ fn set_thread_name_from_title(thread: &mut Thread, title: String) {
     thread.name = Some(title);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn summary_from_state_db_metadata(
-    conversation_id: ThreadId,
-    path: PathBuf,
-    first_user_message: Option<String>,
-    timestamp: String,
-    updated_at: String,
-    model_provider: String,
-    cwd: PathBuf,
-    cli_version: String,
-    source: String,
-    agent_nickname: Option<String>,
-    agent_role: Option<String>,
-    git_sha: Option<String>,
-    git_branch: Option<String>,
-    git_origin_url: Option<String>,
-) -> ConversationSummary {
-    let preview = first_user_message.unwrap_or_default();
-    let source = serde_json::from_str(&source)
-        .or_else(|_| serde_json::from_value(serde_json::Value::String(source.clone())))
-        .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
-    let source = with_thread_spawn_agent_metadata(source, agent_nickname, agent_role);
-    let git_info = if git_sha.is_none() && git_branch.is_none() && git_origin_url.is_none() {
-        None
-    } else {
-        Some(ConversationGitInfo {
-            sha: git_sha,
-            branch: git_branch,
-            origin_url: git_origin_url,
-        })
-    };
+fn stored_thread_to_conversation_summary(thread: StoredThread) -> ConversationSummary {
+    let source = with_thread_spawn_agent_metadata(
+        thread.source,
+        thread.agent_nickname.clone(),
+        thread.agent_role.clone(),
+    );
+    let git_info = thread.git_info.map(|git_info| ConversationGitInfo {
+        sha: git_info.commit_hash.map(|sha| sha.0),
+        branch: git_info.branch,
+        origin_url: git_info.repository_url,
+    });
     ConversationSummary {
-        conversation_id,
-        path,
-        preview,
-        timestamp: Some(timestamp),
-        updated_at: Some(updated_at),
-        model_provider,
-        cwd,
-        cli_version,
+        conversation_id: thread.thread_id,
+        path: thread.legacy_path.unwrap_or_default(),
+        preview: thread.first_user_message.unwrap_or(thread.preview),
+        timestamp: Some(thread.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        updated_at: Some(thread.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        model_provider: thread.model_provider,
+        cwd: thread.cwd,
+        cli_version: thread.cli_version,
         source,
         git_info,
     }
-}
-
-fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummary {
-    summary_from_state_db_metadata(
-        metadata.id,
-        metadata.rollout_path.clone(),
-        metadata.first_user_message.clone(),
-        metadata
-            .created_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        metadata
-            .updated_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        metadata.model_provider.clone(),
-        metadata.cwd.clone(),
-        metadata.cli_version.clone(),
-        metadata.source.clone(),
-        metadata.agent_nickname.clone(),
-        metadata.agent_role.clone(),
-        metadata.git_sha.clone(),
-        metadata.git_branch.clone(),
-        metadata.git_origin_url.clone(),
-    )
 }
 
 pub(crate) async fn read_summary_from_rollout(
@@ -8924,7 +8832,7 @@ async fn load_thread_summary_for_rollout(
     thread_id: ThreadId,
     rollout_path: &Path,
     fallback_provider: &str,
-    persisted_metadata: Option<&ThreadMetadata>,
+    persisted_metadata: Option<&StoredThread>,
 ) -> std::result::Result<Thread, String> {
     let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
@@ -8939,15 +8847,15 @@ async fn load_thread_summary_for_rollout(
     if let Some(persisted_metadata) = persisted_metadata {
         merge_mutable_thread_metadata(
             &mut thread,
-            summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
+            stored_thread_to_api_thread(persisted_metadata.clone()),
         );
-    } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
-        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
+    } else if let Some(stored_thread) = read_stored_thread_by_thread_id(config, thread_id).await {
+        merge_mutable_thread_metadata(&mut thread, stored_thread_to_api_thread(stored_thread));
     }
     let title = if let Some(metadata) = persisted_metadata {
-        non_empty_title(metadata)
+        metadata.name.clone()
     } else {
-        title_from_state_db(config, thread_id).await
+        thread_name_from_thread_store(config, thread_id).await
     };
     if let Some(title) = title {
         set_thread_name_from_title(&mut thread, title);
@@ -9316,19 +9224,37 @@ mod tests {
     fn test_thread_metadata(
         model: Option<&str>,
         reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<ThreadMetadata> {
+    ) -> Result<StoredThread> {
         let thread_id = ThreadId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
-        let mut builder = ThreadMetadataBuilder::new(
+        let now = Utc::now();
+        Ok(StoredThread {
             thread_id,
-            PathBuf::from("/tmp/rollout.jsonl"),
-            Utc::now(),
-            codex_protocol::protocol::SessionSource::default(),
-        );
-        builder.model_provider = Some("mock_provider".to_string());
-        let mut metadata = builder.build("mock_provider");
-        metadata.model = model.map(ToString::to_string);
-        metadata.reasoning_effort = reasoning_effort;
-        Ok(metadata)
+            forked_from_id: None,
+            legacy_path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+            owner: ThreadOwner::default(),
+            preview: String::new(),
+            name: None,
+            model_provider: "mock_provider".to_string(),
+            model: model.map(ToString::to_string),
+            service_tier: None,
+            reasoning_effort,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+            cwd: PathBuf::new(),
+            cli_version: String::new(),
+            source: codex_protocol::protocol::SessionSource::default(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+            git_info: None,
+            approval_mode: codex_protocol::protocol::AskForApproval::OnRequest,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+            token_usage: None,
+            first_user_message: None,
+            memory_mode: None,
+            history: None,
+        })
     }
 
     #[test]
@@ -9750,33 +9676,46 @@ mod tests {
     }
 
     #[test]
-    fn summary_from_state_db_metadata_preserves_agent_nickname() -> Result<()> {
+    fn stored_thread_to_conversation_summary_preserves_agent_nickname() -> Result<()> {
         let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
-        let source =
-            serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            }))?;
+        let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+        let created_at = DateTime::parse_from_rfc3339("2025-09-05T16:53:11Z")?.to_utc();
+        let updated_at = DateTime::parse_from_rfc3339("2025-09-05T16:53:12Z")?.to_utc();
 
-        let summary = summary_from_state_db_metadata(
-            conversation_id,
-            PathBuf::from("/tmp/rollout.jsonl"),
-            Some("hi".to_string()),
-            "2025-09-05T16:53:11Z".to_string(),
-            "2025-09-05T16:53:12Z".to_string(),
-            "test-provider".to_string(),
-            PathBuf::from("/"),
-            "0.0.0".to_string(),
+        let summary = stored_thread_to_conversation_summary(StoredThread {
+            thread_id: conversation_id,
+            forked_from_id: None,
+            legacy_path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+            owner: ThreadOwner::default(),
+            preview: String::new(),
+            name: None,
+            model_provider: "test-provider".to_string(),
+            model: None,
+            service_tier: None,
+            reasoning_effort: None,
+            created_at,
+            updated_at,
+            archived_at: None,
+            cwd: PathBuf::from("/"),
+            cli_version: "0.0.0".to_string(),
             source,
-            Some("atlas".to_string()),
-            Some("explorer".to_string()),
-            /*git_sha*/ None,
-            /*git_branch*/ None,
-            /*git_origin_url*/ None,
-        );
+            agent_nickname: Some("atlas".to_string()),
+            agent_role: Some("explorer".to_string()),
+            agent_path: None,
+            git_info: None,
+            approval_mode: codex_protocol::protocol::AskForApproval::OnRequest,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+            token_usage: None,
+            first_user_message: Some("hi".to_string()),
+            memory_mode: None,
+            history: None,
+        });
 
         let thread = summary_to_thread(summary);
 

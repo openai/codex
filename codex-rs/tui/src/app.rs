@@ -2938,8 +2938,10 @@ impl App {
     }
 
     fn is_terminal_thread_read_error(err: &color_eyre::Report) -> bool {
-        err.chain()
-            .any(|cause| cause.to_string().contains("thread not loaded:"))
+        err.chain().any(|cause| {
+            let message = cause.to_string();
+            message.contains("thread not loaded:") || message.contains(" not found")
+        })
     }
 
     fn closed_state_for_thread_read_error(

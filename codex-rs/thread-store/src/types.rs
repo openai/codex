@@ -277,6 +277,37 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
 }
 
+/// Metadata needed to create a missing persisted metadata row/object for an existing thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadMetadataSeed {
+    /// Legacy local rollout path for implementations that still materialize rollouts on disk.
+    pub rollout_path: PathBuf,
+    /// Timestamp to use if the backing store must create metadata from this seed.
+    pub created_at: DateTime<Utc>,
+    /// Runtime source for the thread.
+    pub source: SessionSource,
+    /// Model provider id associated with the thread.
+    pub model_provider: String,
+    /// Working directory captured for the thread.
+    pub cwd: PathBuf,
+    /// Version of the CLI/app that created the thread.
+    pub cli_version: String,
+    /// Sandbox policy captured for the thread.
+    pub sandbox_policy: SandboxPolicy,
+    /// Approval mode captured for the thread.
+    pub approval_mode: AskForApproval,
+}
+
+/// Controls how metadata updates behave when the backing metadata record is missing.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MissingThreadMetadata {
+    /// Return a not-found error if the backing metadata record cannot be found or reconstructed.
+    Error,
+    /// Create backing metadata from the supplied seed before applying the patch.
+    Create(ThreadMetadataSeed),
+}
+
 /// Parameters for patching mutable thread metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateThreadMetadataParams {
@@ -286,6 +317,8 @@ pub struct UpdateThreadMetadataParams {
     pub owner: ThreadOwner,
     /// Patch to apply.
     pub patch: ThreadMetadataPatch,
+    /// Behavior when the backing metadata record is missing.
+    pub missing: MissingThreadMetadata,
 }
 
 /// Parameters for archiving or unarchiving a thread.
@@ -324,35 +357,6 @@ pub struct ResolveLegacyPathParams {
     pub owner: ThreadOwner,
     /// Whether archived threads are eligible.
     pub include_archived: bool,
-}
-
-/// Parameters for reading dynamic tool specs persisted for a thread.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DynamicToolsParams {
-    /// Thread id to read.
-    pub thread_id: ThreadId,
-    /// Tenant/owner metadata for multi-tenant stores.
-    pub owner: ThreadOwner,
-}
-
-/// Parameters for memory-mode lookups and pollution markers.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ThreadMemoryModeParams {
-    /// Thread id to read or update.
-    pub thread_id: ThreadId,
-    /// Tenant/owner metadata for multi-tenant stores.
-    pub owner: ThreadOwner,
-}
-
-/// Parameters for setting an explicit memory mode.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetThreadMemoryModeParams {
-    /// Thread id to update.
-    pub thread_id: ThreadId,
-    /// Tenant/owner metadata for multi-tenant stores.
-    pub owner: ThreadOwner,
-    /// Memory mode value to store, for example `disabled`.
-    pub memory_mode: String,
 }
 
 /// Status of a parent-child thread-spawn edge.

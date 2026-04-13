@@ -5,7 +5,6 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
@@ -22,6 +21,8 @@ use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_meta_by_name_str;
 use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::rollout_date_parts;
+use codex_state::StateRuntime;
+use codex_state::ThreadMetadataBuilder;
 
 mod helpers;
 mod read;
@@ -29,10 +30,8 @@ mod recorder;
 
 use self::helpers::checked_rollout_file_name;
 use self::helpers::display_error;
-use self::helpers::dynamic_tools_from_items;
 use self::helpers::edge_status_to_state;
 use self::helpers::io_error;
-use self::helpers::memory_mode_from_items;
 use self::helpers::parse_cursor_param;
 use self::helpers::rollout_sort_key;
 use self::helpers::serialize_cursor;
@@ -42,21 +41,20 @@ use self::recorder::RolloutThreadRecorder;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
-use crate::DynamicToolsParams;
 use crate::FindThreadByNameParams;
 use crate::FindThreadSpawnByPathParams;
 use crate::ListThreadSpawnEdgesParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
+use crate::MissingThreadMetadata;
 use crate::ReadThreadParams;
 use crate::ResolveLegacyPathParams;
 use crate::ResumeThreadRecorderParams;
-use crate::SetThreadMemoryModeParams;
 use crate::SetThreadNameParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
-use crate::ThreadMemoryModeParams;
 use crate::ThreadMetadataPatch;
+use crate::ThreadMetadataSeed;
 use crate::ThreadPage;
 use crate::ThreadRecorder;
 use crate::ThreadSpawnEdge;
@@ -141,10 +139,11 @@ impl LocalThreadStore {
             "local_thread_store_find_path",
         )
         .await
-            && path.exists() {
-                let archived = path.starts_with(self.archived_root());
-                return Ok((path, archived));
-            }
+            && path.exists()
+        {
+            let archived = path.starts_with(self.archived_root());
+            return Ok((path, archived));
+        }
 
         match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await {
             Ok(Some(path)) => return Ok((path, false)),
@@ -174,6 +173,49 @@ impl LocalThreadStore {
 
     pub(crate) fn archived_root(&self) -> PathBuf {
         self.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR)
+    }
+
+    async fn ensure_metadata_for_update(
+        &self,
+        thread_id: ThreadId,
+        missing: MissingThreadMetadata,
+        state_db: &StateRuntime,
+    ) -> ThreadStoreResult<()> {
+        if state_db
+            .get_thread(thread_id)
+            .await
+            .map_err(display_error)?
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let MissingThreadMetadata::Create(seed) = missing else {
+            return Err(ThreadStoreError::ThreadNotFound { thread_id });
+        };
+        let ThreadMetadataSeed {
+            rollout_path,
+            created_at,
+            source,
+            model_provider,
+            cwd,
+            cli_version,
+            sandbox_policy,
+            approval_mode,
+        } = seed;
+
+        let mut builder = ThreadMetadataBuilder::new(thread_id, rollout_path, created_at, source);
+        builder.model_provider = Some(model_provider.clone());
+        builder.cwd = cwd;
+        builder.cli_version = Some(cli_version);
+        builder.sandbox_policy = sandbox_policy;
+        builder.approval_mode = approval_mode;
+        let metadata = builder.build(model_provider.as_str());
+        state_db
+            .insert_thread_if_absent(&metadata)
+            .await
+            .map_err(display_error)?;
+        Ok(())
     }
 }
 
@@ -207,7 +249,7 @@ impl ThreadStore for LocalThreadStore {
                 event_persistence_mode.into(),
             ),
             self.state_db().await,
-            None,
+            /*state_builder*/ None,
         )
         .await
         .map_err(io_error)?;
@@ -228,7 +270,7 @@ impl ThreadStore for LocalThreadStore {
             &self.config,
             RolloutRecorderParams::resume(path, params.event_persistence_mode.into()),
             self.state_db().await,
-            None,
+            /*state_builder*/ None,
         )
         .await
         .map_err(io_error)?;
@@ -239,7 +281,9 @@ impl ThreadStore for LocalThreadStore {
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
-        let (path, archived) = self.find_path(params.thread_id, true).await?;
+        let (path, archived) = self
+            .find_path(params.thread_id, /*include_archived*/ true)
+            .await?;
         for item in &params.items {
             append_rollout_item_to_path(path.as_path(), item)
                 .await
@@ -250,7 +294,7 @@ impl ThreadStore for LocalThreadStore {
             state_db.as_deref(),
             path.as_path(),
             self.config.model_provider_id.as_str(),
-            None,
+            /*builder*/ None,
             params.items.as_slice(),
             "local_thread_store_append_items",
             params.new_thread_memory_mode.as_deref(),
@@ -306,7 +350,7 @@ impl ThreadStore for LocalThreadStore {
                         thread_id: params.thread_id,
                     });
                 };
-                self.stored_thread_from_state_metadata(metadata, false)
+                self.stored_thread_from_state_metadata(metadata, /*include_history*/ false)
                     .await
             }
             Err(err) => Err(err),
@@ -460,13 +504,19 @@ impl ThreadStore for LocalThreadStore {
         {
             return Ok(None);
         }
-        self.stored_thread_from_path(path.as_path(), false, false)
-            .await
-            .map(Some)
+        self.stored_thread_from_path(
+            path.as_path(),
+            /*archived*/ false,
+            /*include_history*/ false,
+        )
+        .await
+        .map(Some)
     }
 
     async fn set_thread_name(&self, params: SetThreadNameParams) -> ThreadStoreResult<()> {
-        let (path, _) = self.find_path(params.thread_id, false).await?;
+        let (path, _) = self
+            .find_path(params.thread_id, /*include_archived*/ false)
+            .await?;
         let item = RolloutItem::EventMsg(EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
             thread_id: params.thread_id,
             thread_name: Some(params.name.clone()),
@@ -486,10 +536,10 @@ impl ThreadStore for LocalThreadStore {
             state_db.as_deref(),
             path.as_path(),
             self.config.model_provider_id.as_str(),
-            None,
+            /*builder*/ None,
             &[],
-            None,
-            None,
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
         )
         .await;
         Ok(())
@@ -499,6 +549,7 @@ impl ThreadStore for LocalThreadStore {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreResult<StoredThread> {
+        let missing = params.missing.clone();
         let ThreadMetadataPatch { name, git_info } = params.patch;
         if let Some(name) = name
             && let Some(name) = name
@@ -518,33 +569,30 @@ impl ThreadStore for LocalThreadStore {
                     message: "sqlite state db unavailable for git metadata update".to_string(),
                 });
             };
-            match self.find_path(params.thread_id, true).await {
+            match self
+                .find_path(params.thread_id, /*include_archived*/ true)
+                .await
+            {
                 Ok((path, archived)) => {
                     codex_rollout::state_db::reconcile_rollout(
                         Some(ctx),
                         path.as_path(),
                         self.config.model_provider_id.as_str(),
-                        None,
+                        /*builder*/ None,
                         &[],
                         Some(archived),
-                        None,
+                        /*new_thread_memory_mode*/ None,
                     )
                     .await;
                 }
                 Err(ThreadStoreError::ThreadNotFound { .. }) => {
-                    if ctx
-                        .get_thread(params.thread_id)
-                        .await
-                        .map_err(display_error)?
-                        .is_none()
-                    {
-                        return Err(ThreadStoreError::ThreadNotFound {
-                            thread_id: params.thread_id,
-                        });
-                    }
+                    self.ensure_metadata_for_update(params.thread_id, missing.clone(), ctx)
+                        .await?;
                 }
                 Err(err) => return Err(err),
             }
+            self.ensure_metadata_for_update(params.thread_id, missing, ctx)
+                .await?;
             ctx.update_thread_git_info(
                 params.thread_id,
                 git_info.sha.as_ref().map(|value| value.as_deref()),
@@ -559,7 +607,9 @@ impl ThreadStore for LocalThreadStore {
     }
 
     async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()> {
-        let (path, _) = self.find_path(params.thread_id, false).await?;
+        let (path, _) = self
+            .find_path(params.thread_id, /*include_archived*/ false)
+            .await?;
         let canonical_sessions_dir = tokio::fs::canonicalize(self.sessions_root())
             .await
             .map_err(io_error)?;
@@ -595,7 +645,9 @@ impl ThreadStore for LocalThreadStore {
         &self,
         params: ArchiveThreadParams,
     ) -> ThreadStoreResult<StoredThread> {
-        let (path, _) = self.find_path(params.thread_id, true).await?;
+        let (path, _) = self
+            .find_path(params.thread_id, /*include_archived*/ true)
+            .await?;
         let canonical_archived_dir = tokio::fs::canonicalize(self.archived_root())
             .await
             .map_err(io_error)?;
@@ -646,8 +698,12 @@ impl ThreadStore for LocalThreadStore {
                 .await
                 .map_err(display_error)?;
         }
-        self.stored_thread_from_path(restored_path.as_path(), false, false)
-            .await
+        self.stored_thread_from_path(
+            restored_path.as_path(),
+            /*archived*/ false,
+            /*include_history*/ false,
+        )
+        .await
     }
 
     async fn resolve_legacy_path(
@@ -661,80 +717,6 @@ impl ThreadStore for LocalThreadStore {
             .await
             .map_err(io_error)?;
         Ok(thread_id)
-    }
-
-    async fn dynamic_tools(
-        &self,
-        params: DynamicToolsParams,
-    ) -> ThreadStoreResult<Option<Vec<DynamicToolSpec>>> {
-        let state_db = self.state_db().await;
-        if let Some(tools) = codex_rollout::state_db::get_dynamic_tools(
-            state_db.as_deref(),
-            params.thread_id,
-            "local_thread_store_dynamic_tools",
-        )
-        .await
-        {
-            return Ok(Some(tools));
-        }
-        let history = self
-            .load_history(LoadThreadHistoryParams {
-                thread_id: params.thread_id,
-                owner: params.owner,
-                include_archived: true,
-            })
-            .await?;
-        Ok(dynamic_tools_from_items(&history.items))
-    }
-
-    async fn memory_mode(
-        &self,
-        params: ThreadMemoryModeParams,
-    ) -> ThreadStoreResult<Option<String>> {
-        let state_db = self.state_db().await;
-        if let Some(ctx) = state_db.as_deref() {
-            return ctx
-                .get_thread_memory_mode(params.thread_id)
-                .await
-                .map_err(display_error);
-        }
-        let history = self
-            .load_history(LoadThreadHistoryParams {
-                thread_id: params.thread_id,
-                owner: params.owner,
-                include_archived: true,
-            })
-            .await?;
-        Ok(memory_mode_from_items(&history.items))
-    }
-
-    async fn set_memory_mode(&self, params: SetThreadMemoryModeParams) -> ThreadStoreResult<()> {
-        let state_db = self.state_db().await;
-        let Some(ctx) = state_db.as_deref() else {
-            return Err(ThreadStoreError::Unavailable {
-                message: "sqlite state db unavailable for memory mode update".to_string(),
-            });
-        };
-        ctx.set_thread_memory_mode(params.thread_id, params.memory_mode.as_str())
-            .await
-            .map_err(display_error)?;
-        Ok(())
-    }
-
-    async fn mark_memory_mode_polluted(
-        &self,
-        params: ThreadMemoryModeParams,
-    ) -> ThreadStoreResult<()> {
-        let state_db = self.state_db().await;
-        let Some(ctx) = state_db.as_deref() else {
-            return Err(ThreadStoreError::Unavailable {
-                message: "sqlite state db unavailable for memory mode pollution update".to_string(),
-            });
-        };
-        ctx.mark_thread_memory_mode_polluted(params.thread_id)
-            .await
-            .map_err(display_error)?;
-        Ok(())
     }
 
     async fn upsert_thread_spawn_edge(&self, edge: ThreadSpawnEdge) -> ThreadStoreResult<()> {
@@ -820,5 +802,233 @@ impl ThreadStore for LocalThreadStore {
 
     fn supports_legacy_path(&self, path: &Path) -> bool {
         path.starts_with(self.sessions_root()) || path.starts_with(self.archived_root())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use chrono::TimeZone;
+    use chrono::Utc;
+    use codex_git_utils::GitSha;
+    use codex_protocol::ThreadId;
+    use codex_protocol::models::BaseInstructions;
+    use codex_protocol::protocol::AgentMessageEvent;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::UserMessageEvent;
+    use codex_rollout::RolloutConfig;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    use crate::CreateThreadParams;
+    use crate::GitInfoPatch;
+    use crate::MissingThreadMetadata;
+    use crate::ReadThreadParams;
+    use crate::ThreadEventPersistenceMode;
+    use crate::ThreadMetadataPatch;
+    use crate::ThreadMetadataSeed;
+    use crate::ThreadOwner;
+    use crate::ThreadStore;
+    use crate::ThreadStoreError;
+    use crate::UpdateThreadMetadataParams;
+
+    use super::LocalThreadStore;
+
+    fn test_config(codex_home: &Path) -> RolloutConfig {
+        RolloutConfig {
+            codex_home: codex_home.to_path_buf(),
+            sqlite_home: codex_home.to_path_buf(),
+            cwd: codex_home.to_path_buf(),
+            model_provider_id: "test-provider".to_string(),
+            generate_memories: true,
+        }
+    }
+
+    fn metadata_seed(thread_id: ThreadId, codex_home: &Path, cwd: &Path) -> ThreadMetadataSeed {
+        ThreadMetadataSeed {
+            rollout_path: codex_home.join(format!("sessions/seeded-{thread_id}.jsonl")),
+            created_at: Utc
+                .with_ymd_and_hms(2025, 1, 3, 4, 5, 6)
+                .single()
+                .expect("valid timestamp"),
+            source: SessionSource::Exec,
+            model_provider: "seed-provider".to_string(),
+            cwd: cwd.to_path_buf(),
+            cli_version: "seed-cli-version".to_string(),
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            approval_mode: AskForApproval::Never,
+        }
+    }
+
+    fn git_patch(
+        sha: impl Into<String>,
+        branch: impl Into<String>,
+        origin_url: impl Into<String>,
+    ) -> ThreadMetadataPatch {
+        ThreadMetadataPatch {
+            name: None,
+            git_info: Some(GitInfoPatch {
+                sha: Some(Some(sha.into())),
+                branch: Some(Some(branch.into())),
+                origin_url: Some(Some(origin_url.into())),
+            }),
+        }
+    }
+
+    async fn create_materialized_thread(store: &LocalThreadStore, cwd: &Path) -> ThreadId {
+        let thread_id = ThreadId::new();
+        let recorder = store
+            .create_thread(CreateThreadParams {
+                thread_id,
+                owner: ThreadOwner::default(),
+                forked_from_id: None,
+                source: SessionSource::Exec,
+                cwd: cwd.to_path_buf(),
+                originator: "test-originator".to_string(),
+                cli_version: "test-cli-version".to_string(),
+                model_provider: "test-provider".to_string(),
+                model: None,
+                service_tier: None,
+                reasoning_effort: None,
+                approval_mode: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                base_instructions: BaseInstructions::default(),
+                dynamic_tools: Vec::new(),
+                memory_mode: None,
+                git_info: None,
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("create thread recorder");
+        recorder
+            .record_items(&[
+                RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: "hello from the local store".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                })),
+                RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                    message: "hello back".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                })),
+            ])
+            .await
+            .expect("record rollout items");
+        recorder.flush().await.expect("flush rollout");
+        thread_id
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn update_thread_metadata_create_backfills_missing_sqlite_row() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::with_state_db(test_config(home.path())).await;
+        let thread_id = ThreadId::new();
+        let seed = metadata_seed(thread_id, home.path(), home.path());
+
+        let stored = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                owner: ThreadOwner::default(),
+                patch: git_patch("abc123", "main", "https://example.com/repo.git"),
+                missing: MissingThreadMetadata::Create(seed.clone()),
+            })
+            .await
+            .expect("metadata update succeeds");
+
+        assert_eq!(stored.thread_id, thread_id);
+        assert_eq!(stored.legacy_path, Some(seed.rollout_path));
+        assert_eq!(stored.model_provider, "seed-provider");
+        assert_eq!(stored.cwd, home.path());
+        assert_eq!(stored.cli_version, "seed-cli-version");
+        assert_eq!(stored.source, SessionSource::Exec);
+        assert_eq!(
+            stored.sandbox_policy,
+            SandboxPolicy::new_workspace_write_policy()
+        );
+        assert_eq!(stored.approval_mode, AskForApproval::Never);
+        let git_info = stored.git_info.expect("git info");
+        assert_eq!(git_info.commit_hash, Some(GitSha::new("abc123")));
+        assert_eq!(git_info.branch, Some("main".to_string()));
+        assert_eq!(
+            git_info.repository_url,
+            Some("https://example.com/repo.git".to_string())
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn update_thread_metadata_error_does_not_backfill_missing_sqlite_row() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::with_state_db(test_config(home.path())).await;
+        let thread_id = ThreadId::new();
+
+        let err = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                owner: ThreadOwner::default(),
+                patch: git_patch("abc123", "main", "https://example.com/repo.git"),
+                missing: MissingThreadMetadata::Error,
+            })
+            .await
+            .expect_err("metadata update should fail");
+
+        assert!(
+            matches!(err, ThreadStoreError::ThreadNotFound { thread_id: id } if id == thread_id)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_thread_overlays_sqlite_metadata_on_rollout_summary() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::with_state_db(test_config(home.path())).await;
+        let thread_id = create_materialized_thread(&store, home.path()).await;
+
+        let stored = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                owner: ThreadOwner::default(),
+                patch: git_patch("def456", "feature/thread-store", "ssh://example/repo"),
+                missing: MissingThreadMetadata::Error,
+            })
+            .await
+            .expect("metadata update succeeds");
+
+        let git_info = stored.git_info.expect("git info");
+        assert_eq!(git_info.commit_hash, Some(GitSha::new("def456")));
+        assert_eq!(git_info.branch, Some("feature/thread-store".to_string()));
+        assert_eq!(
+            git_info.repository_url,
+            Some("ssh://example/repo".to_string())
+        );
+
+        let reread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                owner: ThreadOwner::default(),
+                include_archived: false,
+                include_history: true,
+            })
+            .await
+            .expect("read thread");
+
+        let git_info = reread.git_info.expect("git info");
+        assert_eq!(git_info.commit_hash, Some(GitSha::new("def456")));
+        assert_eq!(git_info.branch, Some("feature/thread-store".to_string()));
+        assert_eq!(
+            git_info.repository_url,
+            Some("ssh://example/repo".to_string())
+        );
+        assert_eq!(reread.preview, "hello from the local store");
+        assert_eq!(
+            reread.history.expect("history").items.len(),
+            3,
+            "session metadata plus two recorded events should be replayable"
+        );
     }
 }

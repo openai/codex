@@ -7,7 +7,6 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
@@ -70,6 +69,7 @@ pub(crate) fn stored_thread_from_metadata(
 ) -> StoredThread {
     let thread_id = metadata.id;
     let git_info = git_info_from_metadata(&metadata);
+    let name = name.or_else(|| distinct_title(&metadata));
     StoredThread {
         thread_id,
         forked_from_id: None,
@@ -100,6 +100,15 @@ pub(crate) fn stored_thread_from_metadata(
         first_user_message: metadata.first_user_message,
         memory_mode,
         history,
+    }
+}
+
+fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
+    let title = metadata.title.trim();
+    if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
+        None
+    } else {
+        Some(title.to_string())
     }
 }
 
@@ -140,16 +149,6 @@ fn parse_sandbox_policy(value: &str) -> SandboxPolicy {
 pub(crate) fn memory_mode_from_items(items: &[RolloutItem]) -> Option<String> {
     items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta) => meta.meta.memory_mode.clone(),
-        RolloutItem::ResponseItem(_)
-        | RolloutItem::Compacted(_)
-        | RolloutItem::TurnContext(_)
-        | RolloutItem::EventMsg(_) => None,
-    })
-}
-
-pub(crate) fn dynamic_tools_from_items(items: &[RolloutItem]) -> Option<Vec<DynamicToolSpec>> {
-    items.iter().find_map(|item| match item {
-        RolloutItem::SessionMeta(meta) => meta.meta.dynamic_tools.clone(),
         RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)

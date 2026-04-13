@@ -131,7 +131,20 @@ impl LocalThreadStore {
         item: ThreadItem,
         archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
-        self.stored_thread_from_path(item.path.as_path(), archived, false)
-            .await
+        if let Some(thread_id) = item.thread_id
+            && let Some(ctx) = self.state_db().await.as_deref()
+            && let Some(metadata) = ctx.get_thread(thread_id).await.map_err(display_error)?
+        {
+            return self
+                .stored_thread_from_state_metadata(metadata, /*include_history*/ false)
+                .await;
+        }
+
+        self.stored_thread_from_path(
+            item.path.as_path(),
+            archived,
+            /*include_history*/ false,
+        )
+        .await
     }
 }
