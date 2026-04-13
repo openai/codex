@@ -5925,7 +5925,7 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
-                self.on_context_compacted();
+                self.add_info_message("Context compacted".to_string(), /*hint*/ None);
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
