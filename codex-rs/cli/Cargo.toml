@@ -69,7 +69,13 @@ codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 codex-utils-cargo-bin = { workspace = true }
+codex-utils-pty = { workspace = true }
+hmac = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
 sqlx = { workspace = true }
