@@ -13,6 +13,7 @@ mod helpers;
 mod rate_limits;
 
 pub(crate) use account::StatusAccountDisplay;
+pub(crate) use account::StatusAccountMetadata;
 pub(crate) use card::StatusHistoryHandle;
 #[cfg(test)]
 pub(crate) use card::new_status_output;

@@ -63,6 +63,8 @@ use codex_app_server_protocol::FuzzyFileSearchSessionStopParams;
 use codex_app_server_protocol::FuzzyFileSearchSessionStopResponse;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdateParams;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdateResponse;
+use codex_app_server_protocol::GetAccountMetadataParams;
+use codex_app_server_protocol::GetAccountMetadataResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
@@ -382,6 +384,19 @@ const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 const THREAD_UNLOADING_DELAY: Duration = Duration::from_secs(30 * 60);
+const ACCOUNT_METADATA_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn account_metadata_response(
+    metadata_fetch_eligible: bool,
+    account_display_name: Option<String>,
+    account_group_names: Option<Vec<String>>,
+) -> GetAccountMetadataResponse {
+    GetAccountMetadataResponse {
+        metadata_fetch_eligible,
+        account_display_name,
+        account_group_names,
+    }
+}
 
 enum ActiveLogin {
     Browser {
@@ -1164,6 +1179,10 @@ impl CodexMessageProcessor {
                 self.get_account_rate_limits(to_connection_request_id(request_id))
                     .await;
             }
+            ClientRequest::GetAccountMetadata { request_id, params } => {
+                self.get_account_metadata(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(to_connection_request_id(request_id), params)
                     .await;
@@ -1873,6 +1892,202 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn get_account_metadata(
+        &self,
+        request_id: ConnectionRequestId,
+        params: GetAccountMetadataParams,
+    ) {
+        match self.fetch_account_metadata(params).await {
+            Ok(response) => {
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn fetch_account_metadata(
+        &self,
+        params: GetAccountMetadataParams,
+    ) -> Result<GetAccountMetadataResponse, JSONRPCErrorError> {
+        tracing::info!(
+            target: "codex_tui::status_metadata",
+            eligibility_only = params.eligibility_only,
+            "app-server account metadata request started"
+        );
+        let Some((client, account_id, chatgpt_user_id)) =
+            self.account_metadata_fetch_context().await?
+        else {
+            tracing::info!(
+                target: "codex_tui::status_metadata",
+                "app-server account metadata request ineligible"
+            );
+            return Ok(account_metadata_response(
+                /*metadata_fetch_eligible*/ false, /*account_display_name*/ None,
+                /*account_group_names*/ None,
+            ));
+        };
+        if params.eligibility_only {
+            tracing::info!(
+                target: "codex_tui::status_metadata",
+                account_id_present = account_id.is_some(),
+                chatgpt_user_id_present = chatgpt_user_id.is_some(),
+                "app-server account metadata eligibility check passed"
+            );
+            return Ok(account_metadata_response(
+                /*metadata_fetch_eligible*/ true, /*account_display_name*/ None,
+                /*account_group_names*/ None,
+            ));
+        }
+
+        let account_display_name = match tokio::time::timeout(
+            ACCOUNT_METADATA_FETCH_TIMEOUT,
+            client.get_current_account_display_name(),
+        )
+        .await
+        {
+            Ok(Ok(name)) => name,
+            Ok(Err(err)) => {
+                return Err(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to fetch ChatGPT account display name: {err}"),
+                    data: None,
+                });
+            }
+            Err(err) => {
+                return Err(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("timed out fetching ChatGPT account display name: {err}"),
+                    data: None,
+                });
+            }
+        };
+        tracing::info!(
+            target: "codex_tui::status_metadata",
+            display_name_present = account_display_name.is_some(),
+            "app-server account display name fetch completed"
+        );
+
+        let account_group_names = if account_display_name.is_some() {
+            match (account_id.as_deref(), chatgpt_user_id.as_deref()) {
+                (Some(account_id), Some(chatgpt_user_id)) => match tokio::time::timeout(
+                    ACCOUNT_METADATA_FETCH_TIMEOUT,
+                    client.get_current_account_group_names(account_id, chatgpt_user_id),
+                )
+                .await
+                {
+                    Ok(Ok(names)) => {
+                        tracing::info!(
+                            target: "codex_tui::status_metadata",
+                            group_count = names.as_ref().map_or(0, std::vec::Vec::len),
+                            "app-server account groups fetch completed"
+                        );
+                        names
+                    }
+                    Ok(Err(err)) => {
+                        tracing::warn!(
+                            target: "codex_tui::status_metadata",
+                            "failed to fetch ChatGPT account groups: {err}"
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "codex_tui::status_metadata",
+                            "timed out fetching ChatGPT account groups: {err}"
+                        );
+                        None
+                    }
+                },
+                _ => {
+                    tracing::info!(
+                        target: "codex_tui::status_metadata",
+                        account_id_present = account_id.is_some(),
+                        chatgpt_user_id_present = chatgpt_user_id.is_some(),
+                        "skipping account groups fetch: missing identifiers"
+                    );
+                    None
+                }
+            }
+        } else {
+            tracing::info!(
+                target: "codex_tui::status_metadata",
+                "skipping account groups fetch: missing display name"
+            );
+            None
+        };
+
+        tracing::info!(
+            target: "codex_tui::status_metadata",
+            display_name_present = account_display_name.is_some(),
+            group_count = account_group_names.as_ref().map_or(0, std::vec::Vec::len),
+            "app-server account metadata request completed"
+        );
+        Ok(account_metadata_response(
+            /*metadata_fetch_eligible*/ true,
+            account_display_name,
+            account_group_names,
+        ))
+    }
+
+    async fn account_metadata_fetch_context(
+        &self,
+    ) -> Result<Option<(BackendClient, Option<String>, Option<String>)>, JSONRPCErrorError> {
+        if self.config.model_provider.name != "OpenAI" {
+            tracing::info!(
+                target: "codex_tui::status_metadata",
+                provider_name = %self.config.model_provider.name,
+                "account metadata ineligible: non-OpenAI provider"
+            );
+            return Ok(None);
+        }
+
+        let Some(auth) = self.auth_manager.auth().await else {
+            tracing::info!(
+                target: "codex_tui::status_metadata",
+                "account metadata ineligible: no auth"
+            );
+            return Ok(None);
+        };
+
+        if !matches!(auth.auth_mode(), CoreAuthMode::Chatgpt) {
+            tracing::info!(
+                target: "codex_tui::status_metadata",
+                "account metadata ineligible: auth mode is not ChatGPT"
+            );
+            return Ok(None);
+        }
+        let token_data = auth.get_token_data().ok();
+        let is_workspace_account = token_data
+            .as_ref()
+            .is_some_and(|token_data| token_data.id_token.is_workspace_account());
+        if !is_workspace_account {
+            tracing::info!(
+                target: "codex_tui::status_metadata",
+                token_data_present = token_data.is_some(),
+                "account metadata ineligible: not a workspace account"
+            );
+            return Ok(None);
+        }
+
+        let account_id = auth.get_account_id();
+        let chatgpt_user_id = auth.get_chatgpt_user_id();
+        tracing::info!(
+            target: "codex_tui::status_metadata",
+            account_id_present = account_id.is_some(),
+            chatgpt_user_id_present = chatgpt_user_id.is_some(),
+            "account metadata fetch context built"
+        );
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to construct backend client: {err}"),
+                data: None,
+            })?;
+        Ok(Some((client, account_id, chatgpt_user_id)))
     }
 
     async fn fetch_account_rate_limits(

@@ -1423,6 +1423,30 @@
             },
             "method": {
               "enum": [
+                "account/metadata/read"
+              ],
+              "title": "Account/metadata/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/GetAccountMetadataParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/metadata/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "feedback/upload"
               ],
               "title": "Feedback/uploadRequestMethod",
@@ -8093,6 +8117,44 @@
             "type": "object"
           }
         ]
+      },
+      "GetAccountMetadataParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "eligibilityOnly": {
+            "type": "boolean"
+          }
+        },
+        "title": "GetAccountMetadataParams",
+        "type": "object"
+      },
+      "GetAccountMetadataResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "accountDisplayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accountGroupNames": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "metadataFetchEligible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "metadataFetchEligible"
+        ],
+        "title": "GetAccountMetadataResponse",
+        "type": "object"
       },
       "GetAccountParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

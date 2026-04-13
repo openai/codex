@@ -270,18 +270,37 @@ impl ChatWidget {
                 self.open_skills_menu();
             }
             SlashCommand::Status => {
+                let metadata_request_id = self.has_chatgpt_account().then(|| {
+                    let request_id = self.next_status_metadata_request_id;
+                    self.next_status_metadata_request_id =
+                        self.next_status_metadata_request_id.wrapping_add(1);
+                    request_id
+                });
                 if self.should_prefetch_rate_limits() {
                     let request_id = self.next_status_refresh_request_id;
                     self.next_status_refresh_request_id =
                         self.next_status_refresh_request_id.wrapping_add(1);
-                    self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
+                    self.add_status_output(
+                        /*refreshing_rate_limits*/ true,
+                        Some(request_id),
+                        metadata_request_id,
+                        /*account_metadata*/ None,
+                    );
                     self.app_event_tx.send(AppEvent::RefreshRateLimits {
                         origin: RateLimitRefreshOrigin::StatusCommand { request_id },
                     });
                 } else {
                     self.add_status_output(
-                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
+                        /*refreshing_rate_limits*/ false,
+                        /*rate_limit_request_id*/ None,
+                        metadata_request_id,
+                        /*account_metadata*/ None,
                     );
+                }
+
+                if let Some(request_id) = metadata_request_id {
+                    self.app_event_tx
+                        .send(AppEvent::RefreshStatusMetadata { request_id });
                 }
             }
             SlashCommand::DebugConfig => {

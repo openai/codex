@@ -515,6 +515,11 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
+    GetAccountMetadata => "account/metadata/read" {
+        params: v2::GetAccountMetadataParams,
+        response: v2::GetAccountMetadataResponse,
+    },
+
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,

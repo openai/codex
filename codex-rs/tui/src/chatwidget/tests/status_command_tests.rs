@@ -1,12 +1,34 @@
 use super::*;
+use crate::app_event::RateLimitRefreshOrigin;
 use assert_matches::assert_matches;
+
+fn render_status_without_metadata(chat: &mut ChatWidget) {
+    if chat.should_prefetch_rate_limits() {
+        let request_id = chat.next_status_refresh_request_id;
+        chat.next_status_refresh_request_id = chat.next_status_refresh_request_id.wrapping_add(1);
+        chat.add_status_output(
+            /*refreshing_rate_limits*/ true,
+            Some(request_id),
+            /*metadata_request_id*/ None,
+            /*account_metadata*/ None,
+        );
+        chat.app_event_tx.send(AppEvent::RefreshRateLimits {
+            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+        });
+    } else {
+        chat.add_status_output(
+            /*refreshing_rate_limits*/ false, /*rate_limit_request_id*/ None,
+            /*metadata_request_id*/ None, /*account_metadata*/ None,
+        );
+    }
+}
 
 #[tokio::test]
 async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgpt_auth() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Status);
+    render_status_without_metadata(&mut chat);
 
     let rendered = match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
@@ -32,7 +54,7 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Status);
+    render_status_without_metadata(&mut chat);
 
     match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(_)) => {}
@@ -49,7 +71,7 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
     chat.finish_status_rate_limit_refresh(first_request_id);
     drain_insert_history(&mut rx);
 
-    chat.dispatch_command(SlashCommand::Status);
+    render_status_without_metadata(&mut chat);
     let refreshed = match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
             lines_to_single_string(&cell.display_lines(/*width*/ 80))
@@ -66,7 +88,7 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
 async fn status_command_renders_immediately_without_rate_limit_refresh() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.dispatch_command(SlashCommand::Status);
+    render_status_without_metadata(&mut chat);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
     assert!(
@@ -81,7 +103,7 @@ async fn status_command_renders_instruction_sources_from_thread_session() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.instruction_source_paths = vec![chat.config.cwd.join("AGENTS.md")];
 
-    chat.dispatch_command(SlashCommand::Status);
+    render_status_without_metadata(&mut chat);
 
     let rendered = match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
@@ -104,7 +126,7 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Status);
+    render_status_without_metadata(&mut chat);
     match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(_)) => {}
         other => panic!("expected first status output, got {other:?}"),
@@ -116,7 +138,7 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
         other => panic!("expected first refresh request, got {other:?}"),
     };
 
-    chat.dispatch_command(SlashCommand::Status);
+    render_status_without_metadata(&mut chat);
     let second_rendered = match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {
             lines_to_single_string(&cell.display_lines(/*width*/ 80))

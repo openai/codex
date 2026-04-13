@@ -118,6 +118,8 @@ export type { FsWatchParams } from "./FsWatchParams";
 export type { FsWatchResponse } from "./FsWatchResponse";
 export type { FsWriteFileParams } from "./FsWriteFileParams";
 export type { FsWriteFileResponse } from "./FsWriteFileResponse";
+export type { GetAccountMetadataParams } from "./GetAccountMetadataParams";
+export type { GetAccountMetadataResponse } from "./GetAccountMetadataResponse";
 export type { GetAccountParams } from "./GetAccountParams";
 export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsResponse";
 export type { GetAccountResponse } from "./GetAccountResponse";

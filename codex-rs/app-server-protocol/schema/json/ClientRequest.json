@@ -965,6 +965,14 @@
       ],
       "type": "object"
     },
+    "GetAccountMetadataParams": {
+      "properties": {
+        "eligibilityOnly": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "GetAccountParams": {
       "properties": {
         "refreshToken": {
@@ -4888,6 +4896,30 @@
         "method"
       ],
       "title": "Account/rateLimits/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/metadata/read"
+          ],
+          "title": "Account/metadata/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/GetAccountMetadataParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/metadata/readRequest",
       "type": "object"
     },
     {

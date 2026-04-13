@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "accountDisplayName": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "accountGroupNames": {
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "metadataFetchEligible": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "metadataFetchEligible"
+  ],
+  "title": "GetAccountMetadataResponse",
+  "type": "object"
+}

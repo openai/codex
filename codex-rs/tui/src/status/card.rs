@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use url::Url;
 
 use super::account::StatusAccountDisplay;
+use super::account::StatusAccountMetadata;
 use super::format::FieldFormatter;
 use super::format::line_display_width;
 use super::format::push_label;
@@ -66,8 +67,15 @@ struct StatusRateLimitState {
 }
 
 #[derive(Debug, Clone)]
+struct StatusAccountMetadataState {
+    account_metadata: Option<StatusAccountMetadata>,
+    loading_account_metadata: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct StatusHistoryHandle {
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
+    account_metadata_state: Arc<RwLock<StatusAccountMetadataState>>,
 }
 
 impl StatusHistoryHandle {
@@ -89,6 +97,19 @@ impl StatusHistoryHandle {
         state.rate_limits = rate_limits;
         state.refreshing_rate_limits = false;
     }
+
+    pub(crate) fn finish_account_metadata_fetch(
+        &self,
+        account_metadata: Option<StatusAccountMetadata>,
+    ) {
+        #[expect(clippy::expect_used)]
+        let mut state = self
+            .account_metadata_state
+            .write()
+            .expect("status history account metadata state poisoned");
+        state.account_metadata = account_metadata;
+        state.loading_account_metadata = false;
+    }
 }
 
 #[derive(Debug)]
@@ -101,6 +122,7 @@ struct StatusHistoryCell {
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
+    account_metadata_state: Arc<RwLock<StatusAccountMetadataState>>,
     thread_name: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
@@ -178,6 +200,8 @@ pub(crate) fn new_status_output_with_rate_limits(
         reasoning_effort_override,
         "<none>".to_string(),
         refreshing_rate_limits,
+        /*account_metadata*/ None,
+        /*loading_account_metadata*/ false,
     )
     .0
 }
@@ -199,6 +223,8 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
     agents_summary: String,
     refreshing_rate_limits: bool,
+    account_metadata: Option<StatusAccountMetadata>,
+    loading_account_metadata: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let (card, handle) = StatusHistoryCell::new(
@@ -217,6 +243,8 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         reasoning_effort_override,
         agents_summary,
         refreshing_rate_limits,
+        account_metadata,
+        loading_account_metadata,
     );
 
     (
@@ -243,6 +271,8 @@ impl StatusHistoryCell {
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
         agents_summary: String,
         refreshing_rate_limits: bool,
+        account_metadata: Option<StatusAccountMetadata>,
+        loading_account_metadata: bool,
     ) -> (Self, StatusHistoryHandle) {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
@@ -335,6 +365,10 @@ impl StatusHistoryCell {
             rate_limits,
             refreshing_rate_limits,
         }));
+        let account_metadata_state = Arc::new(RwLock::new(StatusAccountMetadataState {
+            account_metadata,
+            loading_account_metadata,
+        }));
         let agents_summary = Arc::new(RwLock::new(agents_summary));
 
         (
@@ -346,6 +380,7 @@ impl StatusHistoryCell {
                 collaboration_mode: collaboration_mode.map(ToString::to_string),
                 model_provider,
                 account,
+                account_metadata_state: account_metadata_state.clone(),
                 thread_name,
                 session_id,
                 forked_from,
@@ -353,7 +388,10 @@ impl StatusHistoryCell {
                 agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
             },
-            StatusHistoryHandle { rate_limit_state },
+            StatusHistoryHandle {
+                rate_limit_state,
+                account_metadata_state,
+            },
         )
     }
 
@@ -592,12 +630,35 @@ impl HistoryCell for StatusHistoryCell {
             .read()
             .expect("status history agents summary state poisoned")
             .clone();
+        #[expect(clippy::expect_used)]
+        let account_metadata_state = self
+            .account_metadata_state
+            .read()
+            .expect("status history account metadata state poisoned")
+            .clone();
+        let account_metadata = account_metadata_state.account_metadata.clone();
 
         if self.model_provider.is_some() {
             push_label(&mut labels, &mut seen, "Model provider");
         }
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
+        }
+        if account_metadata_state.loading_account_metadata
+            || account_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.account_display_name.as_ref())
+                .is_some()
+        {
+            push_label(&mut labels, &mut seen, "Organization");
+        }
+        if account_metadata_state.loading_account_metadata
+            || account_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.account_group_names.as_ref())
+                .is_some_and(|group_names| !group_names.is_empty())
+        {
+            push_label(&mut labels, &mut seen, "Groups");
         }
         if thread_name.is_some() {
             push_label(&mut labels, &mut seen, "Thread name");
@@ -657,6 +718,23 @@ impl HistoryCell for StatusHistoryCell {
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
+        }
+        if account_metadata_state.loading_account_metadata {
+            lines.push(formatter.line(
+                "Organization",
+                vec![Span::from("Retrieving account information...").dim()],
+            ));
+        } else if let Some(metadata) = account_metadata {
+            if let Some(account_display_name) = metadata.account_display_name {
+                lines.push(formatter.line("Organization", vec![Span::from(account_display_name)]));
+            }
+            if let Some(account_group_names) = metadata.account_group_names
+                && !account_group_names.is_empty()
+            {
+                lines.push(
+                    formatter.line("Groups", vec![Span::from(account_group_names.join(", "))]),
+                );
+            }
         }
 
         if let Some(thread_name) = thread_name {
