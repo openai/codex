@@ -3828,9 +3828,18 @@ impl CodexMessageProcessor {
         self.command_exec_manager
             .connection_closed(connection_id)
             .await;
-        self.thread_state_manager
+        let thread_ids = self
+            .thread_state_manager
             .remove_connection(connection_id)
             .await;
+
+        for thread_id in thread_ids {
+            if self.thread_manager.get_thread(thread_id).await.is_err() {
+                // Reconcile stale app-server bookkeeping when the thread has already been
+                // removed from the core manager.
+                self.finalize_thread_teardown(thread_id).await;
+            }
+        }
     }
 
     pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
@@ -4193,13 +4202,18 @@ impl CodexMessageProcessor {
                 .thread_state_manager
                 .thread_state(existing_thread_id)
                 .await;
-            self.ensure_listener_task_running(
-                existing_thread_id,
-                existing_thread.clone(),
-                thread_state.clone(),
-                ApiVersion::V2,
-            )
-            .await;
+            if let Err(error) = self
+                .ensure_listener_task_running(
+                    existing_thread_id,
+                    existing_thread.clone(),
+                    thread_state.clone(),
+                    ApiVersion::V2,
+                )
+                .await
+            {
+                self.outgoing.send_error(request_id, error).await;
+                return true;
+            }
 
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
@@ -7434,14 +7448,21 @@ impl CodexMessageProcessor {
             };
             thread_state
         };
-        Self::ensure_listener_task_running_task(
-            listener_task_context,
+        if let Err(error) = Self::ensure_listener_task_running_task(
+            listener_task_context.clone(),
             conversation_id,
             conversation,
             thread_state,
             api_version,
         )
-        .await;
+        .await
+        {
+            let _ = listener_task_context
+                .thread_state_manager
+                .unsubscribe_connection_from_thread(conversation_id, connection_id)
+                .await;
+            return Err(error);
+        }
         Ok(EnsureConversationListenerResult::Attached)
     }
 
@@ -7475,7 +7496,7 @@ impl CodexMessageProcessor {
         conversation: Arc<CodexThread>,
         thread_state: Arc<Mutex<ThreadState>>,
         api_version: ApiVersion,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         Self::ensure_listener_task_running_task(
             ListenerTaskContext {
                 thread_manager: Arc::clone(&self.thread_manager),
@@ -7493,7 +7514,7 @@ impl CodexMessageProcessor {
             thread_state,
             api_version,
         )
-        .await;
+        .await
     }
 
     async fn ensure_listener_task_running_task(
@@ -7502,7 +7523,7 @@ impl CodexMessageProcessor {
         conversation: Arc<CodexThread>,
         thread_state: Arc<Mutex<ThreadState>>,
         api_version: ApiVersion,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         let Some(mut unloading_state) = UnloadingState::new(
             &listener_task_context,
@@ -7511,12 +7532,18 @@ impl CodexMessageProcessor {
         )
         .await
         else {
-            return;
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "thread {conversation_id} is closing; retry after the thread is closed"
+                ),
+                data: None,
+            });
         };
         let (mut listener_command_rx, listener_generation) = {
             let mut thread_state = thread_state.lock().await;
             if thread_state.listener_matches(&conversation) {
-                return;
+                return Ok(());
             }
             thread_state.set_listener(cancel_tx, &conversation)
         };
@@ -7652,6 +7679,7 @@ impl CodexMessageProcessor {
                 thread_state.clear_listener();
             }
         });
+        Ok(())
     }
     async fn git_diff_to_origin(&self, request_id: ConnectionRequestId, cwd: PathBuf) {
         let diff = git_diff_to_remote(&cwd).await;
