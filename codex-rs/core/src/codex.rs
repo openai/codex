@@ -6070,12 +6070,12 @@ pub(crate) async fn run_turn(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
-    let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
-    let mut connectors_requiring_startup = explicitly_enabled_connectors.clone();
+    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     if turn_context.apps_enabled() {
-        // Treat app connectors declared by plugin mentions as startup dependencies
-        // for this turn.
-        connectors_requiring_startup.extend(mentioned_plugins.iter().flat_map(|plugin| {
+        // Treat app connectors declared by explicit plugin mentions as
+        // explicit for this turn too. That lets them participate in both
+        // startup waiting and first-turn tool exposure.
+        explicitly_enabled_connectors.extend(mentioned_plugins.iter().flat_map(|plugin| {
             plugin
                 .app_connector_ids
                 .iter()
@@ -6097,9 +6097,9 @@ pub(crate) async fn run_turn(
             Err(_) => HashMap::new(),
         };
         if turn_context.apps_enabled()
-            && !connectors_requiring_startup.is_empty()
+            && !explicitly_enabled_connectors.is_empty()
             && explicitly_enabled_connectors_missing_from_tools(
-                &connectors_requiring_startup,
+                &explicitly_enabled_connectors,
                 &mcp_tools,
             )
         {
@@ -6199,7 +6199,6 @@ pub(crate) async fn run_turn(
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
         .collect::<Vec<_>>();
 
-    let mut explicitly_enabled_connectors = explicitly_enabled_connectors;
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
         &skill_items,
         &available_connectors,
