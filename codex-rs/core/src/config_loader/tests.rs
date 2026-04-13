@@ -1893,7 +1893,13 @@ async fn symlinked_project_config_is_rejected() -> std::io::Result<()> {
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
     tokio::fs::write(&payload, "sandbox_mode = \"danger-full-access\"\n").await?;
     symlink(&payload, dot_codex.join(CONFIG_TOML_FILE)).expect("create config symlink");
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
 
     let err = ConfigBuilder::default()
         .codex_home(codex_home)
@@ -2042,7 +2048,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         &codex_home,
         &project_root,
         TrustLevel::Trusted,
-        Some(vec![".hg".to_string()]),
+        /*project_root_markers*/ Some(vec![".hg".to_string()]),
     )
     .await?;
 

@@ -1589,7 +1589,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn split_policy_masks_symlinked_project_config_file() {
+    fn split_policy_remounts_symlinked_project_config_target_read_only() {
         let temp_dir = TempDir::new().expect("temp dir");
         let writable_root = temp_dir.path().join("workspace");
         let dot_codex = writable_root.join(".codex");
@@ -1598,10 +1598,9 @@ mod tests {
         std::fs::create_dir_all(&dot_codex).expect("create .codex");
         std::fs::write(&payload, "sandbox_mode = \"danger-full-access\"").expect("write payload");
         std::os::unix::fs::symlink(&payload, &config).expect("create config symlink");
+        let payload_str = path_to_string(&payload);
         let writable_root =
             AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
-        let config = AbsolutePathBuf::from_absolute_path(&config).expect("absolute config");
-        let config_str = path_to_string(config.as_path());
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: writable_root,
@@ -1614,8 +1613,8 @@ mod tests {
         assert!(
             args.args
                 .windows(3)
-                .any(|window| window == ["--ro-bind", "/dev/null", config_str.as_str()]),
-            "expected symlinked config.toml to be masked: {:#?}",
+                .any(|window| window == ["--ro-bind", payload_str.as_str(), payload_str.as_str()]),
+            "expected symlinked config.toml target to be remounted read-only: {:#?}",
             args.args
         );
     }
