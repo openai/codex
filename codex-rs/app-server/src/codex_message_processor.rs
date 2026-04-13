@@ -132,6 +132,8 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -957,6 +959,10 @@ impl CodexMessageProcessor {
                     app_server_client_version.clone(),
                 )
                 .await;
+            }
+            ClientRequest::ThreadInjectItems { request_id, params } => {
+                self.thread_inject_items(to_connection_request_id(request_id), params)
+                    .await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
                 self.turn_steer(to_connection_request_id(request_id), params)
@@ -6982,6 +6988,55 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_inject_items(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadInjectItemsParams,
+    ) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let items = match params
+            .items
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                serde_json::from_value::<ResponseItem>(value)
+                    .map_err(|err| format!("items[{index}] is not a valid response item: {err}"))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+        {
+            Ok(items) => items,
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
+
+        match thread.inject_response_items(items).await {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, ThreadInjectItemsResponse {})
+                    .await;
+            }
+            Err(CodexErr::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to inject response items: {err}"),
+                )
+                .await;
             }
         }
     }

@@ -649,6 +649,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                     disabled_tools: Some(vec!["image".to_string()]),
                     scopes: None,
                     oauth_resource: None,
+                    supports_parallel_tool_calls: false,
                     tools: HashMap::new(),
                 },
             );
