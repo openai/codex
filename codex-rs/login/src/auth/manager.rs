@@ -21,6 +21,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
+pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
@@ -61,6 +62,7 @@ pub struct ChatgptAuth {
 #[derive(Debug, Clone)]
 pub struct ChatgptAuthTokens {
     state: ChatgptAuthState,
+    storage: Arc<dyn AuthStorageBackend>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,14 +207,13 @@ impl CodexAuth {
             client,
         };
 
+        let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
         match auth_mode {
-            ApiAuthMode::Chatgpt => {
-                let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
-                Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
-            }
-            ApiAuthMode::ChatgptAuthTokens => {
-                Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
-            }
+            ApiAuthMode::Chatgpt => Ok(Self::Chatgpt(ChatgptAuth { state, storage })),
+            ApiAuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens {
+                state,
+                storage,
+            })),
             ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
         }
     }
@@ -352,6 +353,52 @@ impl CodexAuth {
         self.get_current_auth_json().and_then(|t| t.tokens)
     }
 
+    pub fn get_agent_identity(&self, workspace_id: &str) -> Option<AgentIdentityAuthRecord> {
+        self.get_current_auth_json()
+            .and_then(|auth| auth.agent_identity)
+            .filter(|identity| identity.workspace_id == workspace_id)
+    }
+
+    pub fn set_agent_identity(&self, record: AgentIdentityAuthRecord) -> std::io::Result<()> {
+        let (state, storage) = match self {
+            Self::Chatgpt(auth) => (&auth.state, &auth.storage),
+            Self::ChatgptAuthTokens(auth) => (&auth.state, &auth.storage),
+            Self::ApiKey(_) => return Ok(()),
+        };
+        let mut guard = state
+            .auth_dot_json
+            .lock()
+            .map_err(|_| std::io::Error::other("failed to lock auth state"))?;
+        let mut auth = guard
+            .clone()
+            .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
+        auth.agent_identity = Some(record);
+        storage.save(&auth)?;
+        *guard = Some(auth);
+        Ok(())
+    }
+
+    pub fn remove_agent_identity(&self) -> std::io::Result<bool> {
+        let (state, storage) = match self {
+            Self::Chatgpt(auth) => (&auth.state, &auth.storage),
+            Self::ChatgptAuthTokens(auth) => (&auth.state, &auth.storage),
+            Self::ApiKey(_) => return Ok(false),
+        };
+        let mut guard = state
+            .auth_dot_json
+            .lock()
+            .map_err(|_| std::io::Error::other("failed to lock auth state"))?;
+        let Some(mut auth) = guard.clone() else {
+            return Ok(false);
+        };
+        let removed = auth.agent_identity.take().is_some();
+        if removed {
+            storage.save(&auth)?;
+            *guard = Some(auth);
+        }
+        Ok(removed)
+    }
+
     /// Consider this private to integration tests.
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
         let auth_dot_json = AuthDotJson {
@@ -364,6 +411,7 @@ impl CodexAuth {
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            agent_identity: None,
         };
 
         let client = create_client();
@@ -439,6 +487,7 @@ pub fn login_with_api_key(
         openai_api_key: Some(api_key.to_string()),
         tokens: None,
         last_refresh: None,
+        agent_identity: None,
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -812,6 +861,7 @@ impl AuthDotJson {
             openai_api_key: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
+            agent_identity: None,
         })
     }
 
@@ -1657,8 +1707,14 @@ impl AuthManager {
                 ),
             )));
         }
-        let auth_dot_json =
+        let mut auth_dot_json =
             AuthDotJson::from_external_tokens(&refreshed).map_err(RefreshTokenError::Transient)?;
+        if let Some(previous_auth) = self
+            .auth_cached()
+            .and_then(|auth| auth.get_current_auth_json())
+        {
+            auth_dot_json.agent_identity = previous_auth.agent_identity;
+        }
         save_auth(
             &self.codex_home,
             &auth_dot_json,
