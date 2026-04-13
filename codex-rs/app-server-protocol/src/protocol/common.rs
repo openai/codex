@@ -1097,6 +1097,10 @@ mod tests {
                 },
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
+                    supported_server_requests: Some(vec![
+                        v1::SupportedServerRequestMethod::PermissionsRequestApproval,
+                        v1::SupportedServerRequestMethod::PermissionPresetRequestApproval,
+                    ]),
                     opt_out_notification_methods: Some(vec![
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
@@ -1117,6 +1121,10 @@ mod tests {
                     },
                     "capabilities": {
                         "experimentalApi": true,
+                        "supportedServerRequests": [
+                            "item/permissions/requestApproval",
+                            "item/permissionPreset/requestApproval"
+                        ],
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
@@ -1142,6 +1150,10 @@ mod tests {
                 },
                 "capabilities": {
                     "experimentalApi": true,
+                    "supportedServerRequests": [
+                        "item/permissions/requestApproval",
+                        "item/permissionPreset/requestApproval"
+                    ],
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
@@ -1162,6 +1174,10 @@ mod tests {
                     },
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
+                        supported_server_requests: Some(vec![
+                            v1::SupportedServerRequestMethod::PermissionsRequestApproval,
+                            v1::SupportedServerRequestMethod::PermissionPresetRequestApproval,
+                        ]),
                         opt_out_notification_methods: Some(vec![
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
@@ -1170,6 +1186,31 @@ mod tests {
                 },
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_initialize_without_supported_server_requests() -> Result<()> {
+        let request: ClientRequest = serde_json::from_value(json!({
+            "method": "initialize",
+            "id": 42,
+            "params": {
+                "clientInfo": {
+                    "name": "codex_vscode",
+                    "title": "Codex VS Code Extension",
+                    "version": "0.1.0"
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }
+        }))?;
+
+        let ClientRequest::Initialize { params, .. } = request else {
+            panic!("expected initialize request");
+        };
+        let capabilities = params.capabilities.expect("capabilities");
+        assert_eq!(capabilities.supported_server_requests, None);
         Ok(())
     }
 

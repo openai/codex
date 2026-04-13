@@ -2295,6 +2295,16 @@
             "array",
             "null"
           ]
+        },
+        "supportedServerRequests": {
+          "description": "Server request methods this connection knows how to render and answer.",
+          "items": {
+            "$ref": "#/definitions/SupportedServerRequestMethod"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -4720,6 +4730,14 @@
         }
       ],
       "title": "ServerRequest"
+    },
+    "SupportedServerRequestMethod": {
+      "description": "Server-initiated request methods a client can opt into during initialize.",
+      "enum": [
+        "item/permissions/requestApproval",
+        "item/permissionPreset/requestApproval"
+      ],
+      "type": "string"
     },
     "ToolRequestUserInputAnswer": {
       "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",

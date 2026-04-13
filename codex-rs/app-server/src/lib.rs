@@ -797,7 +797,15 @@ pub async fn run_main_with_transport(
                                                     connection_id,
                                                 )
                                                 .await;
-                                            processor.connection_initialized(connection_id).await;
+                                            processor
+                                                .connection_initialized(
+                                                    connection_id,
+                                                    connection_state
+                                                        .session
+                                                        .supported_server_requests
+                                                        .clone(),
+                                                )
+                                                .await;
                                             connection_state
                                                 .outbound_initialized
                                                 .store(true, std::sync::atomic::Ordering::Release);

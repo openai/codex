@@ -89,6 +89,8 @@ Clients must send a single `initialize` request per transport connection before 
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
+Clients can also advertise `supportedServerRequests` during initialize. This is a per-connection opt-in list of server-initiated request methods the surface knows how to render and answer. App-server uses it for conversational permission confirmation flows so existing clients keep their current behavior until they explicitly opt in.
+
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
@@ -111,7 +113,7 @@ Example (from OpenAI's official VSCode extension):
 }
 ```
 
-Example with notification opt-out:
+Example with notification opt-out and explicit server-request support:
 
 ```json
 {
@@ -125,6 +127,10 @@ Example with notification opt-out:
     },
     "capabilities": {
       "experimentalApi": true,
+      "supportedServerRequests": [
+        "item/permissions/requestApproval",
+        "item/permissionPreset/requestApproval"
+      ],
       "optOutNotificationMethods": ["thread/started", "item/agentMessage/delta"]
     }
   }
@@ -1070,6 +1076,8 @@ For MCP tool approval elicitations, form request `meta` includes
 the client can offer session-scoped and/or persistent approval choices.
 
 ### Permission requests
+
+Clients must opt into conversational permission confirmation request methods by listing them in `initialize.params.capabilities.supportedServerRequests`. The opt-in is per connection and per method, which lets older clients continue to initialize without promising UI they do not implement.
 
 The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access.
 
