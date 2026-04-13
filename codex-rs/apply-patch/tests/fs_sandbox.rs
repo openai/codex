@@ -62,7 +62,10 @@ impl RecordingFileSystem {
     }
 
     fn calls(&self) -> Vec<FsCall> {
-        self.calls.lock().expect("calls").clone()
+        self.calls
+            .lock()
+            .unwrap_or_else(|err| panic!("calls lock poisoned: {err}"))
+            .clone()
     }
 }
 
@@ -73,13 +76,16 @@ impl ExecutorFileSystem for RecordingFileSystem {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        self.calls.lock().expect("calls").push(FsCall::ReadFile {
-            path: path.to_path_buf(),
-            sandbox: sandbox.cloned(),
-        });
+        self.calls
+            .lock()
+            .unwrap_or_else(|err| panic!("calls lock poisoned: {err}"))
+            .push(FsCall::ReadFile {
+                path: path.to_path_buf(),
+                sandbox: sandbox.cloned(),
+            });
         self.files
             .lock()
-            .expect("files")
+            .unwrap_or_else(|err| panic!("files lock poisoned: {err}"))
             .get(path.as_path())
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "missing test file"))
@@ -91,13 +97,16 @@ impl ExecutorFileSystem for RecordingFileSystem {
         contents: Vec<u8>,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        self.calls.lock().expect("calls").push(FsCall::WriteFile {
-            path: path.to_path_buf(),
-            sandbox: sandbox.cloned(),
-        });
+        self.calls
+            .lock()
+            .unwrap_or_else(|err| panic!("calls lock poisoned: {err}"))
+            .push(FsCall::WriteFile {
+                path: path.to_path_buf(),
+                sandbox: sandbox.cloned(),
+            });
         self.files
             .lock()
-            .expect("files")
+            .unwrap_or_else(|err| panic!("files lock poisoned: {err}"))
             .insert(path.to_path_buf(), contents);
         Ok(())
     }
@@ -110,7 +119,7 @@ impl ExecutorFileSystem for RecordingFileSystem {
     ) -> FileSystemResult<()> {
         self.calls
             .lock()
-            .expect("calls")
+            .unwrap_or_else(|err| panic!("calls lock poisoned: {err}"))
             .push(FsCall::CreateDirectory {
                 path: path.to_path_buf(),
                 sandbox: sandbox.cloned(),
@@ -123,14 +132,17 @@ impl ExecutorFileSystem for RecordingFileSystem {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        self.calls.lock().expect("calls").push(FsCall::GetMetadata {
-            path: path.to_path_buf(),
-            sandbox: sandbox.cloned(),
-        });
+        self.calls
+            .lock()
+            .unwrap_or_else(|err| panic!("calls lock poisoned: {err}"))
+            .push(FsCall::GetMetadata {
+                path: path.to_path_buf(),
+                sandbox: sandbox.cloned(),
+            });
         let is_file = self
             .files
             .lock()
-            .expect("files")
+            .unwrap_or_else(|err| panic!("files lock poisoned: {err}"))
             .contains_key(path.as_path());
         Ok(FileMetadata {
             is_directory: false,
@@ -154,11 +166,17 @@ impl ExecutorFileSystem for RecordingFileSystem {
         _remove_options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        self.calls.lock().expect("calls").push(FsCall::Remove {
-            path: path.to_path_buf(),
-            sandbox: sandbox.cloned(),
-        });
-        self.files.lock().expect("files").remove(path.as_path());
+        self.calls
+            .lock()
+            .unwrap_or_else(|err| panic!("calls lock poisoned: {err}"))
+            .push(FsCall::Remove {
+                path: path.to_path_buf(),
+                sandbox: sandbox.cloned(),
+            });
+        self.files
+            .lock()
+            .unwrap_or_else(|err| panic!("files lock poisoned: {err}"))
+            .remove(path.as_path());
         Ok(())
     }
 
@@ -195,9 +213,10 @@ fn wrap_patch(body: &str) -> String {
 
 #[tokio::test]
 async fn verified_parse_passes_sandbox_to_filesystem_reads() {
-    let dir = tempdir().expect("tmp");
+    let dir = tempdir().unwrap_or_else(|err| panic!("tempdir failed: {err}"));
     let path = dir.path().join("source.txt");
-    let path_abs = AbsolutePathBuf::from_absolute_path(&path).expect("absolute file path");
+    let path_abs = AbsolutePathBuf::from_absolute_path(&path)
+        .unwrap_or_else(|err| panic!("absolute file path failed: {err}"));
     let fs = RecordingFileSystem::with_file(path.clone(), "before\n");
     let sandbox = test_sandbox_context();
     let argv = vec![
@@ -212,7 +231,8 @@ async fn verified_parse_passes_sandbox_to_filesystem_reads() {
 
     let result = maybe_parse_apply_patch_verified(
         &argv,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd"),
+        &AbsolutePathBuf::from_absolute_path(dir.path())
+            .unwrap_or_else(|err| panic!("absolute cwd failed: {err}")),
         &fs,
         Some(&sandbox),
     )
@@ -230,10 +250,13 @@ async fn verified_parse_passes_sandbox_to_filesystem_reads() {
 
 #[tokio::test]
 async fn apply_patch_passes_sandbox_to_add_file_operations() {
-    let dir = tempdir().expect("tmp");
-    let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+    let dir = tempdir().unwrap_or_else(|err| panic!("tempdir failed: {err}"));
+    let cwd = AbsolutePathBuf::from_absolute_path(dir.path())
+        .unwrap_or_else(|err| panic!("absolute cwd failed: {err}"));
     let path_abs = cwd.join("nested/add.txt");
-    let parent_abs = path_abs.parent().expect("parent");
+    let parent_abs = path_abs
+        .parent()
+        .unwrap_or_else(|| panic!("expected parent for {}", path_abs.display()));
     let fs = RecordingFileSystem::default();
     let sandbox = test_sandbox_context();
     let patch = wrap_patch(
@@ -245,7 +268,7 @@ async fn apply_patch_passes_sandbox_to_add_file_operations() {
 
     apply_patch(&patch, &cwd, &mut stdout, &mut stderr, &fs, Some(&sandbox))
         .await
-        .expect("apply patch");
+        .unwrap_or_else(|err| panic!("apply patch failed: {err}"));
 
     assert_eq!(
         fs.calls(),
@@ -264,8 +287,9 @@ async fn apply_patch_passes_sandbox_to_add_file_operations() {
 
 #[tokio::test]
 async fn apply_patch_passes_sandbox_to_delete_file_operations() {
-    let dir = tempdir().expect("tmp");
-    let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+    let dir = tempdir().unwrap_or_else(|err| panic!("tempdir failed: {err}"));
+    let cwd = AbsolutePathBuf::from_absolute_path(dir.path())
+        .unwrap_or_else(|err| panic!("absolute cwd failed: {err}"));
     let path_abs = cwd.join("del.txt");
     let fs = RecordingFileSystem::with_file(path_abs.to_path_buf(), "before\n");
     let sandbox = test_sandbox_context();
@@ -275,7 +299,7 @@ async fn apply_patch_passes_sandbox_to_delete_file_operations() {
 
     apply_patch(&patch, &cwd, &mut stdout, &mut stderr, &fs, Some(&sandbox))
         .await
-        .expect("apply patch");
+        .unwrap_or_else(|err| panic!("apply patch failed: {err}"));
 
     assert_eq!(
         fs.calls(),
@@ -294,8 +318,9 @@ async fn apply_patch_passes_sandbox_to_delete_file_operations() {
 
 #[tokio::test]
 async fn apply_patch_passes_sandbox_to_update_file_operations() {
-    let dir = tempdir().expect("tmp");
-    let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+    let dir = tempdir().unwrap_or_else(|err| panic!("tempdir failed: {err}"));
+    let cwd = AbsolutePathBuf::from_absolute_path(dir.path())
+        .unwrap_or_else(|err| panic!("absolute cwd failed: {err}"));
     let path_abs = cwd.join("update.txt");
     let fs = RecordingFileSystem::with_file(path_abs.to_path_buf(), "before\n");
     let sandbox = test_sandbox_context();
@@ -310,7 +335,7 @@ async fn apply_patch_passes_sandbox_to_update_file_operations() {
 
     apply_patch(&patch, &cwd, &mut stdout, &mut stderr, &fs, Some(&sandbox))
         .await
-        .expect("apply patch");
+        .unwrap_or_else(|err| panic!("apply patch failed: {err}"));
 
     assert_eq!(
         fs.calls(),
