@@ -701,6 +701,40 @@ fn file_link_appends_line_number_when_label_lacks_it() {
 }
 
 #[test]
+fn file_link_uses_target_when_label_is_code() {
+    let text = render_markdown_text_for_cwd(
+        "[`markdown_render.rs`](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter([
+        "codex-rs/tui/src/markdown_render.rs:74".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_uses_target_wrapped_in_backticks() {
+    let text = render_markdown_text_for_cwd(
+        "[markdown_render.rs](`/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74`)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter([
+        "codex-rs/tui/src/markdown_render.rs:74".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_uses_angle_wrapped_target_with_spaces() {
+    let text = render_markdown_text_for_cwd(
+        "[My Report.md](</Users/example/code/codex/docs/My Report.md:12>)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter(["docs/My Report.md:12".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn file_link_keeps_absolute_paths_outside_cwd() {
     let text = render_markdown_text_for_cwd(
         "[README.md:74](/Users/example/code/codex/README.md:74)",

@@ -581,15 +581,16 @@ where
     }
 
     fn push_link(&mut self, dest_url: String) {
-        let show_destination = should_render_link_destination(&dest_url);
+        let destination = normalize_local_link_destination(&dest_url);
+        let show_destination = should_render_link_destination(&destination);
         self.link = Some(LinkState {
             show_destination,
-            local_target_display: if is_local_path_like_link(&dest_url) {
-                render_local_link_target(&dest_url, self.cwd.as_deref())
+            local_target_display: if is_local_path_like_link(&destination) {
+                render_local_link_target(&destination, self.cwd.as_deref())
             } else {
                 None
             },
-            destination: dest_url,
+            destination,
         });
     }
 
@@ -738,6 +739,27 @@ fn is_local_path_like_link(dest_url: &str) -> bool {
             [drive, b':', separator, ..]
                 if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
         )
+}
+
+fn normalize_local_link_destination(dest_url: &str) -> String {
+    let mut candidate = dest_url.trim();
+    if let Some(inner) = strip_balanced_wrapper(candidate, '`', '`') {
+        candidate = inner.trim();
+    }
+    if let Some(inner) = strip_balanced_wrapper(candidate, '<', '>') {
+        candidate = inner.trim();
+    }
+    if is_local_path_like_link(candidate) {
+        candidate.to_string()
+    } else {
+        dest_url.to_string()
+    }
+}
+
+fn strip_balanced_wrapper(value: &str, start: char, end: char) -> Option<&str> {
+    value
+        .strip_prefix(start)
+        .and_then(|inner| inner.strip_suffix(end))
 }
 
 /// Parse a local link target into normalized path text plus an optional location suffix.
