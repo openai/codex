@@ -67,6 +67,25 @@ fn mcp_tool_info(tool: rmcp::model::Tool) -> ToolInfo {
     }
 }
 
+fn mcp_tool_info_with_display_name(display_name: &str, tool: rmcp::model::Tool) -> ToolInfo {
+    let (callable_namespace, callable_name) = display_name
+        .rsplit_once('/')
+        .map(|(namespace, callable_name)| (format!("{namespace}/"), callable_name.to_string()))
+        .unwrap_or_else(|| ("".to_string(), display_name.to_string()));
+
+    ToolInfo {
+        server_name: "test_server".to_string(),
+        callable_name,
+        callable_namespace,
+        server_instructions: None,
+        tool,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
+}
+
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
     let slug = name.replace(' ', "-").to_lowercase();
     DiscoverableTool::Connector(Box::new(AppInfo {
@@ -970,16 +989,19 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
         &tools_config,
         Some(HashMap::from([(
             "dash/search".to_string(),
-            mcp_tool_info(mcp_tool(
-                "search",
-                "Search docs",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {"description": "search query"}
-                    }
-                }),
-            )),
+            mcp_tool_info_with_display_name(
+                "dash/search",
+                mcp_tool(
+                    "search",
+                    "Search docs",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {"description": "search query"}
+                        }
+                    }),
+                ),
+            ),
         )])),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1030,14 +1052,17 @@ fn test_mcp_tool_preserves_integer_schema() {
         &tools_config,
         Some(HashMap::from([(
             "dash/paginate".to_string(),
-            mcp_tool_info(mcp_tool(
-                "paginate",
-                "Pagination",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {"page": {"type": "integer"}}
-                }),
-            )),
+            mcp_tool_info_with_display_name(
+                "dash/paginate",
+                mcp_tool(
+                    "paginate",
+                    "Pagination",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {"page": {"type": "integer"}}
+                    }),
+                ),
+            ),
         )])),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1089,14 +1114,17 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
         &tools_config,
         Some(HashMap::from([(
             "dash/tags".to_string(),
-            mcp_tool_info(mcp_tool(
-                "tags",
-                "Tags",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {"tags": {"type": "array"}}
-                }),
-            )),
+            mcp_tool_info_with_display_name(
+                "dash/tags",
+                mcp_tool(
+                    "tags",
+                    "Tags",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {"tags": {"type": "array"}}
+                    }),
+                ),
+            ),
         )])),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1150,16 +1178,19 @@ fn test_mcp_tool_anyof_defaults_to_string() {
         &tools_config,
         Some(HashMap::from([(
             "dash/value".to_string(),
-            mcp_tool_info(mcp_tool(
-                "value",
-                "AnyOf Value",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "value": {"anyOf": [{"type": "string"}, {"type": "number"}]}
-                    }
-                }),
-            )),
+            mcp_tool_info_with_display_name(
+                "dash/value",
+                mcp_tool(
+                    "value",
+                    "AnyOf Value",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "value": {"anyOf": [{"type": "string"}, {"type": "number"}]}
+                        }
+                    }),
+                ),
+            ),
         )])),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1215,12 +1246,14 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         &tools_config,
         Some(HashMap::from([(
             "test_server/do_something_cool".to_string(),
-            mcp_tool_info(mcp_tool(
-                "do_something_cool",
-                "Do something cool",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
+            mcp_tool_info_with_display_name(
+                "test_server/do_something_cool",
+                mcp_tool(
+                    "do_something_cool",
+                    "Do something cool",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
                         "string_argument": {"type": "string"},
                         "number_argument": {"type": "number"},
                         "object_argument": {
@@ -1237,11 +1270,12 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
                                 },
                                 "required": ["addtl_prop"],
                                 "additionalProperties": false
+                                }
                             }
                         }
-                    }
-                }),
-            )),
+                    }),
+                ),
+            ),
         )])),
         /*deferred_mcp_tools*/ None,
         &[],
