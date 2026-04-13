@@ -148,7 +148,11 @@ pub async fn test_env() -> Result<TestEnv> {
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
-                .create_directory(&cwd, CreateDirectoryOptions { recursive: true })
+                .create_directory(
+                    &cwd,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
                 .await?;
             remote_process.process.register_cleanup_path(cwd.as_path());
             Ok(TestEnv {
@@ -170,10 +174,9 @@ struct RemoteExecServerStart {
 fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecServerStart> {
     let container_name = remote_env.container_name.as_str();
     let instance_id = remote_exec_server_instance_id();
-    let remote_exec_server_path = format!("/tmp/codex-exec-server-{instance_id}");
+    let remote_exec_server_path = format!("/tmp/codex-{instance_id}");
     let stdout_path = format!("/tmp/codex-exec-server-{instance_id}.stdout");
-    let local_binary = codex_utils_cargo_bin::cargo_bin("codex-exec-server")
-        .context("resolve codex-exec-server binary")?;
+    let local_binary = codex_utils_cargo_bin::cargo_bin("codex").context("resolve codex binary")?;
     let local_binary = local_binary.to_string_lossy().to_string();
     let remote_binary = format!("{container_name}:{remote_exec_server_path}");
 
@@ -188,7 +191,7 @@ fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecSe
 
     let start_script = format!(
         "rm -f {stdout_path}; \
-nohup {remote_exec_server_path} --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
+nohup {remote_exec_server_path} exec-server --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
 echo $!"
     );
     let pid_output =
@@ -521,6 +524,7 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
+                /*analytics_events_client*/ None,
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
@@ -835,18 +839,26 @@ impl TestCodexHarness {
         if let Some(parent) = abs_path.parent() {
             self.test
                 .fs()
-                .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+                .create_directory(
+                    &parent,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
                 .await?;
         }
         self.test
             .fs()
-            .write_file(&abs_path, contents.as_ref().to_vec())
+            .write_file(&abs_path, contents.as_ref().to_vec(), /*sandbox*/ None)
             .await?;
         Ok(())
     }
 
     pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
-        Ok(self.test.fs().read_file_text(&self.path_abs(rel)).await?)
+        Ok(self
+            .test
+            .fs()
+            .read_file_text(&self.path_abs(rel), /*sandbox*/ None)
+            .await?)
     }
 
     pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
@@ -855,6 +867,7 @@ impl TestCodexHarness {
             .create_directory(
                 &self.path_abs(rel),
                 CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
             )
             .await?;
         Ok(())
@@ -873,13 +886,14 @@ impl TestCodexHarness {
                     recursive: false,
                     force: true,
                 },
+                /*sandbox*/ None,
             )
             .await?;
         Ok(())
     }
 
     pub async fn abs_path_exists(&self, path: &AbsolutePathBuf) -> Result<bool> {
-        match self.test.fs().get_metadata(path).await {
+        match self.test.fs().get_metadata(path, /*sandbox*/ None).await {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err.into()),

@@ -4,6 +4,7 @@ use tokio::sync::OnceCell;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::ExecServerRuntimePaths;
 use crate::RemoteExecServerConnectArgs;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
@@ -21,6 +22,7 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 #[derive(Debug)]
 pub struct EnvironmentManager {
     exec_server_url: Option<String>,
+    local_runtime_paths: Option<ExecServerRuntimePaths>,
     disabled: bool,
     current_environment: OnceCell<Option<Arc<Environment>>>,
 }
@@ -34,9 +36,19 @@ impl Default for EnvironmentManager {
 impl EnvironmentManager {
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value.
     pub fn new(exec_server_url: Option<String>) -> Self {
+        Self::new_with_runtime_paths(exec_server_url, /*local_runtime_paths*/ None)
+    }
+
+    /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value and local
+    /// runtime paths used when creating local filesystem helpers.
+    pub fn new_with_runtime_paths(
+        exec_server_url: Option<String>,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
         let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
         Self {
             exec_server_url,
+            local_runtime_paths,
             disabled,
             current_environment: OnceCell::new(),
         }
@@ -44,7 +56,18 @@ impl EnvironmentManager {
 
     /// Builds a manager from process environment variables.
     pub fn from_env() -> Self {
-        Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
+        Self::from_env_with_runtime_paths(/*local_runtime_paths*/ None)
+    }
+
+    /// Builds a manager from process environment variables and local runtime
+    /// paths used when creating local filesystem helpers.
+    pub fn from_env_with_runtime_paths(
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
+        Self::new_with_runtime_paths(
+            std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
+            local_runtime_paths,
+        )
     }
 
     /// Builds a manager from the currently selected environment, or from the
@@ -53,11 +76,13 @@ impl EnvironmentManager {
         match environment {
             Some(environment) => Self {
                 exec_server_url: environment.exec_server_url().map(str::to_owned),
+                local_runtime_paths: environment.local_runtime_paths().cloned(),
                 disabled: false,
                 current_environment: OnceCell::new(),
             },
             None => Self {
                 exec_server_url: None,
+                local_runtime_paths: None,
                 disabled: true,
                 current_environment: OnceCell::new(),
             },
@@ -82,7 +107,11 @@ impl EnvironmentManager {
                     Ok(None)
                 } else {
                     Ok(Some(Arc::new(
-                        Environment::create(self.exec_server_url.clone()).await?,
+                        Environment::create_with_runtime_paths(
+                            self.exec_server_url.clone(),
+                            self.local_runtime_paths.clone(),
+                        )
+                        .await?,
                     )))
                 }
             })
@@ -101,6 +130,7 @@ pub struct Environment {
     exec_server_url: Option<String>,
     remote_exec_server_client: Option<ExecServerClient>,
     exec_backend: Arc<dyn ExecBackend>,
+    local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
 impl Default for Environment {
@@ -109,6 +139,7 @@ impl Default for Environment {
             exec_server_url: None,
             remote_exec_server_client: None,
             exec_backend: Arc::new(LocalProcess::default()),
+            local_runtime_paths: None,
         }
     }
 }
@@ -124,6 +155,15 @@ impl std::fmt::Debug for Environment {
 impl Environment {
     /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value.
     pub async fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
+        Self::create_with_runtime_paths(exec_server_url, /*local_runtime_paths*/ None).await
+    }
+
+    /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value and
+    /// local runtime paths used when creating local filesystem helpers.
+    pub async fn create_with_runtime_paths(
+        exec_server_url: Option<String>,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Result<Self, ExecServerError> {
         let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
         if disabled {
             return Err(ExecServerError::Protocol(
@@ -157,6 +197,7 @@ impl Environment {
             exec_server_url,
             remote_exec_server_client,
             exec_backend,
+            local_runtime_paths,
         })
     }
 
@@ -169,6 +210,10 @@ impl Environment {
         self.exec_server_url.as_deref()
     }
 
+    pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {
+        self.local_runtime_paths.as_ref()
+    }
+
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
     }
@@ -176,7 +221,10 @@ impl Environment {
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         match self.remote_exec_server_client.clone() {
             Some(client) => Arc::new(RemoteFileSystem::new(client)),
-            None => Arc::new(LocalFileSystem),
+            None => match self.local_runtime_paths.clone() {
+                Some(runtime_paths) => Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths)),
+                None => Arc::new(LocalFileSystem::unsandboxed()),
+            },
         }
     }
 }
@@ -194,6 +242,7 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
+    use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
@@ -244,6 +293,31 @@ mod tests {
         let second = second.expect("local environment");
 
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn environment_manager_carries_local_runtime_paths() {
+        let runtime_paths = ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let manager = EnvironmentManager::new_with_runtime_paths(
+            /*exec_server_url*/ None,
+            Some(runtime_paths.clone()),
+        );
+
+        let environment = manager
+            .current()
+            .await
+            .expect("get current environment")
+            .expect("local environment");
+
+        assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
+        assert_eq!(
+            EnvironmentManager::from_environment(Some(&environment)).local_runtime_paths,
+            Some(runtime_paths)
+        );
     }
 
     #[tokio::test]

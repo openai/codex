@@ -13,8 +13,6 @@ use crate::thread_state::resolve_server_request_on_thread_listener;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
-use codex_app_server_protocol::AddCreditsNudgeEmailNotification;
-use codex_app_server_protocol::AddCreditsNudgeEmailResult;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -119,7 +117,6 @@ use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynam
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::AddCreditsNudgeEmailStatus as CoreAddCreditsNudgeEmailStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -226,26 +223,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::AddCreditsNudgeEmailResponse(event) => {
-            if let ApiVersion::V2 = api_version {
-                let result = match event.result {
-                    Ok(CoreAddCreditsNudgeEmailStatus::Sent) => AddCreditsNudgeEmailResult::Sent,
-                    Ok(CoreAddCreditsNudgeEmailStatus::CooldownActive) => {
-                        AddCreditsNudgeEmailResult::CooldownActive
-                    }
-                    Err(message) => AddCreditsNudgeEmailResult::Failed { message },
-                };
-                let notification = AddCreditsNudgeEmailNotification {
-                    thread_id: conversation_id.to_string(),
-                    result,
-                };
-                outgoing
-                    .send_server_notification(ServerNotification::AddCreditsNudgeEmailCompleted(
-                        notification,
-                    ))
-                    .await;
-            }
-        }
         EventMsg::SkillsUpdateAvailable => {
             if let ApiVersion::V2 = api_version {
                 outgoing
@@ -291,15 +268,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                     CommandExecutionStatus::InProgress,
                 ) {
                     Some(ThreadItem::CommandExecution {
+                        id,
                         command,
                         cwd,
                         command_actions,
                         ..
-                    }) => Some(CommandExecutionCompletionItem {
-                        command,
-                        cwd,
-                        command_actions,
-                    }),
+                    }) => Some((
+                        id,
+                        CommandExecutionCompletionItem {
+                            command,
+                            cwd,
+                            command_actions,
+                        },
+                    )),
                     Some(_) | None => None,
                 };
                 let assessment_turn_id = if assessment.turn_id.is_empty() {
@@ -309,12 +290,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 if assessment.status
                     == codex_protocol::protocol::GuardianAssessmentStatus::InProgress
-                    && let Some(completion_item) = pending_command_execution.as_ref()
+                    && let Some((target_item_id, completion_item)) =
+                        pending_command_execution.as_ref()
                 {
                     start_command_execution_item(
                         &conversation_id,
                         assessment_turn_id.clone(),
-                        assessment.id.clone(),
+                        target_item_id.clone(),
                         completion_item.command.clone(),
                         completion_item.cwd.clone(),
                         completion_item.command_actions.clone(),
@@ -330,22 +312,30 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &assessment,
                 );
                 outgoing.send_server_notification(notification).await;
-                if matches!(
-                    assessment.status,
+                let completion_status = match assessment.status {
                     codex_protocol::protocol::GuardianAssessmentStatus::Denied
-                        | codex_protocol::protocol::GuardianAssessmentStatus::Aborted
-                ) && let Some(completion_item) = pending_command_execution
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+                        Some(CommandExecutionStatus::Declined)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                        Some(CommandExecutionStatus::Failed)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::InProgress
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Approved => None,
+                };
+                if let Some(completion_status) = completion_status
+                    && let Some((target_item_id, completion_item)) = pending_command_execution
                 {
                     complete_command_execution_item(
                         &conversation_id,
                         assessment_turn_id,
-                        assessment.id.clone(),
+                        target_item_id,
                         completion_item.command,
                         completion_item.cwd,
                         /*process_id*/ None,
                         CommandExecutionSource::Agent,
                         completion_item.command_actions,
-                        CommandExecutionStatus::Declined,
+                        completion_status,
                         &outgoing,
                         &thread_state,
                     )
@@ -2919,6 +2909,7 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
@@ -3017,15 +3008,24 @@ mod tests {
                 Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 Some("too risky".to_string()),
             ),
+            GuardianAssessmentStatus::TimedOut => {
+                (None, None, Some("review timed out".to_string()))
+            }
             GuardianAssessmentStatus::Aborted => (None, None, None),
         };
         GuardianAssessmentEvent {
-            id: id.to_string(),
+            id: format!("review-{id}"),
+            target_item_id: Some(id.to_string()),
             turn_id: turn_id.to_string(),
             status,
             risk_level,
             user_authorization,
             rationale,
+            decision_source: if matches!(status, GuardianAssessmentStatus::InProgress) {
+                None
+            } else {
+                Some(codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent)
+            },
             action: serde_json::from_value(json!({
                 "type": "command",
                 "source": "shell",
@@ -3080,12 +3080,14 @@ mod tests {
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-1".to_string(),
+                id: "review-1".to_string(),
+                target_item_id: Some("item-1".to_string()),
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: action.clone(),
             },
         );
@@ -3094,7 +3096,8 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
-                assert_eq!(payload.target_item_id, "item-1");
+                assert_eq!(payload.review_id, "review-1");
+                assert_eq!(payload.target_item_id.as_deref(), Some("item-1"));
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3120,12 +3123,16 @@ mod tests {
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-2".to_string(),
+                id: "review-2".to_string(),
+                target_item_id: Some("item-2".to_string()),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: action.clone(),
             },
         );
@@ -3134,7 +3141,9 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-2");
+                assert_eq!(payload.review_id, "review-2");
+                assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(
                     payload.review.risk_level,
@@ -3164,12 +3173,16 @@ mod tests {
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-3".to_string(),
+                id: "review-3".to_string(),
+                target_item_id: None,
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: action.clone(),
             },
         );
@@ -3178,7 +3191,9 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-3");
+                assert_eq!(payload.review_id, "review-3");
+                assert_eq!(payload.target_item_id, None);
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.user_authorization, None);
@@ -3395,7 +3410,11 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewStarted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-approved");
+                assert_eq!(payload.review_id, "review-cmd-guardian-approved");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-approved")
+                );
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3416,7 +3435,12 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewCompleted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-approved");
+                assert_eq!(payload.review_id, "review-cmd-guardian-approved");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-approved")
+                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::Approved
@@ -3453,7 +3477,11 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewStarted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-denied");
+                assert_eq!(payload.review_id, "review-cmd-guardian-denied");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-denied")
+                );
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3474,7 +3502,12 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewCompleted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-denied");
+                assert_eq!(payload.review_id, "review-cmd-guardian-denied");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-denied")
+                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
             }
             other => bail!("unexpected message: {other:?}"),
@@ -3487,6 +3520,30 @@ mod tests {
                 };
                 assert_eq!(id, "cmd-guardian-denied");
                 assert_eq!(status, CommandExecutionStatus::Declined);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        let mut missing_target = guardian_command_assessment(
+            "cmd-guardian-missing-target",
+            "turn-guardian-missing-target",
+            GuardianAssessmentStatus::InProgress,
+        );
+        missing_target.target_item_id = None;
+        guardian_context
+            .apply_guardian_assessment_event(missing_target)
+            .await;
+        let eighth = recv_broadcast_message(&mut rx).await?;
+        match eighth {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::ItemGuardianApprovalReviewStarted(payload),
+            ) => {
+                assert_eq!(payload.review_id, "review-cmd-guardian-missing-target");
+                assert_eq!(payload.target_item_id, None);
+                assert_eq!(
+                    payload.review.status,
+                    GuardianApprovalReviewStatus::InProgress
+                );
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -3993,7 +4050,6 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
-            spend_control: None,
             plan_type: None,
         };
 

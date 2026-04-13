@@ -263,6 +263,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
         }
     }
+    if let Some(deferred_mcp_tools) = deferred_mcp_tools.as_ref() {
+        for (name, _) in deferred_mcp_tools.iter().filter(|(name, _)| {
+            !mcp_tools
+                .as_ref()
+                .is_some_and(|tools| tools.contains_key(*name))
+        }) {
+            builder.register_handler(name.clone(), mcp_handler.clone());
+        }
+    }
     builder
 }
 

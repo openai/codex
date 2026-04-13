@@ -191,7 +191,11 @@ async fn create_workspace_directory(
 ) -> Result<std::path::PathBuf> {
     let abs_path = test.config.cwd.join(rel_path.as_ref());
     test.fs()
-        .create_directory(&abs_path, CreateDirectoryOptions { recursive: true })
+        .create_directory(
+            &abs_path,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
         .await?;
     Ok(abs_path.into_path_buf())
 }

@@ -133,7 +133,7 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
@@ -147,7 +147,6 @@ Example with notification opt-out:
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
-- `thread/addCreditsNudgeEmail` — ask the backend to notify the workspace owner that the thread hit a usage limit; returns `{}` immediately and emits `account/addCreditsNudgeEmail/completed` with the result.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
@@ -190,6 +189,7 @@ Example with notification opt-out:
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools and auth status, plus resources/resource templates for `full` detail; supports cursor+limit pagination. If `detail` is omitted, the server defaults to `full`.
 - `mcpServer/resource/read` — read a resource from a thread's configured MCP server by `threadId`, `server`, and `uri`, returning text/blob resource `contents`.
+- `mcpServer/tool/call` — call a tool on a thread's configured MCP server by `threadId`, `server`, `tool`, optional `arguments`, and optional `_meta`, returning the MCP tool result.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `config/read` — fetch the effective config on disk after resolving config layering.
@@ -213,6 +213,7 @@ Start a fresh thread when you need a new Codex conversation.
     "sandbox": "workspaceWrite",
     "personality": "friendly",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
+    "sessionStartSource": "startup", // optional: "startup" (default) or "clear"
     // Experimental: requires opt-in
     "dynamicTools": [
         {
@@ -455,15 +456,6 @@ If the thread does not already have an active turn, the server starts a standalo
 ```json
 { "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short" } }
 { "id": 26, "result": {} }
-```
-
-### Example: Notify Workspace Owner About Usage Limit
-
-Use `thread/addCreditsNudgeEmail` when a usage-limit prompt needs to notify the thread's workspace owner. The request returns immediately with `{}`. The final delivery result is emitted separately as `account/addCreditsNudgeEmail/completed` for the same `threadId`.
-
-```json
-{ "method": "thread/addCreditsNudgeEmail", "id": 27, "params": { "threadId": "thr_b" } }
-{ "id": 27, "result": {} }
 ```
 
 ### Example: Start a turn (send user input)
@@ -1366,19 +1358,19 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 
 ### Authentication modes
 
-Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, the current `workspaceRole` when live account metadata can be fetched, and the derived `isWorkspaceOwner` flag. The same cached account state can be read from `account/read`.
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, and can be inferred from `account/read`.
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.
 
 ### API Overview
 
-- `account/read` — fetch cached current account info; optionally refresh tokens. ChatGPT workspace role is refreshed in the background and delivered by `account/updated` so this request does not wait for live account metadata.
+- `account/read` — fetch current account info; optionally refresh tokens.
 - `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
-- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType`, `workspaceRole`, and `isWorkspaceOwner`.
+- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
@@ -1395,19 +1387,16 @@ Request:
 Response examples:
 
 ```json
-{ "id": 1, "result": { "account": null, "workspaceRole": null, "isWorkspaceOwner": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
-{ "id": 1, "result": { "account": null, "workspaceRole": null, "isWorkspaceOwner": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
-{ "id": 1, "result": { "account": { "type": "apiKey" }, "workspaceRole": null, "isWorkspaceOwner": null, "requiresOpenaiAuth": true } }
-{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "workspaceRole": null, "isWorkspaceOwner": true, "requiresOpenaiAuth": true } }
-{ "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "pro", "workspaceRole": "account-admin", "isWorkspaceOwner": true } } // emitted when live workspace metadata arrives
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
+{ "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
+{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
 ```
 
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
-- `workspaceRole` is a nullable live account role from ChatGPT account metadata: `account-owner`, `account-admin`, or `standard-user`. It is normally delivered asynchronously in `account/updated`; clients should treat `null` from `account/read` as "not known yet".
-- `isWorkspaceOwner` is a nullable convenience flag. When `workspaceRole` is available, owners and admins map to `true` and standard users map to `false`; otherwise the server may fall back to the managed-account token's workspace-owner claim.
 
 ### 2) Log in with an API key
 
@@ -1426,7 +1415,7 @@ Field notes:
 3. Notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": null, "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "apikey", "planType": null, "workspaceRole": null, "isWorkspaceOwner": null } }
+   { "method": "account/updated", "params": { "authMode": "apikey", "planType": null } }
    ```
 
 ### 3) Log in with ChatGPT (browser flow)
@@ -1440,7 +1429,7 @@ Field notes:
 3. Wait for notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus", "workspaceRole": "account-owner", "isWorkspaceOwner": true } }
+   { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } }
    ```
 
 ### 4) Log in with ChatGPT (device code flow)
@@ -1454,7 +1443,7 @@ Field notes:
 3. Wait for notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus", "workspaceRole": "account-owner", "isWorkspaceOwner": true } }
+   { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } }
    ```
 
 ### 5) Cancel a ChatGPT login
@@ -1469,7 +1458,7 @@ Field notes:
 ```json
 { "method": "account/logout", "id": 6 }
 { "id": 6, "result": {} }
-{ "method": "account/updated", "params": { "authMode": null, "planType": null, "workspaceRole": null, "isWorkspaceOwner": null } }
+{ "method": "account/updated", "params": { "authMode": null, "planType": null } }
 ```
 
 ### 7) Rate limits (ChatGPT)

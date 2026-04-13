@@ -608,6 +608,32 @@ pub struct PluginConfig {
     pub enabled: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct MarketplaceConfig {
+    /// Last time Codex successfully added or refreshed this marketplace.
+    #[serde(default)]
+    pub last_updated: Option<String>,
+    /// Source kind used to install this marketplace.
+    #[serde(default)]
+    pub source_type: Option<MarketplaceSourceType>,
+    /// Source location used when the marketplace was added.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Git ref to check out when `source_type` is `git`.
+    #[serde(default, rename = "ref")]
+    pub ref_name: Option<String>,
+    /// Sparse checkout paths used when `source_type` is `git`.
+    #[serde(default)]
+    pub sparse_paths: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketplaceSourceType {
+    Git,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SandboxWorkspaceWrite {

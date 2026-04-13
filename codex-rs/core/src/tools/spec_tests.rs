@@ -3,7 +3,6 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::test_support::construct_model_info_offline;
 use crate::tools::ToolRouter;
-use crate::tools::registry::tool_handler_key;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
@@ -24,6 +23,7 @@ use codex_tools::ResponsesApiTool;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::TOOL_SUGGEST_TOOL_NAME;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
@@ -903,12 +903,14 @@ fn search_tool_registers_namespaced_mcp_tool_aliases() {
     )
     .build();
 
-    let app_alias = tool_handler_key("_create_event", Some("mcp__codex_apps__calendar"));
-    let mcp_alias = tool_handler_key("echo", Some("mcp__rmcp__"));
+    let app_alias = ToolName::namespaced("mcp__codex_apps__calendar", "_create_event");
+    let mcp_alias = ToolName::namespaced("mcp__rmcp__", "echo");
 
-    assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, /*namespace*/ None));
-    assert!(registry.has_handler(app_alias.as_str(), /*namespace*/ None));
-    assert!(registry.has_handler(mcp_alias.as_str(), /*namespace*/ None));
+    assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
+    assert!(registry.has_handler(&app_alias));
+    assert!(registry.has_handler(&mcp_alias));
+    assert!(registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
+    assert!(registry.has_handler(&ToolName::plain("mcp__rmcp__echo")));
 }
 
 #[test]

@@ -945,8 +945,6 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                         user_text,
                         &writer,
                         &events_tx,
-                        session_kind,
-                        &mut response_create_queue,
                     )
                         .await
                 }
@@ -992,8 +990,6 @@ async fn handle_user_text_input(
     text: Result<String, RecvError>,
     writer: &RealtimeWebsocketWriter,
     events_tx: &Sender<RealtimeEvent>,
-    session_kind: RealtimeSessionKind,
-    response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
     let text = text.context("user text input channel closed")?;
 
@@ -1004,14 +1000,6 @@ async fn handle_user_text_input(
             .send(RealtimeEvent::Error(mapped_error.to_string()))
             .await;
         return Err(mapped_error.into());
-    }
-    match session_kind {
-        RealtimeSessionKind::V1 => {}
-        RealtimeSessionKind::V2 => {
-            response_create_queue
-                .request_create(writer, events_tx, "text")
-                .await?;
-        }
     }
     Ok(())
 }
