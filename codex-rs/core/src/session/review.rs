@@ -100,6 +100,7 @@ pub(super) async fn spawn_review_thread(
     let review_turn_context = TurnContext {
         sub_id: review_turn_id,
         trace_id: current_span_trace_id(),
+        trace_context: current_span_w3c_trace_context(),
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,

@@ -23,6 +23,9 @@ use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -55,6 +58,12 @@ use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_path_buf;
 use insta::Settings;
 use insta::assert_snapshot;
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -162,6 +171,106 @@ async fn guardian_test_session_and_turn_with_base_url(
     turn.user_instructions = None;
 
     (Arc::new(session), Arc::new(turn))
+}
+
+async fn guardian_test_session_and_turn_with_telemetry(
+    base_url: &str,
+    session_telemetry: SessionTelemetry,
+) -> (Arc<Session>, Arc<TurnContext>) {
+    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    session.conversation_id = fixed_guardian_parent_session_id();
+    session.services.session_telemetry = session_telemetry.clone();
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{base_url}/v1"));
+    config.user_instructions = None;
+    let config = Arc::new(config);
+    let models_manager = Arc::new(test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    session.services.models_manager = models_manager;
+    turn.config = Arc::clone(&config);
+    turn.provider = config.model_provider.clone();
+    turn.user_instructions = None;
+    turn.session_telemetry = session_telemetry;
+
+    (Arc::new(session), Arc::new(turn))
+}
+
+fn test_session_telemetry() -> SessionTelemetry {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        codex_protocol::protocol::SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    for scope_metrics in resource_metrics.scope_metrics() {
+        for metric in scope_metrics.metrics() {
+            if metric.name() == name {
+                return metric;
+            }
+        }
+    }
+    panic!("metric {name} missing");
+}
+
+fn attributes_to_map<'a>(
+    attributes: impl Iterator<Item = &'a KeyValue>,
+) -> BTreeMap<String, String> {
+    attributes
+        .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
+        .collect()
+}
+
+fn metric_sum_points(
+    resource_metrics: &ResourceMetrics,
+    name: &str,
+) -> Vec<(BTreeMap<String, String>, u64)> {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+            .data_points()
+            .map(|point| (attributes_to_map(point.attributes()), point.value()))
+            .collect(),
+        _ => panic!("unexpected counter aggregation for {name}"),
+    }
+}
+
+fn metric_histogram_points(
+    resource_metrics: &ResourceMetrics,
+    name: &str,
+) -> Vec<(BTreeMap<String, String>, u64, f64)> {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+            .data_points()
+            .map(|point| {
+                (
+                    attributes_to_map(point.attributes()),
+                    point.count(),
+                    point.sum(),
+                )
+            })
+            .collect(),
+        _ => panic!("unexpected histogram aggregation for {name}"),
+    }
 }
 
 async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnContext>) {
@@ -325,6 +434,11 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
     assert!(text.contains("The Codex agent has requested the following action:\n"));
     assert!(!text.contains("TRANSCRIPT DELTA"));
     assert_eq!(prompt.transcript_cursor.transcript_entry_count, 4);
+    assert_eq!(prompt.stats.prompt_mode, GuardianPromptModeKind::Full);
+    assert_eq!(prompt.stats.total_transcript_entries, 4);
+    assert_eq!(prompt.stats.considered_transcript_entries, 4);
+    assert_eq!(prompt.stats.retained_transcript_entries, 4);
+    assert!(prompt.stats.approx_prompt_tokens > 0);
 
     Ok(())
 }
@@ -388,6 +502,11 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
     assert!(text.contains("The Codex agent has requested the following next action:\n"));
     assert!(!text.contains("[1] user: Please check the repo visibility"));
     assert_eq!(prompt.transcript_cursor.transcript_entry_count, 6);
+    assert_eq!(prompt.stats.prompt_mode, GuardianPromptModeKind::Delta);
+    assert_eq!(prompt.stats.total_transcript_entries, 6);
+    assert_eq!(prompt.stats.considered_transcript_entries, 2);
+    assert_eq!(prompt.stats.retained_transcript_entries, 2);
+    assert!(prompt.stats.approx_prompt_tokens > 0);
 
     Ok(())
 }
@@ -1148,6 +1267,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         Arc::clone(&session),
         Arc::clone(&turn),
         request,
+        super::observability::GuardianApprovalRequestSource::MainTurn,
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         guardian_output_schema(),
         /*external_cancel*/ None,
@@ -1230,6 +1350,167 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             ))
         );
     });
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_records_lifecycle_metrics() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "medium",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The user explicitly requested the push.",
+    })
+    .to_string();
+    let _request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-metrics"),
+            ev_assistant_message("msg-guardian-metrics", &guardian_assessment),
+            ev_completed("resp-guardian-metrics"),
+        ]),
+    )
+    .await;
+
+    let session_telemetry = test_session_telemetry();
+    let (session, turn) = guardian_test_session_and_turn_with_telemetry(
+        server.uri().as_str(),
+        session_telemetry.clone(),
+    )
+    .await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-shell-guardian-metrics".to_string(),
+        GuardianApprovalRequest::Shell {
+            id: "shell-guardian-metrics".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Approved);
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+
+    assert!(
+        metric_sum_points(
+            &snapshot,
+            super::observability::GUARDIAN_REVIEW_COUNT_METRIC
+        )
+        .into_iter()
+        .any(|(attrs, value)| {
+            value == 1
+                && attrs.get("action_kind") == Some(&"shell".to_string())
+                && attrs.get("result") == Some(&"approved".to_string())
+                && attrs.get("retry") == Some(&"true".to_string())
+                && attrs.get("target_item") == Some(&"true".to_string())
+        })
+    );
+
+    assert!(
+        metric_histogram_points(
+            &snapshot,
+            super::observability::GUARDIAN_REVIEW_DURATION_METRIC,
+        )
+        .into_iter()
+        .any(|(attrs, count, _)| {
+            count >= 1
+                && attrs.get("action_kind") == Some(&"shell".to_string())
+                && attrs.get("result") == Some(&"approved".to_string())
+        })
+    );
+
+    let phase_points = metric_histogram_points(
+        &snapshot,
+        super::observability::GUARDIAN_REVIEW_PHASE_DURATION_METRIC,
+    );
+    assert!(phase_points.iter().any(|(attrs, count, _)| {
+        *count >= 1
+            && attrs.get("action_kind") == Some(&"shell".to_string())
+            && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+            && attrs.get("phase") == Some(&"session_spawn".to_string())
+            && attrs.get("prompt_mode") == Some(&"not_applicable".to_string())
+    }));
+    assert!(phase_points.iter().any(|(attrs, count, _)| {
+        *count >= 1
+            && attrs.get("action_kind") == Some(&"shell".to_string())
+            && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+            && attrs.get("phase") == Some(&"prompt_build".to_string())
+            && attrs.get("prompt_mode") == Some(&"full".to_string())
+    }));
+    assert!(phase_points.iter().any(|(attrs, count, _)| {
+        *count >= 1
+            && attrs.get("action_kind") == Some(&"shell".to_string())
+            && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+            && attrs.get("phase") == Some(&"sync_approved_hosts".to_string())
+            && attrs.get("prompt_mode") == Some(&"full".to_string())
+    }));
+    assert!(phase_points.iter().any(|(attrs, count, _)| {
+        *count >= 1
+            && attrs.get("action_kind") == Some(&"shell".to_string())
+            && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+            && attrs.get("phase") == Some(&"turn_submit".to_string())
+            && attrs.get("prompt_mode") == Some(&"full".to_string())
+            && attrs.get("result") == Some(&"completed".to_string())
+    }));
+    assert!(phase_points.iter().any(|(attrs, count, _)| {
+        *count >= 1
+            && attrs.get("action_kind") == Some(&"shell".to_string())
+            && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+            && attrs.get("phase") == Some(&"wait".to_string())
+            && attrs.get("prompt_mode") == Some(&"full".to_string())
+            && attrs.get("result") == Some(&"completed".to_string())
+    }));
+
+    assert!(
+        metric_histogram_points(
+            &snapshot,
+            super::observability::GUARDIAN_REVIEW_PROMPT_APPROX_TOKENS_METRIC,
+        )
+        .into_iter()
+        .any(|(attrs, count, sum)| {
+            count >= 1
+                && sum > 0.0
+                && attrs.get("action_kind") == Some(&"shell".to_string())
+                && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+                && attrs.get("prompt_mode") == Some(&"full".to_string())
+        })
+    );
+
+    let transcript_points = metric_histogram_points(
+        &snapshot,
+        super::observability::GUARDIAN_REVIEW_PROMPT_TRANSCRIPT_ENTRIES_METRIC,
+    );
+    assert!(transcript_points.iter().any(|(attrs, count, sum)| {
+        *count >= 1
+            && *sum >= 4.0
+            && attrs.get("action_kind") == Some(&"shell".to_string())
+            && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+            && attrs.get("prompt_mode") == Some(&"full".to_string())
+            && attrs.get("entry_scope") == Some(&"total".to_string())
+    }));
+    assert!(transcript_points.iter().any(|(attrs, count, sum)| {
+        *count >= 1
+            && *sum >= 4.0
+            && attrs.get("action_kind") == Some(&"shell".to_string())
+            && attrs.get("session_mode") == Some(&"trunk_spawned".to_string())
+            && attrs.get("prompt_mode") == Some(&"full".to_string())
+            && attrs.get("entry_scope") == Some(&"retained".to_string())
+    }));
 
     Ok(())
 }
@@ -1326,6 +1607,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&session),
         Arc::clone(&turn),
         first_request,
+        super::observability::GuardianApprovalRequestSource::MainTurn,
         Some("First retry reason".to_string()),
         guardian_output_schema(),
         /*external_cancel*/ None,
@@ -1372,6 +1654,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&session),
         Arc::clone(&turn),
         second_request,
+        super::observability::GuardianApprovalRequestSource::MainTurn,
         Some("Second retry reason".to_string()),
         guardian_output_schema(),
         /*external_cancel*/ None,
@@ -1414,6 +1697,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&session),
         Arc::clone(&turn),
         third_request,
+        super::observability::GuardianApprovalRequestSource::MainTurn,
         Some("Third retry reason".to_string()),
         guardian_output_schema(),
         /*external_cancel*/ None,

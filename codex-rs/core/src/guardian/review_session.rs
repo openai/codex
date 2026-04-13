@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
+use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::W3cTraceContext;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -113,6 +115,17 @@ fn token_usage_delta(start: &TokenUsage, end: &TokenUsage) -> TokenUsage {
             .max(0),
         total_tokens: (end.total_tokens - start.total_tokens).max(0),
     }
+}
+
+fn guardian_review_submit_trace(parent_turn: &TurnContext) -> Option<W3cTraceContext> {
+    current_span_w3c_trace_context().or_else(|| parent_turn.trace_context.clone())
+}
+
+#[cfg(test)]
+pub(crate) fn guardian_review_submit_trace_for_test(
+    parent_turn: &TurnContext,
+) -> Option<W3cTraceContext> {
+    guardian_review_submit_trace(parent_turn)
 }
 
 struct EphemeralReviewCleanup {
@@ -684,20 +697,29 @@ async fn run_review_on_session(
     let submit_result = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
-        Box::pin(review_session.codex.submit(Op::UserTurn {
-            environments: None,
-            items: prompt_items.items,
-            cwd: params.parent_turn.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            model: params.model.clone(),
-            effort: params.reasoning_effort,
-            summary: Some(params.reasoning_summary),
-            service_tier: None,
-            final_output_json_schema: Some(params.schema.clone()),
-            collaboration_mode: None,
-            personality: params.personality,
+        Box::pin(async {
+            let review_trace = guardian_review_submit_trace(&params.parent_turn);
+            review_session
+                .codex
+                .submit_with_trace(
+                    Op::UserTurn {
+                        environments: None,
+                        items: prompt_items.items,
+                        cwd: params.parent_turn.cwd.to_path_buf(),
+                        approval_policy: AskForApproval::Never,
+                        approvals_reviewer: None,
+                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                        model: params.model.clone(),
+                        effort: params.reasoning_effort,
+                        summary: Some(params.reasoning_summary),
+                        service_tier: None,
+                        final_output_json_schema: Some(params.schema.clone()),
+                        collaboration_mode: None,
+                        personality: params.personality,
+                    },
+                    review_trace,
+                )
+                .await
         })),
     )
     .await;

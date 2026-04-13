@@ -7,6 +7,8 @@ use codex_analytics::GuardianReviewFailureReason;
 use codex_analytics::GuardianReviewTerminalStatus;
 use codex_analytics::GuardianReviewTrackContext;
 use codex_features::Feature;
+use codex_otel::current_span_w3c_trace_context;
+use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -18,9 +20,12 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::protocol::WarningEvent;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::warn;
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -159,6 +164,29 @@ pub(crate) fn is_guardian_reviewer_source(
     )
 }
 
+fn guardian_review_parent_trace<'a>(
+    parent_trace: Option<&'a W3cTraceContext>,
+    turn: &'a TurnContext,
+) -> Option<&'a W3cTraceContext> {
+    parent_trace.or(turn.trace_context.as_ref())
+}
+
+#[cfg(test)]
+pub(crate) async fn guardian_review_trace_for_test(
+    turn: Arc<TurnContext>,
+    parent_trace: Option<W3cTraceContext>,
+) -> Option<W3cTraceContext> {
+    let review_span = tracing::info_span!("guardian_review");
+    if let Some(parent_trace) = guardian_review_parent_trace(parent_trace.as_ref(), turn.as_ref())
+        && !set_parent_from_w3c_trace_context(&review_span, parent_trace)
+    {
+        return None;
+    }
+    async { current_span_w3c_trace_context() }
+        .instrument(review_span)
+        .await
+}
+
 fn track_guardian_review(
     session: &Session,
     turn: &TurnContext,
@@ -243,6 +271,7 @@ async fn run_guardian_review(
     retry_reason: Option<String>,
     approval_request_source: GuardianApprovalRequestSource,
     external_cancel: Option<CancellationToken>,
+    parent_trace: Option<W3cTraceContext>,
 ) -> ReviewDecision {
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
@@ -310,14 +339,28 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let (outcome, analytics_result) = Box::pin(run_guardian_review_session(
-        session.clone(),
-        turn.clone(),
-        request,
-        retry_reason.clone(),
-        schema,
-        external_cancel,
-    ))
+    let review_span = tracing::info_span!(
+        "guardian_review",
+        review_id = %review_id,
+        turn_id = %assessment_turn_id,
+        target_item_id = target_item_id.as_deref().unwrap_or("<none>"),
+    );
+    if let Some(parent_trace) = guardian_review_parent_trace(parent_trace.as_ref(), turn.as_ref())
+        && !set_parent_from_w3c_trace_context(&review_span, parent_trace)
+    {
+        warn!("ignoring invalid guardian review trace carrier");
+    }
+    let (outcome, analytics_result) = Box::pin(
+        run_guardian_review_session(
+            session.clone(),
+            turn.clone(),
+            request,
+            retry_reason.clone(),
+            schema,
+            external_cancel,
+        )
+        .instrument(review_span),
+    )
     .await;
 
     let (assessment, count_denial_for_circuit_breaker) = match outcome {
@@ -546,6 +589,7 @@ pub(crate) async fn review_approval_request(
         retry_reason,
         GuardianApprovalRequestSource::MainTurn,
         /*external_cancel*/ None,
+        /*parent_trace*/ None,
     ))
     .await
 }
@@ -567,6 +611,30 @@ pub(crate) async fn review_approval_request_with_cancel(
         retry_reason,
         approval_request_source,
         Some(cancel_token),
+        /*parent_trace*/ None,
+    )
+    .await
+}
+
+pub(crate) async fn review_approval_request_with_cancel_and_trace(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    approval_request_source: GuardianApprovalRequestSource,
+    parent_trace: Option<W3cTraceContext>,
+    cancel_token: CancellationToken,
+) -> ReviewDecision {
+    run_guardian_review(
+        Arc::clone(session),
+        Arc::clone(turn),
+        review_id,
+        request,
+        retry_reason,
+        approval_request_source,
+        Some(cancel_token),
+        parent_trace,
     )
     .await
 }
@@ -581,6 +649,7 @@ pub(crate) fn spawn_approval_request_review(
     cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
+    let parent_trace = current_span_w3c_trace_context();
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -589,13 +658,14 @@ pub(crate) fn spawn_approval_request_review(
             let _ = tx.send(ReviewDecision::Denied);
             return;
         };
-        let decision = runtime.block_on(review_approval_request_with_cancel(
+        let decision = runtime.block_on(review_approval_request_with_cancel_and_trace(
             &session,
             &turn,
             review_id,
             request,
             retry_reason,
             approval_request_source,
+            parent_trace,
             cancel_token,
         ));
         let _ = tx.send(decision);
