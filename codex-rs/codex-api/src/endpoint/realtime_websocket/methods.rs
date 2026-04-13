@@ -17,6 +17,8 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::backoff;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_protocol::protocol::RealtimeTranscriptDelta;
+use codex_protocol::protocol::RealtimeTranscriptDone;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -219,9 +221,18 @@ struct ActiveTranscriptState {
 
 #[derive(Debug, PartialEq, Eq)]
 struct ActiveTranscriptPart {
-    role: String,
+    key: TranscriptPartKey,
     entry_index: usize,
     start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranscriptPartKey {
+    role: String,
+    item_id: Option<String>,
+    output_index: Option<u32>,
+    content_index: Option<u32>,
 }
 
 impl RealtimeWebsocketConnection {
@@ -422,16 +433,16 @@ impl RealtimeWebsocketEvents {
         match event {
             RealtimeEvent::InputAudioSpeechStarted(_) => {}
             RealtimeEvent::InputTranscriptDelta(update) => {
-                append_transcript_delta(&mut active_transcript, "user", &update.delta);
+                append_transcript_delta(&mut active_transcript, "user", update);
             }
             RealtimeEvent::InputTranscriptDone(update) => {
-                complete_transcript_entry(&mut active_transcript, "user", &update.text);
+                complete_transcript_entry(&mut active_transcript, "user", update);
             }
             RealtimeEvent::OutputTranscriptDelta(update) => {
-                append_transcript_delta(&mut active_transcript, "assistant", &update.delta);
+                append_transcript_delta(&mut active_transcript, "assistant", update);
             }
             RealtimeEvent::OutputTranscriptDone(update) => {
-                complete_transcript_entry(&mut active_transcript, "assistant", &update.text);
+                complete_transcript_entry(&mut active_transcript, "assistant", update);
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 if self.event_parser == RealtimeEventParser::V1 {
@@ -451,70 +462,104 @@ impl RealtimeWebsocketEvents {
     }
 }
 
-fn append_transcript_delta(state: &mut ActiveTranscriptState, role: &str, delta: &str) {
-    if delta.is_empty() {
+fn append_transcript_delta(
+    state: &mut ActiveTranscriptState,
+    role: &str,
+    update: &RealtimeTranscriptDelta,
+) {
+    if update.delta.is_empty() {
         return;
     }
 
-    let entry_index = match state.entries.last() {
-        Some(last_entry) if last_entry.role == role => state.entries.len() - 1,
-        _ => {
-            state.entries.push(RealtimeTranscriptEntry {
-                role: role.to_string(),
-                text: String::new(),
-            });
-            state.entries.len() - 1
-        }
-    };
+    let key = transcript_part_key(
+        role,
+        update.item_id.as_deref(),
+        update.output_index,
+        update.content_index,
+    );
 
-    let part_index = state
+    if let Some(part_index) = state
         .in_progress_parts
         .iter()
-        .position(|part| part.role == role);
-    let start = part_index
-        .and_then(|index| state.in_progress_parts.get(index))
-        .filter(|part| part.entry_index == entry_index)
-        .map(|part| part.start)
-        .unwrap_or_else(|| state.entries[entry_index].text.len());
+        .position(|part| part.key == key)
+    {
+        let entry_index = state.in_progress_parts[part_index].entry_index;
+        if state
+            .entries
+            .get(entry_index)
+            .is_some_and(|entry| entry.role == role)
+        {
+            let insert_at = state.in_progress_parts[part_index].end;
+            state.entries[entry_index]
+                .text
+                .insert_str(insert_at, &update.delta);
+            adjust_transcript_part_offsets(
+                state,
+                entry_index,
+                insert_at,
+                isize::try_from(update.delta.len()).unwrap_or(isize::MAX),
+            );
+            state.in_progress_parts[part_index].end += update.delta.len();
+            return;
+        }
 
-    let active_part = ActiveTranscriptPart {
-        role: role.to_string(),
+        state.in_progress_parts.swap_remove(part_index);
+    }
+
+    let entry_index = transcript_entry_index(&mut state.entries, role);
+    let start = state.entries[entry_index].text.len();
+    state.entries[entry_index].text.push_str(&update.delta);
+
+    state.in_progress_parts.push(ActiveTranscriptPart {
+        key,
         entry_index,
         start,
-    };
-    if let Some(index) = part_index {
-        state.in_progress_parts[index] = active_part;
-    } else {
-        state.in_progress_parts.push(active_part);
-    }
-
-    state.entries[entry_index].text.push_str(delta);
+        end: start + update.delta.len(),
+    });
 }
 
-fn complete_transcript_entry(state: &mut ActiveTranscriptState, role: &str, text: &str) {
+fn complete_transcript_entry(
+    state: &mut ActiveTranscriptState,
+    role: &str,
+    update: &RealtimeTranscriptDone,
+) {
+    let key = transcript_part_key(
+        role,
+        update.item_id.as_deref(),
+        update.output_index,
+        update.content_index,
+    );
     let part_index = state
         .in_progress_parts
         .iter()
-        .position(|part| part.role == role);
-
-    if text.is_empty() {
-        if let Some(part_index) = part_index {
-            state.in_progress_parts.swap_remove(part_index);
-        }
-        return;
-    }
+        .position(|part| part.key == key);
 
     if let Some(part_index) = part_index {
         let part = state.in_progress_parts.swap_remove(part_index);
-        if let Some(entry) = state.entries.get_mut(part.entry_index)
+        let old_len = part.end.saturating_sub(part.start);
+        let replaced = if let Some(entry) = state.entries.get_mut(part.entry_index)
             && entry.role == role
-            && part.start <= entry.text.len()
+            && part.end <= entry.text.len()
         {
             // Done events carry the complete current part, not the complete
-            // message, so only replace the suffix accumulated for that part.
-            entry.text.replace_range(part.start.., text);
+            // message, so only replace the range accumulated for that part.
+            entry.text.replace_range(part.start..part.end, &update.text);
+            true
+        } else {
+            false
+        };
+
+        if replaced {
+            let length_delta = isize::try_from(update.text.len()).unwrap_or(isize::MAX)
+                - isize::try_from(old_len).unwrap_or(isize::MAX);
+            adjust_transcript_part_offsets(state, part.entry_index, part.end, length_delta);
             return;
         }
+    }
+
+    let text = &update.text;
+    if text.is_empty() {
+        return;
     }
 
     if let Some(last_entry) = state.entries.last_mut()
@@ -528,6 +573,59 @@ fn complete_transcript_entry(state: &mut ActiveTranscriptState, role: &str, text
         role: role.to_string(),
         text: text.to_string(),
     });
+}
+
+fn transcript_part_key(
+    role: &str,
+    item_id: Option<&str>,
+    output_index: Option<u32>,
+    content_index: Option<u32>,
+) -> TranscriptPartKey {
+    TranscriptPartKey {
+        role: role.to_string(),
+        item_id: item_id.map(str::to_string),
+        output_index,
+        content_index,
+    }
+}
+
+fn transcript_entry_index(entries: &mut Vec<RealtimeTranscriptEntry>, role: &str) -> usize {
+    match entries.last() {
+        Some(last_entry) if last_entry.role == role => entries.len() - 1,
+        _ => {
+            entries.push(RealtimeTranscriptEntry {
+                role: role.to_string(),
+                text: String::new(),
+            });
+            entries.len() - 1
+        }
+    }
+}
+
+fn adjust_transcript_part_offsets(
+    state: &mut ActiveTranscriptState,
+    entry_index: usize,
+    after: usize,
+    amount: isize,
+) {
+    if amount == 0 {
+        return;
+    }
+
+    for part in &mut state.in_progress_parts {
+        if part.entry_index == entry_index && part.start >= after {
+            adjust_offset(&mut part.start, amount);
+            adjust_offset(&mut part.end, amount);
+        }
+    }
+}
+
+fn adjust_offset(offset: &mut usize, amount: isize) {
+    if amount.is_positive() {
+        *offset += amount.unsigned_abs();
+    } else {
+        *offset -= amount.unsigned_abs();
+    }
 }
 
 pub struct RealtimeWebsocketClient {
@@ -931,6 +1029,7 @@ mod tests {
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello ".to_string(),
+                    ..Default::default()
                 }
             ))
         );
@@ -949,6 +1048,7 @@ mod tests {
             Some(RealtimeEvent::OutputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hi".to_string(),
+                    ..Default::default()
                 }
             ))
         );
@@ -983,6 +1083,8 @@ mod tests {
     fn parse_realtime_v2_input_audio_transcription_delta_event() {
         let payload = json!({
             "type": "conversation.item.input_audio_transcription.delta",
+            "item_id": "item_input_1",
+            "content_index": 0,
             "delta": "hello"
         })
         .to_string();
@@ -992,6 +1094,9 @@ mod tests {
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello".to_string(),
+                    item_id: Some("item_input_1".to_string()),
+                    output_index: None,
+                    content_index: Some(0),
                 }
             ))
         );
@@ -1001,6 +1106,9 @@ mod tests {
     fn parse_realtime_v2_output_text_done_event() {
         let payload = json!({
             "type": "response.output_text.done",
+            "item_id": "item_output_1",
+            "output_index": 0,
+            "content_index": 1,
             "text": "all done"
         })
         .to_string();
@@ -1010,6 +1118,9 @@ mod tests {
             Some(RealtimeEvent::OutputTranscriptDone(
                 RealtimeTranscriptDone {
                     text: "all done".to_string(),
+                    item_id: Some("item_output_1".to_string()),
+                    output_index: Some(0),
+                    content_index: Some(1),
                 }
             ))
         );
@@ -1018,11 +1129,35 @@ mod tests {
     #[test]
     fn complete_transcript_entry_replaces_current_part_only() {
         let mut state = ActiveTranscriptState::default();
+        let first_part_delta = RealtimeTranscriptDelta {
+            delta: "hel".to_string(),
+            item_id: Some("item_output_1".to_string()),
+            output_index: Some(0),
+            content_index: Some(0),
+        };
+        let second_part_delta = RealtimeTranscriptDelta {
+            delta: " wor".to_string(),
+            item_id: Some("item_output_1".to_string()),
+            output_index: Some(0),
+            content_index: Some(1),
+        };
+        let first_part_done = RealtimeTranscriptDone {
+            text: "hello".to_string(),
+            item_id: Some("item_output_1".to_string()),
+            output_index: Some(0),
+            content_index: Some(0),
+        };
+        let second_part_done = RealtimeTranscriptDone {
+            text: " world".to_string(),
+            item_id: Some("item_output_1".to_string()),
+            output_index: Some(0),
+            content_index: Some(1),
+        };
 
-        append_transcript_delta(&mut state, "assistant", "hello");
-        complete_transcript_entry(&mut state, "assistant", "hello");
-        append_transcript_delta(&mut state, "assistant", " wor");
-        complete_transcript_entry(&mut state, "assistant", " world");
+        append_transcript_delta(&mut state, "assistant", &first_part_delta);
+        append_transcript_delta(&mut state, "assistant", &second_part_delta);
+        complete_transcript_entry(&mut state, "assistant", &second_part_done);
+        complete_transcript_entry(&mut state, "assistant", &first_part_done);
 
         assert_eq!(
             state,
@@ -1571,6 +1706,7 @@ mod tests {
             input_delta_event,
             RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "delegate ".to_string(),
+                ..Default::default()
             })
         );
 
@@ -1583,6 +1719,7 @@ mod tests {
             input_delta_event,
             RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "now".to_string(),
+                ..Default::default()
             })
         );
 
@@ -1595,6 +1732,7 @@ mod tests {
             output_delta_event,
             RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "working".to_string(),
+                ..Default::default()
             })
         );
 
