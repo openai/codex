@@ -15,7 +15,6 @@ use crate::ApplyPatchArgs;
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
-use crate::IoError;
 use crate::MaybeApplyPatchVerified;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
@@ -171,15 +170,17 @@ pub async fn maybe_parse_apply_patch_verified(
                         );
                     }
                     Hunk::DeleteFile { .. } => {
-                        let content = match fs.read_file_text(&path, sandbox).await {
+                        let content = match crate::read_file_utf8_with_context(
+                            &path,
+                            fs,
+                            sandbox,
+                            format!("Failed to read {}", path.display()),
+                        )
+                        .await
+                        {
                             Ok(content) => content,
                             Err(e) => {
-                                return MaybeApplyPatchVerified::CorrectnessError(
-                                    ApplyPatchError::IoError(IoError {
-                                        context: format!("Failed to read {}", path.display()),
-                                        source: e,
-                                    }),
-                                );
+                                return MaybeApplyPatchVerified::CorrectnessError(e);
                             }
                         };
                         changes.insert(
@@ -852,6 +853,71 @@ PATCH"#,
                 );
             }
             other => panic!("expected update change, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verified_delete_file_reports_invalid_utf8_context() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("binary.bin");
+        fs::write(&path, [0xFF_u8, 0xFE]).unwrap();
+
+        let argv = vec![
+            "apply_patch".to_string(),
+            wrap_patch(&format!("*** Delete File: {}", path.display())),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(
+            &argv,
+            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        match result {
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::IoError(err)) => {
+                assert_eq!(err.context, format!("Failed to read {}", path.display()));
+                assert_eq!(err.source.kind(), std::io::ErrorKind::InvalidData);
+            }
+            other => panic!("expected invalid-data IoError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verified_update_file_reports_invalid_utf8_context() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("binary.bin");
+        fs::write(&path, [0xFF_u8, 0xFE]).unwrap();
+
+        let argv = vec![
+            "apply_patch".to_string(),
+            wrap_patch(&format!(
+                r#"*** Update File: {}
+@@
+-placeholder
++replacement"#,
+                path.display()
+            )),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(
+            &argv,
+            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        match result {
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::IoError(err)) => {
+                assert_eq!(
+                    err.context,
+                    format!("Failed to read file to update {}", path.display())
+                );
+                assert_eq!(err.source.kind(), std::io::ErrorKind::InvalidData);
+            }
+            other => panic!("expected invalid-data IoError, got {other:?}"),
         }
     }
 }

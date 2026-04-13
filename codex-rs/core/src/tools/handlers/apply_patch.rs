@@ -197,7 +197,7 @@ impl ToolHandler for ApplyPatchHandler {
                         let content = item?;
                         Ok(ApplyPatchToolOutput::from_text(content))
                     }
-                    InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                    InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
@@ -308,7 +308,7 @@ pub(crate) async fn intercept_apply_patch(
                     let content = item?;
                     Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
-                InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(

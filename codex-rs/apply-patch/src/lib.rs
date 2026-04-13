@@ -35,9 +35,9 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// internal `apply_patch` path.
 ///
 /// Although this constant lives in `codex-apply-patch` (to avoid forcing
-/// `codex-arg0` to depend on `codex-core`), it is part of the "codex core"
-/// process-invocation contract between the apply-patch runtime and the arg0
-/// dispatcher.
+/// `codex-arg0` to depend on `codex-core`), it remains part of the "codex
+/// core" process-invocation contract for the standalone `apply_patch` command
+/// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
 #[derive(Debug, Error, PartialEq)]
@@ -134,8 +134,8 @@ pub enum MaybeApplyPatchVerified {
 pub struct ApplyPatchAction {
     changes: HashMap<PathBuf, ApplyPatchFileChange>,
 
-    /// The raw patch argument that can be used with `apply_patch` as an exec
-    /// call. i.e., if the original arg was parsed in "lenient" mode with a
+    /// The raw patch argument that can be used to apply the patch. i.e., if the
+    /// original arg was parsed in "lenient" mode with a
     /// heredoc, this should be the value without the heredoc wrapper.
     pub patch: String,
 
@@ -242,6 +242,26 @@ pub async fn apply_hunks(
             }
         }
     }
+}
+
+pub(crate) async fn read_file_utf8_with_context(
+    path_abs: &AbsolutePathBuf,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+    context: String,
+) -> std::result::Result<String, ApplyPatchError> {
+    let bytes = fs.read_file(path_abs, sandbox).await.map_err(|err| {
+        ApplyPatchError::IoError(IoError {
+            context: context.clone(),
+            source: err,
+        })
+    })?;
+    String::from_utf8(bytes).map_err(|err| {
+        ApplyPatchError::IoError(IoError {
+            context,
+            source: io::Error::new(io::ErrorKind::InvalidData, err),
+        })
+    })
 }
 
 /// Applies each parsed patch hunk to the filesystem.
@@ -392,12 +412,13 @@ async fn derive_new_contents_from_chunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path_abs, sandbox).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!("Failed to read file to update {}", path_abs.display()),
-            source: err,
-        })
-    })?;
+    let original_contents = read_file_utf8_with_context(
+        path_abs,
+        fs,
+        sandbox,
+        format!("Failed to read file to update {}", path_abs.display()),
+    )
+    .await?;
 
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 
@@ -602,6 +623,7 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::io::ErrorKind;
     use std::string::ToString;
     use tempfile::tempdir;
 
@@ -1301,5 +1323,30 @@ g
         )
         .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_file_utf8_with_context_reports_invalid_utf8() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("invalid.bin");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+        let path = AbsolutePathBuf::from_absolute_path(&path).unwrap();
+
+        let err = read_file_utf8_with_context(
+            &path,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+            "custom context".to_string(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            ApplyPatchError::IoError(io_err) => {
+                assert_eq!(io_err.context, "custom context");
+                assert_eq!(io_err.source.kind(), ErrorKind::InvalidData);
+            }
+            other => panic!("expected IoError, got {other:?}"),
+        }
     }
 }

@@ -254,7 +254,7 @@ where
 ///
 /// - UNIX: `apply_patch` symlink to the current executable
 /// - WINDOWS: `apply_patch.bat` batch script to invoke the current executable
-///   with the "secret" --codex-run-as-apply-patch flag.
+///   with the hidden `--codex-run-as-apply-patch` flag.
 ///
 /// This temporary directory is prepended to the PATH environment variable so
 /// that `apply_patch` can be on the PATH without requiring the user to
@@ -437,16 +437,24 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
 
 #[cfg(test)]
 mod tests {
+    use super::APPLY_PATCH_ARG0;
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::MISSPELLED_APPLY_PATCH_ARG0;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
+    use super::prepend_path_entry_for_codex_aliases;
     use std::fs;
     use std::fs::File;
+    use std::path::Component;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::LazyLock;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn create_lock(dir: &Path) -> std::io::Result<File> {
         let lock_path = dir.join(LOCK_FILENAME);
@@ -517,5 +525,59 @@ mod tests {
 
         assert!(!dir.exists());
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepend_path_entry_creates_apply_patch_aliases() -> std::io::Result<()> {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let codex_home = tempfile::tempdir()?;
+        let previous_codex_home = std::env::var_os("CODEX_HOME");
+        let previous_path = std::env::var_os("PATH");
+
+        unsafe {
+            std::env::set_var("CODEX_HOME", codex_home.path());
+        }
+
+        let result = (|| -> std::io::Result<()> {
+            let _guard = prepend_path_entry_for_codex_aliases()?;
+            let path = std::env::var_os("PATH").expect("PATH should be set");
+            let alias_dir = std::env::split_paths(&path)
+                .next()
+                .expect("prepended alias dir should be first on PATH");
+            assert!(
+                alias_dir
+                    .components()
+                    .all(|component| !matches!(component, Component::ParentDir))
+            );
+
+            for alias_name in [APPLY_PATCH_ARG0, MISSPELLED_APPLY_PATCH_ARG0] {
+                let alias_path = alias_dir.join(alias_name);
+                let metadata = fs::symlink_metadata(&alias_path)?;
+                assert!(metadata.file_type().is_symlink());
+                assert_eq!(fs::read_link(&alias_path)?, std::env::current_exe()?);
+            }
+
+            Ok(())
+        })();
+
+        match previous_path {
+            Some(value) => unsafe {
+                std::env::set_var("PATH", value);
+            },
+            None => unsafe {
+                std::env::remove_var("PATH");
+            },
+        }
+        match previous_codex_home {
+            Some(value) => unsafe {
+                std::env::set_var("CODEX_HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("CODEX_HOME");
+            },
+        }
+
+        result
     }
 }

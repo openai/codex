@@ -18,8 +18,8 @@ struct TestCodexAliasesGuard {
 const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 
 // This code runs before any other tests are run.
-// It allows the test binary to behave like codex and dispatch to apply_patch and codex-linux-sandbox
-// based on the arg0.
+// It allows the test binary to behave like codex and dispatch to apply_patch
+// and codex-linux-sandbox based on the arg0.
 // NOTE: this doesn't work on ARM
 #[ctor]
 pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = {
@@ -34,13 +34,11 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = {
         let _ = arg0_dispatch();
         return None;
     }
-
     // Helper re-execs inherit this ctor too, but they may run inside a sandbox
     // where creating another CODEX_HOME tempdir under /tmp is not allowed.
     if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
         return None;
     }
-
     #[allow(clippy::unwrap_used)]
     let codex_home = tempfile::Builder::new()
         .prefix("codex-core-tests")
