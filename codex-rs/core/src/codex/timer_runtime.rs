@@ -235,8 +235,8 @@ impl Session {
             return;
         }
         match self.maybe_start_pending_message().await {
-            PendingMessageStart::Started | PendingMessageStart::NotReady => return,
-            PendingMessageStart::None => {}
+            PendingMessageStart::Started => return,
+            PendingMessageStart::NotReady | PendingMessageStart::None => {}
         }
         self.try_start_pending_timer(RecurringTimerPolicy::IncludeAll)
             .await;
