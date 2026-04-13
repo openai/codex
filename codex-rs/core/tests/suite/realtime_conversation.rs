@@ -25,6 +25,7 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::approx_token_count;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::start_mock_server;
@@ -1791,6 +1792,243 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp_user_text"),
+            responses::ev_assistant_message("msg_user_text", "ack"),
+            responses::ev_completed("resp_user_text"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_user_text", "instructions": "backend prompt" }
+        })],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.experimental_realtime_ws_startup_context = Some(String::new());
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_user_text");
+
+    let user_text = "typed follow-up for realtime";
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: user_text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let realtime_text_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "normal user turn text mirrored to realtime",
+        |request| websocket_request_text(request).as_deref() == Some(user_text),
+    )
+    .await;
+    let model_user_texts = response_mock.single_request().message_input_texts("user");
+    assert_eq!(
+        (
+            model_user_texts.iter().any(|text| text == user_text),
+            websocket_request_text(&realtime_text_request),
+        ),
+        (true, Some(user_text.to_string())),
+    );
+    let realtime_response_create = timeout(Duration::from_millis(200), async {
+        wait_for_matching_websocket_request(
+            &realtime_server,
+            "unexpected realtime response request for mirrored user text",
+            |request| request.body_json()["type"].as_str() == Some("response.create"),
+        )
+        .await
+    })
+    .await;
+    assert!(
+        realtime_response_create.is_err(),
+        "mirrored user text should not request a realtime response"
+    );
+
+    let realtime_request_body = realtime_text_request.body_json();
+    let content = &realtime_request_body["item"]["content"][0];
+    let snapshot = format!(
+        "type: {}\nitem.type: {}\nitem.role: {}\ncontent[0].type: {}\ncontent[0].text: {}\nresponse.create: {}",
+        realtime_request_body["type"].as_str().unwrap_or_default(),
+        realtime_request_body["item"]["type"]
+            .as_str()
+            .unwrap_or_default(),
+        realtime_request_body["item"]["role"]
+            .as_str()
+            .unwrap_or_default(),
+        content["type"].as_str().unwrap_or_default(),
+        content["text"].as_str().unwrap_or_default(),
+        realtime_response_create.is_ok(),
+    );
+    insta::assert_snapshot!(
+        "conversation_user_text_turn_is_sent_to_realtime_when_active",
+        snapshot
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp_long_user_text"),
+            responses::ev_assistant_message("msg_long_user_text", "ack"),
+            responses::ev_completed("resp_long_user_text"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_long_user_text", "instructions": "backend prompt" }
+        })],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.experimental_realtime_ws_startup_context = Some(String::new());
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    // Phase 1: start realtime so the next normal user turn mirrors over the
+    // active WebSocket session.
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_long_user_text");
+
+    // Phase 2: submit one oversized text turn. The model request should keep
+    // the exact user text, while the realtime mirror should get the capped copy.
+    let user_text = format!(
+        "mirror-head {} mirror-middle {} mirror-tail",
+        "alpha ".repeat(900),
+        "omega ".repeat(900),
+    );
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: user_text.clone(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    // Phase 3: capture the mirrored WebSocket item; the snapshot below records
+    // the capped payload shape.
+    let realtime_text_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "capped normal user turn text mirrored to realtime",
+        |request| websocket_request_text(request).is_some_and(|text| text.contains("mirror-head")),
+    )
+    .await;
+    let realtime_text =
+        websocket_request_text(&realtime_text_request).expect("realtime request text");
+    let model_user_texts = response_mock.single_request().message_input_texts("user");
+
+    let realtime_request_body = realtime_text_request.body_json();
+    let content = &realtime_request_body["item"]["content"][0];
+
+    // Snapshot the request envelope and capped text together so reviewers can
+    // see the preserved head/tail and truncation marker in one place.
+    let snapshot = format!(
+        "type: {}\nitem.type: {}\nitem.role: {}\ncontent[0].type: {}\nmodel_has_full_user_text: {}\nrealtime_text_equal_full_user_text: {}\nrealtime_text_approx_tokens: {}\ncontent[0].text: {}",
+        realtime_request_body["type"].as_str().unwrap_or_default(),
+        realtime_request_body["item"]["type"]
+            .as_str()
+            .unwrap_or_default(),
+        realtime_request_body["item"]["role"]
+            .as_str()
+            .unwrap_or_default(),
+        content["type"].as_str().unwrap_or_default(),
+        model_user_texts.iter().any(|text| text == &user_text),
+        realtime_text == user_text,
+        approx_token_count(&realtime_text),
+        realtime_text,
+    );
+    insta::assert_snapshot!(
+        "conversation_user_text_turn_is_capped_when_mirrored_to_realtime",
+        snapshot
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2767,6 +3005,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             "type": "session.updated",
             "session": { "id": "sess_steer", "instructions": "backend prompt" }
         })],
+        vec![],
         vec![
             json!({
                 "type": "conversation.input_transcript.delta",
@@ -2821,6 +3060,12 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::AgentMessageContentDelta(_))
     })
+    .await;
+    let _ = wait_for_matching_websocket_request(
+        &realtime_server,
+        "first prompt mirrored to realtime",
+        |request| websocket_request_text(request).as_deref() == Some("first prompt"),
+    )
     .await;
 
     test.codex

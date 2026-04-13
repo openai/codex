@@ -12103,7 +12103,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "scope": {
             "$ref": "#/definitions/v2/SkillScope"
@@ -12156,7 +12156,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "shortDescription": {
             "type": [
@@ -12822,6 +12822,14 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "model": {
             "type": "string"
@@ -13666,6 +13674,13 @@
         "title": "ThreadLoadedListResponse",
         "type": "object"
       },
+      "ThreadMemoryMode": {
+        "enum": [
+          "enabled",
+          "disabled"
+        ],
+        "type": "string"
+      },
       "ThreadMetadataGitInfoUpdateParams": {
         "properties": {
           "branch": {
@@ -14122,6 +14137,14 @@
           "cwd": {
             "type": "string"
           },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "model": {
             "type": "string"
           },
@@ -14412,6 +14435,14 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "model": {
             "type": "string"

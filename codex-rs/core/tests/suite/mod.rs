@@ -30,9 +30,14 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestCodexAliasesGuard> = {
         .and_then(|name| name.to_str())
         .unwrap_or("");
     let argv1 = args.next().unwrap_or_default();
+    if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
+        let _ = arg0_dispatch();
+        return None;
+    }
+
     // Helper re-execs inherit this ctor too, but they may run inside a sandbox
     // where creating another CODEX_HOME tempdir under /tmp is not allowed.
-    if exe_name == CODEX_LINUX_SANDBOX_ARG0 || argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
+    if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
         return None;
     }
 

@@ -636,6 +636,12 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
+    /// Set whether the thread remains eligible for memory generation.
+    ///
+    /// This persists thread-level memory mode metadata without involving the
+    /// model.
+    SetThreadMemoryMode { mode: ThreadMemoryMode },
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
@@ -663,6 +669,13 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadMemoryMode {
+    Enabled,
+    Disabled,
 }
 
 impl From<Vec<UserInput>> for Op {
@@ -755,6 +768,7 @@ impl Op {
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",
+            Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
@@ -3362,7 +3376,7 @@ pub struct SkillMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dependencies: Option<SkillDependencies>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
 }

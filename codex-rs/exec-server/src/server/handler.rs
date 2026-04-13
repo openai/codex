@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 
+use crate::ExecServerRuntimePaths;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -48,12 +49,13 @@ impl ExecServerHandler {
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
         notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         Self {
             session_registry,
             notifications,
             session: StdMutex::new(None),
-            file_system: FileSystemHandler::default(),
+            file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }

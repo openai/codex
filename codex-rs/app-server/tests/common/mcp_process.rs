@@ -64,6 +64,7 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -581,6 +582,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("mock/experimentalMethod", params).await
+    }
+
+    /// Send a `thread/memoryMode/set` JSON-RPC request (v2, experimental).
+    pub async fn send_thread_memory_mode_set_request(
+        &mut self,
+        params: ThreadMemoryModeSetParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/memoryMode/set", params).await
     }
 
     /// Send a `turn/start` JSON-RPC request (v2).

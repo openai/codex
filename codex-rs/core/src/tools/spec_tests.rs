@@ -314,6 +314,7 @@ fn assert_model_tools(
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
+            parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: &[],
         },
@@ -909,6 +910,8 @@ fn search_tool_registers_namespaced_mcp_tool_aliases() {
     assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
     assert!(registry.has_handler(&app_alias));
     assert!(registry.has_handler(&mcp_alias));
+    assert!(registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
+    assert!(registry.has_handler(&ToolName::plain("mcp__rmcp__echo")));
 }
 
 #[test]

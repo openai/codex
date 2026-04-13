@@ -2752,6 +2752,9 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2838,6 +2841,9 @@ pub struct ThreadResumeResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2915,6 +2921,9 @@ pub struct ThreadForkResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -3072,6 +3081,43 @@ pub struct ThreadMetadataGitInfoUpdateParams {
 pub struct ThreadMetadataUpdateResponse {
     pub thread: Thread,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum ThreadMemoryMode {
+    Enabled,
+    Disabled,
+}
+
+impl ThreadMemoryMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn to_core(self) -> codex_protocol::protocol::ThreadMemoryMode {
+        match self {
+            Self::Enabled => codex_protocol::protocol::ThreadMemoryMode::Enabled,
+            Self::Disabled => codex_protocol::protocol::ThreadMemoryMode::Disabled,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryModeSetParams {
+    pub thread_id: String,
+    pub mode: ThreadMemoryMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryModeSetResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -3387,7 +3433,7 @@ pub struct SkillMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dependencies: Option<SkillDependencies>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
 }
@@ -3533,7 +3579,7 @@ pub struct SkillSummary {
     pub description: String,
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub enabled: bool,
 }
 
@@ -8596,6 +8642,50 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_lifecycle_responses_default_missing_instruction_sources() {
+        let response = json!({
+            "thread": {
+                "id": "thread-id",
+                "forkedFromId": null,
+                "preview": "",
+                "ephemeral": false,
+                "modelProvider": "openai",
+                "createdAt": 1,
+                "updatedAt": 1,
+                "status": { "type": "idle" },
+                "path": null,
+                "cwd": "/tmp",
+                "cliVersion": "0.0.0",
+                "source": "exec",
+                "agentNickname": null,
+                "agentRole": null,
+                "gitInfo": null,
+                "name": null,
+                "turns": []
+            },
+            "model": "gpt-5",
+            "modelProvider": "openai",
+            "serviceTier": null,
+            "cwd": "/tmp",
+            "approvalPolicy": "on-failure",
+            "approvalsReviewer": "user",
+            "sandbox": { "type": "dangerFullAccess" },
+            "reasoningEffort": null
+        });
+
+        let start: ThreadStartResponse =
+            serde_json::from_value(response.clone()).expect("thread/start response");
+        let resume: ThreadResumeResponse =
+            serde_json::from_value(response.clone()).expect("thread/resume response");
+        let fork: ThreadForkResponse =
+            serde_json::from_value(response).expect("thread/fork response");
+
+        assert_eq!(start.instruction_sources, Vec::<PathBuf>::new());
+        assert_eq!(resume.instruction_sources, Vec::<PathBuf>::new());
+        assert_eq!(fork.instruction_sources, Vec::<PathBuf>::new());
     }
 
     #[test]

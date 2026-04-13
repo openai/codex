@@ -801,7 +801,7 @@ pub(crate) struct ChatWidget {
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
-    skills_initial_state: Option<HashMap<PathBuf, bool>>,
+    skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_sleep_inhibitor: SleepInhibitor,
@@ -942,6 +942,8 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    // Instruction source files loaded for the current session, supplied by app-server.
+    instruction_source_paths: Vec<PathBuf>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -2071,6 +2073,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
         self.on_session_configured(thread_session_state_to_legacy_event(session));
     }
 
@@ -2203,6 +2206,11 @@ impl ChatWidget {
             /*hint*/ None,
         ));
         self.request_redraw();
+    }
+
+    #[cfg(test)]
+    fn on_agent_message(&mut self, message: String) {
+        self.finalize_completed_assistant_message(Some(&message));
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -4563,10 +4571,14 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
         self.flush_answer_stream_with_separator();
-        self.notify(Notification::UserInputRequested {
-            question_count: ev.questions.len(),
-            summary: Notification::user_input_request_summary(&ev.questions),
-        });
+        let question_count = ev.questions.len();
+        let summary = Notification::user_input_request_summary(&ev.questions);
+        let title = match (question_count, summary.as_deref()) {
+            (1, Some(summary)) => summary.to_string(),
+            (1, None) => "Question requested".to_string(),
+            (count, _) => format!("{count} questions requested"),
+        };
+        self.notify(Notification::PlanModePrompt { title });
         self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
     }
@@ -4866,6 +4878,7 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             current_cwd,
+            instruction_source_paths: Vec::new(),
             session_network_proxy: None,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
@@ -5051,11 +5064,6 @@ impl ChatWidget {
                     {
                         return;
                     }
-                    let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
-                    else {
-                        return;
-                    };
                     let should_submit_now =
                         self.is_session_configured() && !self.is_plan_streaming_in_tui();
                     if should_submit_now {
@@ -5085,11 +5093,6 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
-                    };
-                    let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
-                    else {
-                        return;
                     };
                     self.queue_user_message(user_message);
                 }
@@ -5365,7 +5368,7 @@ impl ChatWidget {
             .map(|binding| binding.mention.clone())
             .collect();
         let mut skill_names_lower: HashSet<String> = HashSet::new();
-        let mut selected_skill_paths: HashSet<PathBuf> = HashSet::new();
+        let mut selected_skill_paths: HashSet<AbsolutePathBuf> = HashSet::new();
         let mut selected_plugin_ids: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
@@ -5387,7 +5390,7 @@ impl ChatWidget {
                 {
                     items.push(UserInput::Skill {
                         name: skill.name.clone(),
-                        path: skill.path_to_skills_md.clone(),
+                        path: skill.path_to_skills_md.to_path_buf(),
                     });
                 }
             }
@@ -5401,7 +5404,7 @@ impl ChatWidget {
                 }
                 items.push(UserInput::Skill {
                     name: skill.name.clone(),
-                    path: skill.path_to_skills_md.clone(),
+                    path: skill.path_to_skills_md.to_path_buf(),
                 });
             }
         }
@@ -5937,12 +5940,10 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { kind, .. } => {
-                if from_replay {
-                    self.on_context_compacted(matches!(
-                        kind,
-                        Some(codex_app_server_protocol::ContextCompactionKind::Prefix)
-                    ));
-                }
+                self.on_context_compacted(matches!(
+                    kind,
+                    Some(codex_app_server_protocol::ContextCompactionKind::Prefix)
+                ));
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -6266,12 +6267,7 @@ impl ChatWidget {
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
-            ServerNotification::ContextCompacted(notification) => {
-                self.on_context_compacted(matches!(
-                    notification.kind,
-                    Some(codex_app_server_protocol::ContextCompactionKind::Prefix)
-                ))
-            }
+            ServerNotification::ContextCompacted(_) => {}
         }
     }
 
@@ -6756,10 +6752,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(event) => self.on_context_compacted(matches!(
-                event.kind,
-                Some(codex_protocol::protocol::ContextCompactionKind::Prefix)
-            )),
+            EventMsg::ContextCompacted(_) => {}
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -7095,8 +7088,8 @@ impl ChatWidget {
             .values()
             .cloned()
             .collect();
-        let config = self.config.clone();
-        let frame_requester = self.frame_requester.clone();
+        let agents_summary =
+            crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
             self.status_account_display.as_ref(),
@@ -7111,21 +7104,9 @@ impl ChatWidget {
             self.model_display_name(),
             collaboration_mode,
             reasoning_effort_override,
-            "<none>".to_string(),
+            agents_summary,
             refreshing_rate_limits,
         );
-        let agents_summary_handle = handle.clone();
-        tokio::spawn(async move {
-            let agents_summary = match crate::status::discover_agents_summary(&config).await {
-                Ok(summary) => summary,
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed to discover project docs for /status");
-                    "<none>".to_string()
-                }
-            };
-            agents_summary_handle.finish_agents_summary_discovery(agents_summary);
-            frame_requester.schedule_frame();
-        });
         if let Some(request_id) = request_id {
             self.refreshing_status_outputs.push((request_id, handle));
         }
@@ -10378,7 +10359,7 @@ impl ChatWidget {
             return;
         }
 
-        let plugins = PluginsManager::new(self.config.codex_home.clone())
+        let plugins = PluginsManager::new(self.config.codex_home.to_path_buf())
             .plugins_for_config(&self.config)
             .capability_summaries()
             .to_vec();
@@ -10710,26 +10691,11 @@ impl Renderable for ChatWidget {
 
 #[derive(Debug)]
 enum Notification {
-    AgentTurnComplete {
-        response: String,
-    },
-    ExecApprovalRequested {
-        command: String,
-    },
-    EditApprovalRequested {
-        cwd: PathBuf,
-        changes: Vec<PathBuf>,
-    },
-    ElicitationRequested {
-        server_name: String,
-    },
-    PlanModePrompt {
-        title: String,
-    },
-    UserInputRequested {
-        question_count: usize,
-        summary: Option<String>,
-    },
+    AgentTurnComplete { response: String },
+    ExecApprovalRequested { command: String },
+    EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    ElicitationRequested { server_name: String },
+    PlanModePrompt { title: String },
 }
 
 impl Notification {
@@ -10762,14 +10728,6 @@ impl Notification {
             Notification::PlanModePrompt { title } => {
                 format!("Plan mode prompt: {title}")
             }
-            Notification::UserInputRequested {
-                question_count,
-                summary,
-            } => match (*question_count, summary.as_deref()) {
-                (1, Some(summary)) => format!("Question requested: {summary}"),
-                (1, None) => "Question requested".to_string(),
-                (count, _) => format!("Questions requested: {count}"),
-            },
         }
     }
 
@@ -10780,7 +10738,6 @@ impl Notification {
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. } => "approval-requested",
             Notification::PlanModePrompt { .. } => "plan-mode-prompt",
-            Notification::UserInputRequested { .. } => "user-input-requested",
         }
     }
 
@@ -10790,8 +10747,7 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. }
-            | Notification::PlanModePrompt { .. }
-            | Notification::UserInputRequested { .. } => 1,
+            | Notification::PlanModePrompt { .. } => 1,
         }
     }
 
