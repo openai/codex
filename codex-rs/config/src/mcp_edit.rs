@@ -177,6 +177,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     if config.required {
         entry["required"] = value(true);
     }
+    if config.supports_parallel_tool_calls {
+        entry["supports_parallel_tool_calls"] = value(true);
+    }
     if let Some(timeout) = config.startup_timeout_sec {
         entry["startup_timeout_sec"] = value(timeout.as_secs_f64());
     }

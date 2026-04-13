@@ -7127,11 +7127,24 @@ pub(crate) async fn built_tools(
     );
     let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
 
+    let parallel_mcp_server_names = turn_context
+        .config
+        .mcp_servers
+        .get()
+        .iter()
+        .filter_map(|(server_name, server_config)| {
+            server_config
+                .supports_parallel_tool_calls
+                .then_some(server_name.clone())
+        })
+        .collect::<HashSet<_>>();
+
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
             mcp_tools: direct_mcp_tools,
+            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
