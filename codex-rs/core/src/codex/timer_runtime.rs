@@ -57,6 +57,7 @@ const TIMER_SOURCE_AGENT: &str = "agent";
 const TIMER_CLIENT_ID_FALLBACK: &str = "codex-cli";
 const TIMER_DB_SYNC_INTERVAL: Duration = Duration::from_secs(15);
 const TIMER_DB_MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const TIMER_DUE_PERSIST_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 fn db_timer_to_persisted_timer(row: codex_state::ThreadTimer) -> Option<PersistedTimer> {
     let trigger = match serde_json::from_str(&row.trigger_json) {
@@ -331,6 +332,7 @@ impl Session {
         let session_cancel = self.timer_tasks_cancellation_token.clone();
         tokio::spawn(async move {
             let mut delay = timer_spec.delay;
+            let mut due_persist_retry_at = None;
             loop {
                 tokio::select! {
                     _ = session_cancel.cancelled() => break,
@@ -341,13 +343,25 @@ impl Session {
                     break;
                 };
                 let due_at = Utc::now();
-                let changed = session.timers.lock().await.mark_timer_due(&id, due_at);
+                let (changed, due_at_timestamp) = match due_persist_retry_at.take() {
+                    Some(due_at_timestamp) => (true, due_at_timestamp),
+                    None => (
+                        session.timers.lock().await.mark_timer_due(&id, due_at),
+                        due_at.timestamp(),
+                    ),
+                };
                 if changed
                     && !session
-                        .persist_timer_due_best_effort(&id, due_at.timestamp())
+                        .persist_timer_due_best_effort(&id, due_at_timestamp)
                         .await
                 {
-                    session.sync_timers_from_db(/*emit_update*/ true).await;
+                    if !session.sync_timers_from_db(/*emit_update*/ true).await
+                        && session.timers.lock().await.persisted_timer(&id).is_some()
+                    {
+                        due_persist_retry_at = Some(due_at_timestamp);
+                        delay = TIMER_DUE_PERSIST_RETRY_DELAY;
+                        continue;
+                    }
                     let next_timer_spec = session
                         .timers
                         .lock()
