@@ -209,14 +209,14 @@ mod tests {
     #[tokio::test]
     async fn register_task_registers_and_decrypts_plaintext_task_id() {
         let server = MockServer::start().await;
-        let target_url = agent_task_registration_url(&server.uri(), "agent-123");
-        mount_human_biscuit(&server, &target_url).await;
+        let chatgpt_base_url = server.uri();
+        mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
         let auth = make_chatgpt_auth("account-123", Some("user-123"));
         let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            server.uri(),
+            chatgpt_base_url,
             SessionSource::Cli,
         );
         let stored_identity = seed_stored_identity(&manager, &auth, "agent-123", "account-123");
@@ -253,16 +253,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_task_uses_canonical_registration_url() {
+    async fn register_task_uses_chatgpt_base_url() {
         let server = MockServer::start().await;
-        let target_url = agent_task_registration_url(&server.uri(), "agent-fallback");
-        mount_human_biscuit(&server, &target_url).await;
+        let chatgpt_base_url = format!("{}/backend-api", server.uri());
+        mount_human_biscuit(&server, &chatgpt_base_url, "agent-fallback").await;
         let auth = make_chatgpt_auth("account-123", Some("user-123"));
         let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            server.uri(),
+            chatgpt_base_url,
             SessionSource::Cli,
         );
         let stored_identity =
@@ -271,7 +271,7 @@ mod tests {
             .expect("task ciphertext");
 
         Mock::given(method("POST"))
-            .and(path("/v1/agent/agent-fallback/task/register"))
+            .and(path("/backend-api/v1/agent/agent-fallback/task/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "encrypted_task_id": encrypted_task_id,
@@ -293,15 +293,15 @@ mod tests {
     #[tokio::test]
     async fn register_task_for_binding_keeps_one_auth_snapshot() {
         let server = MockServer::start().await;
-        let target_url = agent_task_registration_url(&server.uri(), "agent-123");
-        mount_human_biscuit(&server, &target_url).await;
+        let chatgpt_base_url = server.uri();
+        mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
         let binding_auth = make_chatgpt_auth("account-123", Some("user-123"));
         let auth_manager =
             AuthManager::from_auth_for_testing(make_chatgpt_auth("account-456", Some("user-456")));
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
-            server.uri(),
+            chatgpt_base_url,
             SessionSource::Cli,
         );
         let stored_identity =
@@ -363,9 +363,19 @@ mod tests {
         assert!(!manager.task_matches_current_binding(&task).await);
     }
 
-    async fn mount_human_biscuit(server: &MockServer, target_url: &str) {
+    async fn mount_human_biscuit(
+        server: &MockServer,
+        chatgpt_base_url: &str,
+        agent_runtime_id: &str,
+    ) {
+        let biscuit_url = agent_identity_biscuit_url(chatgpt_base_url);
+        let biscuit_path = reqwest::Url::parse(&biscuit_url)
+            .expect("biscuit URL parses")
+            .path()
+            .to_string();
+        let target_url = agent_task_registration_url(chatgpt_base_url, agent_runtime_id);
         Mock::given(method("GET"))
-            .and(path("/authenticate_app_v2"))
+            .and(path(biscuit_path))
             .and(header("authorization", "Bearer access-token-account-123"))
             .and(header("x-original-method", "GET"))
             .and(header("x-original-url", target_url))
