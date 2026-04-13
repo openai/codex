@@ -66,6 +66,11 @@ Particularly when introducing a new concept/feature/API, before adding to `codex
 
 Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
 
+## Codex Repo PR Rule
+
+- For pull requests opened against the `openai/codex` repository, always add the `oai` label to the PR.
+- Apply this whether the PR is created with the GitHub app/plugin or any other supported PR creation path.
+
 ## TUI style conventions
 
 See `codex-rs/tui/styles.md`.
