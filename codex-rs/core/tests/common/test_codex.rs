@@ -175,12 +175,18 @@ fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecSe
     let container_name = remote_env.container_name.as_str();
     let instance_id = remote_exec_server_instance_id();
     let remote_exec_server_path = format!("/tmp/codex-{instance_id}");
+    let remote_linux_sandbox_path = format!("/tmp/codex-linux-sandbox-{instance_id}");
     let stdout_path = format!("/tmp/codex-exec-server-{instance_id}.stdout");
     let local_binary = codex_utils_cargo_bin::cargo_bin("codex").context("resolve codex binary")?;
+    let local_linux_sandbox = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+        .context("resolve codex-linux-sandbox binary")?;
     let local_binary = local_binary.to_string_lossy().to_string();
+    let local_linux_sandbox = local_linux_sandbox.to_string_lossy().to_string();
     let remote_binary = format!("{container_name}:{remote_exec_server_path}");
+    let remote_linux_sandbox = format!("{container_name}:{remote_linux_sandbox_path}");
 
     docker_command_success(["cp", &local_binary, &remote_binary])?;
+    docker_command_success(["cp", &local_linux_sandbox, &remote_linux_sandbox])?;
     docker_command_success([
         "exec",
         container_name,
@@ -188,6 +194,14 @@ fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecSe
         "+x",
         &remote_exec_server_path,
     ])?;
+    docker_command_success([
+        "exec",
+        container_name,
+        "chmod",
+        "+x",
+        &remote_linux_sandbox_path,
+    ])?;
+    probe_remote_linux_sandbox(container_name, &remote_linux_sandbox_path)?;
 
     let start_script = format!(
         "rm -f {stdout_path}; \
@@ -209,10 +223,30 @@ echo $!"
             pid,
             remote_exec_server_path,
             stdout_path,
-            cleanup_paths: Vec::new(),
+            cleanup_paths: vec![remote_linux_sandbox_path],
         },
         listen_url,
     })
+}
+
+fn probe_remote_linux_sandbox(container_name: &str, remote_linux_sandbox_path: &str) -> Result<()> {
+    let policy = serde_json::to_string(&SandboxPolicy::new_read_only_policy())
+        .context("serialize remote sandbox probe policy")?;
+    let probe_script = format!(
+        "{remote_linux_sandbox_path} --sandbox-policy-cwd /tmp --sandbox-policy '{policy}' -- /bin/true"
+    );
+    let output = Command::new("docker")
+        .args(["exec", container_name, "sh", "-lc", &probe_script])
+        .output()
+        .with_context(|| format!("probe remote linux sandbox in container `{container_name}`"))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "remote linux sandbox probe failed in container `{container_name}`: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 fn remote_aware_cwd_path() -> AbsolutePathBuf {
