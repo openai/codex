@@ -34,4 +34,12 @@ pub fn create_symlink(
 }
 
 #[cfg(not(any(unix, windows)))]
-compile_error!("codex-git symlink support is only implemented for Unix and Windows");
+pub fn create_symlink(
+    _source: &Path,
+    _link_target: &Path,
+    _destination: &Path,
+) -> Result<(), GitToolingError> {
+    Err(GitToolingError::UnsupportedPlatform(
+        "symlink creation is unavailable on this target".to_string(),
+    ))
+}

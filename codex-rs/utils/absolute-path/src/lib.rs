@@ -1,4 +1,5 @@
 use dirs::home_dir;
+#[cfg(not(target_arch = "wasm32"))]
 use path_absolutize::Absolutize;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -6,6 +7,10 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::ffi::OsString;
+#[cfg(target_arch = "wasm32")]
+use std::path::Component;
 use std::path::Display;
 use std::path::Path;
 use std::path::PathBuf;
@@ -45,13 +50,24 @@ impl AbsolutePathBuf {
         base_path: B,
     ) -> std::io::Result<Self> {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        #[cfg(not(target_arch = "wasm32"))]
         let absolute_path = expanded.absolutize_from(base_path.as_ref())?;
+        #[cfg(target_arch = "wasm32")]
+        let absolute_path =
+            normalize_absolute_path(join_against_base(expanded, base_path.as_ref())?);
         Ok(Self(absolute_path.into_owned()))
     }
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        #[cfg(not(target_arch = "wasm32"))]
         let absolute_path = expanded.absolutize()?;
+        #[cfg(target_arch = "wasm32")]
+        let absolute_path = normalize_absolute_path(if expanded.is_absolute() {
+            expanded
+        } else {
+            join_against_base(expanded, &std::env::current_dir()?)?
+        });
         Ok(Self(absolute_path.into_owned()))
     }
 
@@ -99,6 +115,56 @@ impl AbsolutePathBuf {
     pub fn display(&self) -> Display<'_> {
         self.0.display()
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn join_against_base(path: PathBuf, base_path: &Path) -> std::io::Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    if !base_path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "base path must be absolute",
+        ));
+    }
+    Ok(base_path.join(path))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn normalize_absolute_path(path: PathBuf) -> std::borrow::Cow<'static, Path> {
+    let mut prefix: Option<OsString> = None;
+    let mut has_root = false;
+    let mut parts: Vec<OsString> = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(value) => {
+                prefix = Some(value.as_os_str().to_os_string());
+            }
+            Component::RootDir => {
+                has_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = parts.pop();
+            }
+            Component::Normal(part) => parts.push(part.to_os_string()),
+        }
+    }
+
+    let mut normalized = PathBuf::new();
+    if let Some(prefix) = prefix {
+        normalized.push(prefix);
+    }
+    if has_root {
+        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
+    }
+    for part in parts {
+        normalized.push(part);
+    }
+
+    std::borrow::Cow::Owned(normalized)
 }
 
 impl AsRef<Path> for AbsolutePathBuf {

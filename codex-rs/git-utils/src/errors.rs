@@ -30,6 +30,8 @@ pub enum GitToolingError {
     PathPrefix(#[from] std::path::StripPrefixError),
     #[error(transparent)]
     Walkdir(#[from] WalkdirError),
+    #[error("{0}")]
+    UnsupportedPlatform(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
