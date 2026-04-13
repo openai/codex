@@ -3,11 +3,11 @@ use codex_config::config_toml::RealtimeTransport;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::RealtimeAudioFrame;
-use codex_protocol::protocol::RealtimeConnection;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSession;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
@@ -237,7 +237,7 @@ impl ChatWidget {
     ) {
         self.submit_op(AppCommand::realtime_conversation_start(
             ConversationStartParams {
-                connection: RealtimeConnection::Audio,
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: None,
                 session_id: None,
                 transport,

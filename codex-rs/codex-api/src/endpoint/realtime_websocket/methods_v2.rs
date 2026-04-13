@@ -8,8 +8,8 @@ use crate::endpoint::realtime_websocket::protocol::ConversationItemType;
 use crate::endpoint::realtime_websocket::protocol::ConversationMessageItem;
 use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::NoiseReductionType;
-use crate::endpoint::realtime_websocket::protocol::RealtimeConnection;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
+use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionAudio;
@@ -61,7 +61,7 @@ pub(super) fn conversation_handoff_append_message(
 pub(super) fn session_update_session(
     instructions: String,
     session_mode: RealtimeSessionMode,
-    connection: RealtimeConnection,
+    output_modality: RealtimeOutputModality,
     voice: RealtimeVoice,
 ) -> SessionUpdateSession {
     match session_mode {
@@ -70,7 +70,7 @@ pub(super) fn session_update_session(
             r#type: SessionType::Realtime,
             model: None,
             instructions: Some(instructions),
-            output_modalities: Some(vec![output_modality(connection).to_string()]),
+            output_modalities: Some(vec![output_modality_value(output_modality).to_string()]),
             audio: SessionAudio {
                 input: SessionAudioInput {
                     format: SessionAudioFormat {
@@ -135,10 +135,10 @@ pub(super) fn session_update_session(
     }
 }
 
-fn output_modality(connection: RealtimeConnection) -> &'static str {
-    match connection {
-        RealtimeConnection::Text => REALTIME_V2_OUTPUT_MODALITY_TEXT,
-        RealtimeConnection::Audio => REALTIME_V2_OUTPUT_MODALITY_AUDIO,
+fn output_modality_value(output_modality: RealtimeOutputModality) -> &'static str {
+    match output_modality {
+        RealtimeOutputModality::Text => REALTIME_V2_OUTPUT_MODALITY_TEXT,
+        RealtimeOutputModality::Audio => REALTIME_V2_OUTPUT_MODALITY_AUDIO,
     }
 }
 

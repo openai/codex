@@ -73,8 +73,8 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
-use codex_protocol::protocol::RealtimeConnection;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeTranscriptUpdateKind;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -3963,7 +3963,7 @@ pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
     /// Selects text or audio output for the realtime session. Transport and voice stay
     /// independent so clients can choose how they connect separately from what the model emits.
-    pub connection: RealtimeConnection,
+    pub output_modality: RealtimeOutputModality,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_double_option",

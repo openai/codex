@@ -38,8 +38,8 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_features::FEATURES;
 use codex_features::Feature;
-use codex_protocol::protocol::RealtimeConnection;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeTranscriptUpdateKind;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -303,7 +303,7 @@ impl RealtimeE2eHarness {
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 thread_id: self.thread_id.clone(),
-                connection: RealtimeConnection::Audio,
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("backend prompt".to_string())),
                 session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -530,7 +530,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
-            connection: RealtimeConnection::Audio,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: None,
             session_id: None,
             transport: None,
@@ -727,7 +727,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 }
 
 #[tokio::test]
-async fn realtime_text_connection_requests_text_output_and_final_transcript() -> Result<()> {
+async fn realtime_text_output_modality_requests_text_output_and_final_transcript() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
@@ -777,7 +777,7 @@ async fn realtime_text_connection_requests_text_output_and_final_transcript() ->
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
-            connection: RealtimeConnection::Text,
+            output_modality: RealtimeOutputModality::Text,
             prompt: None,
             session_id: None,
             transport: None,
@@ -942,7 +942,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
-            connection: RealtimeConnection::Audio,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1039,7 +1039,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_id.clone(),
-            connection: RealtimeConnection::Audio,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -1889,7 +1889,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id,
-            connection: RealtimeConnection::Audio,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -1948,7 +1948,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
-            connection: RealtimeConnection::Audio,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,

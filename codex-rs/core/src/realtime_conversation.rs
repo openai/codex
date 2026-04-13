@@ -37,12 +37,12 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RealtimeConnection;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationSdpEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use http::HeaderMap;
@@ -598,7 +598,7 @@ async fn prepare_realtime_start(
         sess,
         params.prompt,
         params.session_id,
-        params.connection,
+        params.output_modality,
         params.voice,
     )
     .await?;
@@ -629,7 +629,7 @@ pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
     prompt: Option<Option<String>>,
     session_id: Option<String>,
-    connection: RealtimeConnection,
+    output_modality: RealtimeOutputModality,
     voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
@@ -662,10 +662,10 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
     if config.realtime.version == RealtimeWsVersion::V1
-        && matches!(connection, RealtimeConnection::Text)
+        && matches!(output_modality, RealtimeOutputModality::Text)
     {
         return Err(CodexErr::InvalidRequest(
-            "text realtime connection requires realtime v2".to_string(),
+            "text realtime output modality requires realtime v2".to_string(),
         ));
     }
     let session_mode = match config.realtime.session_type {
@@ -682,7 +682,7 @@ pub(crate) async fn build_realtime_session_config(
         session_id: Some(session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
         event_parser,
         session_mode,
-        connection,
+        output_modality,
         voice,
     })
 }

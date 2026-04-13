@@ -17,7 +17,7 @@ use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_protocol::protocol::RealtimeConnection;
+use codex_protocol::protocol::RealtimeOutputModality;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::time::Duration;
@@ -77,7 +77,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
     let request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: "thr_123".to_string(),
-            connection: RealtimeConnection::Audio,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("hello".to_string())),
             session_id: None,
             transport: None,
@@ -147,7 +147,7 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
     let request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: "thr_123".to_string(),
-            connection: RealtimeConnection::Audio,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("hello".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {

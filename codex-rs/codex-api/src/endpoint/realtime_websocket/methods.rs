@@ -4,10 +4,10 @@ use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode
 use crate::endpoint::realtime_websocket::methods_common::session_update_session;
 use crate::endpoint::realtime_websocket::methods_common::websocket_intent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
-use crate::endpoint::realtime_websocket::protocol::RealtimeConnection;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
+use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
@@ -309,7 +309,7 @@ impl RealtimeWebsocketWriter {
         &self,
         instructions: String,
         session_mode: RealtimeSessionMode,
-        connection: RealtimeConnection,
+        output_modality: RealtimeOutputModality,
         voice: RealtimeVoice,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
@@ -317,7 +317,7 @@ impl RealtimeWebsocketWriter {
             self.event_parser,
             instructions,
             session_mode,
-            connection,
+            output_modality,
             voice,
         );
         self.send_json(&RealtimeOutboundMessage::SessionUpdate { session })
@@ -628,7 +628,7 @@ impl RealtimeWebsocketClient {
             .send_session_update(
                 config.instructions,
                 config.session_mode,
-                config.connection,
+                config.output_modality,
                 config.voice,
             )
             .await?;
@@ -1445,7 +1445,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
-                    connection: RealtimeConnection::Audio,
+                    output_modality: RealtimeOutputModality::Audio,
                     voice: RealtimeVoice::Breeze,
                 },
                 HeaderMap::new(),
@@ -1723,7 +1723,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Conversational,
-                    connection: RealtimeConnection::Audio,
+                    output_modality: RealtimeOutputModality::Audio,
                     voice: RealtimeVoice::Cedar,
                 },
                 HeaderMap::new(),
@@ -1829,7 +1829,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Transcription,
-                    connection: RealtimeConnection::Audio,
+                    output_modality: RealtimeOutputModality::Audio,
                     voice: RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
@@ -1933,7 +1933,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Transcription,
-                    connection: RealtimeConnection::Audio,
+                    output_modality: RealtimeOutputModality::Audio,
                     voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),
@@ -2023,7 +2023,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
-                    connection: RealtimeConnection::Audio,
+                    output_modality: RealtimeOutputModality::Audio,
                     voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),
