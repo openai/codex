@@ -8,8 +8,6 @@ caching).
 */
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
-use crate::guardian::new_guardian_review_id;
-use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -117,7 +115,6 @@ impl ToolOrchestrator {
         let otel_user = ToolDecisionSource::User;
         let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
         let otel_cfg = ToolDecisionSource::Config;
-        let use_guardian = routes_approval_to_guardian(turn_ctx);
 
         // 1) Approval
         let mut already_approved = false;
@@ -133,17 +130,16 @@ impl ToolOrchestrator {
                 return Err(ToolError::Rejected(reason));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
-                let guardian_review_id = use_guardian.then(new_guardian_review_id);
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
-                    guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason,
                     network_approval_context: None,
                 };
-                let decision = tool.start_approval_async(req, approval_ctx).await;
-                let otel_source = if use_guardian {
+                let outcome = tool.start_approval_async(req, approval_ctx).await;
+                let decision = outcome.decision;
+                let otel_source = if outcome.guardian_review_id.is_some() {
                     otel_automated_reviewer.clone()
                 } else {
                     otel_user.clone()
@@ -153,7 +149,8 @@ impl ToolOrchestrator {
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if let Some(review_id) = guardian_review_id.as_deref() {
+                        let reason = if let Some(review_id) = outcome.guardian_review_id.as_deref()
+                        {
                             guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
                         } else {
                             "rejected by user".to_string()
@@ -291,18 +288,17 @@ impl ToolOrchestrator {
                     .should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
-                    let guardian_review_id = use_guardian.then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
-                        guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
 
-                    let decision = tool.start_approval_async(req, approval_ctx).await;
-                    let otel_source = if use_guardian {
+                    let outcome = tool.start_approval_async(req, approval_ctx).await;
+                    let decision = outcome.decision;
+                    let otel_source = if outcome.guardian_review_id.is_some() {
                         otel_automated_reviewer
                     } else {
                         otel_user
@@ -311,12 +307,13 @@ impl ToolOrchestrator {
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if let Some(review_id) = guardian_review_id.as_deref() {
-                                guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
-                                    .await
-                            } else {
-                                "rejected by user".to_string()
-                            };
+                            let reason =
+                                if let Some(review_id) = outcome.guardian_review_id.as_deref() {
+                                    guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
+                                        .await
+                                } else {
+                                    "rejected by user".to_string()
+                                };
                             return Err(ToolError::Rejected(reason));
                         }
                         ReviewDecision::TimedOut => {

@@ -2,16 +2,16 @@ use super::ShellRequest;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::is_likely_sandbox_denied;
-use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
-use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approval_router::ApprovalIntent;
+use crate::tools::approval_router::ApprovalRequest;
+use crate::tools::approval_router::ExecveApprovalRequest;
+use crate::tools::approval_router::request_approval;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -391,47 +391,35 @@ impl CoreShellActionProvider {
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
-        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
-                if let Some(review_id) = guardian_review_id.clone() {
-                    let decision = review_approval_request(
-                        &session,
-                        &turn,
-                        review_id,
-                        GuardianApprovalRequest::Execve {
-                            id: call_id.clone(),
+                let outcome = request_approval(
+                    &session,
+                    &turn,
+                    ApprovalRequest {
+                        intent: ApprovalIntent::Execve(ExecveApprovalRequest {
+                            call_id,
+                            approval_id,
                             source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
-                            cwd: workdir,
-                            additional_permissions,
-                        },
-                        /*retry_reason*/ None,
-                    )
-                    .await;
-                    return PromptDecision {
-                        decision,
-                        guardian_review_id,
-                    };
-                }
-                let decision = session
-                    .request_command_approval(
-                        &turn,
-                        call_id,
-                        approval_id,
-                        command,
-                        workdir,
-                        /*reason*/ None,
-                        /*network_approval_context*/ None,
-                        /*proposed_execpolicy_amendment*/ None,
-                        additional_permissions,
-                        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                    )
-                    .await;
+                            command,
+                            cwd: workdir.clone(),
+                            additional_permissions: additional_permissions.clone(),
+                            reason: None,
+                            available_decisions: vec![
+                                ReviewDecision::Approved,
+                                ReviewDecision::Abort,
+                            ],
+                        }),
+                        retry_reason: None,
+                        cache: None,
+                    },
+                )
+                .await;
                 PromptDecision {
-                    decision,
-                    guardian_review_id: None,
+                    decision: outcome.decision,
+                    guardian_review_id: outcome.guardian_review_id,
                 }
             })
             .await)

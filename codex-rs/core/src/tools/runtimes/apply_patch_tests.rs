@@ -30,45 +30,6 @@ fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
     );
 }
 
-#[test]
-fn guardian_review_request_includes_patch_context() {
-    let path = std::env::temp_dir()
-        .join("guardian-apply-patch-test.txt")
-        .abs();
-    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let expected_cwd = action.cwd.to_path_buf();
-    let expected_patch = action.patch.clone();
-    let request = ApplyPatchRequest {
-        action,
-        file_paths: vec![path.clone()],
-        changes: HashMap::from([(
-            path.to_path_buf(),
-            FileChange::Add {
-                content: "hello".to_string(),
-            },
-        )]),
-        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
-            reason: None,
-            proposed_execpolicy_amendment: None,
-        },
-        additional_permissions: None,
-        permissions_preapproved: false,
-        timeout_ms: None,
-    };
-
-    let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1");
-
-    assert_eq!(
-        guardian_request,
-        GuardianApprovalRequest::ApplyPatch {
-            id: "call-1".to_string(),
-            cwd: expected_cwd,
-            files: request.file_paths,
-            patch: expected_patch,
-        }
-    );
-}
-
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn build_sandbox_command_prefers_configured_codex_self_exe_for_apply_patch() {

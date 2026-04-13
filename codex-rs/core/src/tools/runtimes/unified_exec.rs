@@ -7,11 +7,15 @@ the process manager to spawn PTYs once an ExecRequest is prepared.
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
-use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approval_router::ApprovalCache;
+use crate::tools::approval_router::ApprovalIntent;
+use crate::tools::approval_router::ApprovalOutcome;
+use crate::tools::approval_router::ApprovalRequest;
+use crate::tools::approval_router::UnifiedExecApprovalRequest;
+use crate::tools::approval_router::request_approval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -27,7 +31,6 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
-use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
@@ -36,7 +39,6 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
@@ -102,24 +104,24 @@ impl Sandboxable for UnifiedExecRuntime<'_> {
 }
 
 impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
-    type ApprovalKey = UnifiedExecApprovalKey;
-
-    fn approval_keys(&self, req: &UnifiedExecRequest) -> Vec<Self::ApprovalKey> {
-        vec![UnifiedExecApprovalKey {
-            command: canonicalize_command_for_approval(&req.command),
-            cwd: req.cwd.clone(),
-            tty: req.tty,
-            sandbox_permissions: req.sandbox_permissions,
-            additional_permissions: req.additional_permissions.clone(),
-        }]
+    fn approval_cache(&self, req: &UnifiedExecRequest) -> Option<ApprovalCache> {
+        Some(ApprovalCache::new(
+            "unified_exec",
+            vec![UnifiedExecApprovalKey {
+                command: canonicalize_command_for_approval(&req.command),
+                cwd: req.cwd.clone(),
+                tty: req.tty,
+                sandbox_permissions: req.sandbox_permissions,
+                additional_permissions: req.additional_permissions.clone(),
+            }],
+        ))
     }
 
     fn start_approval_async<'b>(
         &'b mut self,
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
-    ) -> BoxFuture<'b, ReviewDecision> {
-        let keys = self.approval_keys(req);
+    ) -> BoxFuture<'b, ApprovalOutcome> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -127,45 +129,31 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let cwd = req.cwd.to_path_buf();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
-        let guardian_review_id = ctx.guardian_review_id.clone();
+        let cache = self.approval_cache(req);
         Box::pin(async move {
-            if let Some(review_id) = guardian_review_id {
-                return review_approval_request(
-                    session,
-                    turn,
-                    review_id,
-                    GuardianApprovalRequest::ExecCommand {
-                        id: call_id,
+            request_approval(
+                session,
+                turn,
+                ApprovalRequest {
+                    intent: ApprovalIntent::UnifiedExec(UnifiedExecApprovalRequest {
+                        call_id,
                         command,
                         cwd,
                         sandbox_permissions: req.sandbox_permissions,
                         additional_permissions: req.additional_permissions.clone(),
                         justification: req.justification.clone(),
                         tty: req.tty,
-                    },
-                    retry_reason,
-                )
-                .await;
-            }
-            with_cached_approval(&session.services, "unified_exec", keys, || async move {
-                let available_decisions = None;
-                session
-                    .request_command_approval(
-                        turn,
-                        call_id,
-                        /*approval_id*/ None,
-                        command,
-                        cwd,
                         reason,
-                        ctx.network_approval_context.clone(),
-                        req.exec_approval_requirement
+                        network_approval_context: ctx.network_approval_context.clone(),
+                        proposed_execpolicy_amendment: req
+                            .exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
-                        req.additional_permissions.clone(),
-                        available_decisions,
-                    )
-                    .await
-            })
+                    }),
+                    retry_reason,
+                    cache,
+                },
+            )
             .await
         })
     }

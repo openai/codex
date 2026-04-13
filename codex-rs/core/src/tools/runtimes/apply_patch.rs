@@ -6,10 +6,14 @@
 //! for `codex --codex-run-as-apply-patch` and runs it under the current
 //! `SandboxAttempt` with a minimal environment for local turns.
 use crate::exec::ExecCapturePolicy;
-use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::execute_env;
+use crate::tools::approval_router::ApplyPatchApprovalRequest;
+use crate::tools::approval_router::ApprovalCache;
+use crate::tools::approval_router::ApprovalIntent;
+use crate::tools::approval_router::ApprovalOutcome;
+use crate::tools::approval_router::ApprovalRequest;
+use crate::tools::approval_router::request_approval;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -18,7 +22,6 @@ use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -52,18 +55,6 @@ pub struct ApplyPatchRuntime;
 impl ApplyPatchRuntime {
     pub fn new() -> Self {
         Self
-    }
-
-    fn build_guardian_review_request(
-        req: &ApplyPatchRequest,
-        call_id: &str,
-    ) -> GuardianApprovalRequest {
-        GuardianApprovalRequest::ApplyPatch {
-            id: call_id.to_string(),
-            cwd: req.action.cwd.to_path_buf(),
-            files: req.file_paths.clone(),
-            patch: req.action.patch.clone(),
-        }
     }
 
     #[cfg(target_os = "windows")]
@@ -129,57 +120,61 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = AbsolutePathBuf;
-
-    fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
-        req.file_paths.clone()
+    fn approval_cache(&self, req: &ApplyPatchRequest) -> Option<ApprovalCache> {
+        Some(ApprovalCache::new("apply_patch", req.file_paths.clone()))
     }
 
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision> {
+    ) -> BoxFuture<'a, ApprovalOutcome> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         let retry_reason = ctx.retry_reason.clone();
-        let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
-        let guardian_review_id = ctx.guardian_review_id.clone();
+        let cache = self.approval_cache(req);
         Box::pin(async move {
             if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
-            }
-            if let Some(review_id) = guardian_review_id {
-                let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                return review_approval_request(session, turn, review_id, action, retry_reason)
-                    .await;
+                return ApprovalOutcome::new(ReviewDecision::Approved);
             }
             if let Some(reason) = retry_reason {
-                let rx_approve = session
-                    .request_patch_approval(
-                        turn,
-                        call_id,
-                        changes.clone(),
-                        Some(reason),
-                        /*grant_root*/ None,
-                    )
-                    .await;
-                return rx_approve.await.unwrap_or_default();
+                return request_approval(
+                    session,
+                    turn,
+                    ApprovalRequest {
+                        intent: ApprovalIntent::ApplyPatch(ApplyPatchApprovalRequest {
+                            call_id,
+                            cwd: req.action.cwd.to_path_buf(),
+                            files: req.file_paths.clone(),
+                            patch: req.action.patch.clone(),
+                            changes: changes.clone(),
+                            reason: Some(reason),
+                            grant_root: None,
+                        }),
+                        retry_reason: ctx.retry_reason.clone(),
+                        cache: None,
+                    },
+                )
+                .await;
             }
 
-            with_cached_approval(
-                &session.services,
-                "apply_patch",
-                approval_keys,
-                || async move {
-                    let rx_approve = session
-                        .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
-                        )
-                        .await;
-                    rx_approve.await.unwrap_or_default()
+            request_approval(
+                session,
+                turn,
+                ApprovalRequest {
+                    intent: ApprovalIntent::ApplyPatch(ApplyPatchApprovalRequest {
+                        call_id,
+                        cwd: req.action.cwd.to_path_buf(),
+                        files: req.file_paths.clone(),
+                        patch: req.action.patch.clone(),
+                        changes,
+                        reason: None,
+                        grant_root: None,
+                    }),
+                    retry_reason: None,
+                    cache,
                 },
             )
             .await
