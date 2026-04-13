@@ -1559,6 +1559,7 @@ impl CodexClient {
                             .map(|method| (*method).to_string())
                             .collect(),
                     ),
+                    supported_server_requests: None,
                 }),
             },
         };

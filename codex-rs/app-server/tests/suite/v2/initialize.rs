@@ -158,6 +158,7 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
             },
             Some(InitializeCapabilities {
                 experimental_api: true,
+                supported_server_requests: None,
                 opt_out_notification_methods: Some(vec!["thread/started".to_string()]),
             }),
         ),

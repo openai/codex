@@ -56,6 +56,7 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SupportedServerRequestMethod;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
@@ -179,6 +180,7 @@ pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
+    pub(crate) supported_server_requests: HashSet<SupportedServerRequestMethod>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) client_version: Option<String>,
 }
@@ -456,9 +458,13 @@ impl MessageProcessor {
         }
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        supported_server_requests: HashSet<SupportedServerRequestMethod>,
+    ) {
         self.codex_message_processor
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, supported_server_requests)
             .await;
     }
 
@@ -561,19 +567,28 @@ impl MessageProcessor {
                 // experimental API). Proposed direction is instance-global first-write-wins
                 // with initialize-time mismatch rejection.
                 let analytics_initialize_params = params.clone();
-                let (experimental_api_enabled, opt_out_notification_methods) =
-                    match params.capabilities {
-                        Some(capabilities) => (
-                            capabilities.experimental_api,
-                            capabilities
-                                .opt_out_notification_methods
-                                .unwrap_or_default(),
-                        ),
-                        None => (false, Vec::new()),
-                    };
+                let (
+                    experimental_api_enabled,
+                    opt_out_notification_methods,
+                    supported_server_requests,
+                ) = match params.capabilities {
+                    Some(capabilities) => (
+                        capabilities.experimental_api,
+                        capabilities
+                            .opt_out_notification_methods
+                            .unwrap_or_default(),
+                        capabilities
+                            .supported_server_requests
+                            .unwrap_or_default()
+                            .into_iter()
+                            .collect(),
+                    ),
+                    None => (false, Vec::new(), HashSet::new()),
+                };
                 session.experimental_api_enabled = experimental_api_enabled;
                 session.opted_out_notification_methods =
                     opt_out_notification_methods.into_iter().collect();
+                session.supported_server_requests = supported_server_requests;
                 let ClientInfo {
                     name,
                     title: _title,
@@ -649,7 +664,10 @@ impl MessageProcessor {
                     // initialize handling for the specific connection.
                     outbound_initialized.store(true, Ordering::Release);
                     self.codex_message_processor
-                        .connection_initialized(connection_id)
+                        .connection_initialized(
+                            connection_id,
+                            session.supported_server_requests.clone(),
+                        )
                         .await;
                 }
                 return;
