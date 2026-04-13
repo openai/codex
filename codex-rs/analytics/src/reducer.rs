@@ -8,6 +8,7 @@ use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CodexTurnSteerEventParams;
 use crate::events::CodexTurnSteerEventRequest;
 use crate::events::GuardianReviewEventParams;
 use crate::events::GuardianReviewEventPayload;
@@ -21,7 +22,6 @@ use crate::events::codex_app_metadata;
 use crate::events::codex_compaction_event_params;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
-use crate::events::codex_turn_steer_event_params;
 use crate::events::plugin_state_event_type;
 use crate::events::subagent_parent_thread_id;
 use crate::events::subagent_source_name;
@@ -32,7 +32,6 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
-use crate::facts::CodexTurnSteerEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
@@ -40,7 +39,6 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
-use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -86,12 +84,16 @@ struct ConnectionState {
 #[derive(Clone)]
 struct ThreadMetadataState {
     thread_source: Option<&'static str>,
+    initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
 }
 
 impl ThreadMetadataState {
-    fn from_session_source(session_source: &SessionSource) -> Self {
+    fn from_thread_metadata(
+        session_source: &SessionSource,
+        initialization_mode: ThreadInitializationMode,
+    ) -> Self {
         let (subagent_source, parent_thread_id) = match session_source {
             SessionSource::SubAgent(subagent_source) => (
                 Some(subagent_source_name(subagent_source)),
@@ -106,6 +108,7 @@ impl ThreadMetadataState {
         };
         Self {
             thread_source: thread_source_name(session_source),
+            initialization_mode,
             subagent_source,
             parent_thread_id,
         }
@@ -657,7 +660,8 @@ impl AnalyticsReducer {
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
-        let thread_metadata = ThreadMetadataState::from_session_source(&thread_source);
+        let thread_metadata =
+            ThreadMetadataState::from_thread_metadata(&thread_source, initialization_mode);
         self.thread_connections
             .insert(thread_id.clone(), connection_id);
         self.thread_metadata
@@ -759,30 +763,29 @@ impl AnalyticsReducer {
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
-        let tracking = TrackEventsContext {
-            model_slug: String::new(),
-            thread_id: pending_request.thread_id,
-            turn_id: accepted_turn_id
-                .as_deref()
-                .unwrap_or(pending_request.expected_turn_id.as_str())
-                .to_string(),
-        };
-        let turn_steer = CodexTurnSteerEvent {
-            expected_turn_id: Some(pending_request.expected_turn_id),
-            accepted_turn_id,
-            num_input_images: pending_request.num_input_images,
-            result,
-            rejection_reason,
-            created_at: pending_request.created_at,
+        let Some(thread_metadata) = self.thread_metadata.get(&pending_request.thread_id) else {
+            tracing::warn!(
+                thread_id = %pending_request.thread_id,
+                "dropping turn steer analytics event: missing thread lifecycle metadata"
+            );
+            return;
         };
         out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
             event_type: "codex_turn_steer_event",
-            event_params: codex_turn_steer_event_params(
-                connection_state.app_server_client.clone(),
-                connection_state.runtime.clone(),
-                &tracking,
-                turn_steer,
-            ),
+            event_params: CodexTurnSteerEventParams {
+                thread_id: pending_request.thread_id,
+                expected_turn_id: Some(pending_request.expected_turn_id),
+                accepted_turn_id,
+                app_server_client: connection_state.app_server_client.clone(),
+                runtime: connection_state.runtime.clone(),
+                thread_source: thread_metadata.thread_source.map(str::to_string),
+                subagent_source: thread_metadata.subagent_source.clone(),
+                parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                num_input_images: pending_request.num_input_images,
+                result,
+                rejection_reason,
+                created_at: pending_request.created_at,
+            },
         }));
     }
 
@@ -807,6 +810,24 @@ impl AnalyticsReducer {
                 )
             });
         let Some((app_server_client, runtime)) = connection_metadata else {
+            if let Some(connection_id) = turn_state.connection_id {
+                tracing::warn!(
+                    turn_id,
+                    connection_id,
+                    "dropping turn analytics event: missing connection metadata"
+                );
+            }
+            return;
+        };
+        let Some(thread_id) = turn_state.thread_id.as_ref() else {
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(thread_id) else {
+            tracing::warn!(
+                thread_id,
+                turn_id,
+                "dropping turn analytics event: missing thread lifecycle metadata"
+            );
             return;
         };
         out.push(TrackEventRequest::TurnEvent(Box::new(
@@ -817,6 +838,7 @@ impl AnalyticsReducer {
                     runtime,
                     turn_id.to_string(),
                     turn_state,
+                    thread_metadata,
                 ),
             },
         )));
@@ -829,6 +851,7 @@ fn codex_turn_event_params(
     runtime: CodexRuntimeMetadata,
     turn_id: String,
     turn_state: &TurnState,
+    thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
     let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
         turn_state.thread_id.clone(),
@@ -867,6 +890,10 @@ fn codex_turn_event_params(
         runtime,
         submission_type,
         ephemeral,
+        thread_source: thread_metadata.thread_source.map(str::to_string),
+        initialization_mode: thread_metadata.initialization_mode,
+        subagent_source: thread_metadata.subagent_source.clone(),
+        parent_thread_id: thread_metadata.parent_thread_id.clone(),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),
