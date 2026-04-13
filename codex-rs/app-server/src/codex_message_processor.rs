@@ -3893,8 +3893,8 @@ impl CodexMessageProcessor {
                 self.finalize_thread_teardown(thread_id).await;
                 continue;
             };
-            self.unload_thread_without_subscribers(thread_id, thread)
-                .await;
+            drop(thread);
+            info!("thread {thread_id} has no subscribers after connection close; keeping loaded");
         }
     }
 
@@ -5657,7 +5657,7 @@ impl CodexMessageProcessor {
         thread_id: ThreadId,
         thread: Arc<CodexThread>,
     ) {
-        // This connection was the last subscriber. Only now do we unload the thread.
+        // This explicit unsubscribe was the last subscriber. Only now do we unload the thread.
         info!("thread {thread_id} has no subscribers; shutting down");
         let should_start_unload_task = self.pending_thread_unloads.lock().await.insert(thread_id);
 
