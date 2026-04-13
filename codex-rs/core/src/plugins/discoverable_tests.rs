@@ -13,6 +13,12 @@ use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_test::internal::MockWriter;
 
+fn count_logged_plugin_manifest_paths(logs: &str, plugin_name: &str) -> usize {
+    logs.replace('\\', "/")
+        .matches(&format!("{plugin_name}/.codex-plugin/plugin.json"))
+        .count()
+}
+
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plugins() {
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -190,13 +196,11 @@ async fn list_tool_suggest_discoverable_plugins_does_not_reload_marketplace_per_
     let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
     assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 2);
     assert_eq!(
-        logs.matches("build-ios-apps/.codex-plugin/plugin.json")
-            .count(),
+        count_logged_plugin_manifest_paths(&logs, "build-ios-apps"),
         1
     );
     assert_eq!(
-        logs.matches("life-science-research/.codex-plugin/plugin.json")
-            .count(),
+        count_logged_plugin_manifest_paths(&logs, "life-science-research"),
         1
     );
 }
