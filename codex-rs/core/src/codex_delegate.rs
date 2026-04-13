@@ -5,6 +5,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
 use codex_exec_server::EnvironmentManager;
+use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -16,6 +17,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -40,7 +42,7 @@ use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request_with_cancel;
+use crate::guardian::review_approval_request_with_cancel_and_trace;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
@@ -68,6 +70,7 @@ pub(crate) async fn run_codex_thread_interactive(
     models_manager: Arc<ModelsManager>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
+    parent_trace: Option<W3cTraceContext>,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
@@ -96,7 +99,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_shell_snapshot: None,
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
-        parent_trace: None,
+        parent_trace,
     })
     .await?;
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
@@ -178,6 +181,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         models_manager,
         parent_session,
         parent_ctx,
+        None,
         child_cancel.clone(),
         subagent_source,
         initial_history,
@@ -506,12 +510,20 @@ async fn handle_exec_approval(
         .await
     };
 
+    let submission_trace = if routes_approval_to_guardian(parent_ctx) {
+        parent_ctx.trace_context.clone()
+    } else {
+        None
+    };
     let _ = codex
-        .submit(Op::ExecApproval {
-            id: approval_id_for_op,
-            turn_id: Some(turn_id),
-            decision,
-        })
+        .submit_with_trace(
+            Op::ExecApproval {
+                id: approval_id_for_op,
+                turn_id: Some(turn_id),
+                decision,
+            },
+            submission_trace,
+        )
         .await;
 }
 
@@ -591,6 +603,7 @@ async fn handle_patch_approval(
     } else {
         None
     };
+    let reviewed_by_guardian = guardian_decision.is_some();
     let decision = if let Some(decision) = guardian_decision {
         decision
     } else {
@@ -606,11 +619,19 @@ async fn handle_patch_approval(
         )
         .await
     };
+    let submission_trace = if reviewed_by_guardian {
+        parent_ctx.trace_context.clone()
+    } else {
+        None
+    };
     let _ = codex
-        .submit(Op::PatchApproval {
-            id: approval_id,
-            decision,
-        })
+        .submit_with_trace(
+            Op::PatchApproval {
+                id: approval_id,
+                decision,
+            },
+            submission_trace,
+        )
         .await;
 }
 
@@ -633,7 +654,12 @@ async fn handle_request_user_input(
         )
         .await
     {
-        let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+        let _ = codex
+            .submit_with_trace(
+                Op::UserInputAnswer { id, response },
+                parent_ctx.trace_context.clone(),
+            )
+            .await;
         return;
     }
 
@@ -739,6 +765,7 @@ fn spawn_guardian_review(
     cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
+    let parent_trace = current_span_w3c_trace_context();
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -747,12 +774,13 @@ fn spawn_guardian_review(
             let _ = tx.send(ReviewDecision::Denied);
             return;
         };
-        let decision = runtime.block_on(review_approval_request_with_cancel(
+        let decision = runtime.block_on(review_approval_request_with_cancel_and_trace(
             &session,
             &turn,
             review_id,
             request,
             retry_reason,
+            parent_trace,
             cancel_token,
         ));
         let _ = tx.send(decision);

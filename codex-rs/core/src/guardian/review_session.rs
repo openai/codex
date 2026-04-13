@@ -3,8 +3,11 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::anyhow;
+use codex_otel::SessionTelemetry;
+use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::DeveloperInstructions;
@@ -20,6 +23,8 @@ use codex_protocol::protocol::SubAgentSource;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::field;
 use tracing::warn;
 
 use crate::codex::Codex;
@@ -39,6 +44,11 @@ use codex_model_provider_info::ModelProviderInfo;
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
+use super::observability::GUARDIAN_REVIEW_PHASE_DURATION_METRIC;
+use super::observability::GuardianApprovalRequestSource;
+use super::observability::GuardianReviewSessionMode;
+use super::observability::guardian_action_kind;
+use super::observability::record_guardian_prompt_stats;
 use super::prompt::GuardianPromptMode;
 use super::prompt::GuardianTranscriptCursor;
 use super::prompt::build_guardian_prompt_items;
@@ -66,6 +76,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_turn: Arc<TurnContext>,
     pub(crate) spawn_config: Config,
     pub(crate) request: GuardianApprovalRequest,
+    pub(crate) request_source: GuardianApprovalRequestSource,
     pub(crate) retry_reason: Option<String>,
     pub(crate) schema: Value,
     pub(crate) model: String,
@@ -73,6 +84,70 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
     pub(crate) external_cancel: Option<CancellationToken>,
+}
+
+fn guardian_nested_result_tag<T, E>(
+    result: &Result<Result<T, E>, GuardianReviewSessionOutcome>,
+) -> &'static str {
+    match result {
+        Ok(Ok(_)) => "completed",
+        Ok(Err(_)) => "error",
+        Err(outcome) => guardian_review_session_outcome_tag(outcome),
+    }
+}
+
+fn guardian_prompt_mode_tag(prompt_mode: &GuardianPromptMode) -> &'static str {
+    match prompt_mode {
+        GuardianPromptMode::Full => "full",
+        GuardianPromptMode::Delta { .. } => "delta",
+    }
+}
+
+fn guardian_review_session_outcome_tag(outcome: &GuardianReviewSessionOutcome) -> &'static str {
+    match outcome {
+        GuardianReviewSessionOutcome::Completed(Ok(_)) => "completed",
+        GuardianReviewSessionOutcome::Completed(Err(_)) => "error",
+        GuardianReviewSessionOutcome::TimedOut => "timed_out",
+        GuardianReviewSessionOutcome::Aborted => "aborted",
+    }
+}
+
+fn guardian_review_submit_trace(
+    parent_turn: &TurnContext,
+) -> Option<codex_protocol::protocol::W3cTraceContext> {
+    current_span_w3c_trace_context().or_else(|| parent_turn.trace_context.clone())
+}
+
+#[cfg(test)]
+pub(crate) fn guardian_review_submit_trace_for_test(
+    parent_turn: &TurnContext,
+) -> Option<codex_protocol::protocol::W3cTraceContext> {
+    guardian_review_submit_trace(parent_turn)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_guardian_phase_duration_metric(
+    session_telemetry: &SessionTelemetry,
+    action_kind: &str,
+    request_source: GuardianApprovalRequestSource,
+    session_mode: &str,
+    phase: &str,
+    prompt_mode: &str,
+    result: &str,
+    duration: Duration,
+) {
+    session_telemetry.record_duration(
+        GUARDIAN_REVIEW_PHASE_DURATION_METRIC,
+        duration,
+        &[
+            ("action_kind", action_kind),
+            ("request_source", request_source.as_tag()),
+            ("session_mode", session_mode),
+            ("phase", phase),
+            ("prompt_mode", prompt_mode),
+            ("result", result),
+        ],
+    );
 }
 
 #[derive(Default)]
@@ -269,7 +344,9 @@ impl GuardianReviewSessionManager {
     ) -> GuardianReviewSessionOutcome {
         let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
+        let action_kind = guardian_action_kind(&params.request);
         let mut stale_trunk_to_shutdown = None;
+        let mut spawned_trunk = false;
         let trunk_candidate = match run_before_review_deadline(
             deadline,
             params.external_cancel.as_ref(),
@@ -286,21 +363,39 @@ impl GuardianReviewSessionManager {
                 }
 
                 if state.trunk.is_none() {
+                    let spawn_started_at = Instant::now();
                     let spawn_cancel_token = CancellationToken::new();
-                    let review_session = match run_before_review_deadline_with_cancel(
+                    let spawn_result = run_before_review_deadline_with_cancel(
                         deadline,
                         params.external_cancel.as_ref(),
                         &spawn_cancel_token,
-                        Box::pin(spawn_guardian_review_session(
-                            &params,
-                            params.spawn_config.clone(),
-                            next_reuse_key.clone(),
-                            spawn_cancel_token.clone(),
-                            /*fork_snapshot*/ None,
-                        )),
+                        Box::pin(
+                            spawn_guardian_review_session(
+                                &params,
+                                params.spawn_config.clone(),
+                                next_reuse_key.clone(),
+                                spawn_cancel_token.clone(),
+                                /*fork_snapshot*/ None,
+                            )
+                            .instrument(tracing::info_span!(
+                                "guardian_review_spawn",
+                                action_kind = action_kind,
+                                session_mode = GuardianReviewSessionMode::TrunkSpawned.as_tag(),
+                            )),
+                        ),
                     )
-                    .await
-                    {
+                    .await;
+                    record_guardian_phase_duration_metric(
+                        &params.parent_turn.session_telemetry,
+                        action_kind,
+                        params.request_source,
+                        GuardianReviewSessionMode::TrunkSpawned.as_tag(),
+                        "session_spawn",
+                        "not_applicable",
+                        guardian_nested_result_tag(&spawn_result),
+                        spawn_started_at.elapsed(),
+                    );
+                    let review_session = match spawn_result {
                         Ok(Ok(review_session)) => Arc::new(review_session),
                         Ok(Err(err)) => {
                             return GuardianReviewSessionOutcome::Completed(Err(err));
@@ -308,6 +403,7 @@ impl GuardianReviewSessionManager {
                         Err(outcome) => return outcome,
                     };
                     state.trunk = Some(Arc::clone(&review_session));
+                    spawned_trunk = true;
                 }
 
                 state.trunk.as_ref().cloned()
@@ -332,6 +428,8 @@ impl GuardianReviewSessionManager {
                     next_reuse_key,
                     deadline,
                     /*fork_snapshot*/ None,
+                    action_kind,
+                    GuardianReviewSessionMode::EphemeralReuseKeyMismatch,
                 )
                 .await;
         }
@@ -345,13 +443,26 @@ impl GuardianReviewSessionManager {
                         next_reuse_key,
                         deadline,
                         trunk.fork_snapshot().await,
+                        action_kind,
+                        GuardianReviewSessionMode::EphemeralBusyTrunk,
                     )
                     .await;
             }
         };
 
-        let (outcome, keep_review_session) =
-            run_review_on_session(trunk.as_ref(), &params, deadline).await;
+        let session_mode = if spawned_trunk {
+            GuardianReviewSessionMode::TrunkSpawned
+        } else {
+            GuardianReviewSessionMode::TrunkReused
+        };
+        let (outcome, keep_review_session) = Box::pin(run_review_on_session(
+            trunk.as_ref(),
+            &params,
+            deadline,
+            action_kind,
+            session_mode,
+        ))
+        .await;
         if keep_review_session && matches!(outcome, GuardianReviewSessionOutcome::Completed(_)) {
             trunk.refresh_last_committed_fork_snapshot().await;
         }
@@ -460,24 +571,44 @@ impl GuardianReviewSessionManager {
         reuse_key: GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
         fork_snapshot: Option<GuardianReviewForkSnapshot>,
+        action_kind: &'static str,
+        session_mode: GuardianReviewSessionMode,
     ) -> GuardianReviewSessionOutcome {
+        let spawn_started_at = Instant::now();
         let spawn_cancel_token = CancellationToken::new();
         let mut fork_config = params.spawn_config.clone();
         fork_config.ephemeral = true;
-        let review_session = match run_before_review_deadline_with_cancel(
+        let spawn_result = run_before_review_deadline_with_cancel(
             deadline,
             params.external_cancel.as_ref(),
             &spawn_cancel_token,
-            Box::pin(spawn_guardian_review_session(
-                &params,
-                fork_config,
-                reuse_key,
-                spawn_cancel_token.clone(),
-                fork_snapshot,
-            )),
+            Box::pin(
+                spawn_guardian_review_session(
+                    &params,
+                    fork_config,
+                    reuse_key,
+                    spawn_cancel_token.clone(),
+                    fork_snapshot,
+                )
+                .instrument(tracing::info_span!(
+                    "guardian_review_spawn",
+                    action_kind = action_kind,
+                    session_mode = session_mode.as_tag(),
+                )),
+            ),
         )
-        .await
-        {
+        .await;
+        record_guardian_phase_duration_metric(
+            &params.parent_turn.session_telemetry,
+            action_kind,
+            params.request_source,
+            session_mode.as_tag(),
+            "session_spawn",
+            "not_applicable",
+            guardian_nested_result_tag(&spawn_result),
+            spawn_started_at.elapsed(),
+        );
+        let review_session = match spawn_result {
             Ok(Ok(review_session)) => Arc::new(review_session),
             Ok(Err(err)) => return GuardianReviewSessionOutcome::Completed(Err(err)),
             Err(outcome) => return outcome,
@@ -487,7 +618,14 @@ impl GuardianReviewSessionManager {
         let mut cleanup =
             EphemeralReviewCleanup::new(Arc::clone(&self.state), Arc::clone(&review_session));
 
-        let (outcome, _) = run_review_on_session(review_session.as_ref(), &params, deadline).await;
+        let (outcome, _) = Box::pin(run_review_on_session(
+            review_session.as_ref(),
+            &params,
+            deadline,
+            action_kind,
+            session_mode,
+        ))
+        .await;
         if let Some(review_session) = self.take_active_ephemeral(&review_session).await {
             cleanup.disarm();
             review_session.shutdown_in_background();
@@ -517,6 +655,7 @@ async fn spawn_guardian_review_session(
         params.parent_session.services.models_manager.clone(),
         Arc::clone(&params.parent_session),
         Arc::clone(&params.parent_turn),
+        guardian_review_submit_trace(&params.parent_turn),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -540,6 +679,8 @@ async fn run_review_on_session(
     review_session: &GuardianReviewSession,
     params: &GuardianReviewSessionParams,
     deadline: tokio::time::Instant,
+    action_kind: &'static str,
+    session_mode: GuardianReviewSessionMode,
 ) -> (GuardianReviewSessionOutcome, bool) {
     let (send_followup_reminder, prompt_mode) = {
         let state = review_session.state.lock().await;
@@ -559,49 +700,160 @@ async fn run_review_on_session(
         append_guardian_followup_reminder(review_session).await;
     }
 
-    let submit_result = run_before_review_deadline(
+    let prompt_build_span = tracing::info_span!(
+        "guardian_review_prompt_build",
+        action_kind = action_kind,
+        session_mode = session_mode.as_tag(),
+        prompt_mode = field::Empty,
+        total_transcript_entries = field::Empty,
+        retained_transcript_entries = field::Empty,
+        approx_prompt_tokens = field::Empty,
+        result = field::Empty,
+    );
+    let prompt_build_started_at = Instant::now();
+    let prompt_items = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
-        Box::pin(async {
-            params
-                .parent_session
-                .services
-                .network_approval
-                .sync_session_approved_hosts_to(
-                    &review_session.codex.session.services.network_approval,
-                )
-                .await;
-
-            let prompt_items = build_guardian_prompt_items(
+        Box::pin(
+            build_guardian_prompt_items(
                 params.parent_session.as_ref(),
                 params.retry_reason.clone(),
                 params.request.clone(),
                 prompt_mode,
             )
-            .await?;
-
-            review_session
-                .codex
-                .submit(Op::UserTurn {
-                    items: prompt_items.items,
-                    cwd: params.parent_turn.cwd.to_path_buf(),
-                    approval_policy: AskForApproval::Never,
-                    approvals_reviewer: None,
-                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                    model: params.model.clone(),
-                    effort: params.reasoning_effort,
-                    summary: Some(params.reasoning_summary),
-                    service_tier: None,
-                    final_output_json_schema: Some(params.schema.clone()),
-                    collaboration_mode: None,
-                    personality: params.personality,
-                })
-                .await?;
-
-            Ok::<GuardianTranscriptCursor, anyhow::Error>(prompt_items.transcript_cursor)
-        }),
+            .instrument(prompt_build_span.clone()),
+        ),
     )
     .await;
+    let prompt_items_result_tag = guardian_nested_result_tag(&prompt_items);
+    prompt_build_span.record("result", prompt_items_result_tag);
+    if !matches!(&prompt_items, Ok(Ok(_))) {
+        record_guardian_phase_duration_metric(
+            &params.parent_turn.session_telemetry,
+            action_kind,
+            params.request_source,
+            session_mode.as_tag(),
+            "prompt_build",
+            guardian_prompt_mode_tag(&prompt_mode),
+            prompt_items_result_tag,
+            prompt_build_started_at.elapsed(),
+        );
+    }
+    let prompt_items = match prompt_items {
+        Ok(prompt_items) => prompt_items,
+        Err(outcome) => return (outcome, false),
+    };
+    let prompt_items = match prompt_items {
+        Ok(prompt_items) => prompt_items,
+        Err(err) => {
+            return (
+                GuardianReviewSessionOutcome::Completed(Err(err.into())),
+                false,
+            );
+        }
+    };
+    prompt_build_span.record("prompt_mode", prompt_items.stats.prompt_mode.as_tag());
+    prompt_build_span.record(
+        "total_transcript_entries",
+        i64::try_from(prompt_items.stats.total_transcript_entries).unwrap_or(i64::MAX),
+    );
+    prompt_build_span.record(
+        "retained_transcript_entries",
+        i64::try_from(prompt_items.stats.retained_transcript_entries).unwrap_or(i64::MAX),
+    );
+    prompt_build_span.record(
+        "approx_prompt_tokens",
+        i64::try_from(prompt_items.stats.approx_prompt_tokens).unwrap_or(i64::MAX),
+    );
+    record_guardian_phase_duration_metric(
+        &params.parent_turn.session_telemetry,
+        action_kind,
+        params.request_source,
+        session_mode.as_tag(),
+        "prompt_build",
+        prompt_items.stats.prompt_mode.as_tag(),
+        "completed",
+        prompt_build_started_at.elapsed(),
+    );
+    record_guardian_prompt_stats(
+        &params.parent_turn.session_telemetry,
+        action_kind,
+        session_mode,
+        prompt_items.stats,
+    );
+
+    let prompt_mode_tag = prompt_items.stats.prompt_mode.as_tag();
+    let transcript_cursor = prompt_items.transcript_cursor;
+    let items = prompt_items.items;
+    let sync_hosts_started_at = Instant::now();
+    params
+        .parent_session
+        .services
+        .network_approval
+        .sync_session_approved_hosts_to(&review_session.codex.session.services.network_approval)
+        .await;
+    record_guardian_phase_duration_metric(
+        &params.parent_turn.session_telemetry,
+        action_kind,
+        params.request_source,
+        session_mode.as_tag(),
+        "sync_approved_hosts",
+        prompt_mode_tag,
+        "completed",
+        sync_hosts_started_at.elapsed(),
+    );
+    let submit_started_at = Instant::now();
+    let submit_span = tracing::info_span!(
+        "guardian_review_submit",
+        action_kind = action_kind,
+        session_mode = session_mode.as_tag(),
+        prompt_mode = prompt_mode_tag,
+        result = field::Empty,
+    );
+    let submit_result = run_before_review_deadline(
+        deadline,
+        params.external_cancel.as_ref(),
+        Box::pin(
+            async {
+                let review_trace = guardian_review_submit_trace(&params.parent_turn);
+                review_session
+                    .codex
+                    .submit_with_trace(
+                        Op::UserTurn {
+                            items,
+                            cwd: params.parent_turn.cwd.to_path_buf(),
+                            approval_policy: AskForApproval::Never,
+                            approvals_reviewer: None,
+                            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                            model: params.model.clone(),
+                            effort: params.reasoning_effort,
+                            summary: Some(params.reasoning_summary),
+                            service_tier: None,
+                            final_output_json_schema: Some(params.schema.clone()),
+                            collaboration_mode: None,
+                            personality: params.personality,
+                        },
+                        review_trace,
+                    )
+                    .await?;
+
+                Ok::<GuardianTranscriptCursor, anyhow::Error>(transcript_cursor)
+            }
+            .instrument(submit_span.clone()),
+        ),
+    )
+    .await;
+    submit_span.record("result", guardian_nested_result_tag(&submit_result));
+    record_guardian_phase_duration_metric(
+        &params.parent_turn.session_telemetry,
+        action_kind,
+        params.request_source,
+        session_mode.as_tag(),
+        "turn_submit",
+        prompt_mode_tag,
+        guardian_nested_result_tag(&submit_result),
+        submit_started_at.elapsed(),
+    );
     let submit_result = match submit_result {
         Ok(submit_result) => submit_result,
         Err(outcome) => return (outcome, false),
@@ -613,8 +865,29 @@ async fn run_review_on_session(
         }
     };
 
+    let wait_started_at = Instant::now();
+    let wait_span = tracing::info_span!(
+        "guardian_review_wait",
+        action_kind = action_kind,
+        session_mode = session_mode.as_tag(),
+        prompt_mode = prompt_mode_tag,
+        result = field::Empty,
+    );
     let outcome =
-        wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
+        wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref())
+            .instrument(wait_span.clone())
+            .await;
+    wait_span.record("result", guardian_review_session_outcome_tag(&outcome.0));
+    record_guardian_phase_duration_metric(
+        &params.parent_turn.session_telemetry,
+        action_kind,
+        params.request_source,
+        session_mode.as_tag(),
+        "wait",
+        prompt_mode_tag,
+        guardian_review_session_outcome_tag(&outcome.0),
+        wait_started_at.elapsed(),
+    );
     if matches!(outcome.0, GuardianReviewSessionOutcome::Completed(_)) {
         let mut state = review_session.state.lock().await;
         state.prior_review_count = state.prior_review_count.saturating_add(1);

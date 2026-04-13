@@ -553,6 +553,7 @@ async fn drain_to_completed(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            turn_context.trace_context.as_ref(),
         )
         .await?;
     loop {

@@ -3171,8 +3171,18 @@ async fn new_default_turn_captures_current_span_trace_id() {
             .trace_id()
             .to_string();
         let turn_context = session.new_default_turn().await;
+        let trace_context = turn_context
+            .trace_context
+            .clone()
+            .expect("turn context should capture the current span trace context");
+        let trace_context =
+            codex_otel::context_from_w3c_trace_context(&trace_context).expect("trace context");
         let turn_context_item = turn_context.to_turn_context_item();
-        assert_eq!(turn_context_item.trace_id, Some(expected_trace_id));
+        assert_eq!(turn_context_item.trace_id, Some(expected_trace_id.clone()));
+        assert_eq!(
+            trace_context.span().span_context().trace_id().to_string(),
+            expected_trace_id
+        );
         turn_context_item
     }
     .instrument(request_span)

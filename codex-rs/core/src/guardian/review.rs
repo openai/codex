@@ -1,5 +1,9 @@
 use std::sync::Arc;
+use std::time::Instant;
 
+#[cfg(test)]
+use codex_otel::current_span_w3c_trace_context;
+use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -10,8 +14,12 @@ use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::protocol::WarningEvent;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::field;
+use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -24,6 +32,10 @@ use super::GuardianRejection;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
+use super::observability::GuardianApprovalRequestSource;
+use super::observability::guardian_action_kind;
+use super::observability::guardian_bool_tag;
+use super::observability::record_guardian_review_metrics;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
 use super::review_session::GuardianReviewSessionOutcome;
@@ -79,6 +91,24 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
     }
 }
 
+fn guardian_review_result_tag(
+    outcome: Option<GuardianAssessmentOutcome>,
+    fail_closed_reason: Option<&'static str>,
+    aborted: bool,
+) -> &'static str {
+    if aborted {
+        return "aborted";
+    }
+    if let Some(reason) = fail_closed_reason {
+        return reason;
+    }
+    match outcome {
+        Some(GuardianAssessmentOutcome::Allow) => "approved",
+        Some(GuardianAssessmentOutcome::Deny) => "denied_guardian",
+        None => "unknown",
+    }
+}
+
 /// Whether this turn should route `on-request` approval prompts through the
 /// guardian reviewer instead of surfacing them to the user. ARC may still
 /// block actions earlier in the flow.
@@ -97,17 +127,47 @@ pub(crate) fn is_guardian_reviewer_source(
     )
 }
 
+fn guardian_review_parent_trace<'a>(
+    parent_trace: Option<&'a W3cTraceContext>,
+    turn: &'a TurnContext,
+) -> Option<&'a W3cTraceContext> {
+    parent_trace.or(turn.trace_context.as_ref())
+}
+
+#[cfg(test)]
+pub(crate) async fn guardian_review_trace_for_test(
+    turn: Arc<TurnContext>,
+    parent_trace: Option<W3cTraceContext>,
+) -> Option<W3cTraceContext> {
+    let review_span = tracing::info_span!("guardian_review");
+    if let Some(parent_trace) = guardian_review_parent_trace(parent_trace.as_ref(), turn.as_ref())
+        && !set_parent_from_w3c_trace_context(&review_span, parent_trace)
+    {
+        return None;
+    }
+    async { current_span_w3c_trace_context() }
+        .instrument(review_span)
+        .await
+}
+
 /// This function always fails closed: any timeout, review-session failure, or
 /// parse failure is treated as a high-risk denial.
+#[allow(clippy::too_many_arguments)]
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     review_id: String,
     request: GuardianApprovalRequest,
+    request_source: GuardianApprovalRequestSource,
     retry_reason: Option<String>,
     external_cancel: Option<CancellationToken>,
+    parent_trace: Option<W3cTraceContext>,
 ) -> ReviewDecision {
+    let action_kind = guardian_action_kind(&request);
+    let review_started_at = Instant::now();
+    let retry_tag = guardian_bool_tag(retry_reason.is_some());
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
+    let target_item_tag = guardian_bool_tag(target_item_id.is_some());
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
     session
@@ -131,6 +191,7 @@ async fn run_guardian_review(
         .as_ref()
         .is_some_and(CancellationToken::is_cancelled)
     {
+        let result_tag = guardian_review_result_tag(None, None, true);
         session
             .send_event(
                 turn.as_ref(),
@@ -147,38 +208,90 @@ async fn run_guardian_review(
                 }),
             )
             .await;
+        record_guardian_review_metrics(
+            &session.services.session_telemetry,
+            action_kind,
+            request_source,
+            result_tag,
+            retry_tag,
+            target_item_tag,
+            review_started_at.elapsed(),
+        );
         return ReviewDecision::Abort;
     }
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let outcome = run_guardian_review_session(
-        session.clone(),
-        turn.clone(),
-        request,
-        retry_reason,
-        schema,
-        external_cancel,
+    let review_span = tracing::info_span!(
+        "guardian_review",
+        review_id = %review_id,
+        action_kind = action_kind,
+        retry = retry_tag,
+        turn_id = %assessment_turn_id,
+        target_item_present = target_item_tag,
+        target_item_id = target_item_id.as_deref().unwrap_or("<none>"),
+        result = field::Empty,
+        fail_closed_reason = field::Empty,
+        risk_level = field::Empty,
+        user_authorization = field::Empty,
+    );
+    if let Some(parent_trace) = guardian_review_parent_trace(parent_trace.as_ref(), turn.as_ref())
+        && !set_parent_from_w3c_trace_context(&review_span, parent_trace)
+    {
+        warn!("ignoring invalid guardian review trace carrier");
+    }
+    let outcome = Box::pin(
+        run_guardian_review_session(
+            session.clone(),
+            turn.clone(),
+            request,
+            request_source,
+            retry_reason,
+            schema,
+            external_cancel,
+        )
+        .instrument(review_span.clone()),
     )
     .await;
 
-    let assessment = match outcome {
-        GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
-        GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            user_authorization: GuardianUserAuthorization::Unknown,
-            outcome: GuardianAssessmentOutcome::Deny,
-            rationale: format!("Automatic approval review failed: {err}"),
-        },
-        GuardianReviewOutcome::TimedOut => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            user_authorization: GuardianUserAuthorization::Unknown,
-            outcome: GuardianAssessmentOutcome::Deny,
-            rationale:
-                "Automatic approval review timed out while evaluating the requested approval."
-                    .to_string(),
-        },
+    let (assessment, result_tag, fail_closed_reason) = match outcome {
+        GuardianReviewOutcome::Completed(Ok(assessment)) => {
+            let result_tag = guardian_review_result_tag(Some(assessment.outcome), None, false);
+            (assessment, result_tag, None)
+        }
+        GuardianReviewOutcome::Completed(Err(err)) => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                user_authorization: GuardianUserAuthorization::Unknown,
+                outcome: GuardianAssessmentOutcome::Deny,
+                rationale: format!("Automatic approval review failed: {err}"),
+            },
+            guardian_review_result_tag(
+                Some(GuardianAssessmentOutcome::Deny),
+                Some("denied_error"),
+                false,
+            ),
+            Some("denied_error"),
+        ),
+        GuardianReviewOutcome::TimedOut => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                user_authorization: GuardianUserAuthorization::Unknown,
+                outcome: GuardianAssessmentOutcome::Deny,
+                rationale:
+                    "Automatic approval review timed out while evaluating the requested approval."
+                        .to_string(),
+            },
+            guardian_review_result_tag(
+                Some(GuardianAssessmentOutcome::Deny),
+                Some("denied_timeout"),
+                false,
+            ),
+            Some("denied_timeout"),
+        ),
         GuardianReviewOutcome::Aborted => {
+            let result_tag = guardian_review_result_tag(None, None, true);
+            review_span.record("result", result_tag);
             session
                 .send_event(
                     turn.as_ref(),
@@ -195,9 +308,23 @@ async fn run_guardian_review(
                     }),
                 )
                 .await;
+            record_guardian_review_metrics(
+                &session.services.session_telemetry,
+                action_kind,
+                request_source,
+                result_tag,
+                retry_tag,
+                target_item_tag,
+                review_started_at.elapsed(),
+            );
             return ReviewDecision::Abort;
         }
     };
+
+    review_span.record("result", result_tag);
+    if let Some(fail_closed_reason) = fail_closed_reason {
+        review_span.record("fail_closed_reason", fail_closed_reason);
+    }
 
     let approved = match assessment.outcome {
         GuardianAssessmentOutcome::Allow => true,
@@ -210,6 +337,8 @@ async fn run_guardian_review(
         GuardianUserAuthorization::Medium => "medium",
         GuardianUserAuthorization::High => "high",
     };
+    review_span.record("risk_level", guardian_risk_level_str(assessment.risk_level));
+    review_span.record("user_authorization", user_authorization);
     let warning = format!(
         "Automatic approval review {verdict} (risk: {}, authorization: {user_authorization}): {}",
         guardian_risk_level_str(assessment.risk_level),
@@ -254,6 +383,15 @@ async fn run_guardian_review(
             }),
         )
         .await;
+    record_guardian_review_metrics(
+        &session.services.session_telemetry,
+        action_kind,
+        request_source,
+        result_tag,
+        retry_tag,
+        target_item_tag,
+        review_started_at.elapsed(),
+    );
 
     if approved {
         ReviewDecision::Approved
@@ -275,12 +413,15 @@ pub(crate) async fn review_approval_request(
         Arc::clone(turn),
         review_id,
         request,
+        GuardianApprovalRequestSource::MainTurn,
         retry_reason,
-        /*external_cancel*/ None,
+        None,
+        None,
     )
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
@@ -289,35 +430,46 @@ pub(crate) async fn review_approval_request_with_cancel(
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
 ) -> ReviewDecision {
+    review_approval_request_with_cancel_and_trace(
+        session,
+        turn,
+        review_id,
+        request,
+        retry_reason,
+        None,
+        cancel_token,
+    )
+    .await
+}
+
+pub(crate) async fn review_approval_request_with_cancel_and_trace(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    parent_trace: Option<W3cTraceContext>,
+    cancel_token: CancellationToken,
+) -> ReviewDecision {
     run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
         review_id,
         request,
+        GuardianApprovalRequestSource::MainTurn,
         retry_reason,
         Some(cancel_token),
+        parent_trace,
     )
     .await
 }
 
 /// Runs the guardian in a locked-down reusable review session.
-///
-/// The guardian itself should not mutate state or trigger further approvals, so
-/// it is pinned to a read-only sandbox with `approval_policy = never` and
-/// nonessential agent features disabled. When the cached trunk session is idle,
-/// later approvals append onto that same guardian conversation to preserve a
-/// stable prompt-cache key. If the trunk is already busy, the review runs in an
-/// ephemeral fork from the last committed trunk rollout so parallel approvals
-/// do not block each other or mutate the cached thread. The trunk is recreated
-/// when the effective review-session config changes, and any future compaction
-/// must continue to preserve the guardian policy as exact top-level developer
-/// context. It may still reuse the parent's managed-network allowlist for
-/// read-only checks, but it intentionally runs without inherited exec-policy
-/// rules.
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     request: GuardianApprovalRequest,
+    request_source: GuardianApprovalRequestSource,
     retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
@@ -377,6 +529,13 @@ pub(super) async fn run_guardian_review_session(
         Ok(config) => config,
         Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
     };
+    let action_kind = guardian_action_kind(&request);
+    let review_session_span = tracing::info_span!(
+        "guardian_review_session",
+        action_kind = action_kind,
+        model = guardian_model.as_str(),
+        reasoning_effort = ?guardian_reasoning_effort,
+    );
 
     match session
         .guardian_review_session
@@ -385,6 +544,7 @@ pub(super) async fn run_guardian_review_session(
             parent_turn: turn.clone(),
             spawn_config: guardian_config,
             request,
+            request_source,
             retry_reason,
             schema,
             model: guardian_model,
@@ -393,6 +553,7 @@ pub(super) async fn run_guardian_review_session(
             personality: turn.personality,
             external_cancel,
         })
+        .instrument(review_session_span)
         .await
     {
         GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => {
