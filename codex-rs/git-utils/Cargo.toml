@@ -17,7 +17,6 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "process", "rt", "time"] }
 ts-rs = { workspace = true, features = [
     "uuid-impl",
     "serde-json-impl",
@@ -28,3 +27,6 @@ walkdir = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["macros", "process", "rt", "time"] }

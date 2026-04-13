@@ -42,6 +42,9 @@ anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { workspace = true, features = ["js"] }
+
 [package.metadata.cargo-shear]
 # Required because:
 # `icu_provider`: contains a required `sync` feature for `icu_decimal`
