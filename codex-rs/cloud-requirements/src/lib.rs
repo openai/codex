@@ -173,13 +173,13 @@ fn format_cloud_requirements_load_failed_message(
         .map(|status_code| format!("last backend status: {status_code}"))
         .unwrap_or_else(|| "last failure did not include an HTTP status".to_string());
     format!(
-        "{CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE} after {attempt_count} attempts ({status}). Codex could not use a valid cached copy for this account, so startup stopped to avoid running without managed requirements. Please try again."
+        "{CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE} after {attempt_count} attempts ({status}). Codex could not use a valid cached copy for this account, so startup stopped to avoid running without cloud-managed requirements. Please try again."
     )
 }
 
 fn format_cloud_requirements_timeout_message(timeout: Duration) -> String {
     format!(
-        "timed out waiting for workspace-managed config after {}s. Codex could not use a valid cached copy for this account, so startup stopped to avoid running without managed requirements. Please try again.",
+        "timed out waiting for workspace-managed config after {}s. Codex could not use a valid cached copy for this account, so startup stopped to avoid running without cloud-managed requirements. Please try again.",
         timeout.as_secs()
     )
 }
