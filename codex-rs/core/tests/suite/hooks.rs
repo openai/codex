@@ -1174,12 +1174,16 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     assert_eq!(
         hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "sandbox_permissions": "use_default",
-            "additional_permissions": null,
+            "attempt": {
+                "stage": "initial",
+                "retryReason": null,
+            },
+            "policy": {
+                "sandboxPermissions": "use_default",
+                "additionalPermissions": null,
+            },
             "justification": null,
-            "approval_attempt": "initial",
-            "retry_reason": null,
-            "network_approval_context": null,
+            "resource": {},
         })
     );
     assert!(
@@ -1277,12 +1281,16 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     assert_eq!(
         hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "sandbox_permissions": "use_default",
-            "additional_permissions": null,
+            "attempt": {
+                "stage": "initial",
+                "retryReason": null,
+            },
+            "policy": {
+                "sandboxPermissions": "use_default",
+                "additionalPermissions": null,
+            },
             "justification": null,
-            "approval_attempt": "initial",
-            "retry_reason": null,
-            "network_approval_context": null,
+            "resource": {},
         })
     );
 
@@ -1355,8 +1363,7 @@ allow_local_binding = true
                 .enable(Feature::CodexHooks)
                 .expect("test config should allow feature update");
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-            config.permissions.sandbox_policy =
-                Constrained::allow_any(sandbox_policy_for_config.clone());
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
             let layers = config
                 .config_layer_stack
                 .get_layers(
@@ -1444,10 +1451,21 @@ allow_local_binding = true
         "network-access http://codex-network-test.invalid:80"
     );
     assert_eq!(
-        hook_inputs[0]["approval_context"]["network_approval_context"],
+        hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "host": "codex-network-test.invalid",
-            "protocol": "http",
+            "attempt": {
+                "stage": "initial",
+                "retryReason": null,
+            },
+            "policy": {
+                "sandboxPermissions": "use_default",
+                "additionalPermissions": null,
+            },
+            "justification": "codex-network-test.invalid is not in the allowed_domains",
+            "resource": {
+                "host": "codex-network-test.invalid",
+                "protocol": "http",
+            },
         })
     );
 
@@ -1534,12 +1552,16 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     assert_eq!(
         hook_inputs[0]["approval_context"],
         serde_json::json!({
-            "sandbox_permissions": "use_default",
-            "additional_permissions": null,
+            "attempt": {
+                "stage": "retry",
+                "retryReason": "command failed; retry without sandbox?",
+            },
+            "policy": {
+                "sandboxPermissions": "use_default",
+                "additionalPermissions": null,
+            },
             "justification": null,
-            "approval_attempt": "retry",
-            "retry_reason": "command failed; retry without sandbox?",
-            "network_approval_context": null,
+            "resource": {},
         })
     );
 

@@ -23,21 +23,6 @@
       },
       "type": "object"
     },
-    "NetworkApprovalContext": {
-      "properties": {
-        "host": {
-          "type": "string"
-        },
-        "protocol": {
-          "$ref": "#/definitions/NetworkApprovalProtocol"
-        }
-      },
-      "required": [
-        "host",
-        "protocol"
-      ],
-      "type": "object"
-    },
     "NetworkApprovalProtocol": {
       "enum": [
         "http",
@@ -82,29 +67,66 @@
     "PermissionRequestApprovalContext": {
       "additionalProperties": false,
       "properties": {
-        "additional_permissions": {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        "approval_attempt": {
-          "$ref": "#/definitions/PermissionRequestApprovalAttempt"
+        "attempt": {
+          "$ref": "#/definitions/PermissionRequestAttemptContext"
         },
         "justification": {
           "type": "string"
         },
-        "network_approval_context": {
-          "$ref": "#/definitions/NetworkApprovalContext"
+        "policy": {
+          "$ref": "#/definitions/PermissionRequestPolicyContext"
         },
-        "retry_reason": {
+        "resource": {
+          "$ref": "#/definitions/PermissionRequestResourceContext"
+        }
+      },
+      "required": [
+        "attempt",
+        "policy",
+        "resource"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestAttemptContext": {
+      "additionalProperties": false,
+      "properties": {
+        "retryReason": {
           "type": "string"
         },
-        "sandbox_permissions": {
+        "stage": {
+          "$ref": "#/definitions/PermissionRequestApprovalAttempt"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestPolicyContext": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalPermissions": {
+          "$ref": "#/definitions/PermissionProfile"
+        },
+        "sandboxPermissions": {
           "$ref": "#/definitions/SandboxPermissions"
         }
       },
       "required": [
-        "approval_attempt",
-        "sandbox_permissions"
+        "sandboxPermissions"
       ],
+      "type": "object"
+    },
+    "PermissionRequestResourceContext": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
       "type": "object"
     },
     "PermissionRequestToolInput": {

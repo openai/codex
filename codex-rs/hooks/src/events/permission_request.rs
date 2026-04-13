@@ -36,7 +36,10 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PermissionRequestApprovalContext;
+use crate::schema::PermissionRequestAttemptContext;
 use crate::schema::PermissionRequestCommandInput;
+use crate::schema::PermissionRequestPolicyContext;
+use crate::schema::PermissionRequestResourceContext;
 use crate::schema::PermissionRequestToolInput;
 
 #[derive(Debug, Clone)]
@@ -195,6 +198,11 @@ fn resolve_permission_request_decision<'a>(
 }
 
 fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestCommandInput {
+    let (host, protocol) = request
+        .network_approval_context
+        .as_ref()
+        .map(|context| (Some(context.host.clone()), Some(context.protocol)))
+        .unwrap_or((None, None));
     PermissionRequestCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
@@ -208,12 +216,16 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
             command: request.command.clone(),
         },
         approval_context: PermissionRequestApprovalContext {
-            sandbox_permissions: request.sandbox_permissions,
-            additional_permissions: request.additional_permissions.clone(),
+            attempt: PermissionRequestAttemptContext {
+                stage: request.approval_attempt,
+                retry_reason: request.retry_reason.clone(),
+            },
+            policy: PermissionRequestPolicyContext {
+                sandbox_permissions: request.sandbox_permissions,
+                additional_permissions: request.additional_permissions.clone(),
+            },
             justification: request.justification.clone(),
-            approval_attempt: request.approval_attempt,
-            retry_reason: request.retry_reason.clone(),
-            network_approval_context: request.network_approval_context.clone(),
+            resource: PermissionRequestResourceContext { host, protocol },
         },
     }
 }

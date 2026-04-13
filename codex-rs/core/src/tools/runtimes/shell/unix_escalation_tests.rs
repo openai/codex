@@ -448,7 +448,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         expected_hook_command
     );
     assert_eq!(
-        hook_inputs[0]["approval_context"]["approval_attempt"],
+        hook_inputs[0]["approval_context"]["attempt"]["stage"],
         "initial"
     );
 

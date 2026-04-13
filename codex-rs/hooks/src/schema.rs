@@ -12,7 +12,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 
@@ -251,14 +251,38 @@ pub(crate) struct PermissionRequestToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestApprovalContext {
+pub(crate) struct PermissionRequestAttemptContext {
+    pub stage: PermissionRequestApprovalAttempt,
+    pub retry_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestPolicyContext {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestResourceContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<NetworkApprovalProtocol>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PermissionRequestApprovalContext {
+    pub attempt: PermissionRequestAttemptContext,
+    pub policy: PermissionRequestPolicyContext,
     pub justification: Option<String>,
-    pub approval_attempt: PermissionRequestApprovalAttempt,
-    pub retry_reason: Option<String>,
-    pub network_approval_context: Option<NetworkApprovalContext>,
+    pub resource: PermissionRequestResourceContext,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
