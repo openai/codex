@@ -1,16 +1,16 @@
 //! Cleanup operations for per-thread delivery state.
 //!
-//! Timers and queued messages are stored independently because they have
+//! Timers and queued external messages are stored independently because they have
 //! different runtime behavior, but thread lifecycle operations need to treat
 //! them as one unit. This module owns that cross-table cleanup.
 
 use super::*;
 
 impl StateRuntime {
-    /// Delete all queued messages and timers associated with `thread_id`.
+    /// Delete all queued external messages and timers associated with `thread_id`.
     pub async fn delete_thread_delivery_state(&self, thread_id: &str) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM thread_messages WHERE thread_id = ?")
+        sqlx::query("DELETE FROM external_messages WHERE thread_id = ?")
             .bind(thread_id)
             .execute(&mut *tx)
             .await?;
@@ -27,12 +27,12 @@ impl StateRuntime {
 mod tests {
     use super::StateRuntime;
     use super::test_support::unique_temp_dir;
-    use crate::ThreadMessageCreateParams;
+    use crate::ExternalMessageCreateParams;
     use crate::ThreadTimerCreateParams;
     use pretty_assertions::assert_eq;
 
-    fn message_params(id: &str, thread_id: &str) -> ThreadMessageCreateParams {
-        ThreadMessageCreateParams {
+    fn message_params(id: &str, thread_id: &str) -> ExternalMessageCreateParams {
+        ExternalMessageCreateParams {
             id: id.to_string(),
             thread_id: thread_id.to_string(),
             source: "external".to_string(),
@@ -72,11 +72,11 @@ mod tests {
     async fn delete_thread_delivery_state_removes_messages_and_timers_for_thread() {
         let runtime = test_runtime().await;
         runtime
-            .create_thread_message(&message_params("message-1", "thread-1"))
+            .create_external_message(&message_params("message-1", "thread-1"))
             .await
             .expect("create thread-1 message");
         runtime
-            .create_thread_message(&message_params("message-2", "thread-2"))
+            .create_external_message(&message_params("message-2", "thread-2"))
             .await
             .expect("create thread-2 message");
         runtime
@@ -95,7 +95,7 @@ mod tests {
 
         assert_eq!(
             runtime
-                .list_thread_messages("thread-1")
+                .list_external_messages("thread-1")
                 .await
                 .expect("list thread-1 messages"),
             Vec::new()
@@ -109,7 +109,7 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .list_thread_messages("thread-2")
+                .list_external_messages("thread-2")
                 .await
                 .expect("list thread-2 messages")
                 .into_iter()

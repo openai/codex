@@ -58,7 +58,7 @@ CREATE INDEX idx_thread_timers_thread_pending
 CREATE INDEX idx_thread_timers_thread_next_run
     ON thread_timers(thread_id, next_run_at);
 
-CREATE TABLE thread_messages (
+CREATE TABLE external_messages (
     seq INTEGER PRIMARY KEY,
     id TEXT NOT NULL UNIQUE,
     thread_id TEXT NOT NULL,
@@ -70,8 +70,8 @@ CREATE TABLE thread_messages (
     queued_at INTEGER NOT NULL
 );
 
-CREATE INDEX thread_messages_thread_order_idx
-    ON thread_messages(thread_id, queued_at, seq);
+CREATE INDEX external_messages_thread_order_idx
+    ON external_messages(thread_id, queued_at, seq);
 
-CREATE INDEX thread_messages_thread_delivery_order_idx
-    ON thread_messages(thread_id, delivery, queued_at, seq);
+CREATE INDEX external_messages_thread_delivery_order_idx
+    ON external_messages(thread_id, delivery, queued_at, seq);

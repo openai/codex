@@ -1,7 +1,7 @@
 use sqlx::FromRow;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ThreadMessageCreateParams {
+pub struct ExternalMessageCreateParams {
     pub id: String,
     pub thread_id: String,
     pub source: String,
@@ -12,7 +12,7 @@ pub struct ThreadMessageCreateParams {
     pub queued_at: i64,
 }
 
-impl ThreadMessageCreateParams {
+impl ExternalMessageCreateParams {
     pub fn new(
         thread_id: String,
         source: String,
@@ -36,7 +36,7 @@ impl ThreadMessageCreateParams {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ThreadMessage {
+pub struct ExternalMessage {
     pub seq: i64,
     pub id: String,
     pub thread_id: String,
@@ -49,14 +49,14 @@ pub struct ThreadMessage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ThreadMessageClaim {
-    Claimed(ThreadMessage),
+pub enum ExternalMessageClaim {
+    Claimed(ExternalMessage),
     Invalid { id: String, reason: String },
     NotReady,
 }
 
 #[derive(Debug, FromRow)]
-pub(crate) struct ThreadMessageRow {
+pub(crate) struct ExternalMessageRow {
     pub seq: i64,
     pub id: String,
     pub thread_id: String,
@@ -68,8 +68,8 @@ pub(crate) struct ThreadMessageRow {
     pub queued_at: i64,
 }
 
-impl From<ThreadMessageRow> for ThreadMessage {
-    fn from(row: ThreadMessageRow) -> Self {
+impl From<ExternalMessageRow> for ExternalMessage {
+    fn from(row: ExternalMessageRow) -> Self {
         Self {
             seq: row.seq,
             id: row.id,

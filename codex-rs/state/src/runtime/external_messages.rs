@@ -1,4 +1,4 @@
-//! SQLite-backed state operations for queued thread messages.
+//! SQLite-backed state operations for queued external messages.
 //!
 //! This module extends [`StateRuntime`] with the storage APIs used by message
 //! producers and active threads. Claiming a message deletes the row inside the
@@ -6,19 +6,19 @@
 //! once.
 
 use super::*;
-use crate::model::ThreadMessageRow;
+use crate::model::ExternalMessageRow;
 
 const DELIVERY_AFTER_TURN: &str = "after-turn";
 const DELIVERY_STEER_CURRENT_TURN: &str = "steer-current-turn";
 
 impl StateRuntime {
-    pub async fn create_thread_message(
+    pub async fn create_external_message(
         &self,
-        params: &ThreadMessageCreateParams,
+        params: &ExternalMessageCreateParams,
     ) -> anyhow::Result<()> {
         sqlx::query(
             r#"
-INSERT INTO thread_messages (
+INSERT INTO external_messages (
     id,
     thread_id,
     source,
@@ -43,11 +43,11 @@ INSERT INTO thread_messages (
         Ok(())
     }
 
-    pub async fn list_thread_messages(
+    pub async fn list_external_messages(
         &self,
         thread_id: &str,
-    ) -> anyhow::Result<Vec<ThreadMessage>> {
-        let rows = sqlx::query_as::<_, ThreadMessageRow>(
+    ) -> anyhow::Result<Vec<ExternalMessage>> {
+        let rows = sqlx::query_as::<_, ExternalMessageRow>(
             r#"
 SELECT
     seq,
@@ -59,7 +59,7 @@ SELECT
     meta_json,
     delivery,
     queued_at
-FROM thread_messages
+FROM external_messages
 WHERE thread_id = ?
 ORDER BY queued_at ASC, seq ASC
             "#,
@@ -67,11 +67,11 @@ ORDER BY queued_at ASC, seq ASC
         .bind(thread_id)
         .fetch_all(self.pool.as_ref())
         .await?;
-        Ok(rows.into_iter().map(ThreadMessage::from).collect())
+        Ok(rows.into_iter().map(ExternalMessage::from).collect())
     }
 
-    pub async fn delete_thread_message(&self, thread_id: &str, id: &str) -> anyhow::Result<bool> {
-        let result = sqlx::query("DELETE FROM thread_messages WHERE thread_id = ? AND id = ?")
+    pub async fn delete_external_message(&self, thread_id: &str, id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query("DELETE FROM external_messages WHERE thread_id = ? AND id = ?")
             .bind(thread_id)
             .bind(id)
             .execute(self.pool.as_ref())
@@ -79,18 +79,18 @@ ORDER BY queued_at ASC, seq ASC
         Ok(result.rows_affected() > 0)
     }
 
-    pub async fn claim_next_thread_message(
+    pub async fn claim_next_external_message(
         &self,
         thread_id: &str,
         can_after_turn: bool,
         can_steer_current_turn: bool,
-    ) -> anyhow::Result<Option<ThreadMessageClaim>> {
-        let row = sqlx::query_as::<_, ThreadMessageRow>(
+    ) -> anyhow::Result<Option<ExternalMessageClaim>> {
+        let row = sqlx::query_as::<_, ExternalMessageRow>(
             r#"
-DELETE FROM thread_messages
+DELETE FROM external_messages
 WHERE seq = (
     SELECT seq
-    FROM thread_messages
+    FROM external_messages
     WHERE thread_id = ?
     ORDER BY queued_at ASC, seq ASC
     LIMIT 1
@@ -124,10 +124,10 @@ RETURNING
 
         if let Some(row) = row {
             return match row.delivery.as_str() {
-                DELIVERY_AFTER_TURN | DELIVERY_STEER_CURRENT_TURN => {
-                    Ok(Some(ThreadMessageClaim::Claimed(ThreadMessage::from(row))))
-                }
-                delivery => Ok(Some(ThreadMessageClaim::Invalid {
+                DELIVERY_AFTER_TURN | DELIVERY_STEER_CURRENT_TURN => Ok(Some(
+                    ExternalMessageClaim::Claimed(ExternalMessage::from(row)),
+                )),
+                delivery => Ok(Some(ExternalMessageClaim::Invalid {
                     id: row.id,
                     reason: format!("invalid delivery `{delivery}`"),
                 })),
@@ -137,7 +137,7 @@ RETURNING
         let oldest_delivery = sqlx::query_scalar::<_, String>(
             r#"
 SELECT delivery
-FROM thread_messages
+FROM external_messages
 WHERE thread_id = ?
 ORDER BY queued_at ASC, seq ASC
 LIMIT 1
@@ -148,9 +148,11 @@ LIMIT 1
         .await?;
 
         match oldest_delivery.as_deref() {
-            Some(DELIVERY_AFTER_TURN) if !can_after_turn => Ok(Some(ThreadMessageClaim::NotReady)),
+            Some(DELIVERY_AFTER_TURN) if !can_after_turn => {
+                Ok(Some(ExternalMessageClaim::NotReady))
+            }
             Some(DELIVERY_STEER_CURRENT_TURN) if !(can_steer_current_turn || can_after_turn) => {
-                Ok(Some(ThreadMessageClaim::NotReady))
+                Ok(Some(ExternalMessageClaim::NotReady))
             }
             None | Some(_) => Ok(None),
         }
@@ -161,12 +163,12 @@ LIMIT 1
 mod tests {
     use super::StateRuntime;
     use super::test_support::unique_temp_dir;
-    use crate::ThreadMessageClaim;
-    use crate::ThreadMessageCreateParams;
+    use crate::ExternalMessageClaim;
+    use crate::ExternalMessageCreateParams;
     use pretty_assertions::assert_eq;
 
-    fn message_params(id: &str, thread_id: &str, queued_at: i64) -> ThreadMessageCreateParams {
-        ThreadMessageCreateParams {
+    fn message_params(id: &str, thread_id: &str, queued_at: i64) -> ExternalMessageCreateParams {
+        ExternalMessageCreateParams {
             id: id.to_string(),
             thread_id: thread_id.to_string(),
             source: "external".to_string(),
@@ -185,13 +187,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_messages_table_and_indexes_exist() {
+    async fn external_messages_table_and_indexes_exist() {
         let runtime = test_runtime().await;
         let names = sqlx::query_scalar::<_, String>(
             r#"
 SELECT name
 FROM sqlite_master
-WHERE tbl_name = 'thread_messages'
+WHERE tbl_name = 'external_messages'
   AND name NOT LIKE 'sqlite_autoindex_%'
 ORDER BY name
             "#,
@@ -203,24 +205,24 @@ ORDER BY name
         assert_eq!(
             names,
             vec![
-                "thread_messages",
-                "thread_messages_thread_delivery_order_idx",
-                "thread_messages_thread_order_idx",
+                "external_messages",
+                "external_messages_thread_delivery_order_idx",
+                "external_messages_thread_order_idx",
             ]
         );
     }
 
     #[tokio::test]
-    async fn thread_message_rows_round_trip() {
+    async fn external_message_rows_round_trip() {
         let runtime = test_runtime().await;
         let params = message_params("message-1", "thread-1", /*queued_at*/ 100);
 
         runtime
-            .create_thread_message(&params)
+            .create_external_message(&params)
             .await
             .expect("create message");
         let messages = runtime
-            .list_thread_messages("thread-1")
+            .list_external_messages("thread-1")
             .await
             .expect("list messages");
 
@@ -237,10 +239,10 @@ ORDER BY name
     }
 
     #[tokio::test]
-    async fn delete_thread_message_is_scoped_to_thread_id() {
+    async fn delete_external_message_is_scoped_to_thread_id() {
         let runtime = test_runtime().await;
         runtime
-            .create_thread_message(&message_params(
+            .create_external_message(&message_params(
                 "message-1",
                 "thread-1",
                 /*queued_at*/ 100,
@@ -248,7 +250,7 @@ ORDER BY name
             .await
             .expect("create thread-1 message");
         runtime
-            .create_thread_message(&message_params(
+            .create_external_message(&message_params(
                 "message-2",
                 "thread-2",
                 /*queued_at*/ 100,
@@ -257,25 +259,25 @@ ORDER BY name
             .expect("create thread-2 message");
 
         let deleted_wrong_thread = runtime
-            .delete_thread_message("thread-2", "message-1")
+            .delete_external_message("thread-2", "message-1")
             .await
-            .expect("delete wrong-thread message");
+            .expect("delete wrong-external message");
         assert!(!deleted_wrong_thread);
         let deleted = runtime
-            .delete_thread_message("thread-1", "message-1")
+            .delete_external_message("thread-1", "message-1")
             .await
             .expect("delete thread-1 message");
         assert!(deleted);
         assert_eq!(
             runtime
-                .list_thread_messages("thread-1")
+                .list_external_messages("thread-1")
                 .await
                 .expect("list thread-1 messages"),
             Vec::new()
         );
         assert_eq!(
             runtime
-                .list_thread_messages("thread-2")
+                .list_external_messages("thread-2")
                 .await
                 .expect("list thread-2 messages")
                 .into_iter()
@@ -289,30 +291,30 @@ ORDER BY name
     async fn claim_is_scoped_to_thread_id_and_ordered() {
         let runtime = test_runtime().await;
         runtime
-            .create_thread_message(&message_params("newer", "thread-1", /*queued_at*/ 200))
+            .create_external_message(&message_params("newer", "thread-1", /*queued_at*/ 200))
             .await
             .expect("create newer message");
         runtime
-            .create_thread_message(&message_params(
+            .create_external_message(&message_params(
                 "other-thread",
                 "thread-2",
                 /*queued_at*/ 50,
             ))
             .await
-            .expect("create other thread message");
+            .expect("create other external message");
         runtime
-            .create_thread_message(&message_params("older", "thread-1", /*queued_at*/ 100))
+            .create_external_message(&message_params("older", "thread-1", /*queued_at*/ 100))
             .await
             .expect("create older message");
 
         let claim = runtime
-            .claim_next_thread_message(
+            .claim_next_external_message(
                 "thread-1", /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
             )
             .await
             .expect("claim message");
 
-        let Some(ThreadMessageClaim::Claimed(claimed)) = claim else {
+        let Some(ExternalMessageClaim::Claimed(claimed)) = claim else {
             panic!("expected claimed message");
         };
         assert_eq!(claimed.id, "older");
@@ -320,7 +322,7 @@ ORDER BY name
         assert_eq!(claimed.queued_at, 100);
         assert_eq!(
             runtime
-                .list_thread_messages("thread-1")
+                .list_external_messages("thread-1")
                 .await
                 .expect("list remaining thread-1 messages")
                 .into_iter()
@@ -330,7 +332,7 @@ ORDER BY name
         );
         assert_eq!(
             runtime
-                .list_thread_messages("thread-2")
+                .list_external_messages("thread-2")
                 .await
                 .expect("list thread-2 messages")
                 .into_iter()
@@ -344,7 +346,7 @@ ORDER BY name
     async fn claim_consumes_message_once() {
         let runtime = test_runtime().await;
         runtime
-            .create_thread_message(&message_params(
+            .create_external_message(&message_params(
                 "message-1",
                 "thread-1",
                 /*queued_at*/ 100,
@@ -354,16 +356,16 @@ ORDER BY name
 
         assert!(matches!(
             runtime
-                .claim_next_thread_message(
+                .claim_next_external_message(
                     "thread-1", /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
                 )
                 .await
                 .expect("claim message"),
-            Some(ThreadMessageClaim::Claimed(_))
+            Some(ExternalMessageClaim::Claimed(_))
         ));
         assert_eq!(
             runtime
-                .claim_next_thread_message(
+                .claim_next_external_message(
                     "thread-1", /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
                 )
                 .await
@@ -378,27 +380,27 @@ ORDER BY name
         let mut steer = message_params("steer", "thread-1", /*queued_at*/ 100);
         steer.delivery = "steer-current-turn".to_string();
         runtime
-            .create_thread_message(&steer)
+            .create_external_message(&steer)
             .await
             .expect("create steer message");
         runtime
-            .create_thread_message(&message_params("after", "thread-1", /*queued_at*/ 200))
+            .create_external_message(&message_params("after", "thread-1", /*queued_at*/ 200))
             .await
             .expect("create after-turn message");
 
         assert_eq!(
             runtime
-                .claim_next_thread_message(
+                .claim_next_external_message(
                     "thread-1", /*can_after_turn*/ false,
                     /*can_steer_current_turn*/ false,
                 )
                 .await
                 .expect("claim message"),
-            Some(ThreadMessageClaim::NotReady)
+            Some(ExternalMessageClaim::NotReady)
         );
         assert_eq!(
             runtime
-                .list_thread_messages("thread-1")
+                .list_external_messages("thread-1")
                 .await
                 .expect("list messages")
                 .into_iter()
@@ -414,25 +416,25 @@ ORDER BY name
         let mut params = message_params("bad", "thread-1", /*queued_at*/ 100);
         params.delivery = "bad-delivery".to_string();
         runtime
-            .create_thread_message(&params)
+            .create_external_message(&params)
             .await
             .expect("create message");
 
         assert_eq!(
             runtime
-                .claim_next_thread_message(
+                .claim_next_external_message(
                     "thread-1", /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
                 )
                 .await
                 .expect("claim message"),
-            Some(ThreadMessageClaim::Invalid {
+            Some(ExternalMessageClaim::Invalid {
                 id: "bad".to_string(),
                 reason: "invalid delivery `bad-delivery`".to_string(),
             })
         );
         assert!(
             runtime
-                .list_thread_messages("thread-1")
+                .list_external_messages("thread-1")
                 .await
                 .expect("list messages")
                 .is_empty()
