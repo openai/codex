@@ -2193,6 +2193,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_agent_message(&mut self, message: String) {
         self.finalize_completed_assistant_message(Some(&message));
     }
@@ -5930,7 +5931,7 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
-                self.on_agent_message("Context compacted".to_owned());
+                self.on_context_compacted();
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
