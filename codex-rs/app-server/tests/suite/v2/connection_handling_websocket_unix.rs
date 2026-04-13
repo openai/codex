@@ -163,7 +163,7 @@ async fn websocket_transport_disconnect_does_not_shutdown_running_thread() -> Re
     send_request(
         &mut resumed_ws,
         "thread/resume",
-        5,
+        /*id*/ 5,
         Some(serde_json::to_value(ThreadResumeParams {
             thread_id: thread_id.clone(),
             ..Default::default()
