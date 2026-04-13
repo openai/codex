@@ -1987,19 +1987,12 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     })
     .await;
 
-    // Phase 3: capture the mirrored WebSocket item and wait for the capped
-    // payload itself, not just the turn completion event.
+    // Phase 3: capture the mirrored WebSocket item; the snapshot below records
+    // the capped payload shape.
     let realtime_text_request = wait_for_matching_websocket_request(
         &realtime_server,
         "capped normal user turn text mirrored to realtime",
-        |request| {
-            websocket_request_text(request).is_some_and(|text| {
-                text.contains("mirror-head")
-                    && text.contains("mirror-tail")
-                    && text.contains("tokens truncated")
-                    && approx_token_count(&text) <= 300
-            })
-        },
+        |request| websocket_request_text(request).is_some_and(|text| text.contains("mirror-head")),
     )
     .await;
     let realtime_text =
@@ -2029,19 +2022,6 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     insta::assert_snapshot!(
         "conversation_user_text_turn_is_capped_when_mirrored_to_realtime",
         snapshot
-    );
-
-    assert_eq!(
-        (
-            model_user_texts.iter().any(|text| text == &user_text),
-            realtime_text == user_text,
-            realtime_text.contains("mirror-head"),
-            realtime_text.contains("mirror-middle"),
-            realtime_text.contains("mirror-tail"),
-            realtime_text.contains("tokens truncated"),
-            approx_token_count(&realtime_text) <= 300,
-        ),
-        (true, false, true, false, true, true, true),
     );
 
     realtime_server.shutdown().await;
