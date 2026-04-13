@@ -2197,16 +2197,6 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(Some(&message));
     }
 
-    fn on_context_compacted(&mut self) {
-        self.flush_answer_stream_with_separator();
-        self.handle_stream_finished();
-        self.add_to_history(history_cell::new_info_event(
-            "Context compacted".to_owned(),
-            /*hint*/ None,
-        ));
-        self.request_redraw();
-    }
-
     fn on_agent_message_delta(&mut self, delta: String) {
         self.handle_streaming_delta(delta);
     }
@@ -6254,7 +6244,7 @@ impl ChatWidget {
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
-            ServerNotification::ContextCompacted(_) => self.on_context_compacted(),
+            ServerNotification::ContextCompacted(_) => {}
         }
     }
 
@@ -6739,7 +6729,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_context_compacted(),
+            EventMsg::ContextCompacted(_) => {}
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
