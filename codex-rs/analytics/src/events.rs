@@ -15,7 +15,6 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 
@@ -528,10 +527,6 @@ pub(crate) fn codex_plugin_used_metadata(
         turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
     }
-}
-
-pub(crate) fn thread_source_name(thread_source: &SessionSource) -> Option<&'static str> {
-    thread_source.thread_source_name()
 }
 
 pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
