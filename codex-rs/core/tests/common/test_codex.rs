@@ -530,7 +530,7 @@ impl TestCodexBuilder {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 auth.clone(),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 Arc::clone(&environment_manager),
             )
         };

@@ -35,6 +35,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+codex-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
 tempfile = { workspace = true }

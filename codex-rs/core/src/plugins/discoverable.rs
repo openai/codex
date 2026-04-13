@@ -29,7 +29,7 @@ pub(crate) fn list_tool_suggest_discoverable_plugins(
         return Ok(Vec::new());
     }
 
-    let plugins_manager = PluginsManager::new(config.codex_home.clone());
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
     let configured_plugin_ids = config
         .tool_suggest
         .discoverables

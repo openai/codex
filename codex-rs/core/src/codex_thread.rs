@@ -20,6 +20,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
@@ -93,6 +94,11 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
         self.codex.submit_with_trace(op, trace).await
+    }
+
+    /// Persist whether this thread is eligible for future memory generation.
+    pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
+        self.codex.set_thread_memory_mode(mode).await
     }
 
     pub async fn steer_input(
