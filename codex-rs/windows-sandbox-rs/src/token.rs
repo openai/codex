@@ -1,18 +1,18 @@
 use crate::winutil::to_wide;
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::ffi::c_void;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LUID;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::AdjustTokenPrivileges;
-use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
+use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
@@ -24,8 +24,6 @@ use windows_sys::Win32::Security::GetTokenInformation;
 use windows_sys::Win32::Security::LookupPrivilegeValueW;
 use windows_sys::Win32::Security::SetTokenInformation;
 
-use windows_sys::Win32::Security::TokenDefaultDacl;
-use windows_sys::Win32::Security::TokenGroups;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
@@ -35,6 +33,10 @@ use windows_sys::Win32::Security::TOKEN_ASSIGN_PRIMARY;
 use windows_sys::Win32::Security::TOKEN_DUPLICATE;
 use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_QUERY;
+use windows_sys::Win32::Security::TOKEN_USER;
+use windows_sys::Win32::Security::TokenDefaultDacl;
+use windows_sys::Win32::Security::TokenGroups;
+use windows_sys::Win32::Security::TokenUser;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
@@ -134,11 +136,7 @@ pub unsafe fn convert_string_sid_to_sid(s: &str) -> Option<*mut c_void> {
     }
     let mut psid: *mut c_void = std::ptr::null_mut();
     let ok = unsafe { ConvertStringSidToSidW(to_wide(s).as_ptr(), &mut psid) };
-    if ok != 0 {
-        Some(psid)
-    } else {
-        None
-    }
+    if ok != 0 { Some(psid) } else { None }
 }
 
 /// # Safety
@@ -250,6 +248,67 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
 
     Err(anyhow!("Logon SID not present on token"))
 }
+
+pub unsafe fn get_token_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
+    let mut needed: u32 = 0;
+    GetTokenInformation(h_token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
+    if needed == 0 {
+        return Err(anyhow!("GetTokenInformation(TokenUser) size query failed"));
+    }
+
+    let mut buf: Vec<u8> = vec![0u8; needed as usize];
+    let ok = GetTokenInformation(
+        h_token,
+        TokenUser,
+        buf.as_mut_ptr() as *mut c_void,
+        needed,
+        &mut needed,
+    );
+    if ok == 0 || (needed as usize) < std::mem::size_of::<TOKEN_USER>() {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenUser) failed: {}",
+            GetLastError()
+        ));
+    }
+
+    let token_user = std::ptr::read_unaligned(buf.as_ptr() as *const TOKEN_USER);
+    let sid = token_user.User.Sid;
+    let sid_len = GetLengthSid(sid);
+    if sid_len == 0 {
+        return Err(anyhow!("TokenUser SID length was zero"));
+    }
+
+    let mut out = vec![0u8; sid_len as usize];
+    if CopySid(sid_len, out.as_mut_ptr() as *mut c_void, sid) == 0 {
+        return Err(anyhow!("CopySid(TokenUser) failed: {}", GetLastError()));
+    }
+    Ok(out)
+}
+
+fn restricting_sid_order(
+    psid_capabilities: &[*mut c_void],
+    psid_logon: *mut c_void,
+    psid_user: *mut c_void,
+) -> Vec<*mut c_void> {
+    let mut sids = Vec::with_capacity(psid_capabilities.len() + 2);
+    sids.extend_from_slice(psid_capabilities);
+    sids.push(psid_logon);
+    sids.push(psid_user);
+    sids
+}
+
+fn default_dacl_sid_order(
+    psid_capabilities: &[*mut c_void],
+    psid_logon: *mut c_void,
+    psid_user: *mut c_void,
+) -> Vec<*mut c_void> {
+    let mut sids = Vec::with_capacity(psid_capabilities.len() + 2);
+    sids.push(psid_logon);
+    sids.push(psid_user);
+    sids.extend_from_slice(psid_capabilities);
+    sids
+}
+
 unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     let mut luid = LUID {
         LowPart: 0,
@@ -335,21 +394,16 @@ unsafe fn create_token_with_caps_from(
     }
     let mut logon_sid_bytes = get_logon_sid_bytes(base_token)?;
     let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
-    let mut everyone = world_sid()?;
-    let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
+    let mut user_sid_bytes = get_token_user_sid_bytes(base_token)?;
+    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
 
-    // Exact order: Capabilities..., Logon, Everyone
-    let mut entries: Vec<SID_AND_ATTRIBUTES> =
-        vec![std::mem::zeroed(); psid_capabilities.len() + 2];
-    for (i, psid) in psid_capabilities.iter().enumerate() {
+    // Exact order: Capabilities..., Logon, sandbox user
+    let restricting_sids = restricting_sid_order(psid_capabilities, psid_logon, psid_user);
+    let mut entries: Vec<SID_AND_ATTRIBUTES> = vec![std::mem::zeroed(); restricting_sids.len()];
+    for (i, psid) in restricting_sids.iter().enumerate() {
         entries[i].Sid = *psid;
         entries[i].Attributes = 0;
     }
-    let logon_idx = psid_capabilities.len();
-    entries[logon_idx].Sid = psid_logon;
-    entries[logon_idx].Attributes = 0;
-    entries[logon_idx + 1].Sid = psid_everyone;
-    entries[logon_idx + 1].Attributes = 0;
 
     let mut new_token: HANDLE = 0;
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
@@ -368,12 +422,41 @@ unsafe fn create_token_with_caps_from(
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
 
-    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
-    dacl_sids.push(psid_logon);
-    dacl_sids.push(psid_everyone);
-    dacl_sids.extend_from_slice(psid_capabilities);
+    let dacl_sids = default_dacl_sid_order(psid_capabilities, psid_logon, psid_user);
     set_default_dacl(new_token, &dacl_sids)?;
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_dacl_sid_order;
+    use super::restricting_sid_order;
+    use std::ffi::c_void;
+
+    #[test]
+    fn restricting_sid_order_uses_sandbox_user_instead_of_everyone() {
+        let cap_a = 1usize as *mut c_void;
+        let cap_b = 2usize as *mut c_void;
+        let logon = 3usize as *mut c_void;
+        let sandbox_user = 4usize as *mut c_void;
+
+        assert_eq!(
+            restricting_sid_order(&[cap_a, cap_b], logon, sandbox_user),
+            vec![cap_a, cap_b, logon, sandbox_user]
+        );
+    }
+
+    #[test]
+    fn default_dacl_sid_order_grants_objects_to_logon_user_and_caps() {
+        let cap = 1usize as *mut c_void;
+        let logon = 2usize as *mut c_void;
+        let sandbox_user = 3usize as *mut c_void;
+
+        assert_eq!(
+            default_dacl_sid_order(&[cap], logon, sandbox_user),
+            vec![logon, sandbox_user, cap]
+        );
+    }
 }
