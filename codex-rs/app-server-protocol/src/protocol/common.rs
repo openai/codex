@@ -296,6 +296,10 @@ client_request_definitions! {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
     },
+    ThreadAsyncTaskStart => "thread/asyncTask/start" {
+        params: v2::ThreadAsyncTaskStartParams,
+        response: v2::ThreadAsyncTaskStartResponse,
+    },
     #[experimental("thread/backgroundTerminals/clean")]
     ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
         params: v2::ThreadBackgroundTerminalsCleanParams,

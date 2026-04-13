@@ -108,6 +108,13 @@ pub(crate) enum AppEvent {
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
+    /// Spawn an async task from the active session and render its final response on completion.
+    StartAsyncTurn {
+        task_id: String,
+        prompt: String,
+        op: Op,
+    },
+
     /// Request to exit the application.
     ///
     /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the

@@ -4594,6 +4594,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::inter_agent_communication(&sess, sub.id.clone(), communication).await;
                     false
                 }
+                Op::StartAsyncTask { task_id, items } => {
+                    handlers::start_async_task(&sess, sub.id.clone(), task_id, items).await;
+                    false
+                }
                 Op::ExecApproval {
                     id: approval_id,
                     turn_id,
@@ -4747,9 +4751,12 @@ fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
 
 /// Operation handlers
 mod handlers {
+    use crate::client_common::Prompt;
+    use crate::client_common::ResponseEvent;
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
+    use crate::codex::TurnContext;
 
     use crate::SkillError;
     use crate::codex::spawn_review_thread;
@@ -4763,6 +4770,8 @@ mod handlers {
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::RolloutRecorder;
     use crate::rollout::session_index;
+    use crate::stream_events_utils::last_assistant_message_from_item;
+    use crate::stream_events_utils::raw_assistant_output_text_from_item;
     use crate::tasks::CompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
@@ -4770,6 +4779,15 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_mcp::collect_mcp_snapshot_from_manager;
     use codex_mcp::compute_auth_statuses;
+    use codex_protocol::error::CodexErr;
+    use codex_protocol::error::Result as CodexResult;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::models::MessagePhase;
+    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AgentMessageContentDeltaEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -4788,6 +4806,9 @@ mod handlers {
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::request_user_input::RequestUserInputResponse;
+    use futures::StreamExt;
+    use tracing::Instrument;
+    use tracing::trace_span;
 
     use crate::context_manager::is_user_turn_boundary;
     use codex_protocol::config_types::CollaborationMode;
@@ -4801,6 +4822,7 @@ mod handlers {
     use serde_json::Value;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
     use tracing::info;
     use tracing::warn;
 
@@ -4931,6 +4953,327 @@ mod handlers {
             sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
                 .await;
         }
+    }
+
+    pub async fn start_async_task(
+        sess: &Arc<Session>,
+        _sub_id: String,
+        task_id: String,
+        items: Vec<UserInput>,
+    ) {
+        let turn_context = sess.new_default_turn_with_sub_id(task_id).await;
+        let sess = Arc::clone(sess);
+        tokio::spawn(async move {
+            if let Err(err) =
+                run_side_completion(Arc::clone(&sess), Arc::clone(&turn_context), items).await
+            {
+                sess.send_event(
+                    &turn_context,
+                    EventMsg::Error(ErrorEvent {
+                        message: format!("/async failed: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                )
+                .await;
+            }
+        });
+    }
+
+    async fn run_side_completion(
+        sess: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        items: Vec<UserInput>,
+    ) -> CodexResult<()> {
+        if let Some(delay) = async_side_completion_leading_delay(&items) {
+            tokio::time::sleep(delay).await;
+        }
+
+        let side_request: ResponseItem = ResponseInputItem::from(items).into();
+        let mut input = sess
+            .clone_history()
+            .await
+            .for_prompt(&turn_context.model_info.input_modalities);
+        input.push(side_request);
+
+        let mut base_instructions = sess.get_base_instructions().await;
+        base_instructions
+            .text
+            .push_str("\n\n<codex_async_side_completion>\nYou are answering a /async request. The parent Codex turn may still be running. Answer only this /async request, using the parent thread history as read-only context. Do not claim to run tools; no tools are available in this side completion. If the request began with a sleep/wait duration, the runtime has already honored that delay; do not sleep again. Keep the answer focused and complete.\n</codex_async_side_completion>");
+
+        let prompt = Prompt {
+            input,
+            tools: Vec::new(),
+            parallel_tool_calls: false,
+            base_instructions,
+            personality: turn_context.personality,
+            output_schema: None,
+        };
+        let mut client_session = sess.services.model_client.new_session();
+        let mut stream = client_session
+            .stream(
+                &prompt,
+                &turn_context.model_info,
+                &turn_context.session_telemetry,
+                turn_context.reasoning_effort,
+                turn_context.reasoning_summary,
+                turn_context.config.service_tier,
+                /*turn_metadata_header*/ None,
+            )
+            .instrument(trace_span!("async_side_completion_stream"))
+            .await?;
+
+        let mut active_item_id: Option<String> = None;
+        let mut message = String::new();
+
+        while let Some(event) = stream.next().await {
+            match event? {
+                ResponseEvent::Created
+                | ResponseEvent::ServerModel(_)
+                | ResponseEvent::ServerReasoningIncluded(_)
+                | ResponseEvent::ModelsEtag(_)
+                | ResponseEvent::RateLimits(_)
+                | ResponseEvent::ReasoningSummaryDelta { .. }
+                | ResponseEvent::ReasoningContentDelta { .. }
+                | ResponseEvent::ReasoningSummaryPartAdded { .. } => {}
+                ResponseEvent::OutputItemAdded(item) => {
+                    if active_item_id.is_none()
+                        && let Some(text) = raw_assistant_output_text_from_item(&item)
+                    {
+                        let item_id = side_completion_item_id(&turn_context, &item);
+                        start_side_completion_item(sess.as_ref(), turn_context.as_ref(), &item_id)
+                            .await;
+                        message.push_str(&text);
+                        active_item_id = Some(item_id);
+                    }
+                }
+                ResponseEvent::OutputTextDelta(delta) => {
+                    if active_item_id.is_none() {
+                        let item_id = format!("{}-message", turn_context.sub_id);
+                        start_side_completion_item(sess.as_ref(), turn_context.as_ref(), &item_id)
+                            .await;
+                        active_item_id = Some(item_id);
+                    }
+                    if let Some(item_id) = active_item_id.as_ref() {
+                        sess.send_event(
+                            &turn_context,
+                            EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+                                thread_id: sess.conversation_id.to_string(),
+                                turn_id: turn_context.sub_id.clone(),
+                                item_id: item_id.clone(),
+                                delta: delta.clone(),
+                            }),
+                        )
+                        .await;
+                    }
+                    message.push_str(&delta);
+                }
+                ResponseEvent::OutputItemDone(item) => {
+                    if let Some(final_message) = final_assistant_message_from_item(
+                        &item,
+                        turn_context.collaboration_mode.mode == ModeKind::Plan,
+                    ) {
+                        active_item_id
+                            .get_or_insert_with(|| side_completion_item_id(&turn_context, &item));
+                        message = final_message;
+                    }
+                }
+                ResponseEvent::Completed { token_usage, .. } => {
+                    sess.update_token_usage_info(&turn_context, token_usage.as_ref())
+                        .await;
+                    let item_id = active_item_id
+                        .unwrap_or_else(|| format!("{}-message", turn_context.sub_id));
+                    complete_side_completion_item(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
+                        item_id,
+                        message,
+                    )
+                    .await;
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(CodexErr::Stream(
+            "stream closed before response.completed".into(),
+            None,
+        ))
+    }
+
+    fn async_side_completion_leading_delay(items: &[UserInput]) -> Option<Duration> {
+        let [UserInput::Text { text, .. }] = items else {
+            return None;
+        };
+        parse_leading_sleep_then_delay(text)
+    }
+
+    fn parse_leading_sleep_then_delay(text: &str) -> Option<Duration> {
+        let normalized = text.trim_start().to_ascii_lowercase();
+        let mut rest = strip_keyword(&normalized, "sleep")
+            .or_else(|| strip_keyword(&normalized, "wait"))?
+            .trim_start();
+        rest = strip_keyword(rest, "for").unwrap_or(rest).trim_start();
+
+        let (amount, after_amount) = parse_leading_non_negative_number(rest)?;
+        let after_amount = after_amount.trim_start();
+        let (unit_scale, after_unit) = parse_optional_duration_unit(after_amount)?;
+        let mut tail = after_unit.trim_start();
+        tail = strip_keyword(tail, "and").unwrap_or(tail).trim_start();
+        tail = tail.strip_prefix(',').unwrap_or(tail).trim_start();
+        strip_keyword(tail, "then")?;
+
+        Duration::try_from_secs_f64(amount * unit_scale).ok()
+    }
+
+    fn parse_leading_non_negative_number(rest: &str) -> Option<(f64, &str)> {
+        let mut end = 0usize;
+        let mut saw_digit = false;
+        let mut saw_dot = false;
+        for (idx, ch) in rest.char_indices() {
+            if ch.is_ascii_digit() {
+                saw_digit = true;
+                end = idx + ch.len_utf8();
+            } else if ch == '.' && !saw_dot {
+                saw_dot = true;
+                end = idx + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if !saw_digit {
+            return None;
+        }
+        let amount = rest[..end].parse::<f64>().ok()?;
+        if !amount.is_finite() || amount < 0.0 {
+            return None;
+        }
+        Some((amount, &rest[end..]))
+    }
+
+    fn parse_optional_duration_unit(rest: &str) -> Option<(f64, &str)> {
+        let mut end = 0usize;
+        for (idx, ch) in rest.char_indices() {
+            if ch.is_ascii_alphabetic() {
+                end = idx + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if end == 0 {
+            return Some((1.0, rest));
+        }
+
+        let (token, tail) = rest.split_at(end);
+        let scale = match token {
+            "ms" | "msec" | "msecs" | "millisecond" | "milliseconds" => 0.001,
+            "s" | "sec" | "secs" | "second" | "seconds" => 1.0,
+            "m" | "min" | "mins" | "minute" | "minutes" => 60.0,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 60.0 * 60.0,
+            "then" | "and" => return Some((1.0, rest)),
+            _ => return None,
+        };
+        Some((scale, tail))
+    }
+
+    fn strip_keyword<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
+        let rest = input.strip_prefix(keyword)?;
+        if rest.is_empty() || rest.starts_with(|ch: char| !ch.is_ascii_alphanumeric()) {
+            Some(rest)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    mod async_side_completion_delay_tests {
+        use super::*;
+
+        #[test]
+        fn parses_leading_sleep_then_request_delay() {
+            assert_eq!(
+                parse_leading_sleep_then_delay("sleep 10s then say done"),
+                Some(Duration::from_secs(10))
+            );
+            assert_eq!(
+                parse_leading_sleep_then_delay("wait for 1.5 minutes, then summarize"),
+                Some(Duration::from_secs(90))
+            );
+            assert_eq!(
+                parse_leading_sleep_then_delay("WAIT 250ms and then answer"),
+                Some(Duration::from_millis(250))
+            );
+            assert_eq!(
+                parse_leading_sleep_then_delay("sleep 2 then answer"),
+                Some(Duration::from_secs(2))
+            );
+        }
+
+        #[test]
+        fn ignores_non_leading_or_unfinished_sleep_requests() {
+            assert_eq!(
+                parse_leading_sleep_then_delay("please sleep 10s then answer"),
+                None
+            );
+            assert_eq!(parse_leading_sleep_then_delay("sleep 10s"), None);
+            assert_eq!(
+                parse_leading_sleep_then_delay("sleep 10 bananas then answer"),
+                None
+            );
+            assert_eq!(
+                parse_leading_sleep_then_delay("sleeper 10s then answer"),
+                None
+            );
+        }
+    }
+
+    fn side_completion_item_id(turn_context: &TurnContext, item: &ResponseItem) -> String {
+        if let ResponseItem::Message { id: Some(id), .. } = item {
+            return id.clone();
+        }
+        format!("{}-message", turn_context.sub_id)
+    }
+
+    fn final_assistant_message_from_item(item: &ResponseItem, plan_mode: bool) -> Option<String> {
+        if let ResponseItem::Message { role, phase, .. } = item
+            && role == "assistant"
+            && matches!(phase, Some(MessagePhase::Commentary))
+        {
+            return None;
+        }
+        last_assistant_message_from_item(item, plan_mode)
+    }
+
+    async fn start_side_completion_item(sess: &Session, turn_context: &TurnContext, item_id: &str) {
+        sess.emit_turn_item_started(
+            turn_context,
+            &TurnItem::AgentMessage(AgentMessageItem {
+                id: item_id.to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: String::new(),
+                }],
+                phase: None,
+                memory_citation: None,
+            }),
+        )
+        .await;
+    }
+
+    async fn complete_side_completion_item(
+        sess: &Session,
+        turn_context: &TurnContext,
+        item_id: String,
+        text: String,
+    ) {
+        sess.emit_turn_item_completed(
+            turn_context,
+            TurnItem::AgentMessage(AgentMessageItem {
+                id: item_id,
+                content: vec![AgentMessageContent::Text { text }],
+                phase: None,
+                memory_citation: None,
+            }),
+        )
+        .await;
     }
 
     pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {

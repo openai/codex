@@ -273,6 +273,8 @@ export type { ThreadActiveFlag } from "./ThreadActiveFlag";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification";
+export type { ThreadAsyncTaskStartParams } from "./ThreadAsyncTaskStartParams";
+export type { ThreadAsyncTaskStartResponse } from "./ThreadAsyncTaskStartResponse";
 export type { ThreadClosedNotification } from "./ThreadClosedNotification";
 export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";

@@ -2549,6 +2549,28 @@
       ],
       "type": "object"
     },
+    "ThreadAsyncTaskStartParams": {
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "taskId",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadCompactStartParams": {
       "properties": {
         "threadId": {
@@ -3741,6 +3763,30 @@
         "params"
       ],
       "title": "Thread/shellCommandRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/asyncTask/start"
+          ],
+          "title": "Thread/asyncTask/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadAsyncTaskStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/asyncTask/startRequest",
       "type": "object"
     },
     {

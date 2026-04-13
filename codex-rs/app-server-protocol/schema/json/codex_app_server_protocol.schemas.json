@@ -489,6 +489,30 @@
             },
             "method": {
               "enum": [
+                "thread/asyncTask/start"
+              ],
+              "title": "Thread/asyncTask/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadAsyncTaskStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/asyncTask/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -12446,6 +12470,35 @@
           "threadId"
         ],
         "title": "ThreadArchivedNotification",
+        "type": "object"
+      },
+      "ThreadAsyncTaskStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "input": {
+            "items": {
+              "$ref": "#/definitions/v2/UserInput"
+            },
+            "type": "array"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "input",
+          "taskId",
+          "threadId"
+        ],
+        "title": "ThreadAsyncTaskStartParams",
+        "type": "object"
+      },
+      "ThreadAsyncTaskStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadAsyncTaskStartResponse",
         "type": "object"
       },
       "ThreadClosedNotification": {

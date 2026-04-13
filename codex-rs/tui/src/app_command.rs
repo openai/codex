@@ -38,6 +38,10 @@ pub(crate) enum AppCommandView<'a> {
     RunUserShellCommand {
         command: &'a str,
     },
+    StartAsyncTask {
+        task_id: &'a str,
+        items: &'a [UserInput],
+    },
     UserTurn {
         items: &'a [UserInput],
         cwd: &'a PathBuf,
@@ -137,6 +141,10 @@ impl AppCommand {
 
     pub(crate) fn run_user_shell_command(command: String) -> Self {
         Self(Op::RunUserShellCommand { command })
+    }
+
+    pub(crate) fn start_async_task(task_id: String, items: Vec<UserInput>) -> Self {
+        Self(Op::StartAsyncTask { task_id, items })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -298,6 +306,9 @@ impl AppCommand {
             }
             Op::RealtimeConversationClose => AppCommandView::RealtimeConversationClose,
             Op::RunUserShellCommand { command } => AppCommandView::RunUserShellCommand { command },
+            Op::StartAsyncTask { task_id, items } => {
+                AppCommandView::StartAsyncTask { task_id, items }
+            }
             Op::UserTurn {
                 items,
                 cwd,

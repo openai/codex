@@ -30,6 +30,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
@@ -1005,6 +1006,14 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    async_turns: HashMap<String, AsyncTurnState>,
+}
+
+#[derive(Debug)]
+struct AsyncTurnState {
+    origin_thread_id: ThreadId,
+    prompt: String,
+    last_agent_message: Option<String>,
 }
 
 #[derive(Default)]
@@ -2208,6 +2217,135 @@ impl App {
         }
     }
 
+    async fn start_async_turn(
+        &mut self,
+        app_server: &mut AppServerSession,
+        task_id: String,
+        prompt: String,
+        op: AppCommand,
+    ) -> Result<()> {
+        let Some(origin_thread_id) = self.active_thread_id else {
+            self.chat_widget
+                .add_error_message("No active thread is available.".to_string());
+            return Ok(());
+        };
+
+        let AppCommandView::StartAsyncTask {
+            task_id: op_task_id,
+            ..
+        } = op.view()
+        else {
+            self.chat_widget.add_error_message(
+                "Internal error: /async produced an unsupported operation.".to_string(),
+            );
+            return Ok(());
+        };
+
+        if op_task_id != task_id {
+            self.chat_widget
+                .add_error_message("Internal error: /async task id mismatch.".to_string());
+            return Ok(());
+        }
+
+        self.async_turns.insert(
+            task_id.clone(),
+            AsyncTurnState {
+                origin_thread_id,
+                prompt,
+                last_agent_message: None,
+            },
+        );
+
+        if let Err(err) = self.submit_active_thread_op(app_server, op).await {
+            self.async_turns.remove(&task_id);
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+    fn observe_async_turn_notification(
+        &mut self,
+        _thread_id: ThreadId,
+        notification: &ServerNotification,
+    ) -> bool {
+        match notification {
+            ServerNotification::ItemStarted(notification) => {
+                self.async_turns.contains_key(&notification.turn_id)
+            }
+            ServerNotification::ItemCompleted(notification) => {
+                if let Some(mut state) = self.async_turns.remove(&notification.turn_id) {
+                    if let ThreadItem::AgentMessage { text, .. } = &notification.item {
+                        state.last_agent_message = Some(text.clone());
+                    }
+                    self.render_async_turn_result(state, TurnStatus::Completed);
+                    return true;
+                }
+                false
+            }
+            ServerNotification::AgentMessageDelta(notification) => {
+                if let Some(state) = self.async_turns.get_mut(&notification.turn_id) {
+                    state
+                        .last_agent_message
+                        .get_or_insert_with(String::new)
+                        .push_str(&notification.delta);
+                    return true;
+                }
+                false
+            }
+            ServerNotification::Error(notification) => {
+                if let Some(state) = self.async_turns.remove(&notification.turn_id) {
+                    self.chat_widget.add_error_message(format!(
+                        "/async failed: {}\n{}",
+                        state.prompt, notification.error.message
+                    ));
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn render_async_turn_result(&mut self, state: AsyncTurnState, status: TurnStatus) {
+        let thread_suffix = if self.active_thread_id == Some(state.origin_thread_id) {
+            String::new()
+        } else {
+            format!(" for thread {}", state.origin_thread_id)
+        };
+        match status {
+            TurnStatus::Completed => {
+                let Some(message) = state
+                    .last_agent_message
+                    .filter(|message| !message.is_empty())
+                else {
+                    self.chat_widget.add_info_message(
+                        format!("/async completed{thread_suffix} without a final message"),
+                        /*hint*/ None,
+                    );
+                    return;
+                };
+                let lines: Vec<Line<'static>> = message
+                    .lines()
+                    .map(|line| Line::from(line.to_string()))
+                    .collect();
+                self.chat_widget
+                    .add_to_history(AgentMessageCell::new(lines, /*is_first_line*/ true));
+            }
+            TurnStatus::Interrupted => {
+                self.chat_widget.add_info_message(
+                    format!("/async interrupted{thread_suffix}: {}", state.prompt),
+                    /*hint*/ None,
+                );
+            }
+            TurnStatus::Failed => {
+                self.chat_widget
+                    .add_error_message(format!("/async failed{thread_suffix}: {}", state.prompt));
+            }
+            TurnStatus::InProgress => {}
+        }
+    }
+
     async fn try_submit_active_thread_op_via_app_server(
         &mut self,
         app_server: &mut AppServerSession,
@@ -2220,6 +2358,12 @@ impl App {
                     return Ok(true);
                 };
                 app_server.turn_interrupt(thread_id, turn_id).await?;
+                Ok(true)
+            }
+            AppCommandView::StartAsyncTask { task_id, items } => {
+                app_server
+                    .thread_async_task_start(thread_id, task_id.to_string(), items.to_vec())
+                    .await?;
                 Ok(true)
             }
             AppCommandView::UserTurn {
@@ -2473,6 +2617,9 @@ impl App {
         thread_id: ThreadId,
         notification: ServerNotification,
     ) -> Result<()> {
+        if self.observe_async_turn_notification(thread_id, &notification) {
+            return Ok(());
+        }
         let inferred_session = self
             .infer_session_for_thread_notification(thread_id, &notification)
             .await;
@@ -3263,6 +3410,7 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.async_turns.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -3798,6 +3946,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            async_turns: HashMap::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4277,6 +4426,14 @@ impl App {
             }
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op.into()).await?;
+            }
+            AppEvent::StartAsyncTurn {
+                task_id,
+                prompt,
+                op,
+            } => {
+                self.start_async_turn(app_server, task_id, prompt, op.into())
+                    .await?;
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
@@ -9113,6 +9270,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            async_turns: HashMap::new(),
         }
     }
 
@@ -9167,6 +9325,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                async_turns: HashMap::new(),
             },
             rx,
             op_rx,
@@ -9522,6 +9681,75 @@ guardian_approval = true
             lines_to_single_string(&cell.display_lines(/*width*/ 120)),
             "■ Failed to upload feedback: boom"
         );
+    }
+
+    #[tokio::test]
+    async fn async_turn_observer_renders_side_completion_when_item_completes() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let origin_thread_id = ThreadId::new();
+        let task_id = "async-task-1".to_string();
+        app.active_thread_id = Some(origin_thread_id);
+        app.async_turns.insert(
+            task_id.clone(),
+            AsyncTurnState {
+                origin_thread_id,
+                prompt: "side question".to_string(),
+                last_agent_message: None,
+            },
+        );
+        while app_event_rx.try_recv().is_ok() {}
+
+        assert!(app.observe_async_turn_notification(
+            origin_thread_id,
+            &ServerNotification::ItemStarted(codex_app_server_protocol::ItemStartedNotification {
+                thread_id: origin_thread_id.to_string(),
+                turn_id: task_id.clone(),
+                item: ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: String::new(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            }),
+        ));
+
+        assert!(
+            app.observe_async_turn_notification(
+                origin_thread_id,
+                &agent_message_delta_notification(
+                    origin_thread_id,
+                    &task_id,
+                    "agent-1",
+                    "background ",
+                ),
+            )
+        );
+
+        assert!(app.observe_async_turn_notification(
+            origin_thread_id,
+            &ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: origin_thread_id.to_string(),
+                    turn_id: task_id,
+                    item: ThreadItem::AgentMessage {
+                        id: "agent-1".to_string(),
+                        text: "background answer".to_string(),
+                        phase: None,
+                        memory_citation: None,
+                    },
+                },
+            ),
+        ));
+
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected async answer history cell, saw {other:?}"),
+        };
+        assert_eq!(
+            lines_to_single_string(&cell.transcript_lines(/*width*/ 120)),
+            "• background answer"
+        );
+        assert!(app.async_turns.is_empty());
     }
 
     #[tokio::test]

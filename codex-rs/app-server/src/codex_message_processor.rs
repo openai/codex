@@ -118,6 +118,8 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
+use codex_app_server_protocol::ThreadAsyncTaskStartParams;
+use codex_app_server_protocol::ThreadAsyncTaskStartResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
@@ -774,6 +776,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadAsyncTaskStart { request_id, params } => {
+                self.thread_async_task_start(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
@@ -3371,6 +3377,57 @@ impl CodexMessageProcessor {
                     format!("failed to start shell command: {err}"),
                 )
                 .await;
+            }
+        }
+    }
+
+    async fn thread_async_task_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadAsyncTaskStartParams,
+    ) {
+        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let ThreadAsyncTaskStartParams {
+            thread_id,
+            task_id,
+            input,
+        } = params;
+
+        if task_id.trim().is_empty() {
+            self.send_invalid_request_error(request_id, "taskId must not be empty".to_string())
+                .await;
+            return;
+        }
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let items = input.into_iter().map(V2UserInput::into_core).collect();
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::StartAsyncTask { task_id, items },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadAsyncTaskStartResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to start async task: {err}"))
+                    .await;
             }
         }
     }

@@ -30,6 +30,38 @@ async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
 }
 
 #[tokio::test]
+async fn slash_async_echoes_prompt_and_dispatches_side_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/async side question".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut rendered_prompt = None;
+    let mut dispatched_prompt = None;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                rendered_prompt = Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+            }
+            AppEvent::StartAsyncTurn { prompt, op, .. } => {
+                dispatched_prompt = Some(prompt);
+                assert_matches!(op, Op::StartAsyncTask { .. });
+            }
+            _ => {}
+        }
+    }
+
+    let rendered_prompt = rendered_prompt.expect("expected /async prompt history cell");
+    assert!(
+        rendered_prompt.contains("/async side question"),
+        "expected literal /async command to be rendered, got {rendered_prompt:?}"
+    );
+    assert_eq!(dispatched_prompt.as_deref(), Some("side question"));
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

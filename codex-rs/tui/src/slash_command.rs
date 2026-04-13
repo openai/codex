@@ -29,6 +29,7 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    Async,
     Plan,
     Collab,
     Agent,
@@ -74,6 +75,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Async => "ask in a background thread",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
@@ -130,6 +132,7 @@ impl SlashCommand {
             self,
             SlashCommand::Review
                 | SlashCommand::Rename
+                | SlashCommand::Async
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::SandboxReadRoot
@@ -160,6 +163,7 @@ impl SlashCommand {
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
+            | SlashCommand::Async
             | SlashCommand::Copy
             | SlashCommand::Rename
             | SlashCommand::Mention
@@ -214,6 +218,11 @@ mod tests {
     #[test]
     fn stop_command_is_canonical_name() {
         assert_eq!(SlashCommand::Stop.command(), "stop");
+    }
+
+    #[test]
+    fn async_command_parses() {
+        assert_eq!(SlashCommand::from_str("async"), Ok(SlashCommand::Async));
     }
 
     #[test]

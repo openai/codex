@@ -24,6 +24,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAsyncTaskStartParams;
+use codex_app_server_protocol::ThreadAsyncTaskStartResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -559,6 +561,28 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_async_task_start(
+        &mut self,
+        thread_id: ThreadId,
+        task_id: String,
+        items: Vec<codex_protocol::user_input::UserInput>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadAsyncTaskStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAsyncTaskStart {
+                request_id,
+                params: ThreadAsyncTaskStartParams {
+                    thread_id: thread_id.to_string(),
+                    task_id,
+                    input: items.into_iter().map(Into::into).collect(),
+                },
+            })
+            .await
+            .wrap_err("thread/asyncTask/start failed in TUI")?;
         Ok(())
     }
 

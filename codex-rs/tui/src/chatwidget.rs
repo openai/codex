@@ -5046,6 +5046,9 @@ impl ChatWidget {
                 }
                 self.app_event_tx.compact();
             }
+            SlashCommand::Async => {
+                self.add_error_message("Usage: /async <prompt>".to_string());
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -5402,6 +5405,33 @@ impl ChatWidget {
                 self.add_boxed_history(Box::new(cell));
                 self.request_redraw();
                 self.app_event_tx.set_thread_name(name);
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Async if !trimmed.is_empty() => {
+                let Some((prepared_args, prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                let task_id = format!("async-{}", uuid::Uuid::new_v4());
+                let Some(op) =
+                    self.async_turn_op(task_id.clone(), prepared_args.clone(), prepared_elements)
+                else {
+                    self.bottom_pane.drain_pending_submission_state();
+                    return;
+                };
+                self.add_to_history(history_cell::new_user_prompt(
+                    format!("/async {prepared_args}"),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ));
+                self.app_event_tx.send(AppEvent::StartAsyncTurn {
+                    task_id,
+                    prompt: prepared_args,
+                    op: op.into_core(),
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
@@ -5837,6 +5867,24 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+    }
+
+    fn async_turn_op(
+        &mut self,
+        task_id: String,
+        text: String,
+        text_elements: Vec<TextElement>,
+    ) -> Option<AppCommand> {
+        if text.trim().is_empty() {
+            return None;
+        }
+        Some(AppCommand::start_async_task(
+            task_id,
+            vec![UserInput::Text {
+                text,
+                text_elements,
+            }],
+        ))
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.

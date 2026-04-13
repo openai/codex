@@ -307,6 +307,17 @@ pub enum Op {
         communication: InterAgentCommunication,
     },
 
+    /// Run a tool-free side completion against the active session history.
+    ///
+    /// Unlike [`Op::UserTurn`], this op does not start or steer the parent turn and the
+    /// model response is not recorded back into the parent thread.
+    StartAsyncTask {
+        /// Client-generated identifier used as the side completion turn id.
+        task_id: String,
+        /// Input to append to the parent thread context for this one completion.
+        items: Vec<UserInput>,
+    },
+
     /// Override parts of the persistent turn context for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
@@ -581,6 +592,7 @@ impl Op {
             Self::UserInput { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
+            Self::StartAsyncTask { .. } => "start_async_task",
             Self::OverrideTurnContext { .. } => "override_turn_context",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",

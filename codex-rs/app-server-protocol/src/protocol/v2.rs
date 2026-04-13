@@ -3017,6 +3017,20 @@ pub struct ThreadShellCommandResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadAsyncTaskStartParams {
+    pub thread_id: String,
+    pub task_id: String,
+    pub input: Vec<UserInput>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAsyncTaskStartResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsCleanParams {
     pub thread_id: String,
 }
@@ -6681,6 +6695,49 @@ mod tests {
 
         let decoded = serde_json::from_value::<ThreadShellCommandResponse>(value)
             .expect("deserialize thread/shellCommand response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn thread_async_task_start_params_round_trip() {
+        let params = ThreadAsyncTaskStartParams {
+            thread_id: "thr_123".to_string(),
+            task_id: "async-1".to_string(),
+            input: vec![UserInput::Text {
+                text: "answer this on the side".to_string(),
+                text_elements: Vec::new(),
+            }],
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize thread/asyncTask/start params");
+        assert_eq!(
+            value,
+            json!({
+                "threadId": "thr_123",
+                "taskId": "async-1",
+                "input": [{
+                    "type": "text",
+                    "text": "answer this on the side",
+                    "text_elements": [],
+                }],
+            })
+        );
+
+        let decoded = serde_json::from_value::<ThreadAsyncTaskStartParams>(value)
+            .expect("deserialize thread/asyncTask/start params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_async_task_start_response_round_trip() {
+        let response = ThreadAsyncTaskStartResponse {};
+
+        let value =
+            serde_json::to_value(&response).expect("serialize thread/asyncTask/start response");
+        assert_eq!(value, json!({}));
+
+        let decoded = serde_json::from_value::<ThreadAsyncTaskStartResponse>(value)
+            .expect("deserialize thread/asyncTask/start response");
         assert_eq!(decoded, response);
     }
 
