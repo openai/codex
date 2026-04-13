@@ -45,6 +45,7 @@ pub(crate) enum FeedbackAudience {
 /// through the app-server-managed feedback flow.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
+    turn_id: Option<String>,
     app_event_tx: AppEventSender,
     include_logs: bool,
 
@@ -57,11 +58,13 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
+        turn_id: Option<String>,
         app_event_tx: AppEventSender,
         include_logs: bool,
     ) -> Self {
         Self {
             category,
+            turn_id,
             app_event_tx,
             include_logs,
             textarea: TextArea::new(),
@@ -76,6 +79,7 @@ impl FeedbackNoteView {
         self.app_event_tx.send(AppEvent::SubmitFeedback {
             category: self.category,
             reason,
+            turn_id: self.turn_id.clone(),
             include_logs: self.include_logs,
         });
         self.complete = true;
@@ -607,7 +611,9 @@ mod tests {
     fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        FeedbackNoteView::new(category, tx, /*include_logs*/ true)
+        FeedbackNoteView::new(
+            category, /*turn_id*/ None, tx, /*include_logs*/ true,
+        )
     }
 
     #[test]
@@ -649,7 +655,12 @@ mod tests {
     fn feedback_view_with_connectivity_diagnostics() {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let view = FeedbackNoteView::new(FeedbackCategory::Bug, tx, /*include_logs*/ false);
+        let view = FeedbackNoteView::new(
+            FeedbackCategory::Bug,
+            /*turn_id*/ None,
+            tx,
+            /*include_logs*/ false,
+        );
         let rendered = render(&view, /*width*/ 60);
 
         insta::assert_snapshot!("feedback_view_with_connectivity_diagnostics", rendered);
@@ -659,7 +670,12 @@ mod tests {
     fn submit_feedback_emits_submit_event_with_trimmed_note() {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut view = FeedbackNoteView::new(FeedbackCategory::Bug, tx, /*include_logs*/ true);
+        let mut view = FeedbackNoteView::new(
+            FeedbackCategory::Bug,
+            Some("turn-123".to_string()),
+            tx,
+            /*include_logs*/ true,
+        );
         view.textarea.insert_str("  something broke  ");
 
         view.submit();
@@ -670,8 +686,9 @@ mod tests {
             AppEvent::SubmitFeedback {
                 category: FeedbackCategory::Bug,
                 reason: Some(reason),
+                turn_id: Some(turn_id),
                 include_logs: true,
-            } if reason == "something broke"
+            } if reason == "something broke" && turn_id == "turn-123"
         ));
         assert_eq!(view.is_complete(), true);
     }
@@ -682,6 +699,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = FeedbackNoteView::new(
             FeedbackCategory::GoodResult,
+            /*turn_id*/ None,
             tx,
             /*include_logs*/ false,
         );
@@ -694,6 +712,7 @@ mod tests {
             AppEvent::SubmitFeedback {
                 category: FeedbackCategory::GoodResult,
                 reason: None,
+                turn_id: None,
                 include_logs: false,
             }
         ));

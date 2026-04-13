@@ -62,6 +62,7 @@ use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
@@ -77,6 +78,7 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
+use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -1037,6 +1039,22 @@ impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
         path.as_ref()
             .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
+    }
+
+    pub(crate) fn file_system_sandbox_context(
+        &self,
+        additional_permissions: Option<PermissionProfile>,
+    ) -> FileSystemSandboxContext {
+        FileSystemSandboxContext {
+            sandbox_policy: self.sandbox_policy.get().clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
+            use_legacy_landlock: self.features.use_legacy_landlock(),
+            additional_permissions,
+        }
     }
 
     pub(crate) fn compact_prompt(&self) -> &str {
@@ -2264,7 +2282,7 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        handlers::user_input_or_turn(
+        handlers::user_input_or_turn_inner(
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
@@ -2275,6 +2293,7 @@ impl Session {
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
             },
+            /*mirror_user_text_to_realtime*/ None,
         )
         .await;
     }
@@ -4412,25 +4431,16 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn parse_mcp_tool_name(
+    pub(crate) async fn resolve_mcp_tool_info(
         &self,
         name: &str,
-        namespace: &Option<String>,
-    ) -> Option<(String, String)> {
-        let tool_name = if let Some(namespace) = namespace {
-            if name.starts_with(namespace.as_str()) {
-                name
-            } else {
-                &format!("{namespace}{name}")
-            }
-        } else {
-            name
-        };
+        namespace: Option<&str>,
+    ) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .parse_tool_name(tool_name)
+            .resolve_tool_info(name, namespace)
             .await
     }
 
@@ -4918,6 +4928,7 @@ mod handlers {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::items::UserMessageItem;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
@@ -4925,6 +4936,7 @@ mod handlers {
     use serde_json::Value;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use tracing::debug;
     use tracing::info;
     use tracing::warn;
 
@@ -4966,6 +4978,21 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
+        user_input_or_turn_inner(
+            sess,
+            sub_id,
+            op,
+            /*mirror_user_text_to_realtime*/ Some(()),
+        )
+        .await;
+    }
+
+    pub(super) async fn user_input_or_turn_inner(
+        sess: &Arc<Session>,
+        sub_id: String,
+        op: Op,
+        mirror_user_text_to_realtime: Option<()>,
+    ) {
         let (items, updates, responsesapi_client_metadata) = match op {
             Op::UserTurn {
                 cwd,
@@ -5031,7 +5058,7 @@ mod handlers {
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
-        match sess
+        let accepted_items = match sess
             .steer_input(
                 items.clone(),
                 /*expected_turn_id*/ None,
@@ -5039,7 +5066,10 @@ mod handlers {
             )
             .await
         {
-            Ok(_) => current_context.session_telemetry.user_prompt(&items),
+            Ok(_) => {
+                current_context.session_telemetry.user_prompt(&items);
+                Some(items)
+            }
             Err(SteerInputError::NoActiveTurn(items)) => {
                 if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                     current_context
@@ -5049,12 +5079,14 @@ mod handlers {
                 current_context.session_telemetry.user_prompt(&items);
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
+                let accepted_items = items.clone();
                 sess.spawn_task(
                     Arc::clone(&current_context),
                     items,
                     crate::tasks::RegularTask::new(),
                 )
                 .await;
+                Some(accepted_items)
             }
             Err(err) => {
                 sess.send_event_raw(Event {
@@ -5062,7 +5094,24 @@ mod handlers {
                     msg: EventMsg::Error(err.to_error_event()),
                 })
                 .await;
+                None
             }
+        };
+        if let (Some(items), Some(())) = (accepted_items, mirror_user_text_to_realtime) {
+            self::mirror_user_text_to_realtime(sess, &items).await;
+        }
+    }
+
+    async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
+        let text = UserMessageItem::new(items).message();
+        if text.is_empty() {
+            return;
+        }
+        if sess.conversation.running_state().await.is_none() {
+            return;
+        }
+        if let Err(err) = sess.conversation.text_in(text).await {
+            debug!("failed to mirror user text to realtime conversation: {err}");
         }
     }
 
@@ -6789,12 +6838,6 @@ async fn run_sampling_request(
 
     let base_instructions = sess.get_base_instructions().await;
 
-    let prompt = build_prompt(
-        input,
-        router.as_ref(),
-        turn_context.as_ref(),
-        base_instructions,
-    );
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
@@ -6812,7 +6855,21 @@ async fn run_sampling_request(
         )
         .await;
     let mut retries = 0;
+    let mut initial_input = Some(input);
     loop {
+        let prompt_input = if let Some(input) = initial_input.take() {
+            input
+        } else {
+            sess.clone_history()
+                .await
+                .for_prompt(&turn_context.model_info.input_modalities)
+        };
+        let prompt = build_prompt(
+            prompt_input,
+            router.as_ref(),
+            turn_context.as_ref(),
+            base_instructions.clone(),
+        );
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -7619,7 +7676,8 @@ async fn try_run_sampling_request(
         };
 
         let event = match event {
-            Some(res) => res?,
+            Some(Ok(event)) => event,
+            Some(Err(err)) => break Err(err),
             None => {
                 break Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
@@ -7690,9 +7748,14 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
-                let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)
-                    .instrument(handle_responses)
-                    .await?;
+                let output_result =
+                    match handle_output_item_done(&mut ctx, item, previously_active_item)
+                        .instrument(handle_responses)
+                        .await
+                    {
+                        Ok(output_result) => output_result,
+                        Err(err) => break Err(err),
+                    };
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                 }

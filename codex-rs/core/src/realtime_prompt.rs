@@ -74,7 +74,7 @@ mod tests {
         let prompt =
             prepare_realtime_backend_prompt(/*prompt*/ None, /*config_prompt*/ None);
 
-        assert!(prompt.starts_with("You are **Codex**"));
+        assert!(prompt.starts_with("You are Codex, an OpenAI Coding Agent"));
         assert!(prompt.contains("The user's name is "));
         assert!(!prompt.contains("{{ user_first_name }}"));
     }

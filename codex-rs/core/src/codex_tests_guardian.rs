@@ -144,8 +144,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
-            tool_name: "shell".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("shell"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -211,8 +210,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
-            tool_name: "exec_command".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("exec_command"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -325,8 +323,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "sticky-turn-grant".to_string(),
-            tool_name: "shell".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("shell"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": [

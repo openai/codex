@@ -2242,6 +2242,8 @@ pub struct FeedbackUploadParams {
     pub include_logs: bool,
     #[ts(optional = nullable)]
     pub extra_log_files: Option<Vec<PathBuf>>,
+    #[ts(optional = nullable)]
+    pub tags: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2717,6 +2719,9 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2803,6 +2808,9 @@ pub struct ThreadResumeResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2880,6 +2888,9 @@ pub struct ThreadForkResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -8502,6 +8513,50 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_lifecycle_responses_default_missing_instruction_sources() {
+        let response = json!({
+            "thread": {
+                "id": "thread-id",
+                "forkedFromId": null,
+                "preview": "",
+                "ephemeral": false,
+                "modelProvider": "openai",
+                "createdAt": 1,
+                "updatedAt": 1,
+                "status": { "type": "idle" },
+                "path": null,
+                "cwd": "/tmp",
+                "cliVersion": "0.0.0",
+                "source": "exec",
+                "agentNickname": null,
+                "agentRole": null,
+                "gitInfo": null,
+                "name": null,
+                "turns": []
+            },
+            "model": "gpt-5",
+            "modelProvider": "openai",
+            "serviceTier": null,
+            "cwd": "/tmp",
+            "approvalPolicy": "on-failure",
+            "approvalsReviewer": "user",
+            "sandbox": { "type": "dangerFullAccess" },
+            "reasoningEffort": null
+        });
+
+        let start: ThreadStartResponse =
+            serde_json::from_value(response.clone()).expect("thread/start response");
+        let resume: ThreadResumeResponse =
+            serde_json::from_value(response.clone()).expect("thread/resume response");
+        let fork: ThreadForkResponse =
+            serde_json::from_value(response).expect("thread/fork response");
+
+        assert_eq!(start.instruction_sources, Vec::<PathBuf>::new());
+        assert_eq!(resume.instruction_sources, Vec::<PathBuf>::new());
+        assert_eq!(fork.instruction_sources, Vec::<PathBuf>::new());
     }
 
     #[test]

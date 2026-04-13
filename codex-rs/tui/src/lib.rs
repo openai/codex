@@ -39,6 +39,7 @@ use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -722,7 +723,12 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::from_env());
+    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
+        ExecServerRuntimePaths::from_optional_paths(
+            arg0_paths.codex_self_exe.clone(),
+            arg0_paths.codex_linux_sandbox_exe.clone(),
+        )?,
+    )));
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
@@ -1524,13 +1530,7 @@ async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
-    match (
-        path_utils::normalize_for_path_comparison(current_cwd),
-        path_utils::normalize_for_path_comparison(session_cwd),
-    ) {
-        (Ok(current), Ok(session)) => current != session,
-        _ => current_cwd != session_cwd,
-    }
+    !path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 pub(crate) enum ResolveCwdOutcome {

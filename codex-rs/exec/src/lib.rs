@@ -15,6 +15,7 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
+use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
@@ -469,6 +470,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             range: None,
         })
         .collect();
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
@@ -476,7 +481,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         loader_overrides: run_loader_overrides,
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
-        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env()),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env_with_runtime_paths(
+            Some(local_runtime_paths),
+        )),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
@@ -1205,13 +1212,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
 }
 
 fn cwds_match(current_cwd: &Path, session_cwd: &Path) -> bool {
-    match (
-        path_utils::normalize_for_path_comparison(current_cwd),
-        path_utils::normalize_for_path_comparison(session_cwd),
-    ) {
-        (Ok(current), Ok(session)) => current == session,
-        _ => current_cwd == session_cwd,
-    }
+    path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 async fn resolve_resume_thread_id(

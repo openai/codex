@@ -1525,7 +1525,7 @@ fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
 }
 
 #[test]
-fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
+fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
         cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
@@ -1540,14 +1540,17 @@ fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
 
     assert_eq!(
         config.cli_auth_credentials_store_mode,
-        AuthCredentialsStoreMode::Keyring,
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Keyring,
+            env!("CARGO_PKG_VERSION"),
+        ),
     );
 
     Ok(())
 }
 
 #[test]
-fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
+fn config_resolves_default_oauth_store_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml::default();
 
@@ -1559,10 +1562,64 @@ fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
 
     assert_eq!(
         config.mcp_oauth_credentials_store_mode,
-        OAuthCredentialsStoreMode::Auto,
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Auto,
+            env!("CARGO_PKG_VERSION"),
+        ),
     );
 
     Ok(())
+}
+
+#[test]
+fn local_dev_builds_force_file_cli_auth_store_modes() {
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Keyring,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        AuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Auto,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        AuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Ephemeral,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        AuthCredentialsStoreMode::Ephemeral,
+    );
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(AuthCredentialsStoreMode::Keyring, "1.2.3"),
+        AuthCredentialsStoreMode::Keyring,
+    );
+}
+
+#[test]
+fn local_dev_builds_force_file_mcp_oauth_store_modes() {
+    assert_eq!(
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Keyring,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        OAuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Auto,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        OAuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_mcp_oauth_credentials_store_mode(OAuthCredentialsStoreMode::Keyring, "1.2.3"),
+        OAuthCredentialsStoreMode::Keyring,
+    );
 }
 
 #[test]
@@ -1918,7 +1975,10 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
     )?;
     assert_eq!(
         final_config.mcp_oauth_credentials_store_mode,
-        OAuthCredentialsStoreMode::Keyring,
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Keyring,
+            env!("CARGO_PKG_VERSION"),
+        ),
     );
 
     Ok(())
@@ -4506,7 +4566,10 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
-            mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+                Default::default(),
+                LOCAL_DEV_BUILD_VERSION,
+            ),
             mcp_oauth_callback_port: None,
             mcp_oauth_callback_url: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4652,7 +4715,10 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
-        mcp_oauth_credentials_store_mode: Default::default(),
+        mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+            Default::default(),
+            LOCAL_DEV_BUILD_VERSION,
+        ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
@@ -4796,7 +4862,10 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
-        mcp_oauth_credentials_store_mode: Default::default(),
+        mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+            Default::default(),
+            LOCAL_DEV_BUILD_VERSION,
+        ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
@@ -4926,7 +4995,10 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
-        mcp_oauth_credentials_store_mode: Default::default(),
+        mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+            Default::default(),
+            LOCAL_DEV_BUILD_VERSION,
+        ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),

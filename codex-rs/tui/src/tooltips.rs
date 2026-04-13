@@ -61,7 +61,7 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
             Some(plan_type)
                 if matches!(
                     plan_type,
-                    PlanType::Plus | PlanType::Enterprise | PlanType::Pro
+                    PlanType::Plus | PlanType::Enterprise | PlanType::Pro | PlanType::ProLite
                 ) || plan_type.is_team_like()
                     || plan_type.is_business_like() =>
             {

@@ -169,14 +169,14 @@ async fn read_project_docs_with_fs(
             break;
         }
 
-        match fs.get_metadata(&p).await {
+        match fs.get_metadata(&p, /*sandbox*/ None).await {
             Ok(metadata) if !metadata.is_file => continue,
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
         }
 
-        let mut data = match fs.read_file(&p).await {
+        let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
@@ -249,7 +249,7 @@ pub async fn discover_project_doc_paths(
         for ancestor in dir.ancestors() {
             for marker in &project_root_markers {
                 let marker_path = ancestor.join(marker);
-                let marker_exists = match fs.get_metadata(&marker_path).await {
+                let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
                     Ok(_) => true,
                     Err(err) if err.kind() == io::ErrorKind::NotFound => false,
                     Err(err) => return Err(err),
@@ -289,7 +289,7 @@ pub async fn discover_project_doc_paths(
     for d in search_dirs {
         for name in &candidate_filenames {
             let candidate = d.join(name);
-            match fs.get_metadata(&candidate).await {
+            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
                 Ok(md) if md.is_file => {
                     found.push(candidate);
                     break;
