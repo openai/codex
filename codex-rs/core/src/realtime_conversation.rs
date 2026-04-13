@@ -37,6 +37,7 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RealtimeConnection;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationSdpEvent;
@@ -593,8 +594,14 @@ async fn prepare_realtime_start(
         api_provider.base_url = realtime_ws_base_url.clone();
     }
     let version = config.realtime.version;
-    let session_config =
-        build_realtime_session_config(sess, params.prompt, params.session_id, params.voice).await?;
+    let session_config = build_realtime_session_config(
+        sess,
+        params.prompt,
+        params.session_id,
+        params.connection,
+        params.voice,
+    )
+    .await?;
     let requested_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
@@ -622,6 +629,7 @@ pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
     prompt: Option<Option<String>>,
     session_id: Option<String>,
+    connection: RealtimeConnection,
     voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
@@ -653,6 +661,13 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
+    if config.realtime.version == RealtimeWsVersion::V1
+        && matches!(connection, RealtimeConnection::Text)
+    {
+        return Err(CodexErr::InvalidRequest(
+            "text realtime connection requires realtime v2".to_string(),
+        ));
+    }
     let session_mode = match config.realtime.session_type {
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
@@ -667,6 +682,7 @@ pub(crate) async fn build_realtime_session_config(
         session_id: Some(session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
         event_parser,
         session_mode,
+        connection,
         voice,
     })
 }

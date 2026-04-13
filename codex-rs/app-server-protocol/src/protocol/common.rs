@@ -1050,7 +1050,9 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::RealtimeConnection;
     use codex_protocol::protocol::RealtimeConversationVersion;
+    use codex_protocol::protocol::RealtimeVoice;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1779,10 +1781,11 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                connection: RealtimeConnection::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
                 session_id: Some("sess_456".to_string()),
                 transport: None,
-                voice: Some(codex_protocol::protocol::RealtimeVoice::Marin),
+                voice: Some(RealtimeVoice::Marin),
             },
         };
         assert_eq!(
@@ -1791,6 +1794,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "connection": "audio",
                     "prompt": "You are on a call",
                     "sessionId": "sess_456",
                     "transport": null,
@@ -1808,6 +1812,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                connection: RealtimeConnection::Audio,
                 prompt: None,
                 session_id: None,
                 transport: None,
@@ -1820,6 +1825,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "connection": "audio",
                     "sessionId": null,
                     "transport": null,
                     "voice": null
@@ -1832,6 +1838,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                connection: RealtimeConnection::Audio,
                 prompt: Some(None),
                 session_id: None,
                 transport: None,
@@ -1844,6 +1851,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "connection": "audio",
                     "prompt": null,
                     "sessionId": null,
                     "transport": null,
@@ -1858,6 +1866,7 @@ mod tests {
             "id": 9,
             "params": {
                 "threadId": "thr_123",
+                "connection": "audio",
                 "sessionId": null,
                 "transport": null,
                 "voice": null
@@ -1873,6 +1882,7 @@ mod tests {
             "id": 9,
             "params": {
                 "threadId": "thr_123",
+                "connection": "audio",
                 "prompt": null,
                 "sessionId": null,
                 "transport": null,
@@ -1957,6 +1967,7 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                connection: RealtimeConnection::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
                 session_id: None,
                 transport: None,

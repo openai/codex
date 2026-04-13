@@ -4,6 +4,7 @@ use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode
 use crate::endpoint::realtime_websocket::methods_common::session_update_session;
 use crate::endpoint::realtime_websocket::methods_common::websocket_intent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
+use crate::endpoint::realtime_websocket::protocol::RealtimeConnection;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
@@ -11,6 +12,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
+use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptUpdateKind;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
@@ -307,10 +309,17 @@ impl RealtimeWebsocketWriter {
         &self,
         instructions: String,
         session_mode: RealtimeSessionMode,
+        connection: RealtimeConnection,
         voice: RealtimeVoice,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
-        let session = session_update_session(self.event_parser, instructions, session_mode, voice);
+        let session = session_update_session(
+            self.event_parser,
+            instructions,
+            session_mode,
+            connection,
+            voice,
+        );
         self.send_json(&RealtimeOutboundMessage::SessionUpdate { session })
             .await
     }
@@ -406,11 +415,11 @@ impl RealtimeWebsocketEvents {
         let mut active_transcript = self.active_transcript.lock().await;
         match event {
             RealtimeEvent::InputAudioSpeechStarted(_) => {}
-            RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta { delta }) => {
-                append_transcript_delta(&mut active_transcript.entries, "user", delta);
+            RealtimeEvent::InputTranscriptDelta(update) => {
+                update_active_transcript_entry(&mut active_transcript.entries, "user", update);
             }
-            RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta { delta }) => {
-                append_transcript_delta(&mut active_transcript.entries, "assistant", delta);
+            RealtimeEvent::OutputTranscriptDelta(update) => {
+                update_active_transcript_entry(&mut active_transcript.entries, "assistant", update);
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 if self.event_parser == RealtimeEventParser::V1 {
@@ -444,6 +453,41 @@ fn append_transcript_delta(entries: &mut Vec<RealtimeTranscriptEntry>, role: &st
     entries.push(RealtimeTranscriptEntry {
         role: role.to_string(),
         text: delta.to_string(),
+    });
+}
+
+fn update_active_transcript_entry(
+    entries: &mut Vec<RealtimeTranscriptEntry>,
+    role: &str,
+    update: &RealtimeTranscriptDelta,
+) {
+    match update.update_kind {
+        RealtimeTranscriptUpdateKind::Delta => {
+            append_transcript_delta(entries, role, &update.delta)
+        }
+        RealtimeTranscriptUpdateKind::Done => {
+            complete_transcript_entry(entries, role, &update.delta)
+        }
+    }
+}
+
+fn complete_transcript_entry(entries: &mut Vec<RealtimeTranscriptEntry>, role: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+
+    // Final transcript events carry the complete part. Replace the in-progress entry
+    // instead of appending, so active transcript state stays usable after deltas.
+    if let Some(last_entry) = entries.last_mut()
+        && last_entry.role == role
+    {
+        last_entry.text = text.to_string();
+        return;
+    }
+
+    entries.push(RealtimeTranscriptEntry {
+        role: role.to_string(),
+        text: text.to_string(),
     });
 }
 
@@ -581,7 +625,12 @@ impl RealtimeWebsocketClient {
         );
         connection
             .writer
-            .send_session_update(config.instructions, config.session_mode, config.voice)
+            .send_session_update(
+                config.instructions,
+                config.session_mode,
+                config.connection,
+                config.voice,
+            )
             .await?;
         Ok(connection)
     }
@@ -842,6 +891,7 @@ mod tests {
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello ".to_string(),
+                    update_kind: RealtimeTranscriptUpdateKind::Delta,
                 }
             ))
         );
@@ -860,6 +910,7 @@ mod tests {
             Some(RealtimeEvent::OutputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hi".to_string(),
+                    update_kind: RealtimeTranscriptUpdateKind::Delta,
                 }
             ))
         );
@@ -903,6 +954,26 @@ mod tests {
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello".to_string(),
+                    update_kind: RealtimeTranscriptUpdateKind::Delta,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_realtime_v2_output_text_done_event() {
+        let payload = json!({
+            "type": "response.output_text.done",
+            "text": "all done"
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
+            Some(RealtimeEvent::OutputTranscriptDelta(
+                RealtimeTranscriptDelta {
+                    delta: "all done".to_string(),
+                    update_kind: RealtimeTranscriptUpdateKind::Done,
                 }
             ))
         );
@@ -1374,6 +1445,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                    connection: RealtimeConnection::Audio,
                     voice: RealtimeVoice::Breeze,
                 },
                 HeaderMap::new(),
@@ -1442,6 +1514,7 @@ mod tests {
             input_delta_event,
             RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "delegate ".to_string(),
+                update_kind: RealtimeTranscriptUpdateKind::Delta,
             })
         );
 
@@ -1454,6 +1527,7 @@ mod tests {
             input_delta_event,
             RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "now".to_string(),
+                update_kind: RealtimeTranscriptUpdateKind::Delta,
             })
         );
 
@@ -1466,6 +1540,7 @@ mod tests {
             output_delta_event,
             RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta {
                 delta: "working".to_string(),
+                update_kind: RealtimeTranscriptUpdateKind::Delta,
             })
         );
 
@@ -1648,6 +1723,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Conversational,
+                    connection: RealtimeConnection::Audio,
                     voice: RealtimeVoice::Cedar,
                 },
                 HeaderMap::new(),
@@ -1753,6 +1829,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Transcription,
+                    connection: RealtimeConnection::Audio,
                     voice: RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
@@ -1856,6 +1933,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Transcription,
+                    connection: RealtimeConnection::Audio,
                     voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),
@@ -1945,6 +2023,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                    connection: RealtimeConnection::Audio,
                     voice: RealtimeVoice::Cove,
                 },
                 HeaderMap::new(),

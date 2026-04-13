@@ -657,6 +657,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadRealtimeStartParams {
                     thread_id: thread_id.to_string(),
+                    connection: params.connection,
                     prompt: params.prompt,
                     session_id: params.session_id,
                     voice: params.voice,

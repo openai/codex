@@ -1,21 +1,35 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+  "definitions": {
+    "RealtimeTranscriptUpdateKind": {
+      "enum": [
+        "delta",
+        "done"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "EXPERIMENTAL - flat transcript update emitted whenever realtime transcript text changes or completes.",
   "properties": {
     "role": {
       "type": "string"
     },
     "text": {
+      "description": "Delta text for delta updates; final complete text for done updates.",
       "type": "string"
     },
     "threadId": {
       "type": "string"
+    },
+    "updateKind": {
+      "$ref": "#/definitions/RealtimeTranscriptUpdateKind"
     }
   },
   "required": [
     "role",
     "text",
-    "threadId"
+    "threadId",
+    "updateKind"
   ],
   "title": "ThreadRealtimeTranscriptUpdatedNotification",
   "type": "object"

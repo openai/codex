@@ -73,7 +73,9 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeConnection;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeTranscriptUpdateKind;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
@@ -3954,11 +3956,14 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 }
 
 /// EXPERIMENTAL - start a thread-scoped realtime session.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
+    /// Selects text or audio output for the realtime session. Transport and voice stay
+    /// independent so clients can choose how they connect separately from what the model emits.
+    pub connection: RealtimeConnection,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_double_option",
@@ -4071,15 +4076,17 @@ pub struct ThreadRealtimeItemAddedNotification {
     pub item: JsonValue,
 }
 
-/// EXPERIMENTAL - flat transcript delta emitted whenever realtime
-/// transcript text changes.
+/// EXPERIMENTAL - flat transcript update emitted whenever realtime
+/// transcript text changes or completes.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeTranscriptUpdatedNotification {
     pub thread_id: String,
     pub role: String,
+    /// Delta text for delta updates; final complete text for done updates.
     pub text: String,
+    pub update_kind: RealtimeTranscriptUpdateKind,
 }
 
 /// EXPERIMENTAL - streamed output audio emitted by thread realtime.

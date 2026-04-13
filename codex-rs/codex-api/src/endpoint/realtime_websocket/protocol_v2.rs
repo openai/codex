@@ -2,6 +2,7 @@ use crate::endpoint::realtime_websocket::protocol_common::parse_error_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_realtime_payload;
 use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta_event;
+use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_update_event;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -9,6 +10,7 @@ use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseCreated;
 use codex_protocol::protocol::RealtimeResponseDone;
+use codex_protocol::protocol::RealtimeTranscriptUpdateKind;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
@@ -30,11 +32,19 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::InputTranscriptDelta)
         }
         "conversation.item.input_audio_transcription.completed" => {
-            parse_transcript_delta_event(&parsed, "transcript")
+            parse_transcript_update_event(&parsed, "transcript", RealtimeTranscriptUpdateKind::Done)
                 .map(RealtimeEvent::InputTranscriptDelta)
         }
         "response.output_text.delta" | "response.output_audio_transcript.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
+        }
+        "response.output_text.done" => {
+            parse_transcript_update_event(&parsed, "text", RealtimeTranscriptUpdateKind::Done)
+                .map(RealtimeEvent::OutputTranscriptDelta)
+        }
+        "response.output_audio_transcript.done" => {
+            parse_transcript_update_event(&parsed, "transcript", RealtimeTranscriptUpdateKind::Done)
+                .map(RealtimeEvent::OutputTranscriptDelta)
         }
         "input_audio_buffer.speech_started" => Some(RealtimeEvent::InputAudioSpeechStarted(
             RealtimeInputAudioSpeechStarted {

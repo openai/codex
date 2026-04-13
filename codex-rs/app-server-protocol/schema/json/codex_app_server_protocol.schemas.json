@@ -10608,10 +10608,24 @@
           }
         ]
       },
+      "RealtimeConnection": {
+        "enum": [
+          "text",
+          "audio"
+        ],
+        "type": "string"
+      },
       "RealtimeConversationVersion": {
         "enum": [
           "v1",
           "v2"
+        ],
+        "type": "string"
+      },
+      "RealtimeTranscriptUpdateKind": {
+        "enum": [
+          "delta",
+          "done"
         ],
         "type": "string"
       },
@@ -13963,22 +13977,27 @@
       },
       "ThreadRealtimeTranscriptUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+        "description": "EXPERIMENTAL - flat transcript update emitted whenever realtime transcript text changes or completes.",
         "properties": {
           "role": {
             "type": "string"
           },
           "text": {
+            "description": "Delta text for delta updates; final complete text for done updates.",
             "type": "string"
           },
           "threadId": {
             "type": "string"
+          },
+          "updateKind": {
+            "$ref": "#/definitions/v2/RealtimeTranscriptUpdateKind"
           }
         },
         "required": [
           "role",
           "text",
-          "threadId"
+          "threadId",
+          "updateKind"
         ],
         "title": "ThreadRealtimeTranscriptUpdatedNotification",
         "type": "object"

@@ -8,6 +8,7 @@ use crate::endpoint::realtime_websocket::protocol::ConversationItemType;
 use crate::endpoint::realtime_websocket::protocol::ConversationMessageItem;
 use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::NoiseReductionType;
+use crate::endpoint::realtime_websocket::protocol::RealtimeConnection;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
@@ -26,6 +27,7 @@ use crate::endpoint::realtime_websocket::protocol::TurnDetectionType;
 use serde_json::json;
 
 const REALTIME_V2_OUTPUT_MODALITY_AUDIO: &str = "audio";
+const REALTIME_V2_OUTPUT_MODALITY_TEXT: &str = "text";
 const REALTIME_V2_TOOL_CHOICE: &str = "auto";
 const REALTIME_V2_BACKGROUND_AGENT_TOOL_NAME: &str = "background_agent";
 const REALTIME_V2_BACKGROUND_AGENT_TOOL_DESCRIPTION: &str = "Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.";
@@ -59,6 +61,7 @@ pub(super) fn conversation_handoff_append_message(
 pub(super) fn session_update_session(
     instructions: String,
     session_mode: RealtimeSessionMode,
+    connection: RealtimeConnection,
     voice: RealtimeVoice,
 ) -> SessionUpdateSession {
     match session_mode {
@@ -67,7 +70,7 @@ pub(super) fn session_update_session(
             r#type: SessionType::Realtime,
             model: None,
             instructions: Some(instructions),
-            output_modalities: Some(vec![REALTIME_V2_OUTPUT_MODALITY_AUDIO.to_string()]),
+            output_modalities: Some(vec![output_modality(connection).to_string()]),
             audio: SessionAudio {
                 input: SessionAudioInput {
                     format: SessionAudioFormat {
@@ -129,6 +132,13 @@ pub(super) fn session_update_session(
             tools: None,
             tool_choice: None,
         },
+    }
+}
+
+fn output_modality(connection: RealtimeConnection) -> &'static str {
+    match connection {
+        RealtimeConnection::Text => REALTIME_V2_OUTPUT_MODALITY_TEXT,
+        RealtimeConnection::Audio => REALTIME_V2_OUTPUT_MODALITY_AUDIO,
     }
 }
 

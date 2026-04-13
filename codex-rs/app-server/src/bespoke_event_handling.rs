@@ -405,6 +405,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             thread_id: conversation_id.to_string(),
                             role: "user".to_string(),
                             text: event.delta,
+                            update_kind: event.update_kind,
                         };
                         outgoing
                             .send_server_notification(
@@ -417,6 +418,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             thread_id: conversation_id.to_string(),
                             role: "assistant".to_string(),
                             text: event.delta,
+                            update_kind: event.update_kind,
                         };
                         outgoing
                             .send_server_notification(

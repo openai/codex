@@ -1499,6 +1499,13 @@
         }
       ]
     },
+    "RealtimeConnection": {
+      "enum": [
+        "text",
+        "audio"
+      ],
+      "type": "string"
+    },
     "RealtimeVoice": {
       "enum": [
         "alloy",
