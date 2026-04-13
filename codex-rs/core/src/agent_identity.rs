@@ -365,7 +365,7 @@ impl AgentIdentityManager {
         let stored_identity = StoredAgentIdentity {
             binding_id: binding.binding_id.clone(),
             chatgpt_account_id: binding.chatgpt_account_id.clone(),
-            chatgpt_user_id: binding.chatgpt_user_id.clone(),
+            chatgpt_user_id: binding.chatgpt_user_id,
             agent_runtime_id: agent_runtime_id.to_string(),
             private_key_pkcs8_base64: key_material.private_key_pkcs8_base64,
             public_key_ssh: key_material.public_key_ssh,

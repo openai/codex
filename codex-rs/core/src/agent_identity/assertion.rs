@@ -90,8 +90,9 @@ mod tests {
 
     #[tokio::test]
     async fn authorization_header_for_task_skips_when_feature_is_disabled() {
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let auth = make_chatgpt_auth(codex_home.path(), "account-123", Some("user-123"));
+        let auth_manager = AuthManager::from_auth_for_testing(auth);
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ false,
@@ -99,9 +100,9 @@ mod tests {
             SessionSource::Cli,
         );
         let agent_task = RegisteredAgentTask {
-            binding_id: "chatgpt-account-account_id".to_string(),
-            chatgpt_account_id: "account_id".to_string(),
-            chatgpt_user_id: None,
+            binding_id: "chatgpt-account-account-123".to_string(),
+            chatgpt_account_id: "account-123".to_string(),
+            chatgpt_user_id: Some("user-123".to_string()),
             agent_runtime_id: "agent-123".to_string(),
             task_id: "task-123".to_string(),
             registered_at: "2026-03-23T12:00:00Z".to_string(),
@@ -118,8 +119,9 @@ mod tests {
 
     #[tokio::test]
     async fn authorization_header_for_task_serializes_signed_agent_assertion() {
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let auth = make_chatgpt_auth(codex_home.path(), "account-123", Some("user-123"));
+        let auth_manager = AuthManager::from_auth_for_testing(auth);
         let manager = AgentIdentityManager::new_for_tests(
             auth_manager,
             /*feature_enabled*/ true,
@@ -131,9 +133,9 @@ mod tests {
             .await
             .expect("seed test identity");
         let agent_task = RegisteredAgentTask {
-            binding_id: "chatgpt-account-account_id".to_string(),
-            chatgpt_account_id: "account_id".to_string(),
-            chatgpt_user_id: None,
+            binding_id: "chatgpt-account-account-123".to_string(),
+            chatgpt_account_id: "account-123".to_string(),
+            chatgpt_user_id: Some("user-123".to_string()),
             agent_runtime_id: "agent-123".to_string(),
             task_id: "task-123".to_string(),
             registered_at: "2026-03-23T12:00:00Z".to_string(),
@@ -178,5 +180,51 @@ mod tests {
                 &signature,
             )
             .expect("signature should verify");
+    }
+
+    fn make_chatgpt_auth(
+        codex_home: &std::path::Path,
+        account_id: &str,
+        user_id: Option<&str>,
+    ) -> CodexAuth {
+        let auth_json = codex_login::AuthDotJson {
+            auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: Some(codex_login::token_data::TokenData {
+                id_token: codex_login::token_data::IdTokenInfo {
+                    email: None,
+                    chatgpt_plan_type: None,
+                    chatgpt_user_id: user_id.map(ToOwned::to_owned),
+                    chatgpt_account_id: Some(account_id.to_string()),
+                    raw_jwt: fake_id_token(account_id, user_id),
+                },
+                access_token: format!("access-token-{account_id}"),
+                refresh_token: "refresh-token".to_string(),
+                account_id: Some(account_id.to_string()),
+            }),
+            last_refresh: Some(chrono::Utc::now()),
+            agent_identity: None,
+        };
+        codex_login::save_auth(
+            codex_home,
+            &auth_json,
+            codex_login::AuthCredentialsStoreMode::File,
+        )
+        .expect("save auth");
+        CodexAuth::from_auth_storage(codex_home, codex_login::AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth")
+    }
+
+    fn fake_id_token(account_id: &str, user_id: Option<&str>) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let payload = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": user_id,
+                "chatgpt_account_id": account_id,
+            }
+        });
+        let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
+        format!("{header}.{payload}.signature")
     }
 }

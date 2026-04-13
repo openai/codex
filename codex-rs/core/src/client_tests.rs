@@ -17,11 +17,16 @@ use crate::agent_identity::RegisteredAgentTask;
 use crate::agent_identity::StoredAgentIdentity;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::Utc;
 use codex_api::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
-use codex_keyring_store::tests::MockKeyringStore;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::save_auth;
+use codex_login::token_data::IdTokenInfo;
+use codex_login::token_data::TokenData;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
@@ -33,8 +38,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_secrets::SecretsBackendKind;
-use codex_secrets::SecretsManager;
 use core_test_support::responses;
 use ed25519_dalek::Signature;
 use ed25519_dalek::Verifier as _;
@@ -136,20 +139,13 @@ async fn model_client_with_agent_task(
     StoredAgentIdentity,
 ) {
     let codex_home = tempfile::tempdir().expect("tempdir");
-    let keyring_store = Arc::new(MockKeyringStore::default());
-    let secrets_manager = SecretsManager::new_with_keyring_store(
-        codex_home.path().to_path_buf(),
-        SecretsBackendKind::Local,
-        keyring_store,
-    );
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let auth = make_chatgpt_auth(codex_home.path(), "account-123", Some("user-123"));
+    let auth_manager = AuthManager::from_auth_for_testing(auth);
     let agent_identity_manager = Arc::new(AgentIdentityManager::new_for_tests(
         Arc::clone(&auth_manager),
         /*feature_enabled*/ true,
         "https://chatgpt.com/backend-api/".to_string(),
         SessionSource::Cli,
-        secrets_manager,
     ));
     let stored_identity = agent_identity_manager
         .seed_generated_identity_for_tests("agent-123")
@@ -176,6 +172,47 @@ async fn model_client_with_agent_task(
         /*beta_features_header*/ None,
     );
     (codex_home, client, agent_task, stored_identity)
+}
+
+fn make_chatgpt_auth(
+    codex_home: &std::path::Path,
+    account_id: &str,
+    user_id: Option<&str>,
+) -> CodexAuth {
+    let auth_json = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: IdTokenInfo {
+                email: None,
+                chatgpt_plan_type: None,
+                chatgpt_user_id: user_id.map(ToOwned::to_owned),
+                chatgpt_account_id: Some(account_id.to_string()),
+                raw_jwt: fake_id_token(account_id, user_id),
+            },
+            access_token: format!("access-token-{account_id}"),
+            refresh_token: "refresh-token".to_string(),
+            account_id: Some(account_id.to_string()),
+        }),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+    };
+    save_auth(codex_home, &auth_json, AuthCredentialsStoreMode::File).expect("save auth");
+    CodexAuth::from_auth_storage(codex_home, AuthCredentialsStoreMode::File)
+        .expect("load auth")
+        .expect("auth")
+}
+
+fn fake_id_token(account_id: &str, user_id: Option<&str>) -> String {
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+    let payload = serde_json::json!({
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": user_id,
+            "chatgpt_account_id": account_id,
+        }
+    });
+    let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
+    format!("{header}.{payload}.signature")
 }
 
 fn assert_agent_assertion_header(
@@ -420,7 +457,7 @@ async fn websocket_agent_task_bypasses_cached_bearer_prewarm() {
     assert_eq!(handshakes.len(), 2);
     assert_eq!(
         handshakes[0].header("authorization"),
-        Some("Bearer Access Token".to_string())
+        Some("Bearer access-token-account-123".to_string())
     );
     let agent_authorization = handshakes[1]
         .header("authorization")
