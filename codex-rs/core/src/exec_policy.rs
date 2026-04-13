@@ -112,6 +112,8 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
     exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
         && parent_config.config_layer_stack.requirements().exec_policy
             == child_config.config_layer_stack.requirements().exec_policy
+        && parent_config.permissions.active_profile_name
+            == child_config.permissions.active_profile_name
 }
 
 fn is_policy_match(rule_match: &RuleMatch) -> bool {
@@ -171,12 +173,18 @@ pub enum ExecPolicyError {
         path: String,
         source: codex_execpolicy::Error,
     },
+
+    #[error("invalid permissions profile name `{profile_name}` for rules file")]
+    InvalidProfileName { profile_name: String },
 }
 
 #[derive(Debug, Error)]
 pub enum ExecPolicyUpdateError {
     #[error("failed to update rules file {path}: {source}")]
     AppendRule { path: PathBuf, source: AmendError },
+
+    #[error("failed to resolve rules file path: {source}")]
+    RulePath { source: ExecPolicyError },
 
     #[error("failed to join blocking rules update task: {source}")]
     JoinBlockingTask { source: tokio::task::JoinError },
@@ -190,6 +198,7 @@ pub enum ExecPolicyUpdateError {
 
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
+    active_permission_profile_name: Option<String>,
     update_lock: tokio::sync::Mutex<()>,
 }
 
@@ -206,17 +215,26 @@ impl ExecPolicyManager {
     pub(crate) fn new(policy: Arc<Policy>) -> Self {
         Self {
             policy: ArcSwap::from(policy),
+            active_permission_profile_name: None,
             update_lock: tokio::sync::Mutex::new(()),
         }
     }
 
     #[instrument(level = "info", skip_all)]
-    pub(crate) async fn load(config_stack: &ConfigLayerStack) -> Result<Self, ExecPolicyError> {
-        let (policy, warning) = load_exec_policy_with_warning(config_stack).await?;
+    pub(crate) async fn load(
+        config_stack: &ConfigLayerStack,
+        active_permission_profile_name: Option<&str>,
+    ) -> Result<Self, ExecPolicyError> {
+        let (policy, warning) =
+            load_exec_policy_with_warning(config_stack, active_permission_profile_name).await?;
         if let Some(err) = warning.as_ref() {
             tracing::warn!("failed to parse rules: {err}");
         }
-        Ok(Self::new(Arc::new(policy)))
+        Ok(Self {
+            policy: ArcSwap::from(Arc::new(policy)),
+            active_permission_profile_name: active_permission_profile_name.map(str::to_string),
+            update_lock: tokio::sync::Mutex::new(()),
+        })
     }
 
     pub(crate) fn current(&self) -> Arc<Policy> {
@@ -315,7 +333,8 @@ impl ExecPolicyManager {
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let _update_guard = self.update_lock.lock().await;
-        let policy_path = default_policy_path(codex_home);
+        let policy_path =
+            writable_policy_path(codex_home, self.active_permission_profile_name.as_deref())?;
         spawn_blocking({
             let policy_path = policy_path.clone();
             let prefix = amendment.command.clone();
@@ -360,7 +379,8 @@ impl ExecPolicyManager {
         justification: Option<String>,
     ) -> Result<(), ExecPolicyUpdateError> {
         let _update_guard = self.update_lock.lock().await;
-        let policy_path = default_policy_path(codex_home);
+        let policy_path =
+            writable_policy_path(codex_home, self.active_permission_profile_name.as_deref())?;
         let host = host.to_string();
         spawn_blocking({
             let policy_path = policy_path.clone();
@@ -398,8 +418,10 @@ impl Default for ExecPolicyManager {
 
 pub async fn check_execpolicy_for_warnings(
     config_stack: &ConfigLayerStack,
+    active_permission_profile_name: Option<&str>,
 ) -> Result<Option<ExecPolicyError>, ExecPolicyError> {
-    let (_, warning) = load_exec_policy_with_warning(config_stack).await?;
+    let (_, warning) =
+        load_exec_policy_with_warning(config_stack, active_permission_profile_name).await?;
     Ok(warning)
 }
 
@@ -476,15 +498,19 @@ pub fn format_exec_policy_error_with_source(error: &ExecPolicyError) -> String {
 
 async fn load_exec_policy_with_warning(
     config_stack: &ConfigLayerStack,
+    active_permission_profile_name: Option<&str>,
 ) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError> {
-    match load_exec_policy(config_stack).await {
+    match load_exec_policy(config_stack, active_permission_profile_name).await {
         Ok(policy) => Ok((policy, None)),
         Err(err @ ExecPolicyError::ParsePolicy { .. }) => Ok((Policy::empty(), Some(err))),
         Err(err) => Err(err),
     }
 }
 
-pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
+pub async fn load_exec_policy(
+    config_stack: &ConfigLayerStack,
+    active_permission_profile_name: Option<&str>,
+) -> Result<Policy, ExecPolicyError> {
     // Iterate the layers in increasing order of precedence, adding the *.rules
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
@@ -495,7 +521,8 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     ) {
         if let Some(config_folder) = layer.config_folder() {
             let policy_dir = config_folder.join(RULES_DIR_NAME);
-            let layer_policy_paths = collect_policy_files(&policy_dir).await?;
+            let layer_policy_paths =
+                collect_policy_files(&policy_dir, active_permission_profile_name).await?;
             policy_paths.extend(layer_policy_paths);
         }
     }
@@ -628,6 +655,34 @@ pub fn render_decision_for_unmatched_command(
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
+}
+
+fn profile_policy_file_name(profile_name: &str) -> Result<String, ExecPolicyError> {
+    if profile_name.is_empty()
+        || profile_name == "."
+        || profile_name == ".."
+        || profile_name.contains('/')
+        || profile_name.contains('\\')
+    {
+        return Err(ExecPolicyError::InvalidProfileName {
+            profile_name: profile_name.to_string(),
+        });
+    }
+
+    Ok(format!("{profile_name}.{RULE_EXTENSION}"))
+}
+
+fn writable_policy_path(
+    codex_home: &Path,
+    active_permission_profile_name: Option<&str>,
+) -> Result<PathBuf, ExecPolicyUpdateError> {
+    let Some(profile_name) = active_permission_profile_name else {
+        return Ok(default_policy_path(codex_home));
+    };
+
+    let file_name = profile_policy_file_name(profile_name)
+        .map_err(|source| ExecPolicyUpdateError::RulePath { source })?;
+    Ok(codex_home.join(RULES_DIR_NAME).join(file_name))
 }
 
 fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
@@ -825,8 +880,24 @@ fn derive_forbidden_reason(command_args: &[String], evaluation: &Evaluation) -> 
     }
 }
 
-async fn collect_policy_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, ExecPolicyError> {
+async fn collect_policy_files(
+    dir: impl AsRef<Path>,
+    active_permission_profile_name: Option<&str>,
+) -> Result<Vec<PathBuf>, ExecPolicyError> {
     let dir = dir.as_ref();
+    if let Some(profile_name) = active_permission_profile_name {
+        let policy_path = dir.join(profile_policy_file_name(profile_name)?);
+        return match fs::metadata(&policy_path).await {
+            Ok(metadata) if metadata.is_file() => Ok(vec![policy_path]),
+            Ok(_) => Ok(Vec::new()),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+            Err(source) => Err(ExecPolicyError::ReadFile {
+                path: policy_path,
+                source,
+            }),
+        };
+    }
+
     let mut read_dir = match fs::read_dir(dir).await {
         Ok(read_dir) => read_dir,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),

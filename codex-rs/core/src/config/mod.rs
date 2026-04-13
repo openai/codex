@@ -182,6 +182,9 @@ pub(crate) fn test_config() -> Config {
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Permissions {
+    /// Active named permissions profile, when profile-based permissions are in
+    /// use.
+    pub active_profile_name: Option<String>,
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
     /// Effective sandbox policy used for shell/unified exec.
@@ -1589,6 +1592,7 @@ impl Config {
         ) || (permission_config_syntax.is_none()
             && has_permission_profiles);
         let (
+            active_permission_profile_name,
             configured_network_proxy_config,
             sandbox_policy,
             file_system_sandbox_policy,
@@ -1627,6 +1631,7 @@ impl Config {
                     .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             }
             (
+                Some(default_permissions.to_string()),
                 configured_network_proxy_config,
                 sandbox_policy,
                 file_system_sandbox_policy,
@@ -1654,6 +1659,7 @@ impl Config {
             );
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
             (
+                None,
                 configured_network_proxy_config,
                 sandbox_policy,
                 file_system_sandbox_policy,
@@ -2019,6 +2025,7 @@ impl Config {
             cwd: resolved_cwd,
             startup_warnings,
             permissions: Permissions {
+                active_profile_name: active_permission_profile_name,
                 approval_policy: constrained_approval_policy.value,
                 sandbox_policy: constrained_sandbox_policy.value,
                 file_system_sandbox_policy: effective_file_system_sandbox_policy,

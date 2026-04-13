@@ -1,9 +1,15 @@
 use super::*;
 
+use crate::config_loader::ConfigLayerEntry;
+use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use tempfile::tempdir;
 
 #[test]
 fn higher_precedence_profile_network_overlays_domain_entries() {
@@ -144,6 +150,38 @@ fn execpolicy_network_rules_overlay_network_lists() {
     assert_eq!(
         config.network.denied_domains(),
         Some(vec!["api.example.com".to_string()])
+    );
+}
+
+#[test]
+fn active_permission_profile_from_layers_uses_highest_precedence_default_permissions() {
+    let lower_dir = tempdir().expect("create lower dir");
+    let higher_dir = tempdir().expect("create higher dir");
+    let lower_file =
+        AbsolutePathBuf::from_absolute_path(lower_dir.path().join("config.toml")).unwrap();
+    let higher_dot_codex_folder = AbsolutePathBuf::from_absolute_path(higher_dir.path()).unwrap();
+    let lower_config: toml::Value =
+        toml::from_str(r#"default_permissions = "workspace""#).expect("lower config should parse");
+    let higher_config: toml::Value =
+        toml::from_str(r#"default_permissions = "full""#).expect("higher config should parse");
+    let layers = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(ConfigLayerSource::User { file: lower_file }, lower_config),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: higher_dot_codex_folder,
+                },
+                higher_config,
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    assert_eq!(
+        active_permission_profile_from_layers(&layers).expect("active profile should resolve"),
+        Some("full".to_string())
     );
 }
 

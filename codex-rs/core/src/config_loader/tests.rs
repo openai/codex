@@ -1720,7 +1720,8 @@ prefix_rules = []
         let config_stack =
             config_stack_for_dot_codex_folder_with_requirements(temp_dir.path(), requirements);
 
-        let policy = load_exec_policy(&config_stack).await?;
+        let policy =
+            load_exec_policy(&config_stack, /*active_permission_profile_name*/ None).await?;
 
         assert_eq!(
             policy.check_multiple([vec!["rm".to_string()]].iter(), &panic_if_called),
@@ -1759,7 +1760,8 @@ prefix_rules = []
         let config_stack =
             config_stack_for_dot_codex_folder_with_requirements(temp_dir.path(), requirements);
 
-        let policy = load_exec_policy(&config_stack).await?;
+        let policy =
+            load_exec_policy(&config_stack, /*active_permission_profile_name*/ None).await?;
 
         assert_eq!(
             policy.check_multiple([vec!["rm".to_string()]].iter(), &panic_if_called),

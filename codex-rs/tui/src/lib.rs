@@ -844,7 +844,12 @@ pub async fn run_main(
     .await;
 
     #[allow(clippy::print_stderr)]
-    match check_execpolicy_for_warnings(&config.config_layer_stack).await {
+    match check_execpolicy_for_warnings(
+        &config.config_layer_stack,
+        config.permissions.active_profile_name.as_deref(),
+    )
+    .await
+    {
         Ok(None) => {}
         Ok(Some(err)) | Err(err) => {
             eprintln!(
