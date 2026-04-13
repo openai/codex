@@ -67,8 +67,7 @@ fn invocation(
         turn,
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),
-        tool_name: tool_name.to_string(),
-        tool_namespace: None,
+        tool_name: codex_tools::ToolName::plain(tool_name),
         payload,
     }
 }
@@ -2004,6 +2003,7 @@ async fn send_input_accepts_structured_items() {
             },
         ],
         final_output_json_schema: None,
+        responsesapi_client_metadata: None,
     };
     let captured = manager
         .captured_ops()

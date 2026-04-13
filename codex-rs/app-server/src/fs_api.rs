@@ -46,7 +46,7 @@ impl FsApi {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file(&params.path)
+            .read_file(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -64,7 +64,7 @@ impl FsApi {
             ))
         })?;
         self.file_system
-            .write_file(&params.path, bytes)
+            .write_file(&params.path, bytes, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -80,6 +80,7 @@ impl FsApi {
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
+                /*sandbox*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -92,7 +93,7 @@ impl FsApi {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata(&params.path)
+            .get_metadata(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -109,7 +110,7 @@ impl FsApi {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory(&params.path)
+            .read_directory(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -135,6 +136,7 @@ impl FsApi {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
                 },
+                /*sandbox*/ None,
             )
             .await
             .map_err(map_fs_error)?;
@@ -152,6 +154,7 @@ impl FsApi {
                 CopyOptions {
                     recursive: params.recursive,
                 },
+                /*sandbox*/ None,
             )
             .await
             .map_err(map_fs_error)?;

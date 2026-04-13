@@ -21,9 +21,11 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     let payload = b"remote-test-env-ok".to_vec();
 
     file_system
-        .write_file(&file_path_abs, payload.clone())
+        .write_file(&file_path_abs, payload.clone(), /*sandbox*/ None)
         .await?;
-    let actual = file_system.read_file(&file_path_abs).await?;
+    let actual = file_system
+        .read_file(&file_path_abs, /*sandbox*/ None)
+        .await?;
     assert_eq!(actual, payload);
 
     file_system
@@ -33,6 +35,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
                 recursive: false,
                 force: true,
             },
+            /*sandbox*/ None,
         )
         .await?;
 

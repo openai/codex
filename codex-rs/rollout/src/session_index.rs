@@ -8,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionMetaLine;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
@@ -111,12 +112,12 @@ pub async fn find_thread_names_by_ids(
     Ok(names)
 }
 
-/// Locate a recorded thread rollout file by thread name using newest-first ordering.
-/// Returns `Ok(Some(path))` if found, `Ok(None)` if not present.
-pub async fn find_thread_path_by_name_str(
+/// Locate a recorded thread rollout and read its session metadata by thread name.
+/// Returns the newest indexed name that still has a readable rollout header.
+pub async fn find_thread_meta_by_name_str(
     codex_home: &Path,
     name: &str,
-) -> std::io::Result<Option<PathBuf>> {
+) -> std::io::Result<Option<(PathBuf, SessionMetaLine)>> {
     if name.trim().is_empty() {
         return Ok(None);
     }
@@ -136,11 +137,11 @@ pub async fn find_thread_path_by_name_str(
         // rename cannot shadow an older persisted session with the same name.
         if let Some(path) =
             super::list::find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await?
-            && super::list::read_session_meta_line(&path).await.is_ok()
+            && let Ok(session_meta) = super::list::read_session_meta_line(&path).await
         {
             drop(rx);
             scan.await.map_err(std::io::Error::other)??;
-            return Ok(Some(path));
+            return Ok(Some((path, session_meta)));
         }
     }
     scan.await.map_err(std::io::Error::other)??;

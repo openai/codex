@@ -194,7 +194,12 @@ async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str
         .inject_user_message_without_turn(message.to_string())
         .await;
     thread.codex.session.ensure_rollout_materialized().await;
-    thread.codex.session.flush_rollout().await;
+    thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("test thread rollout should flush");
 }
 
 async fn wait_for_live_thread_spawn_children(
@@ -425,6 +430,7 @@ async fn send_input_submits_user_message() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         },
     );
     let captured = harness
@@ -571,6 +577,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         },
     );
     let captured = harness
@@ -622,7 +629,12 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .session
         .ensure_rollout_materialized()
         .await;
-    parent_thread.codex.session.flush_rollout().await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
 
     let child_thread_id = harness
         .control
@@ -678,6 +690,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         },
     );
     let captured = harness
@@ -818,7 +831,12 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .session
         .ensure_rollout_materialized()
         .await;
-    parent_thread.codex.session.flush_rollout().await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
 
     let child_thread_id = harness
         .control

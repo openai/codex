@@ -5,4 +5,4 @@
 /**
  * [UNSTABLE] Lifecycle state for a guardian approval review.
  */
-export type GuardianApprovalReviewStatus = "inProgress" | "approved" | "denied" | "aborted";
+export type GuardianApprovalReviewStatus = "inProgress" | "approved" | "denied" | "timedOut" | "aborted";
