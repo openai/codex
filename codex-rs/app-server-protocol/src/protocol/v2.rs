@@ -2794,6 +2794,14 @@ pub struct ThreadResumeParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub user_instructions: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
@@ -2874,6 +2882,14 @@ pub struct ThreadForkParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub user_instructions: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
@@ -8620,6 +8636,46 @@ mod tests {
 
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
+        assert_eq!(serialized_without_override.get("userInstructions"), None);
+    }
+
+    #[test]
+    fn thread_resume_params_preserve_explicit_null_user_instructions() {
+        let params: ThreadResumeParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "userInstructions": null,
+        }))
+        .expect("params should deserialize");
+        assert_eq!(params.user_instructions, Some(None));
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("userInstructions"),
+            Some(&serde_json::Value::Null)
+        );
+
+        let serialized_without_override =
+            serde_json::to_value(ThreadResumeParams::default()).expect("params should serialize");
+        assert_eq!(serialized_without_override.get("userInstructions"), None);
+    }
+
+    #[test]
+    fn thread_fork_params_preserve_explicit_null_user_instructions() {
+        let params: ThreadForkParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "userInstructions": null,
+        }))
+        .expect("params should deserialize");
+        assert_eq!(params.user_instructions, Some(None));
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("userInstructions"),
+            Some(&serde_json::Value::Null)
+        );
+
+        let serialized_without_override =
+            serde_json::to_value(ThreadForkParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("userInstructions"), None);
     }
 

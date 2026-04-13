@@ -10629,6 +10629,12 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "userInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -11933,6 +11939,12 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "userInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

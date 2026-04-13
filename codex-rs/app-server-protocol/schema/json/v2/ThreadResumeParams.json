@@ -1081,6 +1081,12 @@
     },
     "threadId": {
       "type": "string"
+    },
+    "userInstructions": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [
