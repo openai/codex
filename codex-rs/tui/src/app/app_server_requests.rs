@@ -368,6 +368,7 @@ mod tests {
                         "network": { "enabled": null }
                     }))
                     .expect("valid permissions"),
+                    suggested_scope: codex_app_server_protocol::PermissionGrantScope::Turn,
                 },
             }),
             None

@@ -160,6 +160,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
                 write: Some(vec![write_path.clone()]),
             }),
         },
+        suggested_scope: codex_app_server_protocol::PermissionGrantScope::Turn,
     });
 
     assert_eq!(
@@ -173,6 +174,10 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
                 write: Some(vec![write_path]),
             }),
         }
+    );
+    assert_eq!(
+        request.suggested_scope,
+        codex_protocol::request_permissions::PermissionGrantScope::Turn
     );
 }
 

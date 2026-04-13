@@ -1,3 +1,4 @@
+use codex_protocol::request_permissions::PermissionGrantScope;
 use core_test_support::responses;
 use serde_json::json;
 use std::path::Path;
@@ -84,7 +85,10 @@ pub fn create_request_user_input_sse_response(call_id: &str) -> anyhow::Result<S
     ]))
 }
 
-pub fn create_request_permissions_sse_response(call_id: &str) -> anyhow::Result<String> {
+pub fn create_request_permissions_sse_response(
+    call_id: &str,
+    scope: PermissionGrantScope,
+) -> anyhow::Result<String> {
     let tool_call_arguments = serde_json::to_string(&json!({
         "reason": "Select a workspace root",
         "permissions": {
@@ -94,7 +98,8 @@ pub fn create_request_permissions_sse_response(call_id: &str) -> anyhow::Result<
                     "../shared"
                 ]
             }
-        }
+        },
+        "scope": scope,
     }))?;
 
     Ok(responses::sse(vec![

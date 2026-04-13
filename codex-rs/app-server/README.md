@@ -1079,7 +1079,7 @@ the client can offer session-scoped and/or persistent approval choices.
 
 Clients must opt into conversational permission confirmation request methods by listing them in `initialize.params.capabilities.supportedServerRequests`. The opt-in is per connection and per method, which lets older clients continue to initialize without promising UI they do not implement.
 
-The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access.
+The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access, and it includes `suggestedScope` so clients can preselect the model's requested lifetime while still requiring explicit confirmation.
 
 ```json
 {
@@ -1090,6 +1090,7 @@ The built-in `request_permissions` tool sends an `item/permissions/requestApprov
     "turnId": "turn_123",
     "itemId": "call_123",
     "reason": "Select a workspace root",
+    "suggestedScope": "session",
     "permissions": {
       "fileSystem": {
         "write": ["/Users/me/project", "/Users/me/shared"]
