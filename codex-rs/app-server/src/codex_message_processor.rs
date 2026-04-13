@@ -321,6 +321,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -344,11 +345,9 @@ mod plugin_mcp_oauth;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
-use crate::thread_state::ThreadIdleUnloadWait;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
-use crate::thread_state::ThreadSubscriptionRemoval;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -365,7 +364,7 @@ struct ThreadListFilters {
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
-const THREAD_IDLE_UNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const THREAD_UNLOADING_DELAY: Duration = Duration::from_secs(30 * 60);
 
 enum ActiveLogin {
     Browser {
@@ -413,12 +412,6 @@ enum ThreadShutdownResult {
     TimedOut,
 }
 
-enum IdleThreadUnloadCheck {
-    Started,
-    Deferred,
-    NotEligible,
-}
-
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -438,7 +431,6 @@ pub(crate) struct CodexMessageProcessor {
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    pending_idle_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     command_exec_manager: CommandExecManager,
@@ -462,23 +454,12 @@ struct ListenerTaskContext {
     thread_manager: Arc<ThreadManager>,
     thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
+    pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     analytics_events_client: AnalyticsEventsClient,
     general_analytics_enabled: bool,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
-    thread_unload_context: ThreadUnloadContext,
-}
-
-#[derive(Clone)]
-struct ThreadUnloadContext {
-    thread_manager: Arc<ThreadManager>,
-    outgoing: Arc<OutgoingMessageSender>,
-    pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    pending_idle_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    thread_state_manager: ThreadStateManager,
-    thread_watch_manager: ThreadWatchManager,
-    idle_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -492,6 +473,110 @@ enum RefreshTokenRequestOutcome {
     NotAttemptedOrSucceeded,
     FailedTransiently,
     FailedPermanently,
+}
+
+struct UnloadingState {
+    delay: Duration,
+    has_subscribers_rx: watch::Receiver<bool>,
+    has_subscribers: (bool, Instant),
+    thread_status_rx: watch::Receiver<ThreadStatus>,
+    is_active: (bool, Instant),
+}
+
+impl UnloadingState {
+    async fn new(
+        listener_task_context: &ListenerTaskContext,
+        thread_id: ThreadId,
+        delay: Duration,
+    ) -> Option<Self> {
+        let has_subscribers_rx = listener_task_context
+            .thread_state_manager
+            .subscribe_to_has_connections(thread_id)
+            .await?;
+        let thread_status_rx = listener_task_context
+            .thread_watch_manager
+            .subscribe(thread_id)
+            .await?;
+        let has_subscribers = (*has_subscribers_rx.borrow(), Instant::now());
+        let is_active = (
+            matches!(*thread_status_rx.borrow(), ThreadStatus::Active { .. }),
+            Instant::now(),
+        );
+        Some(Self {
+            delay,
+            has_subscribers_rx,
+            thread_status_rx,
+            has_subscribers,
+            is_active,
+        })
+    }
+
+    fn unloading_target(&self) -> Option<Instant> {
+        match (self.has_subscribers, self.is_active) {
+            ((false, has_no_subscribers_since), (false, is_inactive_since)) => {
+                Some(std::cmp::max(has_no_subscribers_since, is_inactive_since) + self.delay)
+            }
+            _ => None,
+        }
+    }
+
+    fn sync_receiver_values(&mut self) {
+        let has_subscribers = *self.has_subscribers_rx.borrow();
+        if self.has_subscribers.0 != has_subscribers {
+            self.has_subscribers = (has_subscribers, Instant::now());
+        }
+
+        let is_active = matches!(*self.thread_status_rx.borrow(), ThreadStatus::Active { .. });
+        if self.is_active.0 != is_active {
+            self.is_active = (is_active, Instant::now());
+        }
+    }
+
+    fn should_unload_now(&mut self) -> bool {
+        self.sync_receiver_values();
+        self.unloading_target()
+            .is_some_and(|target| target <= Instant::now())
+    }
+
+    fn note_thread_activity_observed(&mut self) {
+        if !self.is_active.0 {
+            self.is_active = (false, Instant::now());
+        }
+    }
+
+    async fn wait_for_unloading_trigger(&mut self) -> bool {
+        loop {
+            self.sync_receiver_values();
+            let unloading_target = self.unloading_target();
+            if let Some(target) = unloading_target
+                && target <= Instant::now()
+            {
+                return true;
+            }
+            let unloading_sleep = async {
+                if let Some(target) = unloading_target {
+                    tokio::time::sleep_until(target.into()).await;
+                } else {
+                    futures::future::pending::<()>().await;
+                }
+            };
+            tokio::select! {
+                _ = unloading_sleep => return true,
+                changed = self.has_subscribers_rx.changed() => {
+                    if changed.is_err() {
+                        return false;
+                    }
+                    self.sync_receiver_values();
+                },
+                changed = self.thread_status_rx.changed() => {
+                    if changed.is_err() {
+                        return false;
+                    }
+                    self.sync_receiver_values();
+                },
+            }
+        }
+    }
 }
 
 pub(crate) struct CodexMessageProcessorArgs {
@@ -511,32 +596,6 @@ pub(crate) struct CodexMessageProcessorArgs {
 impl CodexMessageProcessor {
     pub(crate) fn handle_config_mutation(&self) {
         self.clear_plugin_related_caches();
-    }
-
-    fn thread_unload_context(&self) -> ThreadUnloadContext {
-        ThreadUnloadContext {
-            thread_manager: Arc::clone(&self.thread_manager),
-            outgoing: Arc::clone(&self.outgoing),
-            pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
-            pending_idle_thread_unloads: Arc::clone(&self.pending_idle_thread_unloads),
-            thread_state_manager: self.thread_state_manager.clone(),
-            thread_watch_manager: self.thread_watch_manager.clone(),
-            idle_timeout: THREAD_IDLE_UNLOAD_TIMEOUT,
-        }
-    }
-
-    fn listener_task_context(&self) -> ListenerTaskContext {
-        ListenerTaskContext {
-            thread_manager: Arc::clone(&self.thread_manager),
-            thread_state_manager: self.thread_state_manager.clone(),
-            outgoing: Arc::clone(&self.outgoing),
-            analytics_events_client: self.analytics_events_client.clone(),
-            general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
-            thread_watch_manager: self.thread_watch_manager.clone(),
-            fallback_model_provider: self.config.model_provider_id.clone(),
-            codex_home: self.config.codex_home.clone(),
-            thread_unload_context: self.thread_unload_context(),
-        }
     }
 
     fn clear_plugin_related_caches(&self) {
@@ -563,14 +622,6 @@ impl CodexMessageProcessor {
             data: None,
         })?;
 
-        let pending_thread_unloads = self.pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains(&thread_id) {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread {thread_id} is closing; retry after the thread is closed"),
-                data: None,
-            });
-        }
         let thread = self
             .thread_manager
             .get_thread(thread_id)
@@ -580,10 +631,6 @@ impl CodexMessageProcessor {
                 message: format!("thread not found: {thread_id}"),
                 data: None,
             })?;
-        self.thread_state_manager
-            .note_thread_activity(thread_id)
-            .await;
-        drop(pending_thread_unloads);
 
         Ok((thread_id, thread))
     }
@@ -613,7 +660,6 @@ impl CodexMessageProcessor {
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
-            pending_idle_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
             command_exec_manager: CommandExecManager::default(),
@@ -2173,7 +2219,17 @@ impl CodexMessageProcessor {
         typesafe_overrides.ephemeral = ephemeral;
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
-        let listener_task_context = self.listener_task_context();
+        let listener_task_context = ListenerTaskContext {
+            thread_manager: Arc::clone(&self.thread_manager),
+            thread_state_manager: self.thread_state_manager.clone(),
+            outgoing: Arc::clone(&self.outgoing),
+            pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
+            analytics_events_client: self.analytics_events_client.clone(),
+            general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
+            thread_watch_manager: self.thread_watch_manager.clone(),
+            fallback_model_provider: self.config.model_provider_id.clone(),
+            codex_home: self.config.codex_home.clone(),
+        };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
         let thread_start_task = async move {
@@ -3772,17 +3828,9 @@ impl CodexMessageProcessor {
         self.command_exec_manager
             .connection_closed(connection_id)
             .await;
-        let thread_ids_with_no_subscribers = self
-            .thread_state_manager
+        self.thread_state_manager
             .remove_connection(connection_id)
             .await;
-        for thread_id in thread_ids_with_no_subscribers {
-            if self.thread_manager.get_thread(thread_id).await.is_err() {
-                self.finalize_thread_teardown(thread_id).await;
-                continue;
-            }
-            self.schedule_thread_idle_unload_check(thread_id).await;
-        }
     }
 
     pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
@@ -3819,22 +3867,21 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_resume(&self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
-        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id) {
-            let pending_thread_unloads = self.pending_thread_unloads.lock().await;
-            if pending_thread_unloads.contains(&thread_id) {
-                drop(pending_thread_unloads);
-                self.send_invalid_request_error(
-                    request_id,
-                    format!(
-                        "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-                    ),
-                )
-                .await;
-                return;
-            }
-            self.thread_state_manager
-                .note_thread_activity(thread_id)
-                .await;
+        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
+            && self
+                .pending_thread_unloads
+                .lock()
+                .await
+                .contains(&thread_id)
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "thread {thread_id} is closing; retry thread/resume after the thread is closed"
+                ),
+            )
+            .await;
+            return;
         }
 
         if self
@@ -5478,10 +5525,6 @@ impl CodexMessageProcessor {
 
     async fn finalize_thread_teardown(&self, thread_id: ThreadId) {
         self.pending_thread_unloads.lock().await.remove(&thread_id);
-        self.pending_idle_thread_unloads
-            .lock()
-            .await
-            .remove(&thread_id);
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
@@ -5493,251 +5536,52 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn schedule_thread_idle_unload_check(&self, thread_id: ThreadId) {
-        Self::schedule_thread_idle_unload_check_task(self.thread_unload_context(), thread_id).await;
-    }
-
-    async fn schedule_thread_idle_unload_check_task(
-        context: ThreadUnloadContext,
-        thread_id: ThreadId,
-    ) {
-        {
-            let mut pending_idle_thread_unloads = context.pending_idle_thread_unloads.lock().await;
-            if !pending_idle_thread_unloads.insert(thread_id) {
-                return;
-            }
-        }
-
-        tokio::spawn(async move {
-            Self::thread_idle_unload_check_task(context, thread_id).await;
-        });
-    }
-
-    async fn thread_idle_unload_check_task(context: ThreadUnloadContext, thread_id: ThreadId) {
-        loop {
-            match context
-                .thread_state_manager
-                .thread_idle_unload_wait(thread_id, context.idle_timeout)
-                .await
-            {
-                ThreadIdleUnloadWait::Ready => {
-                    context
-                        .pending_idle_thread_unloads
-                        .lock()
-                        .await
-                        .remove(&thread_id);
-
-                    if let Some(listener_command_tx) = context
-                        .thread_state_manager
-                        .listener_command_tx(thread_id)
-                        .await
-                        && listener_command_tx
-                            .send(ThreadListenerCommand::CheckIdleUnload {
-                                idle_timeout: context.idle_timeout,
-                            })
-                            .is_ok()
-                    {
-                        return;
-                    }
-
-                    let Ok(thread) = context.thread_manager.get_thread(thread_id).await else {
-                        context
-                            .thread_state_manager
-                            .remove_thread_state(thread_id)
-                            .await;
-                        context
-                            .thread_watch_manager
-                            .remove_thread(&thread_id.to_string())
-                            .await;
-                        return;
-                    };
-                    let active_turn_snapshot = context
-                        .thread_state_manager
-                        .has_active_turn_snapshot(thread_id)
-                        .await;
-                    if matches!(
-                        Self::check_idle_unload(
-                            &context,
-                            thread_id,
-                            &thread,
-                            active_turn_snapshot,
-                            context.idle_timeout,
-                        )
-                        .await,
-                        IdleThreadUnloadCheck::Deferred
-                    ) {
-                        context
-                            .pending_idle_thread_unloads
-                            .lock()
-                            .await
-                            .insert(thread_id);
-                        tokio::time::sleep(context.idle_timeout).await;
-                        continue;
-                    }
-                    return;
-                }
-                ThreadIdleUnloadWait::Wait(wait_duration) => {
-                    tokio::time::sleep(wait_duration).await;
-                }
-                ThreadIdleUnloadWait::HasSubscribers | ThreadIdleUnloadWait::Missing => {
-                    context
-                        .pending_idle_thread_unloads
-                        .lock()
-                        .await
-                        .remove(&thread_id);
-                    return;
-                }
-            }
-        }
-    }
-
-    async fn check_idle_unload_from_listener(
-        context: &ThreadUnloadContext,
-        thread_id: ThreadId,
-        thread: &Arc<CodexThread>,
-        thread_state: &Arc<Mutex<ThreadState>>,
-        idle_timeout: Duration,
-    ) -> IdleThreadUnloadCheck {
-        let active_turn_snapshot = thread_state.lock().await.active_turn_snapshot().is_some();
-        Self::check_idle_unload(
-            context,
-            thread_id,
-            thread,
-            active_turn_snapshot,
-            idle_timeout,
-        )
-        .await
-    }
-
-    async fn check_idle_unload(
-        context: &ThreadUnloadContext,
-        thread_id: ThreadId,
-        thread: &Arc<CodexThread>,
-        active_turn_snapshot: bool,
-        idle_timeout: Duration,
-    ) -> IdleThreadUnloadCheck {
-        let mut pending_thread_unloads = context.pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains(&thread_id) {
-            return IdleThreadUnloadCheck::Started;
-        }
-        match context
-            .thread_state_manager
-            .thread_idle_unload_wait(thread_id, idle_timeout)
-            .await
-        {
-            ThreadIdleUnloadWait::Ready => {}
-            ThreadIdleUnloadWait::Wait(_) => return IdleThreadUnloadCheck::Deferred,
-            ThreadIdleUnloadWait::HasSubscribers | ThreadIdleUnloadWait::Missing => {
-                return IdleThreadUnloadCheck::NotEligible;
-            }
-        }
-        if Self::thread_has_active_work(context, thread_id, thread, active_turn_snapshot).await {
-            context
-                .thread_state_manager
-                .note_thread_activity(thread_id)
-                .await;
-            return IdleThreadUnloadCheck::Deferred;
-        }
-        pending_thread_unloads.insert(thread_id);
-        drop(pending_thread_unloads);
-
-        info!("thread {thread_id} has no subscribers and is idle; shutting down");
-        context
-            .pending_idle_thread_unloads
-            .lock()
-            .await
-            .remove(&thread_id);
-
-        // Any pending app-server -> client requests for this thread can no longer be
-        // answered; cancel their callbacks before shutdown/unload.
-        context
-            .outgoing
-            .cancel_requests_for_thread(thread_id, /*error*/ None)
-            .await;
-        context
-            .thread_state_manager
-            .remove_thread_state(thread_id)
-            .await;
-
-        Self::spawn_thread_shutdown_task(context.clone(), thread_id, thread.clone());
-        IdleThreadUnloadCheck::Started
-    }
-
-    async fn thread_has_active_work(
-        context: &ThreadUnloadContext,
-        thread_id: ThreadId,
-        thread: &Arc<CodexThread>,
-        active_turn_snapshot: bool,
-    ) -> bool {
-        if matches!(thread.agent_status().await, AgentStatus::Running) || active_turn_snapshot {
-            return true;
-        }
-        matches!(
-            context
-                .thread_watch_manager
-                .loaded_status_for_thread(&thread_id.to_string())
-                .await,
-            ThreadStatus::Active { .. }
-        )
-    }
-
-    fn spawn_thread_shutdown_task(
-        context: ThreadUnloadContext,
+    async fn unload_thread_without_subscribers(
+        thread_manager: Arc<ThreadManager>,
+        outgoing: Arc<OutgoingMessageSender>,
+        pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+        thread_state_manager: ThreadStateManager,
+        thread_watch_manager: ThreadWatchManager,
         thread_id: ThreadId,
         thread: Arc<CodexThread>,
     ) {
+        info!("thread {thread_id} has no subscribers and is idle; shutting down");
+
+        // Any pending app-server -> client requests for this thread can no longer be
+        // answered; cancel their callbacks before shutdown/unload.
+        outgoing
+            .cancel_requests_for_thread(thread_id, /*error*/ None)
+            .await;
+        thread_state_manager.remove_thread_state(thread_id).await;
+
         tokio::spawn(async move {
             match Self::wait_for_thread_shutdown(&thread).await {
                 ThreadShutdownResult::Complete => {
-                    if context
-                        .thread_manager
-                        .remove_thread(&thread_id)
-                        .await
-                        .is_none()
-                    {
+                    if thread_manager.remove_thread(&thread_id).await.is_none() {
                         info!("thread {thread_id} was already removed before teardown finalized");
-                        context
-                            .thread_watch_manager
+                        thread_watch_manager
                             .remove_thread(&thread_id.to_string())
                             .await;
-                        context
-                            .pending_thread_unloads
-                            .lock()
-                            .await
-                            .remove(&thread_id);
+                        pending_thread_unloads.lock().await.remove(&thread_id);
                         return;
                     }
-                    context
-                        .thread_watch_manager
+                    thread_watch_manager
                         .remove_thread(&thread_id.to_string())
                         .await;
                     let notification = ThreadClosedNotification {
                         thread_id: thread_id.to_string(),
                     };
-                    context
-                        .outgoing
+                    outgoing
                         .send_server_notification(ServerNotification::ThreadClosed(notification))
                         .await;
-                    context
-                        .pending_thread_unloads
-                        .lock()
-                        .await
-                        .remove(&thread_id);
+                    pending_thread_unloads.lock().await.remove(&thread_id);
                 }
                 ThreadShutdownResult::SubmitFailed => {
-                    context
-                        .pending_thread_unloads
-                        .lock()
-                        .await
-                        .remove(&thread_id);
+                    pending_thread_unloads.lock().await.remove(&thread_id);
                     warn!("failed to submit Shutdown to thread {thread_id}");
                 }
                 ThreadShutdownResult::TimedOut => {
-                    context
-                        .pending_thread_unloads
-                        .lock()
-                        .await
-                        .remove(&thread_id);
+                    pending_thread_unloads.lock().await.remove(&thread_id);
                     warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
                 }
             }
@@ -5758,7 +5602,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let Ok(_thread) = self.thread_manager.get_thread(thread_id).await else {
+        if self.thread_manager.get_thread(thread_id).await.is_err() {
             // Reconcile stale app-server bookkeeping when the thread has already been
             // removed from the core manager. This keeps loaded-status/subscription state
             // consistent with the source of truth before reporting NotLoaded.
@@ -5774,35 +5618,18 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let removal = self
+        let was_subscribed = self
             .thread_state_manager
             .unsubscribe_connection_from_thread(thread_id, request_id.connection_id)
             .await;
-        match removal {
-            ThreadSubscriptionRemoval::NotSubscribed => {
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        ThreadUnsubscribeResponse {
-                            status: ThreadUnsubscribeStatus::NotSubscribed,
-                        },
-                    )
-                    .await;
-                return;
-            }
-            ThreadSubscriptionRemoval::RemovedStillHasSubscribers => {}
-            ThreadSubscriptionRemoval::RemovedLastSubscriber => {
-                self.schedule_thread_idle_unload_check(thread_id).await;
-            }
-        }
 
+        let status = if was_subscribed {
+            ThreadUnsubscribeStatus::Unsubscribed
+        } else {
+            ThreadUnsubscribeStatus::NotSubscribed
+        };
         self.outgoing
-            .send_response(
-                request_id,
-                ThreadUnsubscribeResponse {
-                    status: ThreadUnsubscribeStatus::Unsubscribed,
-                },
-            )
+            .send_response(request_id, ThreadUnsubscribeResponse { status })
             .await;
     }
 
@@ -7543,7 +7370,17 @@ impl CodexMessageProcessor {
         api_version: ApiVersion,
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
         Self::ensure_conversation_listener_task(
-            self.listener_task_context(),
+            ListenerTaskContext {
+                thread_manager: Arc::clone(&self.thread_manager),
+                thread_state_manager: self.thread_state_manager.clone(),
+                outgoing: Arc::clone(&self.outgoing),
+                pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
+                analytics_events_client: self.analytics_events_client.clone(),
+                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
+                thread_watch_manager: self.thread_watch_manager.clone(),
+                fallback_model_provider: self.config.model_provider_id.clone(),
+                codex_home: self.config.codex_home.clone(),
+            },
             conversation_id,
             connection_id,
             raw_events_enabled,
@@ -7574,11 +7411,7 @@ impl CodexMessageProcessor {
             }
         };
         let thread_state = {
-            let pending_thread_unloads = listener_task_context
-                .thread_unload_context
-                .pending_thread_unloads
-                .lock()
-                .await;
+            let pending_thread_unloads = listener_task_context.pending_thread_unloads.lock().await;
             if pending_thread_unloads.contains(&conversation_id) {
                 return Err(JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
@@ -7644,7 +7477,17 @@ impl CodexMessageProcessor {
         api_version: ApiVersion,
     ) {
         Self::ensure_listener_task_running_task(
-            self.listener_task_context(),
+            ListenerTaskContext {
+                thread_manager: Arc::clone(&self.thread_manager),
+                thread_state_manager: self.thread_state_manager.clone(),
+                outgoing: Arc::clone(&self.outgoing),
+                pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
+                analytics_events_client: self.analytics_events_client.clone(),
+                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
+                thread_watch_manager: self.thread_watch_manager.clone(),
+                fallback_model_provider: self.config.model_provider_id.clone(),
+                codex_home: self.config.codex_home.clone(),
+            },
             conversation_id,
             conversation,
             thread_state,
@@ -7661,6 +7504,15 @@ impl CodexMessageProcessor {
         api_version: ApiVersion,
     ) {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
+        let Some(mut unloading_state) = UnloadingState::new(
+            &listener_task_context,
+            conversation_id,
+            THREAD_UNLOADING_DELAY,
+        )
+        .await
+        else {
+            return;
+        };
         let (mut listener_command_rx, listener_generation) = {
             let mut thread_state = thread_state.lock().await;
             if thread_state.listener_matches(&conversation) {
@@ -7672,20 +7524,38 @@ impl CodexMessageProcessor {
             outgoing,
             thread_manager,
             thread_state_manager,
+            pending_thread_unloads,
             analytics_events_client: _,
             general_analytics_enabled: _,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
-            thread_unload_context,
         } = listener_task_context;
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    biased;
                     _ = &mut cancel_rx => {
                         // Listener was superseded or the thread is being torn down.
                         break;
+                    }
+                    listener_command = listener_command_rx.recv() => {
+                        let Some(listener_command) = listener_command else {
+                            break;
+                        };
+                        handle_thread_listener_command(
+                            conversation_id,
+                            &conversation,
+                            codex_home.as_path(),
+                            &thread_state_manager,
+                            &thread_state,
+                            &thread_watch_manager,
+                            &outgoing_for_task,
+                            &pending_thread_unloads,
+                            listener_command,
+                        )
+                        .await;
                     }
                     event = conversation.next_event() => {
                         let event = match event {
@@ -7699,15 +7569,6 @@ impl CodexMessageProcessor {
                         // Track the event before emitting any typed
                         // translations so thread-local state such as raw event
                         // opt-in stays synchronized with the conversation.
-                        {
-                            let pending_thread_unloads = thread_unload_context
-                                .pending_thread_unloads
-                                .lock()
-                                .await;
-                            if !pending_thread_unloads.contains(&conversation_id) {
-                                thread_state_manager.note_thread_activity(conversation_id).await;
-                            }
-                        }
                         let raw_events_enabled = {
                             let mut thread_state = thread_state.lock().await;
                             thread_state.track_current_turn_event(&event.msg);
@@ -7750,22 +7611,38 @@ impl CodexMessageProcessor {
                         )
                         .await;
                     }
-                    listener_command = listener_command_rx.recv() => {
-                        let Some(listener_command) = listener_command else {
+                    unloading_watchers_open = unloading_state.wait_for_unloading_trigger() => {
+                        if !unloading_watchers_open {
                             break;
-                        };
-                        handle_thread_listener_command(
+                        }
+                        if !unloading_state.should_unload_now() {
+                            continue;
+                        }
+                        if matches!(conversation.agent_status().await, AgentStatus::Running) {
+                            unloading_state.note_thread_activity_observed();
+                            continue;
+                        }
+                        {
+                            let mut pending_thread_unloads = pending_thread_unloads.lock().await;
+                            if pending_thread_unloads.contains(&conversation_id) {
+                                continue;
+                            }
+                            if !unloading_state.should_unload_now() {
+                                continue;
+                            }
+                            pending_thread_unloads.insert(conversation_id);
+                        }
+                        Self::unload_thread_without_subscribers(
+                            thread_manager.clone(),
+                            outgoing_for_task.clone(),
+                            pending_thread_unloads.clone(),
+                            thread_state_manager.clone(),
+                            thread_watch_manager.clone(),
                             conversation_id,
-                            &conversation,
-                            codex_home.as_path(),
-                            &thread_state_manager,
-                            &thread_state,
-                            &thread_watch_manager,
-                            &outgoing_for_task,
-                            &thread_unload_context,
-                            listener_command,
+                            conversation.clone(),
                         )
                         .await;
+                        break;
                     }
                 }
             }
@@ -8263,7 +8140,7 @@ async fn handle_thread_listener_command(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    thread_unload_context: &ThreadUnloadContext,
+    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     listener_command: ThreadListenerCommand,
 ) {
     match listener_command {
@@ -8276,27 +8153,10 @@ async fn handle_thread_listener_command(
                 thread_state,
                 thread_watch_manager,
                 outgoing,
-                thread_unload_context,
+                pending_thread_unloads,
                 *resume_request,
             )
             .await;
-        }
-        ThreadListenerCommand::CheckIdleUnload { idle_timeout } => {
-            let result = CodexMessageProcessor::check_idle_unload_from_listener(
-                thread_unload_context,
-                conversation_id,
-                conversation,
-                thread_state,
-                idle_timeout,
-            )
-            .await;
-            if matches!(result, IdleThreadUnloadCheck::Deferred) {
-                CodexMessageProcessor::schedule_thread_idle_unload_check_task(
-                    thread_unload_context.clone(),
-                    conversation_id,
-                )
-                .await;
-            }
         }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,
@@ -8323,7 +8183,7 @@ async fn handle_pending_thread_resume_request(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    thread_unload_context: &ThreadUnloadContext,
+    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
     let active_turn = {
@@ -8378,7 +8238,7 @@ async fn handle_pending_thread_resume_request(
     );
 
     {
-        let pending_thread_unloads = thread_unload_context.pending_thread_unloads.lock().await;
+        let pending_thread_unloads = pending_thread_unloads.lock().await;
         if pending_thread_unloads.contains(&conversation_id) {
             drop(pending_thread_unloads);
             outgoing
@@ -10229,86 +10089,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn last_subscriber_removal_starts_idle_unload_wait() -> Result<()> {
-        let manager = ThreadStateManager::new();
-        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
-        let connection = ConnectionId(1);
-        let idle_timeout = Duration::from_millis(30);
-
-        manager.connection_initialized(connection).await;
-        manager
-            .try_ensure_connection_subscribed(
-                thread_id, connection, /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection should be live");
-
-        assert!(matches!(
-            manager
-                .unsubscribe_connection_from_thread(thread_id, connection)
-                .await,
-            ThreadSubscriptionRemoval::RemovedLastSubscriber
-        ));
-        assert!(matches!(
-            manager
-                .thread_idle_unload_wait(thread_id, idle_timeout)
-                .await,
-            ThreadIdleUnloadWait::Wait(_)
-        ));
-
-        tokio::time::sleep(Duration::from_millis(40)).await;
-        assert!(matches!(
-            manager
-                .thread_idle_unload_wait(thread_id, idle_timeout)
-                .await,
-            ThreadIdleUnloadWait::Ready
-        ));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn thread_activity_resets_idle_unload_wait() -> Result<()> {
-        let manager = ThreadStateManager::new();
-        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
-        let connection = ConnectionId(1);
-        let idle_timeout = Duration::from_millis(50);
-
-        manager.connection_initialized(connection).await;
-        manager
-            .try_ensure_connection_subscribed(
-                thread_id, connection, /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection should be live");
-        assert!(matches!(
-            manager
-                .unsubscribe_connection_from_thread(thread_id, connection)
-                .await,
-            ThreadSubscriptionRemoval::RemovedLastSubscriber
-        ));
-
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        manager.note_thread_activity(thread_id).await;
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert!(matches!(
-            manager
-                .thread_idle_unload_wait(thread_id, idle_timeout)
-                .await,
-            ThreadIdleUnloadWait::Wait(_)
-        ));
-
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert!(matches!(
-            manager
-                .thread_idle_unload_wait(thread_id, idle_timeout)
-                .await,
-            ThreadIdleUnloadWait::Ready
-        ));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn resubscribe_cancels_idle_unload_eligibility() -> Result<()> {
+    async fn adding_connection_to_thread_updates_has_connections_watcher() -> Result<()> {
         let manager = ThreadStateManager::new();
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let connection_a = ConnectionId(1);
@@ -10324,27 +10105,33 @@ mod tests {
             )
             .await
             .expect("connection_a should be live");
-        assert!(matches!(
+        let mut has_connections = manager
+            .subscribe_to_has_connections(thread_id)
+            .await
+            .expect("thread should have a has-connections watcher");
+        assert!(*has_connections.borrow());
+
+        assert!(
             manager
                 .unsubscribe_connection_from_thread(thread_id, connection_a)
-                .await,
-            ThreadSubscriptionRemoval::RemovedLastSubscriber
-        ));
-
-        manager
-            .try_ensure_connection_subscribed(
-                thread_id,
-                connection_b,
-                /*experimental_raw_events*/ false,
-            )
+                .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), has_connections.changed())
             .await
-            .expect("connection_b should be live");
-        assert!(matches!(
+            .expect("timed out waiting for no-subscriber update")
+            .expect("has-connections watcher should remain open");
+        assert!(!*has_connections.borrow());
+
+        assert!(
             manager
-                .thread_idle_unload_wait(thread_id, Duration::from_millis(1))
-                .await,
-            ThreadIdleUnloadWait::HasSubscribers
-        ));
+                .try_add_connection_to_thread(thread_id, connection_b)
+                .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), has_connections.changed())
+            .await
+            .expect("timed out waiting for subscriber update")
+            .expect("has-connections watcher should remain open");
+        assert!(*has_connections.borrow());
         Ok(())
     }
 
