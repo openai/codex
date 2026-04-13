@@ -1130,25 +1130,25 @@ mod tests {
     fn complete_transcript_entry_replaces_current_part_only() {
         let mut state = ActiveTranscriptState::default();
         let first_part_delta = RealtimeTranscriptDelta {
-            delta: "hel".to_string(),
+            delta: "hello".to_string(),
             item_id: Some("item_output_1".to_string()),
             output_index: Some(0),
             content_index: Some(0),
         };
         let second_part_delta = RealtimeTranscriptDelta {
-            delta: " wor".to_string(),
+            delta: "beta".to_string(),
             item_id: Some("item_output_1".to_string()),
             output_index: Some(0),
             content_index: Some(1),
         };
         let first_part_done = RealtimeTranscriptDone {
-            text: "hello".to_string(),
+            text: "hello!".to_string(),
             item_id: Some("item_output_1".to_string()),
             output_index: Some(0),
             content_index: Some(0),
         };
         let second_part_done = RealtimeTranscriptDone {
-            text: " world".to_string(),
+            text: " beta".to_string(),
             item_id: Some("item_output_1".to_string()),
             output_index: Some(0),
             content_index: Some(1),
@@ -1156,15 +1156,15 @@ mod tests {
 
         append_transcript_delta(&mut state, "assistant", &first_part_delta);
         append_transcript_delta(&mut state, "assistant", &second_part_delta);
-        complete_transcript_entry(&mut state, "assistant", &second_part_done);
         complete_transcript_entry(&mut state, "assistant", &first_part_done);
+        complete_transcript_entry(&mut state, "assistant", &second_part_done);
 
         assert_eq!(
             state,
             ActiveTranscriptState {
                 entries: vec![RealtimeTranscriptEntry {
                     role: "assistant".to_string(),
-                    text: "hello world".to_string(),
+                    text: "hello! beta".to_string(),
                 }],
                 in_progress_parts: Vec::new(),
             }
