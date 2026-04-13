@@ -96,7 +96,11 @@ async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
     tokio::fs::create_dir_all(&turn.config.codex_home)
         .await
         .expect("codex home should be created");
-    let role_config_path = turn.config.codex_home.join("fork-context-role.toml");
+    let role_config_path = turn
+        .config
+        .codex_home
+        .as_path()
+        .join("fork-context-role.toml");
     tokio::fs::write(
         &role_config_path,
         r#"model = "gpt-5-role-override"
