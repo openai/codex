@@ -340,10 +340,19 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn should_include_current_exe_parent(dir: &Path) -> bool {
+    !dir.ancestors().any(|ancestor| {
+        ancestor
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("WindowsApps"))
+    })
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && should_include_current_exe_parent(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -832,6 +841,7 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::should_include_current_exe_parent;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use codex_protocol::protocol::ReadOnlyAccess;
@@ -840,6 +850,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1031,6 +1042,16 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn current_exe_parent_skips_windows_apps_package_dirs() {
+        assert!(!should_include_current_exe_parent(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.313.5234.0_x64__2p2nqsd0c76g0"
+        )));
+        assert!(should_include_current_exe_parent(Path::new(
+            r"C:\Users\ace\.codex\.sandbox-bin"
+        )));
     }
 
     #[test]
