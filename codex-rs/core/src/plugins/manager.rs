@@ -952,13 +952,6 @@ impl PluginsManager {
                 marketplace_name,
             });
         };
-        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
-            return Err(MarketplaceError::PluginNotFound {
-                plugin_name: request.plugin_name.clone(),
-                marketplace_name,
-            });
-        }
-
         let plugin_id = PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(
             |err| match err {
                 PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
@@ -966,6 +959,51 @@ impl PluginsManager {
         )?;
         let plugin_key = plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let plugin = self.read_plugin_detail_for_marketplace_plugin(
+            config,
+            &marketplace.name,
+            ConfiguredMarketplacePlugin {
+                id: plugin_key.clone(),
+                name: plugin.name,
+                source: plugin.source,
+                policy: plugin.policy,
+                interface: plugin.interface,
+                installed: installed_plugins.contains(&plugin_key),
+                enabled: enabled_plugins.contains(&plugin_key),
+            },
+        )?;
+
+        Ok(PluginReadOutcome {
+            marketplace_name: if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
+                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
+            } else {
+                marketplace.name
+            },
+            marketplace_path: marketplace.path,
+            plugin,
+        })
+    }
+
+    pub(crate) fn read_plugin_detail_for_marketplace_plugin(
+        &self,
+        config: &Config,
+        marketplace_name: &str,
+        plugin: ConfiguredMarketplacePlugin,
+    ) -> Result<PluginDetail, MarketplaceError> {
+        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
+            return Err(MarketplaceError::PluginNotFound {
+                plugin_name: plugin.name,
+                marketplace_name: marketplace_name.to_string(),
+            });
+        }
+
+        let plugin_id =
+            PluginId::new(plugin.name.clone(), marketplace_name.to_string()).map_err(|err| {
+                match err {
+                    PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+                }
+            })?;
+        let plugin_key = plugin_id.as_key();
         let source_path = match &plugin.source {
             MarketplacePluginSource::Local { path } => path.clone(),
         };
@@ -1001,27 +1039,19 @@ impl PluginsManager {
         mcp_server_names.sort_unstable();
         mcp_server_names.dedup();
 
-        Ok(PluginReadOutcome {
-            marketplace_name: if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
-                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
-            } else {
-                marketplace.name
-            },
-            marketplace_path: marketplace.path,
-            plugin: PluginDetail {
-                id: plugin_key.clone(),
-                name: plugin.name,
-                description,
-                source: plugin.source,
-                policy: plugin.policy,
-                interface: plugin.interface,
-                installed: installed_plugins.contains(&plugin_key),
-                enabled: enabled_plugins.contains(&plugin_key),
-                skills: resolved_skills.skills,
-                disabled_skill_paths: resolved_skills.disabled_skill_paths,
-                apps,
-                mcp_server_names,
-            },
+        Ok(PluginDetail {
+            id: plugin_key,
+            name: plugin.name,
+            description,
+            source: plugin.source,
+            policy: plugin.policy,
+            interface: plugin.interface,
+            installed: plugin.installed,
+            enabled: plugin.enabled,
+            skills: resolved_skills.skills,
+            disabled_skill_paths: resolved_skills.disabled_skill_paths,
+            apps,
+            mcp_server_names,
         })
     }
 
