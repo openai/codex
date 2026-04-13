@@ -5895,8 +5895,13 @@ impl App {
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
             ThreadBufferedEvent::Request(request) => {
-                self.chat_widget
-                    .handle_server_request(request, /*replay_kind*/ None);
+                if self
+                    .pending_app_server_requests
+                    .contains_server_request(&request)
+                {
+                    self.chat_widget
+                        .handle_server_request(request, /*replay_kind*/ None);
+                }
             }
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
@@ -6838,6 +6843,11 @@ mod tests {
         let approval_request =
             exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
 
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
         app.enqueue_primary_thread_request(approval_request).await?;
         app.enqueue_primary_thread_session(
             test_thread_session(thread_id, test_path_buf("/tmp/project")),

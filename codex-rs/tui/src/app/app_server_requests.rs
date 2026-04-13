@@ -306,6 +306,38 @@ impl PendingAppServerRequests {
         None
     }
 
+    pub(super) fn contains_server_request(&self, request: &ServerRequest) -> bool {
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { request_id, .. } => self
+                .exec_approvals
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::FileChangeRequestApproval { request_id, .. } => self
+                .file_change_approvals
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::PermissionsRequestApproval { request_id, .. } => self
+                .permissions_approvals
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::ToolRequestUserInput { request_id, .. } => {
+                self.user_inputs.values().any(|queue| {
+                    queue
+                        .iter()
+                        .any(|pending| &pending.request_id == request_id)
+                })
+            }
+            ServerRequest::McpServerElicitationRequest { request_id, .. } => self
+                .mcp_requests
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::DynamicToolCall { .. }
+            | ServerRequest::ChatgptAuthTokensRefresh { .. }
+            | ServerRequest::ApplyPatchApproval { .. }
+            | ServerRequest::ExecCommandApproval { .. } => true,
+        }
+    }
+
     fn pop_user_input_request_for_turn(
         &mut self,
         turn_id: &str,
