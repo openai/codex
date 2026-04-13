@@ -166,6 +166,7 @@ ORDER BY created_at ASC, id ASC
         &self,
         thread_id: &str,
         id: &str,
+        due_at: i64,
         next_run_at: Option<i64>,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
@@ -175,11 +176,15 @@ SET pending_run = 1,
     next_run_at = ?
 WHERE thread_id = ?
   AND id = ?
+  AND pending_run = 0
+  AND next_run_at IS NOT NULL
+  AND next_run_at <= ?
             "#,
         )
         .bind(next_run_at)
         .bind(thread_id)
         .bind(id)
+        .bind(due_at)
         .execute(self.pool.as_ref())
         .await?;
         Ok(result.rows_affected() > 0)
@@ -272,6 +277,7 @@ WHERE thread_id = ?
 mod tests {
     use super::StateRuntime;
     use super::test_support::unique_temp_dir;
+    use crate::ThreadTimer;
     use crate::ThreadTimerCreateParams;
     use crate::ThreadTimerUpdateParams;
     use pretty_assertions::assert_eq;
@@ -607,6 +613,65 @@ ORDER BY name
         assert_eq!(timers[0].next_run_at, Some(120));
         assert_eq!(timers[0].last_run_at, Some(110));
         assert!(!timers[0].pending_run);
+    }
+
+    #[tokio::test]
+    async fn due_update_rejects_stale_timer_row_after_claim() {
+        let runtime = test_runtime().await;
+        let mut params = timer_params("timer-1", "thread-1");
+        params.next_run_at = Some(110);
+        params.pending_run = false;
+        runtime
+            .create_thread_timer(&params)
+            .await
+            .expect("create overdue recurring timer");
+        let update = ThreadTimerUpdateParams {
+            trigger_json: params.trigger_json.clone(),
+            content: params.content.clone(),
+            instructions: params.instructions.clone(),
+            meta_json: params.meta_json.clone(),
+            delivery: params.delivery.clone(),
+            next_run_at: Some(120),
+            last_run_at: Some(110),
+            pending_run: false,
+        };
+        assert!(
+            runtime
+                .claim_recurring_thread_timer(
+                    "thread-1", "timer-1", /*due_at*/ 110, /*expected_last_run_at*/ None,
+                    &update,
+                )
+                .await
+                .expect("claim overdue recurring timer")
+        );
+
+        assert!(
+            !runtime
+                .update_thread_timer_due("thread-1", "timer-1", /*due_at*/ 110, Some(130))
+                .await
+                .expect("stale due update should be rejected")
+        );
+        assert_eq!(
+            runtime
+                .list_thread_timers("thread-1")
+                .await
+                .expect("list timers"),
+            vec![ThreadTimer {
+                id: params.id,
+                thread_id: params.thread_id,
+                source: params.source,
+                client_id: params.client_id,
+                trigger_json: params.trigger_json,
+                content: params.content,
+                instructions: params.instructions,
+                meta_json: params.meta_json,
+                delivery: params.delivery,
+                created_at: params.created_at,
+                next_run_at: Some(120),
+                last_run_at: Some(110),
+                pending_run: false,
+            }]
+        );
     }
 
     #[tokio::test]
