@@ -10,7 +10,6 @@ use std::sync::atomic::Ordering;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
-use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -22,6 +21,7 @@ use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
+use axum::http::HeaderValue;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::AppListUpdatedNotification;
@@ -616,63 +616,24 @@ impl MessageProcessor {
                 title: _title,
                 version,
             } = params.client_info;
+            // Validate before committing; set_default_originator validates while
+            // mutating process-global metadata.
+            if HeaderValue::from_str(&name).is_err() {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                    ),
+                    data: None,
+                };
+                self.outgoing
+                    .send_error(connection_request_id.clone(), error)
+                    .await;
+                return;
+            }
             let originator = name.clone();
-            if let Err(error) = set_default_originator(originator.clone()) {
-                match error {
-                    SetOriginatorError::InvalidHeaderValue => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!(
-                                "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
-                            ),
-                            data: None,
-                        };
-                        self.outgoing
-                            .send_error(connection_request_id.clone(), error)
-                            .await;
-                        return;
-                    }
-                    SetOriginatorError::AlreadyInitialized => {
-                        // No-op. This is expected to happen if the originator is already set via env var.
-                        // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
-                        // this will be an unexpected state and we can return a JSON-RPC error indicating
-                        // internal server error.
-                    }
-                }
-            }
-            if self.config.features.enabled(Feature::GeneralAnalytics) {
-                self.analytics_events_client.track_initialize(
-                    connection_id.0,
-                    analytics_initialize_params,
-                    originator,
-                    self.rpc_transport,
-                );
-            }
-            set_default_client_residency_requirement(self.config.enforce_residency.value());
             let user_agent_suffix = format!("{name}; {version}");
-            if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
-                *suffix = Some(user_agent_suffix);
-            }
-
-            let user_agent = get_codex_user_agent();
-            let codex_home = match self.config.codex_home.clone().try_into() {
-                Ok(codex_home) => codex_home,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("Invalid CODEX_HOME: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(connection_request_id, error).await;
-                    return;
-                }
-            };
-            let response = InitializeResponse {
-                user_agent,
-                codex_home,
-                platform_family: std::env::consts::FAMILY.to_string(),
-                platform_os: std::env::consts::OS.to_string(),
-            };
+            let codex_home = self.config.codex_home.clone();
             if session
                 .initialize(InitializedConnectionSessionState {
                     experimental_api_enabled,
@@ -692,6 +653,45 @@ impl MessageProcessor {
                 self.outgoing.send_error(connection_request_id, error).await;
                 return;
             }
+
+            // Only the request that wins session initialization may mutate
+            // process-global client metadata.
+            if let Err(error) = set_default_originator(originator.clone()) {
+                match error {
+                    SetOriginatorError::InvalidHeaderValue => {
+                        tracing::warn!(
+                            client_info_name = %name,
+                            "validated clientInfo.name was rejected while setting originator"
+                        );
+                    }
+                    SetOriginatorError::AlreadyInitialized => {
+                        // No-op. This is expected to happen if the originator is already set via env var.
+                        // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+                        // this will be an unexpected state and we can return a JSON-RPC error indicating
+                        // internal server error.
+                    }
+                }
+            }
+            if self.config.features.enabled(Feature::GeneralAnalytics) {
+                self.analytics_events_client.track_initialize(
+                    connection_id.0,
+                    analytics_initialize_params,
+                    originator,
+                    self.rpc_transport,
+                );
+            }
+            set_default_client_residency_requirement(self.config.enforce_residency.value());
+            if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
+                *suffix = Some(user_agent_suffix);
+            }
+
+            let user_agent = get_codex_user_agent();
+            let response = InitializeResponse {
+                user_agent,
+                codex_home,
+                platform_family: std::env::consts::FAMILY.to_string(),
+                platform_os: std::env::consts::OS.to_string(),
+            };
 
             self.outgoing
                 .send_response(connection_request_id, response)
