@@ -1340,7 +1340,7 @@ allow_local_binding = true
         .with_pre_build_hook(|home| {
             if let Err(error) = write_permission_request_hook(
                 home,
-                Some("^NetworkAccess$"),
+                Some("^Bash$"),
                 "allow",
                 "should not be used for allow",
             ) {
@@ -1435,7 +1435,7 @@ allow_local_binding = true
     let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
-    assert_eq!(hook_inputs[0]["tool_name"], "NetworkAccess");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
     assert_eq!(
         hook_inputs[0]["tool_input"]["description"],

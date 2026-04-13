@@ -37,8 +37,6 @@ use tokio::sync::RwLock;
 use tracing::warn;
 use uuid::Uuid;
 
-const NETWORK_ACCESS_HOOK_TOOL_NAME: &str = "NetworkAccess";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NetworkApprovalMode {
     Immediate,
@@ -389,7 +387,7 @@ impl NetworkApprovalService {
             &turn_context,
             &guardian_approval_id,
             PermissionRequestPayload {
-                tool_name: NETWORK_ACCESS_HOOK_TOOL_NAME.to_string(),
+                tool_name: "Bash".to_string(),
                 command,
                 description: Some(format!("network-access {}", request.host)),
             },
