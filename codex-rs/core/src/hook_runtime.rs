@@ -157,7 +157,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
 pub(crate) async fn run_permission_request_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    run_id_suffix: String,
+    request_id: &str,
     payload: PermissionRequestPayload,
     approval_attempt: PermissionRequestApprovalAttempt,
     retry_reason: Option<String>,
@@ -171,7 +171,7 @@ pub(crate) async fn run_permission_request_hooks(
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
         tool_name: payload.tool_name,
-        run_id_suffix,
+        run_id_suffix: format!("{request_id}:{}", approval_attempt.as_wire_value()),
         command: payload.command,
         sandbox_permissions: payload.sandbox_permissions,
         additional_permissions: payload.additional_permissions,

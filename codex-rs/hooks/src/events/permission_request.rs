@@ -211,7 +211,7 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
             justification: request.justification.clone(),
-            approval_attempt: request.approval_attempt.clone(),
+            approval_attempt: request.approval_attempt,
             retry_reason: request.retry_reason.clone(),
             network_approval_context: request.network_approval_context.clone(),
         },

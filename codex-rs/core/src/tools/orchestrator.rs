@@ -373,11 +373,7 @@ impl ToolOrchestrator {
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
-                format!(
-                    "{}:{}",
-                    approval_ctx.call_id,
-                    approval_attempt.as_wire_value()
-                ),
+                approval_ctx.call_id,
                 permission_request,
                 approval_attempt,
                 approval_ctx.retry_reason.clone(),

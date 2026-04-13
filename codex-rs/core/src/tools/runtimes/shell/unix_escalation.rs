@@ -8,11 +8,13 @@ use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -22,6 +24,8 @@ use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
+use codex_hooks::PermissionRequestApprovalAttempt;
+use codex_hooks::PermissionRequestDecision;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -320,6 +324,7 @@ enum DecisionSource {
 struct PromptDecision {
     decision: ReviewDecision,
     guardian_review_id: Option<String>,
+    rejection_message: Option<String>,
 }
 
 fn execve_prompt_is_rejected_by_policy(
@@ -394,11 +399,49 @@ impl CoreShellActionProvider {
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
+                // 1) Run PermissionRequest hooks
+                let permission_request = PermissionRequestPayload {
+                    tool_name: "Bash".to_string(),
+                    command: codex_shell_command::parse_command::shlex_join(&command),
+                    sandbox_permissions: self.approval_sandbox_permissions,
+                    additional_permissions: additional_permissions.clone(),
+                    justification: None,
+                };
+                let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
+                match run_permission_request_hooks(
+                    &session,
+                    &turn,
+                    &effective_approval_id,
+                    permission_request,
+                    PermissionRequestApprovalAttempt::Initial,
+                    /*retry_reason*/ None,
+                    /*network_approval_context*/ None,
+                )
+                .await
+                {
+                    Some(PermissionRequestDecision::Allow) => {
+                        return PromptDecision {
+                            decision: ReviewDecision::Approved,
+                            guardian_review_id: None,
+                            rejection_message: None,
+                        };
+                    }
+                    Some(PermissionRequestDecision::Deny { message }) => {
+                        return PromptDecision {
+                            decision: ReviewDecision::Denied,
+                            guardian_review_id: None,
+                            rejection_message: Some(message),
+                        };
+                    }
+                    None => {}
+                }
+
+                // 2) Route to Guardian if configured
                 if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
                         &turn,
-                        review_id,
+                        review_id.clone(),
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
                             source,
@@ -413,8 +456,11 @@ impl CoreShellActionProvider {
                     return PromptDecision {
                         decision,
                         guardian_review_id,
+                        rejection_message: None,
                     };
                 }
+
+                // 3) Fall back to regular user prompt
                 let decision = session
                     .request_command_approval(
                         &turn,
@@ -432,6 +478,7 @@ impl CoreShellActionProvider {
                 PromptDecision {
                     decision,
                     guardian_review_id: None,
+                    rejection_message: None,
                 }
             })
             .await)
@@ -487,7 +534,11 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            let message = if let Some(review_id) =
+                            let message = if let Some(message) =
+                                prompt_decision.rejection_message.clone()
+                            {
+                                message
+                            } else if let Some(review_id) =
                                 prompt_decision.guardian_review_id.as_deref()
                             {
                                 guardian_rejection_message(self.session.as_ref(), review_id).await

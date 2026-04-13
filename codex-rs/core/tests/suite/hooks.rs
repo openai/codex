@@ -1183,6 +1183,100 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-exec-command";
+    let marker = std::env::temp_dir().join("permissionrequest-exec-command-marker");
+    let command = format!("rm -f {}", marker.display());
+    let args = serde_json::json!({
+        "cmd": command,
+        "login": true,
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request hook allowed exec_command"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some("^Bash$"),
+                "allow",
+                "should not be used for allow",
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    fs::write(&marker, "seed").context("create exec command permission request marker")?;
+
+    test.submit_turn_with_policies(
+        "run the exec command after hook approval",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    requests[1].function_call_output(call_id);
+    assert!(
+        !marker.exists(),
+        "approved exec command should remove marker file"
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["approval_context"],
+        serde_json::json!({
+            "sandbox_permissions": "use_default",
+            "additional_permissions": null,
+            "justification": null,
+            "approval_attempt": "initial",
+            "retry_reason": null,
+            "network_approval_context": null,
+        })
+    );
+
+    Ok(())
+}
+
 #[cfg(not(target_os = "linux"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Result<()> {
