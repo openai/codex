@@ -5997,10 +5997,9 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
-// Explicit plugin mentions can imply app usage even when the user did not
-// mention `app://...` directly. If those connectors are still missing from the
+// Explicit plugin mentions imply app usage even when the user did not
+// mention the app directly. If those connectors are still missing from the
 // current `codex_apps` snapshot, give startup a bounded chance to finish
-// before we build plugin guidance and first-turn tool exposure.
 fn explicitly_enabled_connectors_missing_from_tools(
     connector_ids: &HashSet<String>,
     mcp_tools: &HashMap<String, ToolInfo>,
@@ -6074,9 +6073,8 @@ pub(crate) async fn run_turn(
     let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     let mut connectors_requiring_startup = explicitly_enabled_connectors.clone();
     if turn_context.apps_enabled() {
-        // `plugin://...` mentions carry app provenance through plugin metadata,
-        // so treat those declared connectors as explicit startup dependencies
-        // for this turn as well.
+        // Treat app connectors declared by plugin mentions as startup dependencies
+        // for this turn.
         connectors_requiring_startup.extend(mentioned_plugins.iter().flat_map(|plugin| {
             plugin
                 .app_connector_ids
@@ -6106,8 +6104,7 @@ pub(crate) async fn run_turn(
             )
         {
             // The caller explicitly asked for one of these app-backed surfaces,
-            // but the first snapshot still does not expose it. That usually
-            // means `codex_apps` is still hydrating from startup, so wait
+            // but the first snapshot still does not expose it, so wait
             // briefly and then rebuild the tool view for this turn.
             let codex_apps_ready = match mcp_connection_manager
                 .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, EXPLICIT_APPS_READY_TIMEOUT)
