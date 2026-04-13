@@ -367,6 +367,25 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 } }
 ```
 
+### Example: Create a shareable snapshot link (experimental)
+
+`thread/share` creates a markdown snapshot of a persisted thread, publishes it through the Codex backend, and returns a share URL. This method rejects threads that have not materialized a rollout yet and requires ChatGPT authentication.
+
+```json
+{ "method": "thread/share", "id": 24, "params": { "threadId": "thr_123" } }
+{ "id": 24, "result": {
+    "shareId": "019cbc6b-bf5e-74e4-86c5-8e2b0d3ad2a1",
+    "shareUrl": "https://chatgpt.com/s/019cbc6b-bf5e-74e4-86c5-8e2b0d3ad2a1"
+} }
+```
+
+`share/revoke` revokes a share previously created by the authenticated user.
+
+```json
+{ "method": "share/revoke", "id": 25, "params": { "shareId": "019cbc6b-bf5e-74e4-86c5-8e2b0d3ad2a1" } }
+{ "id": 25, "result": { "revoked": true } }
+```
+
 ### Example: Update stored thread metadata
 
 Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports persisted `gitInfo`; omitted fields are left unchanged, while explicit `null` clears a stored value.

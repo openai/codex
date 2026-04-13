@@ -53,6 +53,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ShareRevokeParams;
+use codex_app_server_protocol::ShareRevokeResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
@@ -62,6 +64,8 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadShareParams;
+use codex_app_server_protocol::ThreadShareResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -272,6 +276,18 @@ enum CliCommand {
         #[arg(long, default_value_t = 15)]
         hold_seconds: u64,
     },
+    /// Create a shareable snapshot link for a persisted thread.
+    #[command(name = "thread-share")]
+    ThreadShare {
+        /// Existing thread id to share.
+        thread_id: String,
+    },
+    /// Revoke a previously created share link.
+    #[command(name = "share-revoke")]
+    ShareRevoke {
+        /// Share id returned by thread-share.
+        share_id: String,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -422,6 +438,16 @@ pub async fn run() -> Result<()> {
                 script,
                 hold_seconds,
             )
+        }
+        CliCommand::ThreadShare { thread_id } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "thread-share")?;
+            let endpoint = resolve_endpoint(codex_bin, url)?;
+            thread_share(&endpoint, &config_overrides, thread_id).await
+        }
+        CliCommand::ShareRevoke { share_id } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "share-revoke")?;
+            let endpoint = resolve_endpoint(codex_bin, url)?;
+            share_revoke(&endpoint, &config_overrides, share_id).await
         }
     }
 }
@@ -1137,6 +1163,40 @@ async fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u3
     .await
 }
 
+async fn thread_share(
+    endpoint: &Endpoint,
+    config_overrides: &[String],
+    thread_id: String,
+) -> Result<()> {
+    with_client("thread-share", endpoint, config_overrides, |client| {
+        let initialize = client.initialize_with_experimental_api(true)?;
+        println!("< initialize response: {initialize:?}");
+
+        let response = client.thread_share(ThreadShareParams { thread_id })?;
+        println!("< thread/share response: {response:?}");
+
+        Ok(())
+    })
+    .await
+}
+
+async fn share_revoke(
+    endpoint: &Endpoint,
+    config_overrides: &[String],
+    share_id: String,
+) -> Result<()> {
+    with_client("share-revoke", endpoint, config_overrides, |client| {
+        let initialize = client.initialize_with_experimental_api(true)?;
+        println!("< initialize response: {initialize:?}");
+
+        let response = client.share_revoke(ShareRevokeParams { share_id })?;
+        println!("< share/revoke response: {response:?}");
+
+        Ok(())
+    })
+    .await
+}
+
 async fn with_client<T>(
     command_name: &'static str,
     endpoint: &Endpoint,
@@ -1679,6 +1739,26 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "thread/decrement_elicitation")
+    }
+
+    fn thread_share(&mut self, params: ThreadShareParams) -> Result<ThreadShareResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ThreadShare {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "thread/share")
+    }
+
+    fn share_revoke(&mut self, params: ShareRevokeParams) -> Result<ShareRevokeResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ShareRevoke {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "share/revoke")
     }
 
     fn wait_for_account_login_completion(
