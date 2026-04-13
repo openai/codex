@@ -2098,6 +2098,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "codex-app-server-protocol",
+ "codex-config",
  "codex-protocol",
  "codex-sandboxing",
  "codex-utils-absolute-path",
