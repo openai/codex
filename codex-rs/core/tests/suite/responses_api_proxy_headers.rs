@@ -212,10 +212,37 @@ fn read_proxy_request_dumps(dump_dir: &Path) -> Result<Vec<Value>> {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.ends_with("-request.json"))
         {
-            dumps.push(serde_json::from_str(&std::fs::read_to_string(&path)?)?);
+            let contents = std::fs::read_to_string(&path)?;
+            if contents.trim().is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str(&contents) {
+                Ok(dump) => dumps.push(dump),
+                Err(err) if err.is_eof() => continue,
+                Err(err) => return Err(err.into()),
+            }
         }
     }
     Ok(dumps)
+}
+
+#[test]
+fn read_proxy_request_dumps_ignores_in_progress_files() -> Result<()> {
+    let dump_dir = TempDir::new()?;
+    std::fs::write(dump_dir.path().join("empty-request.json"), "")?;
+    std::fs::write(dump_dir.path().join("partial-request.json"), "{\"body\"")?;
+    std::fs::write(
+        dump_dir.path().join("complete-request.json"),
+        serde_json::to_string(&json!({ "body": "ready" }))?,
+    )?;
+
+    assert_eq!(
+        read_proxy_request_dumps(dump_dir.path())?,
+        vec![json!({ "body": "ready" })]
+    );
+
+    Ok(())
 }
 
 fn dump_body_contains(dump: &Value, text: &str) -> bool {
