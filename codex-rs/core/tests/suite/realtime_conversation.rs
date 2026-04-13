@@ -415,7 +415,7 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
         json!({
             "startedVersion": RealtimeConversationVersion::V2,
             "handshakeUri": "/v1/realtime?model=gpt-realtime-1.5",
-            "voice": "marin",
+            "voice": null,
             "instructions": "backend prompt",
         })
     );
