@@ -408,7 +408,7 @@ async fn queued_messages_feature_consumes_messages_without_timers() -> Result<()
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
     let thread_id = test.session_configured.session_id.to_string();
-    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+    db.create_external_message(&codex_state::ExternalMessageCreateParams::new(
         thread_id,
         "external".to_string(),
         "queued hello".to_string(),
@@ -515,7 +515,7 @@ async fn queued_message_runs_after_idle_recurring_timer() -> Result<()> {
     )
     .await;
     let thread_id = test.session_configured.session_id.to_string();
-    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+    db.create_external_message(&codex_state::ExternalMessageCreateParams::new(
         thread_id,
         "external".to_string(),
         "queued hello".to_string(),
@@ -602,7 +602,7 @@ async fn queued_messages_feature_disabled_leaves_messages_queued() -> Result<()>
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
     let thread_id = test.session_configured.session_id.to_string();
-    db.create_thread_message(&codex_state::ThreadMessageCreateParams::new(
+    db.create_external_message(&codex_state::ExternalMessageCreateParams::new(
         thread_id.clone(),
         "external".to_string(),
         "queued hello".to_string(),
@@ -618,7 +618,7 @@ async fn queued_messages_feature_disabled_leaves_messages_queued() -> Result<()>
 
     assert_eq!(mock.requests().len(), 1);
     assert!(
-        db.claim_next_thread_message(
+        db.claim_next_external_message(
             &thread_id, /*can_after_turn*/ true, /*can_steer_current_turn*/ true,
         )
         .await?

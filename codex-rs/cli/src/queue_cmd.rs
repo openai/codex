@@ -47,7 +47,7 @@ pub(crate) async fn run_queue_command(
         StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
     let delivery = TimerDelivery::AfterTurn;
 
-    let message_params = codex_state::ThreadMessageCreateParams::new(
+    let message_params = codex_state::ExternalMessageCreateParams::new(
         thread_id,
         "external".to_string(),
         cmd.message,
@@ -56,7 +56,7 @@ pub(crate) async fn run_queue_command(
         delivery.as_str().to_string(),
         unix_timestamp_now()?,
     );
-    state_db.create_thread_message(&message_params).await?;
+    state_db.create_external_message(&message_params).await?;
     remove_queued_message_if_thread_missing(
         config.codex_home.as_path(),
         &state_db,
@@ -85,7 +85,7 @@ async fn remove_queued_message_if_thread_missing(
     }
 
     state_db
-        .delete_thread_message(thread_id, message_id)
+        .delete_external_message(thread_id, message_id)
         .await?;
     anyhow::bail!("thread `{thread_id}` was archived before queued work could be created");
 }

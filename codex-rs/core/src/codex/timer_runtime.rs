@@ -348,7 +348,7 @@ impl Session {
 
         loop {
             let claim = match state_db
-                .claim_next_thread_message(
+                .claim_next_external_message(
                     &self.thread_id_string(),
                     can_after_turn,
                     can_steer_current_turn,
@@ -363,7 +363,7 @@ impl Session {
                 }
             };
             match claim {
-                Some(codex_state::ThreadMessageClaim::Claimed(row)) => {
+                Some(codex_state::ExternalMessageClaim::Claimed(row)) => {
                     let (message, delivery) = match InjectedMessage::from_external_row(row) {
                         Ok(parsed) => parsed,
                         Err(err) => {
@@ -375,11 +375,11 @@ impl Session {
                         PendingInputItem::injected(message.prompt_input_item(), message.event());
                     return Some(PendingMessageClaim::Claimed(Box::new(input_item), delivery));
                 }
-                Some(codex_state::ThreadMessageClaim::Invalid { id, reason }) => {
+                Some(codex_state::ExternalMessageClaim::Invalid { id, reason }) => {
                     warn!("dropped invalid queued message {id}: {reason}");
                     continue;
                 }
-                Some(codex_state::ThreadMessageClaim::NotReady) | None => {
+                Some(codex_state::ExternalMessageClaim::NotReady) | None => {
                     *self.timer_start_in_progress.lock().await = false;
                     return claim.map(|_| PendingMessageClaim::NotReady);
                 }

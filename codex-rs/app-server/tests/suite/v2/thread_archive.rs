@@ -20,8 +20,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::find_thread_path_by_id_str;
+use codex_state::ExternalMessageCreateParams;
 use codex_state::StateRuntime;
-use codex_state::ThreadMessageCreateParams;
 use codex_state::ThreadTimerCreateParams;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -125,11 +125,11 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         .await
         .expect("initialize state db");
     state_db
-        .create_thread_message(&message_params("message-1", &thread.id))
+        .create_external_message(&message_params("message-1", &thread.id))
         .await
         .expect("create archived thread message");
     state_db
-        .create_thread_message(&message_params("message-2", "other-thread"))
+        .create_external_message(&message_params("message-2", "other-thread"))
         .await
         .expect("create other thread message");
     state_db
@@ -181,7 +181,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     );
     assert_eq!(
         state_db
-            .list_thread_messages(&thread.id)
+            .list_external_messages(&thread.id)
             .await
             .expect("list archived thread messages"),
         Vec::new()
@@ -195,7 +195,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     );
     assert_eq!(
         state_db
-            .list_thread_messages("other-thread")
+            .list_external_messages("other-thread")
             .await
             .expect("list other thread messages")
             .into_iter()
@@ -381,8 +381,8 @@ fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result
     Ok(())
 }
 
-fn message_params(id: &str, thread_id: &str) -> ThreadMessageCreateParams {
-    ThreadMessageCreateParams {
+fn message_params(id: &str, thread_id: &str) -> ExternalMessageCreateParams {
+    ExternalMessageCreateParams {
         id: id.to_string(),
         thread_id: thread_id.to_string(),
         source: "external".to_string(),

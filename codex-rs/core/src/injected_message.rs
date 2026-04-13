@@ -45,7 +45,7 @@ pub(crate) enum InjectedMessage {
 
 impl InjectedMessage {
     pub(crate) fn from_external_row(
-        row: codex_state::ThreadMessage,
+        row: codex_state::ExternalMessage,
     ) -> Result<(Self, TimerDelivery), String> {
         let delivery = serde_json::from_value::<TimerDelivery>(serde_json::Value::String(
             row.delivery.clone(),
