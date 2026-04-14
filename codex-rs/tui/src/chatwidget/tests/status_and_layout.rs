@@ -915,17 +915,20 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
 }
 
 #[tokio::test]
-async fn status_line_context_usage_meter_renders_meter() {
+async fn status_line_context_remaining_percent_renders_labeled_percent() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.config.tui_status_line = Some(vec!["context-usage-meter".to_string()]);
+    chat.config.tui_status_line = Some(vec!["context-remaining-percent".to_string()]);
 
     chat.refresh_status_line();
 
-    assert_eq!(status_line_text(&chat), Some("Context [     ]".to_string()));
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Context 100% left".to_string())
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
-        "context-usage-meter should remain a valid status line item"
+        "context-remaining-percent should remain a valid status line item"
     );
 }
 
@@ -1197,7 +1200,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
 }
 
 #[tokio::test]
-async fn status_line_model_with_reasoning_context_usage_meter_footer_snapshot() {
+async fn status_line_model_with_reasoning_context_remaining_percent_footer_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1208,7 +1211,7 @@ async fn status_line_model_with_reasoning_context_usage_meter_footer_snapshot() 
     chat.config.cwd = test_project_path().abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
-        "context-usage-meter".to_string(),
+        "context-remaining-percent".to_string(),
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
@@ -1225,7 +1228,7 @@ async fn status_line_model_with_reasoning_context_usage_meter_footer_snapshot() 
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw model-with-reasoning footer");
     assert_chatwidget_snapshot!(
-        "status_line_model_with_reasoning_context_usage_meter_footer",
+        "status_line_model_with_reasoning_context_remaining_percent_footer",
         normalized_backend_snapshot(terminal.backend())
     );
 }

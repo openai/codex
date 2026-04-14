@@ -12,7 +12,7 @@
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
-//! - Context usage (meter, percent, window size)
+//! - Context usage (remaining %, used %, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (thread title, ID, tokens used)
 //! - Application version
@@ -66,15 +66,15 @@ pub(crate) enum StatusLineItem {
     /// Percentage of context window remaining.
     ContextRemaining,
 
+    /// Percentage of context window remaining.
+    #[strum(to_string = "context-remaining-percent")]
+    ContextRemainingPercent,
+
     /// Percentage of context window used.
     ///
     /// Also accepts the legacy `context-usage` config value.
     #[strum(to_string = "context-used", serialize = "context-usage")]
     ContextUsed,
-
-    /// Visual meter of context window usage.
-    #[strum(to_string = "context-usage-meter")]
-    ContextUsage,
 
     /// Remaining usage on the 5-hour rate limit.
     FiveHourLimit,
@@ -119,11 +119,11 @@ impl StatusLineItem {
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
+            StatusLineItem::ContextRemainingPercent => {
+                "Percentage of context window remaining (omitted when unknown)"
+            }
             StatusLineItem::ContextUsed => {
                 "Percentage of context window used (omitted when unknown)"
-            }
-            StatusLineItem::ContextUsage => {
-                "Visual meter of context window usage (omitted when unknown)"
             }
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on 5-hour usage limit (omitted when unavailable)"
@@ -333,14 +333,14 @@ mod tests {
     }
 
     #[test]
-    fn context_usage_meter_is_separate_selectable_id() {
+    fn context_remaining_percent_is_separate_selectable_id() {
         assert_eq!(
-            StatusLineItem::ContextUsage.to_string(),
-            "context-usage-meter"
+            StatusLineItem::ContextRemainingPercent.to_string(),
+            "context-remaining-percent"
         );
         assert_eq!(
-            "context-usage-meter".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ContextUsage)
+            "context-remaining-percent".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ContextRemainingPercent)
         );
     }
 
