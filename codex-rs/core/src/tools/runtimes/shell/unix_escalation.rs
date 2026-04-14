@@ -430,7 +430,12 @@ impl CoreShellActionProvider {
                     }
                     Some(PermissionRequestDecision::Deny { message, interrupt }) => {
                         if interrupt {
-                            session.interrupt_task_detached();
+                            session
+                                .abort_turn(
+                                    &turn.sub_id,
+                                    codex_protocol::protocol::TurnAbortReason::Interrupted,
+                                )
+                                .await;
                             return Err(anyhow::Error::new(ToolError::Interrupted));
                         }
                         return Ok(PromptDecision {

@@ -416,7 +416,12 @@ impl NetworkApprovalService {
                         .await;
                     }
                     if interrupt {
-                        session.interrupt_task_detached();
+                        session
+                            .abort_turn(
+                                &turn_context.sub_id,
+                                codex_protocol::protocol::TurnAbortReason::Interrupted,
+                            )
+                            .await;
                     }
                     pending.set_decision(PendingApprovalDecision::Deny).await;
                     let mut pending_approvals = self.pending_host_approvals.lock().await;

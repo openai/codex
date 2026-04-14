@@ -394,7 +394,13 @@ impl ToolOrchestrator {
                         ToolDecisionSource::Config,
                     );
                     if interrupt {
-                        approval_ctx.session.interrupt_task_detached();
+                        approval_ctx
+                            .session
+                            .abort_turn(
+                                &approval_ctx.turn.sub_id,
+                                codex_protocol::protocol::TurnAbortReason::Interrupted,
+                            )
+                            .await;
                         return Err(ToolError::Interrupted);
                     }
                     return Err(ToolError::Rejected(message));

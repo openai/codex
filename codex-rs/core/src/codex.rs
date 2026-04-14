@@ -4436,13 +4436,6 @@ impl Session {
         }
     }
 
-    pub(crate) fn interrupt_task_detached(self: &Arc<Self>) {
-        let session = Arc::clone(self);
-        tokio::spawn(async move {
-            session.interrupt_task().await;
-        });
-    }
-
     pub(crate) fn hooks(&self) -> &Hooks {
         &self.services.hooks
     }

@@ -396,6 +396,30 @@ impl Session {
         }
     }
 
+    pub(crate) async fn abort_turn(self: &Arc<Self>, sub_id: &str, reason: TurnAbortReason) {
+        let (task, active_turn) = {
+            let mut active = self.active_turn.lock().await;
+            let Some(task) = active.as_mut().and_then(|turn| turn.take_task(sub_id)) else {
+                return;
+            };
+            let active_turn = if active.as_ref().is_some_and(|turn| turn.tasks.is_empty()) {
+                active.take()
+            } else {
+                None
+            };
+            (task, active_turn)
+        };
+
+        self.handle_task_abort(task, reason.clone()).await;
+
+        if let Some(active_turn) = active_turn {
+            active_turn.clear_pending().await;
+            if reason == TurnAbortReason::Interrupted {
+                self.maybe_start_turn_for_pending_work().await;
+            }
+        }
+    }
+
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -411,15 +435,18 @@ impl Session {
         let mut turn_tool_calls = 0_u64;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
-            if let Some(at) = active.as_mut()
-                && at.remove_task(&turn_context.sub_id)
-            {
-                should_clear_active_turn = true;
-                let turn_state = Arc::clone(&at.turn_state);
-                if should_clear_active_turn {
-                    *active = None;
+            if let Some(at) = active.as_mut() {
+                let removed = at.take_task(&turn_context.sub_id);
+                if removed.is_some() {
+                    should_clear_active_turn = at.tasks.is_empty();
+                    let turn_state = Arc::clone(&at.turn_state);
+                    if should_clear_active_turn {
+                        *active = None;
+                    }
+                    Some(turn_state)
+                } else {
+                    None
                 }
-                Some(turn_state)
             } else {
                 None
             }
