@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::fmt;
 
 /// Identifies a callable tool, preserving the namespace split when the model
 /// provides one.
@@ -35,6 +36,15 @@ impl ToolName {
         match &self.namespace {
             Some(namespace) => format!("{namespace}{}", self.name),
             None => self.name.clone(),
+        }
+    }
+}
+
+impl fmt::Display for ToolName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.namespace {
+            Some(namespace) => write!(f, "{namespace}{}", self.name),
+            None => f.write_str(&self.name),
         }
     }
 }

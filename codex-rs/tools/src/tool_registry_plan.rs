@@ -473,8 +473,8 @@ pub fn build_tool_registry_plan(
 
         for tool in entries {
             let Some(namespace) = tool.name.namespace.as_ref() else {
-                let display_name = tool.name.display();
-                tracing::error!("Skipping MCP tool {display_name:?}: MCP tools must be namespaced");
+                let tool_name = &tool.name;
+                tracing::error!("Skipping MCP tool `{tool_name}`: MCP tools must be namespaced");
                 continue;
             };
             namespace_entries
@@ -492,15 +492,15 @@ pub fn build_tool_registry_plan(
                 .unwrap_or_default();
             let mut tools = Vec::new();
             for tool in entries {
-                let display_name = tool.name.display();
                 match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
                     Ok(converted_tool) => {
                         tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
                         plan.register_handler(tool.name, ToolHandlerKind::Mcp);
                     }
                     Err(error) => {
+                        let tool_name = &tool.name;
                         tracing::error!(
-                            "Failed to convert {display_name:?} MCP tool to OpenAI tool: {error:?}"
+                            "Failed to convert `{tool_name}` MCP tool to OpenAI tool: {error:?}"
                         );
                     }
                 }

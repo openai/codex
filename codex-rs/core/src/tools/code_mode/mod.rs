@@ -342,10 +342,9 @@ fn tool_kind_for_name(
     spec: Option<ToolSpec>,
     tool_name: &ToolName,
 ) -> Result<codex_code_mode::CodeModeToolKind, String> {
-    let display_name = tool_name.display();
     spec.as_ref()
         .map(tool_kind_for_spec)
-        .ok_or_else(|| format!("tool `{display_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
+        .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
 }
 
 fn build_nested_tool_payload(
@@ -376,13 +375,12 @@ fn serialize_function_tool_arguments(
     tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<String, String> {
-    let display_name = tool_name.display();
     match input {
         None => Ok("{}".to_string()),
         Some(JsonValue::Object(map)) => serde_json::to_string(&JsonValue::Object(map))
-            .map_err(|err| format!("failed to serialize tool `{display_name}` arguments: {err}")),
+            .map_err(|err| format!("failed to serialize tool `{tool_name}` arguments: {err}")),
         Some(_) => Err(format!(
-            "tool `{display_name}` expects a JSON object for arguments"
+            "tool `{tool_name}` expects a JSON object for arguments"
         )),
     }
 }
@@ -391,9 +389,8 @@ fn build_freeform_tool_payload(
     tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let display_name = tool_name.display();
     match input {
         Some(JsonValue::String(input)) => Ok(ToolPayload::Custom { input }),
-        _ => Err(format!("tool `{display_name}` expects a string input")),
+        _ => Err(format!("tool `{tool_name}` expects a string input")),
     }
 }
