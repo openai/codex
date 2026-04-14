@@ -367,7 +367,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         dangerously_allow_all_unix_sockets,
         domains,
         managed_allowed_domains_only,
-        danger_full_access_denylist_only,
         unix_sockets,
         allow_local_binding,
     } = network;
@@ -403,11 +402,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
         parts.push(format!(
             "managed_allowed_domains_only={managed_allowed_domains_only}"
-        ));
-    }
-    if let Some(danger_full_access_denylist_only) = danger_full_access_denylist_only {
-        parts.push(format!(
-            "danger_full_access_denylist_only={danger_full_access_denylist_only}"
         ));
     }
     if let Some(unix_sockets) = unix_sockets {
@@ -605,7 +599,6 @@ mod tests {
                             NetworkDomainPermissionToml::Allow,
                         )]),
                     }),
-                    danger_full_access_denylist_only: Some(true),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
@@ -676,7 +669,7 @@ mod tests {
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, domains={example.com=allow}, danger_full_access_denylist_only=true (source: cloud requirements)"
+            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
         ));
         assert!(!rendered.contains("  - rules:"));
     }

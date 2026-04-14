@@ -449,7 +449,6 @@ fn map_network_requirements_to_api(
                 .collect()
         }),
         managed_allowed_domains_only: network.managed_allowed_domains_only,
-        danger_full_access_denylist_only: network.danger_full_access_denylist_only,
         allowed_domains,
         denied_domains,
         unix_sockets: network.unix_sockets.map(|unix_sockets| {
@@ -595,7 +594,6 @@ mod tests {
                     ]),
                 }),
                 managed_allowed_domains_only: Some(false),
-                danger_full_access_denylist_only: Some(true),
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/proxy.sock".to_string(),
@@ -655,7 +653,6 @@ mod tests {
                     ("example.com".to_string(), NetworkDomainPermission::Deny),
                 ])),
                 managed_allowed_domains_only: Some(false),
-                danger_full_access_denylist_only: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -690,7 +687,6 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
-                danger_full_access_denylist_only: None,
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/ignored.sock".to_string(),
@@ -714,7 +710,6 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
-                danger_full_access_denylist_only: None,
                 allowed_domains: None,
                 denied_domains: None,
                 unix_sockets: Some(std::collections::BTreeMap::from([(
