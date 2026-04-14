@@ -96,10 +96,11 @@ mod metrics {
     pub(super) const MEMORY_PHASE_TWO_TOKEN_USAGE: &str = "codex.memory.phase2.token_usage";
 }
 
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub fn memory_root(codex_home: &Path) -> PathBuf {
+pub fn memory_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home.join("memories")
 }
 

@@ -402,7 +402,6 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use std::path::PathBuf;
     use tokio::time::Duration;
     use tokio::time::timeout;
 
@@ -772,7 +771,7 @@ mod tests {
                         reason: Some("Need extra read access".to_string()),
                         network_approval_context: None,
                         command: Some("cat file".to_string()),
-                        cwd: Some(PathBuf::from("/tmp")),
+                        cwd: Some(absolute_path("/tmp")),
                         command_actions: None,
                         additional_permissions: Some(
                             codex_app_server_protocol::AdditionalPermissionProfile {
@@ -834,7 +833,7 @@ mod tests {
                         reason: Some("Need extra read access".to_string()),
                         network_approval_context: None,
                         command: Some("cat file".to_string()),
-                        cwd: Some(PathBuf::from("/tmp")),
+                        cwd: Some(absolute_path("/tmp")),
                         command_actions: None,
                         additional_permissions: Some(
                             codex_app_server_protocol::AdditionalPermissionProfile {
