@@ -23,6 +23,56 @@ fn make_exec_output(
 }
 
 #[test]
+fn preserves_legacy_boolean_denial_keywords() {
+    for keyword in [
+        "operation not permitted",
+        "permission denied",
+        "read-only file system",
+        "seccomp",
+        "sandbox",
+        "landlock",
+        "failed to write file",
+    ] {
+        let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
+
+        assert_eq!(
+            is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output),
+            true,
+            "{keyword}"
+        );
+    }
+}
+
+#[test]
+fn preserves_legacy_boolean_denial_ordering() {
+    let quick_reject_without_keyword =
+        make_exec_output(/*exit_code*/ 127, "", "command not found", "");
+    let quick_reject_with_keyword =
+        make_exec_output(/*exit_code*/ 127, "", "Permission denied", "");
+    let zero_exit_with_keyword =
+        make_exec_output(/*exit_code*/ 0, "", "Operation not permitted", "");
+    let non_sandbox_with_keyword =
+        make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
+
+    assert!(!is_likely_sandbox_denied(
+        SandboxType::LinuxSeccomp,
+        &quick_reject_without_keyword
+    ));
+    assert!(is_likely_sandbox_denied(
+        SandboxType::LinuxSeccomp,
+        &quick_reject_with_keyword
+    ));
+    assert!(!is_likely_sandbox_denied(
+        SandboxType::LinuxSeccomp,
+        &zero_exit_with_keyword
+    ));
+    assert!(!is_likely_sandbox_denied(
+        SandboxType::None,
+        &non_sandbox_with_keyword
+    ));
+}
+
+#[test]
 fn classifies_filesystem_violation_with_path() {
     let output = make_exec_output(
         /*exit_code*/ 1,
