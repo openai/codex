@@ -157,6 +157,14 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
         })
         .await
         .unwrap_or_else(|err| panic!("submit queue-only agent mail: {err}"));
+    codex
+        .submit(Op::ListMcpTools)
+        .await
+        .unwrap_or_else(|err| panic!("submit list-mcp-tools barrier: {err}"));
+    wait_for_event(codex, |event| {
+        matches!(event, EventMsg::McpListToolsResponse(_))
+    })
+    .await;
 }
 
 async fn wait_for_reasoning_item_started(codex: &CodexThread) {
