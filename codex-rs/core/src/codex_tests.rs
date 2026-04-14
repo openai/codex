@@ -42,6 +42,7 @@ use tracing::Span;
 use crate::RolloutRecorderParams;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::state::ActiveTurn;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -82,6 +83,7 @@ use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -4686,6 +4688,55 @@ impl SessionTask for SlowAbortTask {
     }
 }
 
+struct ApprovalWaitTask {
+    approval_id: String,
+    warning_message: String,
+}
+
+impl SessionTask for ApprovalWaitTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.approval_wait"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        ctx: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        let decision = session
+            .clone_session()
+            .request_command_approval(
+                ctx.as_ref(),
+                self.approval_id.clone(),
+                /*approval_id*/ None,
+                vec!["echo".to_string(), "hi".to_string()],
+                ctx.cwd.to_path_buf(),
+                /*reason*/ None,
+                /*network_approval_context*/ None,
+                /*proposed_execpolicy_amendment*/ None,
+                /*additional_permissions*/ None,
+                Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+            )
+            .await;
+        session
+            .clone_session()
+            .send_event(
+                ctx.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!("approval decision: {decision:?} {}", self.warning_message),
+                }),
+            )
+            .await;
+        None
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
 async fn abort_regular_task_emits_turn_aborted_only() {
@@ -4809,6 +4860,65 @@ async fn interrupt_keeps_active_turn_installed_until_abort_cleanup_finishes() {
         EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
         other => panic!("unexpected event: {other:?}"),
     }
+
+    let active_turn = sess.active_turn.lock().await;
+    assert!(active_turn.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_waiting_approval_does_not_emit_abort_fallback_before_turn_aborted() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let warning_message = "approval wait should not escape interrupt".to_string();
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        ApprovalWaitTask {
+            approval_id: "approval-wait".to_string(),
+            warning_message: warning_message.clone(),
+        },
+    )
+    .await;
+
+    loop {
+        let evt = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for approval request event")
+            .expect("event");
+        if matches!(evt.msg, EventMsg::ExecApprovalRequest(_)) {
+            break;
+        }
+    }
+
+    sess.interrupt_task().await;
+
+    loop {
+        let evt = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for abort event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::Warning(WarningEvent { message }) => {
+                assert!(
+                    !message.contains(&warning_message),
+                    "approval wait surfaced fallback decision before interrupt completed"
+                );
+            }
+            EventMsg::TurnAborted(e) => {
+                assert_eq!(TurnAbortReason::Interrupted, e.reason);
+                break;
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn interrupt_clears_empty_aborting_turn() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    *sess.active_turn.lock().await = Some(ActiveTurn::default());
+
+    sess.interrupt_task().await;
+    tokio::task::yield_now().await;
 
     let active_turn = sess.active_turn.lock().await;
     assert!(active_turn.is_none());

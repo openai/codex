@@ -388,7 +388,7 @@ impl Session {
         if let Some(mut active_turn) = self.take_active_turn().await {
             let turn_state = Arc::clone(&active_turn.turn_state);
             let tasks = active_turn.drain_tasks();
-            self.prepare_tasks_for_abort(&tasks, &turn_state).await;
+            self.prepare_tasks_for_abort(&tasks).await;
             for task in tasks {
                 self.handle_task_abort(
                     task,
@@ -397,6 +397,8 @@ impl Session {
                 )
                 .await;
             }
+            let mut state = turn_state.lock().await;
+            state.clear_pending();
         }
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
@@ -417,7 +419,7 @@ impl Session {
             };
             (tasks, Arc::clone(&active_turn.turn_state))
         };
-        self.prepare_tasks_for_abort(&tasks, &turn_state).await;
+        self.prepare_tasks_for_abort(&tasks).await;
         let session = Arc::clone(self);
         tokio::spawn(async move {
             let num_tasks = tasks.len();
@@ -426,6 +428,14 @@ impl Session {
                     .handle_task_abort(task, reason.clone(), index + 1 == num_tasks)
                     .await;
             }
+            let mut state = turn_state.lock().await;
+            state.clear_pending();
+            drop(state);
+            let mut active = session.active_turn.lock().await;
+            if active.as_ref().is_some_and(ActiveTurn::is_aborting) {
+                *active = None;
+            }
+            drop(active);
             if reason == TurnAbortReason::Interrupted {
                 session.maybe_start_turn_for_pending_work().await;
             }
@@ -586,21 +596,13 @@ impl Session {
         active.take()
     }
 
-    async fn prepare_tasks_for_abort(
-        &self,
-        tasks: &[RunningTask],
-        turn_state: &Arc<tokio::sync::Mutex<crate::state::TurnState>>,
-    ) {
+    async fn prepare_tasks_for_abort(&self, tasks: &[RunningTask]) {
         for task in tasks {
             task.cancellation_token.cancel();
             task.turn_context
                 .turn_metadata_state
                 .cancel_git_enrichment_task();
         }
-        // Let interrupted tasks observe cancellation before dropping pending approvals, or an
-        // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-        let mut state = turn_state.lock().await;
-        state.clear_pending();
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {
