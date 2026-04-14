@@ -41,7 +41,10 @@
         },
         "updatedPermissions": {
           "default": null,
-          "description": "Reserved for a future permission-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+          "items": {
+            "$ref": "#/definitions/PermissionSuggestion"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -68,6 +71,79 @@
         "hookEventName"
       ],
       "type": "object"
+    },
+    "PermissionSuggestion": {
+      "properties": {
+        "behavior": {
+          "$ref": "#/definitions/PermissionSuggestionBehavior"
+        },
+        "destination": {
+          "$ref": "#/definitions/PermissionSuggestionDestination"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/definitions/PermissionSuggestionRule"
+          },
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/definitions/PermissionSuggestionType"
+        }
+      },
+      "required": [
+        "behavior",
+        "destination",
+        "rules",
+        "type"
+      ],
+      "type": "object"
+    },
+    "PermissionSuggestionBehavior": {
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ],
+      "type": "string"
+    },
+    "PermissionSuggestionDestination": {
+      "enum": [
+        "session",
+        "projectSettings",
+        "userSettings"
+      ],
+      "type": "string"
+    },
+    "PermissionSuggestionRule": {
+      "oneOf": [
+        {
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "prefixRule"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PermissionSuggestionType": {
+      "enum": [
+        "addRules"
+      ],
+      "type": "string"
     }
   },
   "properties": {

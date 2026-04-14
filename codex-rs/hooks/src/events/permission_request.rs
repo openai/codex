@@ -11,8 +11,9 @@
 //! 2. Execute every matching handler in precedence order.
 //! 3. Parse each handler into transcript-visible output plus an optional
 //!    decision.
-//! 4. Fold the decisions conservatively: any deny wins, otherwise the last
-//!    allow wins, otherwise there is no hook verdict.
+//! 4. Fold the decisions conservatively: any deny wins, otherwise allow if at
+//!    least one handler allowed the request, and accumulate the selected
+//!    permission updates, otherwise there is no hook verdict.
 use std::path::PathBuf;
 
 use super::common;
@@ -31,9 +32,10 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use schemars::JsonSchema;
+use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionSuggestion {
     #[serde(rename = "type")]
@@ -43,13 +45,13 @@ pub struct PermissionSuggestion {
     pub destination: PermissionSuggestionDestination,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionSuggestionType {
     AddRules,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionSuggestionBehavior {
     Allow,
@@ -57,7 +59,7 @@ pub enum PermissionSuggestionBehavior {
     Ask,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub enum PermissionSuggestionDestination {
     #[serde(rename = "session")]
     Session,
@@ -67,7 +69,7 @@ pub enum PermissionSuggestionDestination {
     UserSettings,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PermissionSuggestionRule {
     PrefixRule { command: Vec<String> },
@@ -90,8 +92,12 @@ pub struct PermissionRequestRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRequestDecision {
-    Allow,
-    Deny { message: String },
+    Allow {
+        updated_permissions: Vec<PermissionSuggestion>,
+    },
+    Deny {
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -157,7 +163,7 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
+    let mut results = dispatcher::execute_handlers(
         shell,
         matched,
         input_json,
@@ -167,8 +173,22 @@ pub(crate) async fn run(
     )
     .await;
 
-    // Preserve the most specific matching allow, but treat any deny as final so
-    // broader policy layers cannot accidentally overrule a more specific block.
+    for result in &mut results {
+        if let Some(invalid_reason) = invalid_permission_updates(
+            result.data.decision.as_ref(),
+            &request.permission_suggestions,
+        ) {
+            result.completed.run.status = HookRunStatus::Failed;
+            result.completed.run.entries.push(HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: invalid_reason,
+            });
+            result.data.decision = None;
+        }
+    }
+
+    // Any deny wins immediately. Otherwise, accumulate the selected permission
+    // updates from matching allow decisions in precedence order.
     let decision = resolve_permission_request_decision(
         results
             .iter()
@@ -187,16 +207,24 @@ pub(crate) async fn run(
 }
 
 /// Resolve matching hook decisions conservatively: any deny wins immediately;
-/// otherwise keep the highest-precedence allow so more specific handlers
-/// override broader ones.
+/// otherwise allow if any handler allowed the request and accumulate the
+/// distinct selected permission updates in precedence order.
 fn resolve_permission_request_decision<'a>(
     decisions: impl IntoIterator<Item = &'a PermissionRequestDecision>,
 ) -> Option<PermissionRequestDecision> {
-    let mut resolved_allow = None;
+    let mut saw_allow = false;
+    let mut updated_permissions = Vec::new();
     for decision in decisions {
         match decision {
-            PermissionRequestDecision::Allow => {
-                resolved_allow = Some(PermissionRequestDecision::Allow);
+            PermissionRequestDecision::Allow {
+                updated_permissions: selected_permissions,
+            } => {
+                saw_allow = true;
+                for permission in selected_permissions {
+                    if !updated_permissions.contains(permission) {
+                        updated_permissions.push(permission.clone());
+                    }
+                }
             }
             PermissionRequestDecision::Deny { message } => {
                 return Some(PermissionRequestDecision::Deny {
@@ -205,7 +233,29 @@ fn resolve_permission_request_decision<'a>(
             }
         }
     }
-    resolved_allow
+    saw_allow.then_some(PermissionRequestDecision::Allow {
+        updated_permissions,
+    })
+}
+
+fn invalid_permission_updates(
+    decision: Option<&PermissionRequestDecision>,
+    offered_permissions: &[PermissionSuggestion],
+) -> Option<String> {
+    let PermissionRequestDecision::Allow {
+        updated_permissions,
+    } = decision?
+    else {
+        return None;
+    };
+    if updated_permissions
+        .iter()
+        .any(|permission| !offered_permissions.contains(permission))
+    {
+        Some("PermissionRequest hook returned updatedPermissions that were not offered".to_string())
+    } else {
+        None
+    }
 }
 
 fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestCommandInput {
@@ -265,8 +315,12 @@ fn parse_completed(
                         });
                     } else if let Some(parsed_decision) = parsed.decision {
                         match parsed_decision {
-                            output_parser::PermissionRequestDecision::Allow => {
-                                decision = Some(PermissionRequestDecision::Allow);
+                            output_parser::PermissionRequestDecision::Allow {
+                                updated_permissions,
+                            } => {
+                                decision = Some(PermissionRequestDecision::Allow {
+                                    updated_permissions,
+                                });
                             }
                             output_parser::PermissionRequestDecision::Deny { message } => {
                                 status = HookRunStatus::Blocked;
@@ -335,12 +389,20 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::PermissionRequestDecision;
+    use super::PermissionSuggestion;
+    use super::PermissionSuggestionBehavior;
+    use super::PermissionSuggestionDestination;
+    use super::PermissionSuggestionRule;
+    use super::PermissionSuggestionType;
+    use super::invalid_permission_updates;
     use super::resolve_permission_request_decision;
 
     #[test]
     fn permission_request_deny_overrides_earlier_allow() {
         let decisions = [
-            PermissionRequestDecision::Allow,
+            PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+            },
             PermissionRequestDecision::Deny {
                 message: "repo deny".to_string(),
             },
@@ -357,13 +419,19 @@ mod tests {
     #[test]
     fn permission_request_returns_allow_when_no_handler_denies() {
         let decisions = [
-            PermissionRequestDecision::Allow,
-            PermissionRequestDecision::Allow,
+            PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+            },
+            PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+            },
         ];
 
         assert_eq!(
             resolve_permission_request_decision(decisions.iter()),
-            Some(PermissionRequestDecision::Allow)
+            Some(PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+            })
         );
     }
 
@@ -372,5 +440,62 @@ mod tests {
         let decisions = Vec::<PermissionRequestDecision>::new();
 
         assert_eq!(resolve_permission_request_decision(decisions.iter()), None);
+    }
+
+    #[test]
+    fn permission_request_accumulates_distinct_updated_permissions() {
+        let permission = PermissionSuggestion {
+            suggestion_type: PermissionSuggestionType::AddRules,
+            rules: vec![PermissionSuggestionRule::PrefixRule {
+                command: vec!["rm".to_string(), "-f".to_string()],
+            }],
+            behavior: PermissionSuggestionBehavior::Allow,
+            destination: PermissionSuggestionDestination::UserSettings,
+        };
+        let decisions = [
+            PermissionRequestDecision::Allow {
+                updated_permissions: vec![permission.clone()],
+            },
+            PermissionRequestDecision::Allow {
+                updated_permissions: vec![permission.clone()],
+            },
+        ];
+
+        assert_eq!(
+            resolve_permission_request_decision(decisions.iter()),
+            Some(PermissionRequestDecision::Allow {
+                updated_permissions: vec![permission],
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_unoffered_updated_permissions() {
+        let offered = vec![PermissionSuggestion {
+            suggestion_type: PermissionSuggestionType::AddRules,
+            rules: vec![PermissionSuggestionRule::PrefixRule {
+                command: vec!["rm".to_string()],
+            }],
+            behavior: PermissionSuggestionBehavior::Allow,
+            destination: PermissionSuggestionDestination::UserSettings,
+        }];
+        let selected = PermissionRequestDecision::Allow {
+            updated_permissions: vec![PermissionSuggestion {
+                suggestion_type: PermissionSuggestionType::AddRules,
+                rules: vec![PermissionSuggestionRule::PrefixRule {
+                    command: vec!["curl".to_string()],
+                }],
+                behavior: PermissionSuggestionBehavior::Allow,
+                destination: PermissionSuggestionDestination::UserSettings,
+            }],
+        };
+
+        assert_eq!(
+            invalid_permission_updates(Some(&selected), &offered),
+            Some(
+                "PermissionRequest hook returned updatedPermissions that were not offered"
+                    .to_string()
+            )
+        );
     }
 }

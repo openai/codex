@@ -377,7 +377,7 @@ impl ToolOrchestrator {
             )
             .await
             {
-                Some(PermissionRequestDecision::Allow) => {
+                Some(PermissionRequestDecision::Allow { .. }) => {
                     telemetry.otel.tool_decision(
                         telemetry.tool_name,
                         telemetry.call_id,

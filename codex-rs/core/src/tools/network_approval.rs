@@ -395,7 +395,7 @@ impl NetworkApprovalService {
         .await
         {
             match permission_request_decision {
-                PermissionRequestDecision::Allow => {
+                PermissionRequestDecision::Allow { .. } => {
                     pending
                         .set_decision(PendingApprovalDecision::AllowOnce)
                         .await;

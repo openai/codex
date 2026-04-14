@@ -145,11 +145,8 @@ pub(crate) struct PermissionRequestDecisionWire {
     /// PermissionRequest hooks currently fail closed if this field is present.
     #[serde(default)]
     pub updated_input: Option<Value>,
-    /// Reserved for a future permission-rewrite capability.
-    ///
-    /// PermissionRequest hooks currently fail closed if this field is present.
     #[serde(default)]
-    pub updated_permissions: Option<Value>,
+    pub updated_permissions: Option<Vec<PermissionSuggestion>>,
     #[serde(default)]
     pub message: Option<String>,
     /// Reserved for future short-circuiting semantics.

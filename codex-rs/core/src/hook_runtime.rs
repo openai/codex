@@ -1,9 +1,14 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
+use codex_hooks::PermissionSuggestion;
+use codex_hooks::PermissionSuggestionDestination;
+use codex_hooks::PermissionSuggestionRule;
+use codex_hooks::PermissionSuggestionType;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -11,20 +16,31 @@ use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
+use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
+use toml::Value as TomlValue;
+use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::Config;
+use crate::config_loader::ConfigLayerStackOrdering;
+use crate::config_loader::default_project_root_markers;
+use crate::config_loader::find_project_root;
+use crate::config_loader::merge_toml_values;
+use crate::config_loader::project_root_markers_from_config;
 use crate::event_mapping::parse_turn_item;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
@@ -180,7 +196,121 @@ pub(crate) async fn run_permission_request_hooks(
     } = sess.hooks().run_permission_request(request).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
+    if let Some(PermissionRequestDecision::Allow {
+        updated_permissions,
+    }) = &decision
+    {
+        apply_permission_updates_from_hook(sess, turn_context, updated_permissions).await;
+    }
+
     decision
+}
+
+async fn apply_permission_updates_from_hook(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    updated_permissions: &[PermissionSuggestion],
+) {
+    for permission in updated_permissions {
+        if let Err(err) = apply_permission_update_from_hook(sess, turn_context, permission).await {
+            let message =
+                format!("PermissionRequest hook failed to apply updated permission: {err}");
+            warn!("{message}");
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent { message }),
+            })
+            .await;
+        }
+    }
+}
+
+async fn apply_permission_update_from_hook(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    permission: &PermissionSuggestion,
+) -> Result<(), String> {
+    match permission.suggestion_type {
+        PermissionSuggestionType::AddRules => {
+            for rule in &permission.rules {
+                match rule {
+                    PermissionSuggestionRule::PrefixRule { command } => {
+                        let amendment = ExecPolicyAmendment::new(command.clone());
+                        apply_execpolicy_amendment_destination(
+                            sess,
+                            turn_context,
+                            &permission.destination,
+                            &amendment,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn apply_execpolicy_amendment_destination(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    destination: &PermissionSuggestionDestination,
+    amendment: &ExecPolicyAmendment,
+) -> Result<(), String> {
+    match destination {
+        PermissionSuggestionDestination::Session => sess
+            .services
+            .exec_policy
+            .add_amendment_to_current_policy(amendment)
+            .await
+            .map_err(|err| format!("failed to cache session prefix rule: {err}")),
+        PermissionSuggestionDestination::UserSettings => {
+            let codex_home = sess.codex_home().await;
+            sess.services
+                .exec_policy
+                .append_amendment_and_update(&codex_home, amendment)
+                .await
+                .map_err(|err| format!("failed to persist user prefix rule: {err}"))
+        }
+        PermissionSuggestionDestination::ProjectSettings => {
+            let project_codex_home = project_codex_home(turn_context.config.as_ref())
+                .await
+                .map_err(|err| format!("failed to resolve project root for rules file: {err}"))?;
+            tokio::fs::create_dir_all(project_codex_home.join("rules"))
+                .await
+                .map_err(|err| format!("failed to create project rules directory: {err}"))?;
+            sess.services
+                .exec_policy
+                .append_amendment_and_update(&project_codex_home, amendment)
+                .await
+                .map_err(|err| format!("failed to persist project prefix rule: {err}"))
+        }
+    }
+}
+
+async fn project_codex_home(config: &Config) -> std::io::Result<std::path::PathBuf> {
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in config.config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
+        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+    let project_root_markers = match project_root_markers_from_config(&merged) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            warn!("invalid project_root_markers: {err}");
+            default_project_root_markers()
+        }
+    };
+    Ok(find_project_root(&config.cwd, &project_root_markers)
+        .await?
+        .join(".codex")
+        .to_path_buf())
 }
 
 pub(crate) async fn run_post_tool_use_hooks(
