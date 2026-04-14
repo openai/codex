@@ -134,6 +134,8 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationStartParams {
+    /// Selects whether the realtime session should produce text or audio output.
+    pub output_modality: RealtimeOutputModality,
     #[serde(
         default,
         deserialize_with = "conversation_start_prompt_serde::deserialize",
@@ -155,6 +157,13 @@ pub struct ConversationStartParams {
 pub enum ConversationStartTransport {
     Websocket,
     Webrtc { sdp: String },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeOutputModality {
+    Text,
+    Audio,
 }
 
 mod conversation_start_prompt_serde {
@@ -291,6 +300,11 @@ pub struct RealtimeTranscriptDelta {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeTranscriptDone {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeTranscriptEntry {
     pub role: String,
     pub text: String,
@@ -332,7 +346,9 @@ pub enum RealtimeEvent {
     },
     InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
     InputTranscriptDelta(RealtimeTranscriptDelta),
+    InputTranscriptDone(RealtimeTranscriptDone),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
+    OutputTranscriptDone(RealtimeTranscriptDone),
     AudioOut(RealtimeAudioFrame),
     ResponseCreated(RealtimeResponseCreated),
     ResponseCancelled(RealtimeResponseCancelled),
@@ -636,6 +652,12 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
+    /// Set whether the thread remains eligible for memory generation.
+    ///
+    /// This persists thread-level memory mode metadata without involving the
+    /// model.
+    SetThreadMemoryMode { mode: ThreadMemoryMode },
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
@@ -663,6 +685,13 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadMemoryMode {
+    Enabled,
+    Disabled,
 }
 
 impl From<Vec<UserInput>> for Op {
@@ -755,6 +784,7 @@ impl Op {
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",
+            Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
@@ -2430,6 +2460,14 @@ pub enum InitialHistory {
 }
 
 impl InitialHistory {
+    pub fn scan_rollout_items(&self, mut predicate: impl FnMut(&RolloutItem) -> bool) -> bool {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => false,
+            InitialHistory::Resumed(resumed) => resumed.history.iter().any(&mut predicate),
+            InitialHistory::Forked(items) => items.iter().any(predicate),
+        }
+    }
+
     pub fn forked_from_id(&self) -> Option<ThreadId> {
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
@@ -3332,7 +3370,7 @@ pub struct SkillMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dependencies: Option<SkillDependencies>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
 }
@@ -4572,12 +4610,14 @@ mod tests {
             },
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: None,
             voice: None,
         });
         let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: Some(ConversationStartTransport::Webrtc {
@@ -4590,12 +4630,14 @@ mod tests {
         });
         let close = Op::RealtimeConversationClose;
         let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: None,
             session_id: None,
             transport: None,
             voice: None,
         });
         let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(None),
             session_id: None,
             transport: None,
@@ -4607,6 +4649,7 @@ mod tests {
             serde_json::to_value(&start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": "be helpful",
                 "session_id": "conv_1"
             })
@@ -4614,19 +4657,22 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&default_prompt_start).unwrap(),
             json!({
-                "type": "realtime_conversation_start"
+                "type": "realtime_conversation_start",
+                "output_modality": "audio"
             })
         );
         assert_eq!(
             serde_json::to_value(&null_prompt_start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": null
             })
         );
         assert_eq!(
             serde_json::from_value::<Op>(json!({
-                "type": "realtime_conversation_start"
+                "type": "realtime_conversation_start",
+                "output_modality": "audio"
             }))
             .unwrap(),
             default_prompt_start
@@ -4634,6 +4680,7 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<Op>(json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": null
             }))
             .unwrap(),
@@ -4679,6 +4726,7 @@ mod tests {
             serde_json::to_value(&webrtc_start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": "be helpful",
                 "session_id": "conv_1",
                 "transport": {

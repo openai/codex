@@ -485,6 +485,9 @@
             "steer": {
               "type": "boolean"
             },
+            "telepathy": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
@@ -1522,6 +1525,10 @@
           "format": "double",
           "type": "number"
         },
+        "supports_parallel_tool_calls": {
+          "default": null,
+          "type": "boolean"
+        },
         "tool_timeout_sec": {
           "default": null,
           "format": "double",
@@ -2332,6 +2339,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "telepathy": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {
