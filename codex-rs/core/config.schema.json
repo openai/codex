@@ -811,8 +811,7 @@
     "MarketplaceSourceType": {
       "enum": [
         "git",
-        "path",
-        "manifest_url"
+        "path"
       ],
       "type": "string"
     },

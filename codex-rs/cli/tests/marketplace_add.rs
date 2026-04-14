@@ -1,12 +1,9 @@
 use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_core::plugins::marketplace_install_root;
+use predicates::str::contains;
 use pretty_assertions::assert_eq;
-use std::io::Read;
-use std::io::Write;
-use std::net::TcpListener;
 use std::path::Path;
-use std::thread;
 use tempfile::TempDir;
 
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
@@ -76,61 +73,20 @@ async fn marketplace_add_supports_local_directory_source() -> Result<()> {
     Ok(())
 }
 
-fn spawn_manifest_server(body: String) -> Result<(u16, thread::JoinHandle<Result<()>>)> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    Ok((
-        port,
-        thread::spawn(move || {
-            let (mut stream, _addr) = listener.accept()?;
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request)?;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(response.as_bytes())?;
-            Ok(())
-        }),
-    ))
-}
-
 #[tokio::test]
-async fn marketplace_add_supports_manifest_url_source() -> Result<()> {
+async fn marketplace_add_rejects_local_manifest_file_source() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
-    std::fs::create_dir_all(source.path().join(".agents/plugins"))?;
-    std::fs::write(
-        source.path().join(".agents/plugins/marketplace.json"),
-        r#"{"name":"debug-url","plugins":[]}"#,
-    )?;
-    let (port, server) = spawn_manifest_server(r#"{"name":"debug-url","plugins":[]}"#.to_string())?;
-    let url = format!("http://127.0.0.1:{port}/.agents/plugins/marketplace.json");
+    write_marketplace_source(source.path(), "local ref")?;
+    let manifest_path = source.path().join(".agents/plugins/marketplace.json");
 
     codex_command(codex_home.path())?
-        .args(["marketplace", "add", &url])
+        .args(["marketplace", "add", manifest_path.to_str().unwrap()])
         .assert()
-        .success();
-
-    let installed_root = marketplace_install_root(codex_home.path()).join("debug-url");
-    assert!(
-        installed_root
-            .join(".agents/plugins/marketplace.json")
-            .is_file()
-    );
-
-    let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
-    let config: toml::Value = toml::from_str(&config)?;
-    assert_eq!(
-        config["marketplaces"]["debug-url"]["source_type"].as_str(),
-        Some("manifest_url")
-    );
-    assert_eq!(
-        config["marketplaces"]["debug-url"]["source"].as_str(),
-        Some(url.as_str())
-    );
-    server.join().unwrap()?;
+        .failure()
+        .stderr(contains(
+            "local marketplace source must be a directory, not a file",
+        ));
 
     Ok(())
 }

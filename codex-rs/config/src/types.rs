@@ -633,7 +633,6 @@ pub struct MarketplaceConfig {
 pub enum MarketplaceSourceType {
     Git,
     Path,
-    ManifestUrl,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]

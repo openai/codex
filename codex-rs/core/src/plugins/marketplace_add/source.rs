@@ -14,9 +14,6 @@ pub(super) enum MarketplaceSource {
     Path {
         path: PathBuf,
     },
-    ManifestUrl {
-        url: String,
-    },
 }
 
 pub(super) fn parse_marketplace_source(
@@ -42,15 +39,6 @@ pub(super) fn parse_marketplace_source(
         return Ok(MarketplaceSource::Path {
             path: resolve_local_source_path(&base_source)?,
         });
-    }
-
-    if looks_like_manifest_url(&base_source) {
-        if ref_name.is_some() {
-            return Err(MarketplaceAddError::InvalidRequest(
-                "--ref is only supported for git marketplace sources".to_string(),
-            ));
-        }
-        return Ok(MarketplaceSource::ManifestUrl { url: base_source });
     }
 
     if is_ssh_git_url(&base_source) || is_git_url(&base_source) {
@@ -92,7 +80,6 @@ where
             clone_source(url, ref_name.as_deref(), sparse_paths, staged_root)
         }
         MarketplaceSource::Path { path } => stage_local_source(path, staged_root),
-        MarketplaceSource::ManifestUrl { url } => download_manifest_url_source(url, staged_root),
     }
 }
 
@@ -140,17 +127,6 @@ fn looks_like_local_path(source: &str) -> bool {
         || source == ".."
 }
 
-fn looks_like_manifest_url(source: &str) -> bool {
-    if !is_git_url(source) {
-        return false;
-    }
-
-    let without_query = source.split('?').next().unwrap_or(source);
-    without_query
-        .trim_end_matches('/')
-        .ends_with("marketplace.json")
-}
-
 fn resolve_local_source_path(source: &str) -> Result<PathBuf, MarketplaceAddError> {
     let path = expand_tilde_path(source);
     let path = if path.is_absolute() {
@@ -196,47 +172,10 @@ fn stage_local_source(source_path: &Path, staged_root: &Path) -> Result<(), Mark
         return Ok(());
     }
 
-    if !metadata.is_file() {
-        return Err(MarketplaceAddError::InvalidRequest(format!(
-            "local marketplace source must be a file or directory: {}",
-            source_path.display()
-        )));
-    }
-
-    if let Some(marketplace_root) = marketplace_root_for_manifest_path(source_path) {
-        copy_dir_recursive(marketplace_root, staged_root)?;
-        return Ok(());
-    }
-
-    let staged_manifest_path = staged_root.join(".agents/plugins/marketplace.json");
-    if let Some(parent) = staged_manifest_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            MarketplaceAddError::Internal(format!(
-                "failed to create marketplace staging directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    fs::copy(source_path, &staged_manifest_path).map_err(|err| {
-        MarketplaceAddError::Internal(format!(
-            "failed to copy local marketplace manifest {} to {}: {err}",
-            source_path.display(),
-            staged_manifest_path.display()
-        ))
-    })?;
-
-    Ok(())
-}
-
-fn marketplace_root_for_manifest_path(path: &Path) -> Option<&Path> {
-    let plugins_dir = path.parent()?;
-    let dot_agents_dir = plugins_dir.parent()?;
-    let marketplace_root = dot_agents_dir.parent()?;
-
-    (path.file_name().and_then(|name| name.to_str()) == Some("marketplace.json")
-        && plugins_dir.file_name().and_then(|name| name.to_str()) == Some("plugins")
-        && dot_agents_dir.file_name().and_then(|name| name.to_str()) == Some(".agents"))
-    .then_some(marketplace_root)
+    Err(MarketplaceAddError::InvalidRequest(format!(
+        "local marketplace source must be a directory, not a file: {}",
+        source_path.display()
+    )))
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), MarketplaceAddError> {
@@ -292,56 +231,6 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), MarketplaceAdd
     Ok(())
 }
 
-fn download_manifest_url_source(url: &str, staged_root: &Path) -> Result<(), MarketplaceAddError> {
-    let contents = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| {
-            MarketplaceAddError::Internal(format!(
-                "failed to create runtime for marketplace manifest download: {err}"
-            ))
-        })?
-        .block_on(async {
-            let response = reqwest::Client::new()
-                .get(url)
-                .send()
-                .await
-                .map_err(|err| {
-                    MarketplaceAddError::Internal(format!(
-                        "failed to download marketplace manifest from {url}: {err}"
-                    ))
-                })?;
-            let response = response.error_for_status().map_err(|err| {
-                MarketplaceAddError::Internal(format!(
-                    "failed to download marketplace manifest from {url}: {err}"
-                ))
-            })?;
-            response.bytes().await.map_err(|err| {
-                MarketplaceAddError::Internal(format!(
-                    "failed to read downloaded marketplace manifest from {url}: {err}"
-                ))
-            })
-        })?;
-
-    let staged_manifest_path = staged_root.join(".agents/plugins/marketplace.json");
-    if let Some(parent) = staged_manifest_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            MarketplaceAddError::Internal(format!(
-                "failed to create marketplace staging directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    fs::write(&staged_manifest_path, contents).map_err(|err| {
-        MarketplaceAddError::Internal(format!(
-            "failed to write downloaded marketplace manifest to {}: {err}",
-            staged_manifest_path.display()
-        ))
-    })?;
-
-    Ok(())
-}
-
 fn is_ssh_git_url(source: &str) -> bool {
     source.starts_with("ssh://") || source.starts_with("git@") && source.contains(':')
 }
@@ -375,7 +264,6 @@ impl MarketplaceSource {
                 None => url.clone(),
             },
             Self::Path { path } => path.display().to_string(),
-            Self::ManifestUrl { url } => url.clone(),
         }
     }
 }
@@ -486,20 +374,6 @@ mod tests {
             panic!("expected local path source");
         };
         assert!(path.is_absolute());
-    }
-
-    #[test]
-    fn manifest_url_source_parses() {
-        assert_eq!(
-            parse_marketplace_source(
-                "https://example.com/.agents/plugins/marketplace.json",
-                /*explicit_ref*/ None,
-            )
-            .unwrap(),
-            MarketplaceSource::ManifestUrl {
-                url: "https://example.com/.agents/plugins/marketplace.json".to_string(),
-            }
-        );
     }
 
     #[test]

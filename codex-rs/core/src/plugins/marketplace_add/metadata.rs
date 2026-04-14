@@ -26,9 +26,6 @@ enum InstalledMarketplaceSource {
     Path {
         path: String,
     },
-    ManifestUrl {
-        url: String,
-    },
 }
 
 pub(super) fn record_added_marketplace_entry(
@@ -103,9 +100,6 @@ impl MarketplaceInstallMetadata {
             MarketplaceSource::Path { path } => InstalledMarketplaceSource::Path {
                 path: path.display().to_string(),
             },
-            MarketplaceSource::ManifestUrl { url } => {
-                InstalledMarketplaceSource::ManifestUrl { url: url.clone() }
-            }
         };
         Self { source }
     }
@@ -114,7 +108,6 @@ impl MarketplaceInstallMetadata {
         match &self.source {
             InstalledMarketplaceSource::Git { .. } => "git",
             InstalledMarketplaceSource::Path { .. } => "path",
-            InstalledMarketplaceSource::ManifestUrl { .. } => "manifest_url",
         }
     }
 
@@ -122,23 +115,20 @@ impl MarketplaceInstallMetadata {
         match &self.source {
             InstalledMarketplaceSource::Git { url, .. } => url.clone(),
             InstalledMarketplaceSource::Path { path } => path.clone(),
-            InstalledMarketplaceSource::ManifestUrl { url } => url.clone(),
         }
     }
 
     fn ref_name(&self) -> Option<&str> {
         match &self.source {
             InstalledMarketplaceSource::Git { ref_name, .. } => ref_name.as_deref(),
-            InstalledMarketplaceSource::Path { .. }
-            | InstalledMarketplaceSource::ManifestUrl { .. } => None,
+            InstalledMarketplaceSource::Path { .. } => None,
         }
     }
 
     fn sparse_paths(&self) -> &[String] {
         match &self.source {
             InstalledMarketplaceSource::Git { sparse_paths, .. } => sparse_paths,
-            InstalledMarketplaceSource::Path { .. }
-            | InstalledMarketplaceSource::ManifestUrl { .. } => &[],
+            InstalledMarketplaceSource::Path { .. } => &[],
         }
     }
 
