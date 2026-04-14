@@ -420,9 +420,15 @@ impl CoreShellActionProvider {
                             rejection_message: None,
                         };
                     }
-                    Some(PermissionRequestDecision::Deny { message }) => {
+                    Some(PermissionRequestDecision::Deny { message, interrupt }) => {
+                        let decision = if interrupt {
+                            session.interrupt_task().await;
+                            ReviewDecision::Abort
+                        } else {
+                            ReviewDecision::Denied
+                        };
                         return PromptDecision {
-                            decision: ReviewDecision::Denied,
+                            decision,
                             guardian_review_id: None,
                             rejection_message: Some(message),
                         };

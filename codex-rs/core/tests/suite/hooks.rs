@@ -294,6 +294,17 @@ elif mode == "deny":
             }}
         }}
     }}))
+elif mode == "deny_interrupt":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "deny",
+                "message": reason,
+                "interrupt": True
+            }}
+        }}
+    }}))
 elif mode == "exit_2":
     sys.stderr.write(reason + "\n")
     raise SystemExit(2)
@@ -1217,6 +1228,112 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_interrupts_shell_command_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-shell-command-interrupt";
+    let marker = std::env::temp_dir().join("permissionrequest-shell-command-interrupt-marker");
+    let command = format!("rm -f {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            core_test_support::responses::ev_function_call(
+                call_id,
+                "shell_command",
+                &serde_json::to_string(&args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some(PERMISSION_REQUEST_HOOK_MATCHER),
+                "deny_interrupt",
+                "blocked and interrupted by hook",
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    fs::write(&marker, "seed").context("create interrupt permission request marker")?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run the shell command after hook approval".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let mut started_turn_id = None;
+    let mut aborted = None;
+    let mut seen_events = Vec::new();
+    while aborted.is_none() {
+        let event = timeout(Duration::from_secs(10), test.codex.next_event())
+            .await
+            .expect("timeout waiting for hook interrupt events")?;
+        seen_events.push(format!("{:?}", event.msg));
+        match event.msg {
+            EventMsg::TurnStarted(started) => {
+                started_turn_id = Some(started.turn_id);
+            }
+            EventMsg::TurnAborted(event) => {
+                aborted = Some(event);
+            }
+            EventMsg::TurnComplete(event) => {
+                panic!("expected interrupted turn, saw completion instead: {event:?}");
+            }
+            _ => {}
+        }
+    }
+    let aborted = aborted.expect("turn aborted event should be present");
+    assert_eq!(
+        aborted.reason,
+        codex_protocol::protocol::TurnAbortReason::Interrupted
+    );
+    assert_eq!(aborted.turn_id, started_turn_id);
+    assert_eq!(responses.requests().len(), 1);
+    assert!(
+        marker.exists(),
+        "interrupted command should not remove marker file"
+    );
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        /*description*/ None,
+    )?;
 
     Ok(())
 }

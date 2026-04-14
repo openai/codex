@@ -4430,7 +4430,7 @@ impl Session {
         info!("interrupt received: abort current task, if any");
         let has_active_turn = { self.active_turn.lock().await.is_some() };
         if has_active_turn {
-            self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+            self.request_task_abort(TurnAbortReason::Interrupted).await;
         } else {
             self.cancel_mcp_startup().await;
         }
@@ -7532,6 +7532,9 @@ async fn drain_in_flight(
             Ok(response_input) => {
                 sess.record_conversation_items(&turn_context, &[response_input.into()])
                     .await;
+            }
+            Err(CodexErr::TurnAborted) => {
+                return Err(CodexErr::TurnAborted);
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));

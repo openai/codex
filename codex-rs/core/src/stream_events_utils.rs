@@ -325,6 +325,9 @@ pub(crate) async fn handle_output_item_done(
         Err(FunctionCallError::Fatal(message)) => {
             return Err(CodexErr::Fatal(message));
         }
+        Err(FunctionCallError::Interrupted) => {
+            return Err(CodexErr::TurnAborted);
+        }
     }
 
     Ok(output)

@@ -357,6 +357,7 @@ impl ToolEmitter {
                 let result = Err(FunctionCallError::RespondToModel(normalized));
                 (event, result)
             }
+            Err(ToolError::Interrupted) => return Err(FunctionCallError::Interrupted),
         };
         self.emit(ctx, event).await;
         result

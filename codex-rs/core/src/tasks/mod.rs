@@ -384,16 +384,30 @@ impl Session {
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         if let Some(mut active_turn) = self.take_active_turn().await {
-            for task in active_turn.drain_tasks() {
+            let tasks = self.prepare_tasks_for_abort(&mut active_turn).await;
+            for task in tasks {
                 self.handle_task_abort(task, reason.clone()).await;
             }
-            // Let interrupted tasks observe cancellation before dropping pending approvals, or an
-            // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            active_turn.clear_pending().await;
         }
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
         }
+    }
+
+    pub(crate) async fn request_task_abort(self: &Arc<Self>, reason: TurnAbortReason) {
+        let Some(mut active_turn) = self.take_active_turn().await else {
+            return;
+        };
+        let tasks = self.prepare_tasks_for_abort(&mut active_turn).await;
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            for task in tasks {
+                session.handle_task_abort(task, reason.clone()).await;
+            }
+            if reason == TurnAbortReason::Interrupted {
+                session.maybe_start_turn_for_pending_work().await;
+            }
+        });
     }
 
     pub async fn on_task_finished(
@@ -550,6 +564,20 @@ impl Session {
         active.take()
     }
 
+    async fn prepare_tasks_for_abort(&self, active_turn: &mut ActiveTurn) -> Vec<RunningTask> {
+        let tasks = active_turn.drain_tasks();
+        for task in &tasks {
+            task.cancellation_token.cancel();
+            task.turn_context
+                .turn_metadata_state
+                .cancel_git_enrichment_task();
+        }
+        // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+        // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+        active_turn.clear_pending().await;
+        tasks
+    }
+
     pub(crate) async fn close_unified_exec_processes(&self) {
         self.services
             .unified_exec_manager
@@ -567,12 +595,10 @@ impl Session {
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
-        if task.cancellation_token.is_cancelled() {
-            return;
+        if !task.cancellation_token.is_cancelled() {
+            trace!(task_kind = ?task.kind, sub_id, "aborting running task");
+            task.cancellation_token.cancel();
         }
-
-        trace!(task_kind = ?task.kind, sub_id, "aborting running task");
-        task.cancellation_token.cancel();
         task.turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();

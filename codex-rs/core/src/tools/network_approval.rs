@@ -402,13 +402,16 @@ impl NetworkApprovalService {
                     pending_approvals.remove(&key);
                     return NetworkDecision::Allow;
                 }
-                PermissionRequestDecision::Deny { message } => {
+                PermissionRequestDecision::Deny { message, interrupt } => {
                     if let Some(owner_call) = owner_call.as_ref() {
                         self.record_call_outcome(
                             &owner_call.registration_id,
-                            NetworkApprovalOutcome::DeniedByPolicy(message),
+                            NetworkApprovalOutcome::DeniedByPolicy(message.clone()),
                         )
                         .await;
+                    }
+                    if interrupt {
+                        session.interrupt_task().await;
                     }
                     pending.set_decision(PendingApprovalDecision::Deny).await;
                     let mut pending_approvals = self.pending_host_approvals.lock().await;
