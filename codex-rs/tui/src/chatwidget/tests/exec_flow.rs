@@ -652,6 +652,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
             last_agent_message: Some("Final response.".into()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -697,6 +698,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -764,6 +766,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -844,6 +847,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -1344,6 +1348,7 @@ async fn turn_complete_keeps_unified_exec_processes() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
