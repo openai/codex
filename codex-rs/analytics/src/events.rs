@@ -37,7 +37,6 @@ pub(crate) enum TrackEventRequest {
     ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
-    #[allow(dead_code)]
     CommandExecution(CodexCommandExecutionEventRequest),
     FileChange(CodexFileChangeEventRequest),
     McpToolCall(CodexMcpToolCallEventRequest),
@@ -110,21 +109,10 @@ pub(crate) struct ThreadInitializedEvent {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
-pub(crate) enum ToolKind {
-    Shell,
-    UnifiedExec,
-    ApplyPatch,
-    Mcp,
-    Dynamic,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
-pub(crate) enum ToolCallFinalReviewOutcome {
+pub(crate) enum ToolItemFinalApprovalOutcome {
     NotNeeded,
+    ConfigAllowed,
+    PolicyForbidden,
     GuardianApproved,
     GuardianDenied,
     GuardianAborted,
@@ -137,7 +125,6 @@ pub(crate) enum ToolCallFinalReviewOutcome {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolItemTerminalStatus {
     Completed,
     Failed,
@@ -148,7 +135,6 @@ pub(crate) enum ToolItemTerminalStatus {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolItemFailureKind {
     ToolError,
     ApprovalDenied,
