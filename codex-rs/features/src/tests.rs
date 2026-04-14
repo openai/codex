@@ -170,18 +170,6 @@ fn use_agent_identity_is_under_development() {
 }
 
 #[test]
-fn image_detail_original_feature_is_experimental_and_user_toggleable() {
-    let stage = Feature::ImageDetailOriginal.stage();
-
-    assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(
-        stage.experimental_menu_name(),
-        Some("Original image detail")
-    );
-    assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
-}
-
-#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
@@ -261,6 +249,25 @@ fn from_sources_applies_base_profile_and_overrides() {
     assert_eq!(features.enabled(Feature::CodeMode), true);
     assert_eq!(features.enabled(Feature::ApplyPatchFreeform), true);
     assert_eq!(features.enabled(Feature::WebSearchRequest), false);
+}
+
+#[test]
+fn from_sources_ignores_removed_image_detail_original_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "image_detail_original".to_string(),
+        true,
+    )]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
 }
 
 #[test]
