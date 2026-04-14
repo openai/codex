@@ -63,7 +63,7 @@ fn configured_marketplace_root(
     default_install_root: &Path,
 ) -> Option<PathBuf> {
     match marketplace.get("source_type").and_then(toml::Value::as_str) {
-        Some("path") => marketplace
+        Some("local" | "path") => marketplace
             .get("source")
             .and_then(toml::Value::as_str)
             .filter(|source| !source.is_empty())

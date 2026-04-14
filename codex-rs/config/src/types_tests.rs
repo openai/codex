@@ -2,6 +2,20 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn deserialize_marketplace_source_type_with_legacy_path_alias() {
+    let cfg: MarketplaceConfig = toml::from_str(
+        r#"
+            source_type = "path"
+            source = "/tmp/debug"
+        "#,
+    )
+    .expect("should deserialize marketplace config with legacy path source type");
+
+    assert_eq!(cfg.source_type, Some(MarketplaceSourceType::Local));
+    assert_eq!(cfg.source.as_deref(), Some("/tmp/debug"));
+}
+
+#[test]
 fn deserialize_skill_config_with_name_selector() {
     let cfg: SkillConfig = toml::from_str(
         r#"

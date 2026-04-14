@@ -278,7 +278,7 @@ mod tests {
 
         let config = fs::read_to_string(codex_home.path().join(codex_config::CONFIG_TOML_FILE))?;
         assert!(config.contains("[marketplaces.debug]"));
-        assert!(config.contains("source_type = \"path\""));
+        assert!(config.contains("source_type = \"local\""));
         assert!(config.contains(&format!("source = \"{expected_source}\"")));
         Ok(())
     }

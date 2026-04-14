@@ -151,7 +151,7 @@ impl MarketplaceInstallMetadata {
     fn config_source_type(&self) -> &'static str {
         match &self.source {
             InstalledMarketplaceSource::Git { .. } => "git",
-            InstalledMarketplaceSource::Path { .. } => "path",
+            InstalledMarketplaceSource::Path { .. } => "local",
         }
     }
 
@@ -206,7 +206,7 @@ fn configured_marketplace_root(
     install_root: &Path,
 ) -> Option<PathBuf> {
     match marketplace.get("source_type").and_then(toml::Value::as_str) {
-        Some("path") => marketplace
+        Some("local" | "path") => marketplace
             .get("source")
             .and_then(toml::Value::as_str)
             .filter(|source| !source.is_empty())
@@ -311,7 +311,7 @@ mod tests {
         fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
             format!(
-                "[marketplaces.debug]\nsource_type = \"path\"\nsource = \"{}\"\n",
+                "[marketplaces.debug]\nsource_type = \"local\"\nsource = \"{}\"\n",
                 source_root.display()
             ),
         )

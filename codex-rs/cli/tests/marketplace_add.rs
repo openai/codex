@@ -60,7 +60,7 @@ async fn marketplace_add_supports_local_directory_source() -> Result<()> {
     let expected_source = source.path().canonicalize()?.display().to_string();
     assert_eq!(
         config["marketplaces"]["debug"]["source_type"].as_str(),
-        Some("path")
+        Some("local")
     );
     assert_eq!(
         config["marketplaces"]["debug"]["source"].as_str(),
