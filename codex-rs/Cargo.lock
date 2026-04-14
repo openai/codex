@@ -1375,6 +1375,7 @@ dependencies = [
  "codex-login",
  "codex-plugin",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "os_info",
  "pretty_assertions",
  "serde",
@@ -2237,6 +2238,7 @@ dependencies = [
  "chrono",
  "codex-config",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "futures",
  "pretty_assertions",
  "regex",
@@ -2386,6 +2388,7 @@ dependencies = [
  "codex-models-manager",
  "codex-protocol",
  "codex-shell-command",
+ "codex-utils-absolute-path",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "core_test_support",
@@ -2823,6 +2826,17 @@ version = "0.0.0"
 dependencies = [
  "codex-arg0",
  "tempfile",
+]
+
+[[package]]
+name = "codex-thread-store"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "codex-protocol",
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

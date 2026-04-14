@@ -14,6 +14,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -1043,7 +1044,7 @@ fn accepted_elicitation_without_content_defaults_to_accept() {
 async fn persist_codex_app_tool_approval_writes_tool_override() {
     let tmp = tempdir().expect("tempdir");
 
-    persist_codex_app_tool_approval(tmp.path(), "calendar", "calendar/list_events")
+    persist_codex_app_tool_approval(&tmp.path().abs(), "calendar", "calendar/list_events")
         .await
         .expect("persist approval");
 
@@ -1216,7 +1217,7 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         .await
         .expect("trust project");
     let config = ConfigBuilder::default()
-        .codex_home(codex_home)
+        .codex_home(codex_home.to_path_buf())
         .fallback_cwd(Some(project_dir.path().to_path_buf()))
         .build()
         .await

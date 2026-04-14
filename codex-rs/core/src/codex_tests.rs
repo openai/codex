@@ -1919,7 +1919,7 @@ async fn set_rate_limits_retains_previous_credits() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2021,7 +2021,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2373,7 +2373,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2643,7 +2643,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2747,7 +2747,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -3599,7 +3599,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -4140,7 +4140,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        turn_context.config.codex_home.as_path(),
+        &turn_context.config.codex_home,
         &session.conversation_id.to_string(),
         call_id,
     );
@@ -4164,7 +4164,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
 
     let history = session.clone_history().await;
     let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
-        turn_context.config.codex_home.as_path(),
+        &turn_context.config.codex_home,
         &session.conversation_id.to_string(),
         "<image_id>",
     );
@@ -4192,7 +4192,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        turn_context.config.codex_home.as_path(),
+        &turn_context.config.codex_home,
         &session.conversation_id.to_string(),
         call_id,
     );

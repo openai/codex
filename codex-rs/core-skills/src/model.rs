@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::protocol::Product;
@@ -56,8 +55,8 @@ pub struct SkillPolicy {
 pub struct SkillInterface {
     pub display_name: Option<String>,
     pub short_description: Option<String>,
-    pub icon_small: Option<PathBuf>,
-    pub icon_large: Option<PathBuf>,
+    pub icon_small: Option<AbsolutePathBuf>,
+    pub icon_large: Option<AbsolutePathBuf>,
     pub brand_color: Option<String>,
     pub default_prompt: Option<String>,
 }

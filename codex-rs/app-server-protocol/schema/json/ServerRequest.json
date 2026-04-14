@@ -141,7 +141,7 @@
               "type": "string"
             },
             "path": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "type": {
               "enum": [
@@ -346,11 +346,15 @@
           ]
         },
         "cwd": {
-          "description": "The command's working directory.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command's working directory."
         },
         "itemId": {
           "type": "string"

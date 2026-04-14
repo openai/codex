@@ -518,16 +518,8 @@ interface:
             interface: Some(SkillInterface {
                 display_name: Some("UI Skill".to_string()),
                 short_description: Some("short desc".to_string()),
-                icon_small: Some(
-                    normalized_skill_dir
-                        .join("assets/small-400px.png")
-                        .to_path_buf()
-                ),
-                icon_large: Some(
-                    normalized_skill_dir
-                        .join("assets/large-logo.svg")
-                        .to_path_buf()
-                ),
+                icon_small: Some(normalized_skill_dir.join("assets/small-400px.png")),
+                icon_large: Some(normalized_skill_dir.join("assets/large-logo.svg")),
                 brand_color: Some("#3B82F6".to_string()),
                 default_prompt: Some("default prompt".to_string()),
             }),
@@ -679,8 +671,8 @@ async fn accepts_icon_paths_under_assets_dir() {
             interface: Some(SkillInterface {
                 display_name: Some("UI Skill".to_string()),
                 short_description: None,
-                icon_small: Some(normalized_skill_dir.join("assets/icon.png").to_path_buf()),
-                icon_large: Some(normalized_skill_dir.join("assets/logo.svg").to_path_buf()),
+                icon_small: Some(normalized_skill_dir.join("assets/icon.png")),
+                icon_large: Some(normalized_skill_dir.join("assets/logo.svg")),
                 brand_color: None,
                 default_prompt: None,
             }),
@@ -772,11 +764,7 @@ async fn ignores_default_prompt_over_max_length() {
             interface: Some(SkillInterface {
                 display_name: Some("UI Skill".to_string()),
                 short_description: None,
-                icon_small: Some(
-                    normalized_skill_dir
-                        .join("assets/small-400px.png")
-                        .to_path_buf()
-                ),
+                icon_small: Some(normalized_skill_dir.join("assets/small-400px.png")),
                 icon_large: None,
                 brand_color: None,
                 default_prompt: None,

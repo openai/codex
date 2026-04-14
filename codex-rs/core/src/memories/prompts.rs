@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_state::Phase2InputSelection;
 use codex_state::Stage1Output;
 use codex_state::Stage1OutputRef;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_template::Template;
@@ -231,7 +232,9 @@ pub(super) fn build_stage_one_input_message(
 /// Build prompt used for read path. This prompt must be added to the developer instructions. In
 /// case of large memory files, the `memory_summary.md` is truncated at
 /// [phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
-pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
+pub(crate) async fn build_memory_tool_developer_instructions(
+    codex_home: &AbsolutePathBuf,
+) -> Option<String> {
     let base_path = memory_root(codex_home);
     let memory_summary_path = base_path.join("memory_summary.md");
     let memory_summary = fs::read_to_string(&memory_summary_path)

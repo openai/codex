@@ -802,7 +802,7 @@ fn resolve_asset_path(
     skill_dir: &AbsolutePathBuf,
     field: &'static str,
     path: Option<PathBuf>,
-) -> Option<PathBuf> {
+) -> Option<AbsolutePathBuf> {
     // Icons must be relative paths under the skill's assets/ directory; otherwise return None.
     let path = path?;
     if path.as_os_str().is_empty() {
@@ -843,7 +843,7 @@ fn resolve_asset_path(
         }
     }
 
-    Some(skill_dir.join(normalized).into_path_buf())
+    Some(skill_dir.join(normalized))
 }
 
 fn sanitize_single_line(raw: &str) -> String {
