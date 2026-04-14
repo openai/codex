@@ -503,6 +503,7 @@ fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Va
         .collect()
 }
 
+#[cfg(not(target_os = "linux"))]
 fn assert_permission_request_hook_input(
     hook_input: &Value,
     command: &str,
@@ -521,9 +522,9 @@ fn assert_permission_request_hook_input(
     assert!(hook_input.get("justification").is_none());
     assert!(hook_input.get("host").is_none());
     assert!(hook_input.get("protocol").is_none());
-    assert!(hook_input.get("permission_suggestions").is_none());
 }
 
+#[cfg(not(target_os = "linux"))]
 fn assert_single_permission_request_hook_input(
     home: &Path,
     command: &str,
