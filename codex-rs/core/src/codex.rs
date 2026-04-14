@@ -107,6 +107,7 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -2935,10 +2936,14 @@ impl Session {
     }
 
     async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
-        if !matches!(msg, EventMsg::TurnComplete(_)) {
+        let EventMsg::TurnComplete(event) = msg else {
             return;
-        }
-        if let Err(err) = self.conversation.handoff_complete().await {
+        };
+        if let Err(err) = self
+            .conversation
+            .handoff_complete(event.last_agent_message.clone())
+            .await
+        {
             debug!("failed to finalize realtime handoff output: {err}");
         }
         self.conversation.clear_active_handoff().await;
@@ -7349,7 +7354,12 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
         EventMsg::ItemCompleted(event) => match &event.item {
-            TurnItem::AgentMessage(item) => Some(agent_message_text(item)),
+            TurnItem::AgentMessage(item)
+                if item.phase.as_ref() != Some(&MessagePhase::FinalAnswer) =>
+            {
+                Some(agent_message_text(item))
+            }
+            TurnItem::AgentMessage(_) => None,
             _ => None,
         },
         EventMsg::Error(_)

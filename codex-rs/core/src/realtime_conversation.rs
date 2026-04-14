@@ -448,7 +448,10 @@ impl RealtimeConversationManager {
         Ok(())
     }
 
-    pub(crate) async fn handoff_complete(&self) -> CodexResult<()> {
+    pub(crate) async fn handoff_complete(
+        &self,
+        final_output_text: Option<String>,
+    ) -> CodexResult<()> {
         let handoff = {
             let guard = self.state.lock().await;
             guard.as_ref().map(|state| state.handoff.clone())
@@ -464,9 +467,19 @@ impl RealtimeConversationManager {
         let Some(handoff_id) = handoff.active_handoff.lock().await.clone() else {
             return Ok(());
         };
-        let Some(output_text) = handoff.last_output_text.lock().await.clone() else {
-            return Ok(());
+        let output_text = match final_output_text {
+            Some(output_text) => output_text,
+            None => {
+                let Some(output_text) = handoff.last_output_text.lock().await.clone() else {
+                    return Ok(());
+                };
+                output_text
+            }
         };
+
+        if output_text.is_empty() {
+            return Ok(());
+        }
 
         handoff
             .output_tx
