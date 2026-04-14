@@ -199,7 +199,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
@@ -242,7 +242,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         sandbox_state,
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),
     )
@@ -396,7 +396,7 @@ fn filter_tool_suggest_discoverable_connectors(
 }
 
 fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
-    let mut connector_ids = PluginsManager::new(config.codex_home.clone())
+    let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(config)
         .capability_summaries()
         .iter()

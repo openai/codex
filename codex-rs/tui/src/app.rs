@@ -60,6 +60,8 @@ use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
+#[cfg(test)]
+use crate::test_support::test_path_buf;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -1108,7 +1110,7 @@ impl App {
         overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
         ConfigBuilder::default()
-            .codex_home(self.config.codex_home.clone())
+            .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .build()
@@ -3058,6 +3060,7 @@ impl App {
                 approvals_reviewer: self.config.approvals_reviewer,
                 sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
                 cwd: thread.cwd.clone(),
+                instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -3068,6 +3071,7 @@ impl App {
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
         session.cwd = thread.cwd.clone();
+        session.instruction_source_paths = Vec::new();
         session.rollout_path = thread.path.clone();
         if let Some(model) =
             read_session_model(&self.config, thread_id, thread.path.as_deref()).await
@@ -3861,13 +3865,7 @@ impl App {
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
-                Self::spawn_world_writable_scan(
-                    cwd.to_path_buf(),
-                    env_map,
-                    logs_base_dir,
-                    sandbox_policy,
-                    tx,
-                );
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
 
@@ -5225,7 +5223,7 @@ impl App {
                         let logs_base_dir = self.config.codex_home.clone();
                         let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
-                            cwd.to_path_buf(),
+                            cwd,
                             env_map,
                             logs_base_dir,
                             sandbox_policy,
@@ -5403,7 +5401,7 @@ impl App {
             }
             AppEvent::SetSkillEnabled { path, enabled } => {
                 let edits = [ConfigEdit::SetSkillConfig {
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                     enabled,
                 }];
                 match ConfigEditsBuilder::new(&self.config.codex_home)
@@ -5412,7 +5410,7 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        self.chat_widget.update_skill_enabled(path.clone(), enabled);
+                        self.chat_widget.update_skill_enabled(path, enabled);
                         if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                             tracing::warn!(
                                 error = %err,
@@ -6105,19 +6103,20 @@ impl App {
 
     #[cfg(target_os = "windows")]
     fn spawn_world_writable_scan(
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         env_map: std::collections::HashMap<String, String>,
-        logs_base_dir: PathBuf,
+        logs_base_dir: AbsolutePathBuf,
         sandbox_policy: codex_protocol::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
+            let logs_base_dir_path = logs_base_dir.as_path();
             let result = codex_windows_sandbox::apply_world_writable_scan_and_denies(
-                &logs_base_dir,
-                &cwd,
+                logs_base_dir_path,
+                cwd.as_path(),
                 &env_map,
                 &sandbox_policy,
-                Some(logs_base_dir.as_path()),
+                Some(logs_base_dir_path),
             );
             if result.is_err() {
                 // Scan failed: warn without examples.
@@ -7899,7 +7898,7 @@ mod tests {
     async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         let guardian_approvals = guardian_approvals_mode();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
@@ -7983,7 +7982,7 @@ mod tests {
     -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
@@ -8074,7 +8073,7 @@ mod tests {
     -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         let guardian_approvals = guardian_approvals_mode();
         let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"user\"\n";
@@ -8142,7 +8141,7 @@ mod tests {
     -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
@@ -8201,7 +8200,7 @@ mod tests {
     -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         let guardian_approvals = guardian_approvals_mode();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = codex_home.path().join("config.toml").abs();
@@ -8272,7 +8271,7 @@ mod tests {
     -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = r#"
@@ -8360,7 +8359,7 @@ guardian_approval = true
     -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nguardian_approval = true\n";
@@ -9077,7 +9076,7 @@ guardian_approval = true
 
     async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project").abs();
+        app.config.cwd = test_path_buf("/tmp/project").abs();
         app.chat_widget.set_model("gpt-test");
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
@@ -9130,7 +9129,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
+                cwd: test_path_buf("/tmp/project"),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -9214,7 +9213,7 @@ guardian_approval = true
     )]
     async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project").abs();
+        app.config.cwd = test_path_buf("/tmp/project").abs();
         app.chat_widget.set_model("gpt-5.4");
         set_fast_mode_test_catalog(&mut app.chat_widget);
         app.chat_widget
@@ -9361,6 +9360,7 @@ guardian_approval = true
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd,
+            instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -10222,7 +10222,7 @@ guardian_approval = true
     async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         let app_id = "unit_test_refresh_in_memory_config_connector".to_string();
 
         assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
@@ -10262,7 +10262,7 @@ guardian_approval = true
     -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
         let original_config = app.config.clone();
 
@@ -10316,7 +10316,7 @@ guardian_approval = true
     -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
         let current_config = app.config.clone();
         let current_cwd = current_config.cwd.clone();
@@ -10333,7 +10333,7 @@ guardian_approval = true
     async fn rebuild_config_for_resume_or_fallback_errors_when_cwd_changes() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
         let current_cwd = app.config.cwd.clone();
         let next_cwd_tmp = tempdir()?;

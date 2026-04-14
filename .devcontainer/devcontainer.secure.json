@@ -12,6 +12,13 @@
     }
   },
   "runArgs": [
+    "--cap-add=SYS_ADMIN",
+    "--cap-add=SYS_CHROOT",
+    "--cap-add=SETUID",
+    "--cap-add=SETGID",
+    "--cap-add=SYS_PTRACE",
+    "--security-opt=seccomp=unconfined",
+    "--security-opt=apparmor=unconfined",
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW"
   ],

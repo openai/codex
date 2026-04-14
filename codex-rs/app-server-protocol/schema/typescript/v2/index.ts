@@ -149,6 +149,8 @@ export type { ListMcpServerStatusResponse } from "./ListMcpServerStatusResponse"
 export type { LoginAccountParams } from "./LoginAccountParams";
 export type { LoginAccountResponse } from "./LoginAccountResponse";
 export type { LogoutAccountResponse } from "./LogoutAccountResponse";
+export type { MarketplaceAddParams } from "./MarketplaceAddParams";
+export type { MarketplaceAddResponse } from "./MarketplaceAddResponse";
 export type { MarketplaceInterface } from "./MarketplaceInterface";
 export type { MarketplaceLoadErrorInfo } from "./MarketplaceLoadErrorInfo";
 export type { McpAuthStatus } from "./McpAuthStatus";
@@ -282,6 +284,8 @@ export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";
 export type { ThreadForkParams } from "./ThreadForkParams";
 export type { ThreadForkResponse } from "./ThreadForkResponse";
+export type { ThreadInjectItemsParams } from "./ThreadInjectItemsParams";
+export type { ThreadInjectItemsResponse } from "./ThreadInjectItemsResponse";
 export type { ThreadItem } from "./ThreadItem";
 export type { ThreadListParams } from "./ThreadListParams";
 export type { ThreadListResponse } from "./ThreadListResponse";

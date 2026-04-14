@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::ExecServerHandler;
+use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeParams;
@@ -26,6 +27,7 @@ fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
         process_id: ProcessId::from(process_id),
         argv,
         cwd: std::env::current_dir().expect("cwd"),
+        env_policy: None,
         env: inherited_path_env(),
         tty: false,
         arg0: None,
@@ -64,12 +66,21 @@ fn windows_command_processor() -> String {
     std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
 }
 
+fn test_runtime_paths() -> ExecServerRuntimePaths {
+    ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths")
+}
+
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
     let registry = SessionRegistry::new();
     let handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(outgoing_tx),
+        test_runtime_paths(),
     ));
     let initialize_response = handler
         .initialize(InitializeParams {
@@ -147,6 +158,7 @@ async fn long_poll_read_fails_after_session_resume() {
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
+        test_runtime_paths(),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -187,6 +199,7 @@ async fn long_poll_read_fails_after_session_resume() {
     let second_handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(second_tx),
+        test_runtime_paths(),
     ));
     second_handler
         .initialize(InitializeParams {
@@ -219,6 +232,7 @@ async fn active_session_resume_is_rejected() {
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
+        test_runtime_paths(),
     ));
     let initialize_response = first_handler
         .initialize(InitializeParams {
@@ -232,6 +246,7 @@ async fn active_session_resume_is_rejected() {
     let second_handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(second_tx),
+        test_runtime_paths(),
     ));
     let err = second_handler
         .initialize(InitializeParams {
@@ -259,6 +274,7 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
     let handler = Arc::new(ExecServerHandler::new(
         SessionRegistry::new(),
         RpcNotificationSender::new(outgoing_tx),
+        test_runtime_paths(),
     ));
     handler
         .initialize(InitializeParams {

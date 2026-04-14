@@ -14,7 +14,7 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
-# Start codex-exec-server and run codex-tui.
+# Start `codex exec-server` and run codex-tui.
 [no-cd]
 tui-with-exec-server *args:
     ./scripts/run_tui_with_exec_server.sh "$@"

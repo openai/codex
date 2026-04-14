@@ -47,6 +47,7 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
@@ -62,8 +63,10 @@ use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -513,6 +516,15 @@ impl McpProcess {
         self.send_request("skills/list", params).await
     }
 
+    /// Send a `marketplace/add` JSON-RPC request.
+    pub async fn send_marketplace_add_request(
+        &mut self,
+        params: MarketplaceAddParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("marketplace/add", params).await
+    }
+
     /// Send a `plugin/install` JSON-RPC request.
     pub async fn send_plugin_install_request(
         &mut self,
@@ -584,6 +596,15 @@ impl McpProcess {
         self.send_request("mock/experimentalMethod", params).await
     }
 
+    /// Send a `thread/memoryMode/set` JSON-RPC request (v2, experimental).
+    pub async fn send_thread_memory_mode_set_request(
+        &mut self,
+        params: ThreadMemoryModeSetParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/memoryMode/set", params).await
+    }
+
     /// Send a `turn/start` JSON-RPC request (v2).
     pub async fn send_turn_start_request(
         &mut self,
@@ -591,6 +612,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/start", params).await
+    }
+
+    /// Send a `thread/inject_items` JSON-RPC request (v2).
+    pub async fn send_thread_inject_items_request(
+        &mut self,
+        params: ThreadInjectItemsParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/inject_items", params).await
     }
 
     /// Send a `command/exec` JSON-RPC request (v2).

@@ -10,6 +10,7 @@ use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
+use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -52,6 +53,7 @@ pub struct UnifiedExecRequest {
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
+    pub exec_server_env_config: Option<ExecServerEnvConfig>,
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
@@ -237,9 +239,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 expiration: ExecExpiration::DefaultTimeout,
                 capture_policy: ExecCapturePolicy::ShellTool,
             };
-            let exec_env = attempt
+            let mut exec_env = attempt
                 .env_for(command, options, req.network.as_ref())
                 .map_err(|err| ToolError::Codex(err.into()))?;
+            exec_env.exec_server_env_config = req.exec_server_env_config.clone();
             match zsh_fork_backend::maybe_prepare_unified_exec(
                 req,
                 attempt,
@@ -294,9 +297,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
-        let exec_env = attempt
+        let mut exec_env = attempt
             .env_for(command, options, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
+        exec_env.exec_server_env_config = req.exec_server_env_config.clone();
         let Some(environment) = ctx.turn.environment.as_ref() else {
             return Err(ToolError::Rejected(
                 "exec_command is unavailable in this session".to_string(),
