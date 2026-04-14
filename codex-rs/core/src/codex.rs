@@ -4164,6 +4164,8 @@ impl Session {
         let Some(active_turn) = active.as_mut() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
+        // An aborting turn still owns the session until cleanup finishes, but it can no longer
+        // accept same-turn input.
         if active_turn.is_aborting() {
             return Err(SteerInputError::TurnAbortInProgress(input));
         }

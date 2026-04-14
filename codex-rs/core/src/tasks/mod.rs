@@ -409,6 +409,9 @@ impl Session {
             let Some(active_turn) = active.as_mut() else {
                 return;
             };
+            // Async abort keeps the turn installed until cleanup completes so the session does
+            // not look idle to other callers while the old turn is still unwinding. Mark it as
+            // aborting before we cancel tasks so the turn remains non-steerable during that gap.
             let Some(tasks) = active_turn.begin_abort() else {
                 return;
             };
@@ -662,6 +665,8 @@ impl Session {
         }
 
         if clear_active_turn_before_event {
+            // The final async-aborted task clears the installed aborting turn before emitting the
+            // client-visible abort event so immediate follow-up actions observe an idle session.
             let mut active = self.active_turn.lock().await;
             if active.as_ref().is_some_and(ActiveTurn::is_aborting) {
                 *active = None;
