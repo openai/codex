@@ -126,10 +126,10 @@ fn normalize_git_url(url: &str) -> String {
 fn looks_like_local_path(source: &str) -> bool {
     source.starts_with("./")
         || source.starts_with("../")
-        || source.starts_with('/')
         || source.starts_with("~/")
         || source == "."
         || source == ".."
+        || Path::new(source).is_absolute()
 }
 
 fn resolve_local_source_path(source: &str) -> Result<PathBuf, MarketplaceAddError> {
