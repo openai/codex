@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
@@ -40,7 +41,7 @@ use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request_with_cancel;
+use crate::guardian::review_approval_request_with_source_and_cancel;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
@@ -747,12 +748,13 @@ fn spawn_guardian_review(
             let _ = tx.send(ReviewDecision::Denied);
             return;
         };
-        let decision = runtime.block_on(review_approval_request_with_cancel(
+        let decision = runtime.block_on(review_approval_request_with_source_and_cancel(
             &session,
             &turn,
             review_id,
             request,
             retry_reason,
+            GuardianApprovalRequestSource::DelegatedSubagent,
             cancel_token,
         ));
         let _ = tx.send(decision);
