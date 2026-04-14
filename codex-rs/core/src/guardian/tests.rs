@@ -1332,8 +1332,19 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
+#[test]
+fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024;
+
+    let handle =
+        std::thread::Builder::new()
+            .name("guardian_parallel_reviews_fork_from_last_committed_trunk_history".to_string())
+            .stack_size(TEST_STACK_SIZE_BYTES)
+            .spawn(|| -> anyhow::Result<()> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(Box::pin(async {
     let first_assessment = serde_json::json!({
         "risk_level": "low",
         "user_authorization": "high",
@@ -1548,6 +1559,15 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     server.shutdown().await;
 
     Ok(())
+            }))
+            })?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "guardian_parallel_reviews_fork_from_last_committed_trunk_history thread panicked"
+        )),
+    }
 }
 #[test]
 fn guardian_review_session_config_preserves_parent_network_proxy() {
