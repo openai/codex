@@ -103,12 +103,13 @@ impl RemoteExecServerProcess {
 
 #[derive(Debug)]
 pub struct TestEnv {
+    // Keep the remote exec-server process alive until the environment/client has dropped.
+    _remote_exec_server_process: Option<RemoteExecServerProcess>,
     environment: codex_exec_server::Environment,
     cwd: AbsolutePathBuf,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
     remote_codex_self_exe: Option<PathBuf>,
     remote_codex_linux_sandbox_exe: Option<PathBuf>,
-    _remote_exec_server_process: Option<RemoteExecServerProcess>,
 }
 
 impl TestEnv {
@@ -117,12 +118,12 @@ impl TestEnv {
         let cwd = local_cwd_temp_dir.abs();
         let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None).await?;
         Ok(Self {
+            _remote_exec_server_process: None,
             environment,
             cwd,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
             remote_codex_self_exe: None,
             remote_codex_linux_sandbox_exe: None,
-            _remote_exec_server_process: None,
         })
     }
 
@@ -169,6 +170,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 .await?;
             remote_process.process.register_cleanup_path(cwd.as_path());
             Ok(TestEnv {
+                _remote_exec_server_process: Some(remote_process.process),
                 environment,
                 cwd,
                 local_cwd_temp_dir: None,
@@ -181,7 +183,6 @@ pub async fn test_env() -> Result<TestEnv> {
                         .expect("remote exec-server path should have a parent")
                         .join(REMOTE_CODEX_LINUX_SANDBOX_EXE),
                 ),
-                _remote_exec_server_process: Some(remote_process.process),
             })
         }
         None => TestEnv::local().await,
@@ -639,13 +640,13 @@ impl TestCodexBuilder {
         };
 
         Ok(TestCodex {
+            _test_env: test_env,
             home,
             cwd,
             config,
             codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
             thread_manager,
-            _test_env: test_env,
         })
     }
 
@@ -729,13 +730,14 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
 }
 
 pub struct TestCodex {
+    // Drop the execution environment after the thread manager and conversation teardown.
+    _test_env: TestEnv,
     pub home: Arc<TempDir>,
     pub cwd: Arc<TempDir>,
     pub codex: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
-    _test_env: TestEnv,
 }
 
 impl TestCodex {
