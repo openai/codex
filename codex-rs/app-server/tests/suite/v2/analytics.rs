@@ -116,29 +116,26 @@ pub(crate) async fn mount_analytics_capture(server: &MockServer, codex_home: &Pa
     Ok(())
 }
 
-pub(crate) async fn wait_for_thread_initialized_payload(
+pub(crate) async fn wait_for_analytics_payload(
     server: &MockServer,
     read_timeout: Duration,
 ) -> Result<Value> {
-    timeout(read_timeout, async {
+    let body = timeout(read_timeout, async {
         loop {
             let Some(requests) = server.received_requests().await else {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             };
-            for request in requests.iter().filter(|request| {
+            if let Some(request) = requests.iter().find(|request| {
                 request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
             }) {
-                let payload: Value = serde_json::from_slice(&request.body)
-                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))?;
-                if thread_initialized_event(&payload).is_ok() {
-                    return Ok(payload);
-                }
+                break request.body.clone();
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
-    .await?
+    .await?;
+    serde_json::from_slice(&body).map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))
 }
 
 pub(crate) async fn wait_for_analytics_event(

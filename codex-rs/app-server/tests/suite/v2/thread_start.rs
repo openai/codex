@@ -43,7 +43,7 @@ use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_event;
-use super::analytics::wait_for_thread_initialized_payload;
+use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -248,7 +248,7 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
 
-    let payload = wait_for_thread_initialized_payload(&server, DEFAULT_READ_TIMEOUT).await?;
+    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     assert_eq!(payload["events"].as_array().expect("events array").len(), 1);
     let event = thread_initialized_event(&payload)?;
     assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "new");
@@ -891,7 +891,11 @@ fn create_config_toml_with_chatgpt_base_url(
     chatgpt_base_url: &str,
     general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
-    let general_analytics_toml = format!("general_analytics = {general_analytics_enabled}");
+    let general_analytics_toml = if general_analytics_enabled {
+        "\ngeneral_analytics = true".to_string()
+    } else {
+        "\ngeneral_analytics = false".to_string()
+    };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,

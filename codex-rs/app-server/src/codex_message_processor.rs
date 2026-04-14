@@ -2495,7 +2495,6 @@ impl CodexMessageProcessor {
             };
         }
 
-        let thread_general_analytics_enabled = config.features.enabled(Feature::GeneralAnalytics);
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
@@ -2634,7 +2633,7 @@ impl CodexMessageProcessor {
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
-                if thread_general_analytics_enabled {
+                if listener_task_context.general_analytics_enabled {
                     listener_task_context
                         .analytics_events_client
                         .track_response(
@@ -7929,8 +7928,8 @@ impl CodexMessageProcessor {
             thread_manager,
             thread_state_manager,
             pending_thread_unloads,
-            analytics_events_client,
-            general_analytics_enabled,
+            analytics_events_client: _,
+            general_analytics_enabled: _,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -8006,7 +8005,9 @@ impl CodexMessageProcessor {
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
-                            general_analytics_enabled.then(|| analytics_events_client.clone()),
+                            listener_task_context
+                                .general_analytics_enabled
+                                .then(|| listener_task_context.analytics_events_client.clone()),
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
