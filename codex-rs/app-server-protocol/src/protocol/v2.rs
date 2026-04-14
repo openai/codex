@@ -944,9 +944,43 @@ pub enum ExternalAgentConfigMigrationItemType {
     #[serde(rename = "SKILLS")]
     #[ts(rename = "SKILLS")]
     Skills,
+    #[serde(rename = "PLUGINS")]
+    #[ts(rename = "PLUGINS")]
+    Plugins,
     #[serde(rename = "MCP_SERVER_CONFIG")]
     #[ts(rename = "MCP_SERVER_CONFIG")]
     McpServerConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum PluginMarketplaceSource {
+    #[serde(rename = "github")]
+    #[ts(rename = "github")]
+    Github,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginMarketplaceMigration {
+    pub name: String,
+    pub source: PluginMarketplaceSource,
+    pub repo: String,
+    #[serde(rename = "ref")]
+    #[ts(rename = "ref")]
+    pub ref_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginsMigrationDetails {
+    pub marketplaces: Vec<PluginMarketplaceMigration>,
+    #[serde(rename = "pluginIds")]
+    #[ts(rename = "pluginIds")]
+    pub plugin_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -957,6 +991,7 @@ pub struct ExternalAgentConfigMigrationItem {
     pub description: String,
     /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
     pub cwd: Option<PathBuf>,
+    pub details: Option<PluginsMigrationDetails>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -6588,6 +6623,45 @@ mod tests {
             CollabAgentState {
                 status: CollabAgentStatus::Interrupted,
                 message: None,
+            }
+        );
+    }
+
+    #[test]
+    fn external_agent_config_plugins_details_round_trip() {
+        let item: ExternalAgentConfigMigrationItem = serde_json::from_value(json!({
+            "itemType": "PLUGINS",
+            "description": "Install supported plugins from Claude settings",
+            "cwd": absolute_path_string("repo"),
+            "details": {
+                "marketplaces": [
+                    {
+                        "name": "team-marketplace",
+                        "source": "github",
+                        "repo": "acme-corp/team-marketplace",
+                        "ref": "main"
+                    }
+                ],
+                "pluginIds": ["asana@team-marketplace"]
+            }
+        }))
+        .expect("plugins migration item should deserialize");
+
+        assert_eq!(
+            item,
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                description: "Install supported plugins from Claude settings".to_string(),
+                cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+                details: Some(PluginsMigrationDetails {
+                    marketplaces: vec![PluginMarketplaceMigration {
+                        name: "team-marketplace".to_string(),
+                        source: PluginMarketplaceSource::Github,
+                        repo: "acme-corp/team-marketplace".to_string(),
+                        ref_name: Some("main".to_string()),
+                    }],
+                    plugin_ids: vec!["asana@team-marketplace".to_string()],
+                }),
             }
         );
     }

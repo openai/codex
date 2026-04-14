@@ -6,10 +6,16 @@ use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::PluginMarketplaceMigration;
+use codex_app_server_protocol::PluginMarketplaceSource;
+use codex_app_server_protocol::PluginsMigrationDetails;
 use codex_core::external_agent_config::ExternalAgentConfigDetectOptions;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use codex_core::external_agent_config::ExternalAgentConfigService;
+use codex_core::external_agent_config::PluginMarketplaceMigration as CorePluginMarketplaceMigration;
+use codex_core::external_agent_config::PluginMarketplaceSource as CorePluginMarketplaceSource;
+use codex_core::external_agent_config::PluginsMigrationDetails as CorePluginsMigrationDetails;
 use std::io;
 use std::path::PathBuf;
 
@@ -51,12 +57,16 @@ impl ExternalAgentConfigApi {
                         CoreMigrationItemType::AgentsMd => {
                             ExternalAgentConfigMigrationItemType::AgentsMd
                         }
+                        CoreMigrationItemType::Plugins => {
+                            ExternalAgentConfigMigrationItemType::Plugins
+                        }
                         CoreMigrationItemType::McpServerConfig => {
                             ExternalAgentConfigMigrationItemType::McpServerConfig
                         }
                     },
                     description: migration_item.description,
                     cwd: migration_item.cwd,
+                    details: migration_item.details.map(map_details_to_api),
                 })
                 .collect(),
         })
@@ -82,15 +92,20 @@ impl ExternalAgentConfigApi {
                             ExternalAgentConfigMigrationItemType::AgentsMd => {
                                 CoreMigrationItemType::AgentsMd
                             }
+                            ExternalAgentConfigMigrationItemType::Plugins => {
+                                CoreMigrationItemType::Plugins
+                            }
                             ExternalAgentConfigMigrationItemType::McpServerConfig => {
                                 CoreMigrationItemType::McpServerConfig
                             }
                         },
                         description: migration_item.description,
                         cwd: migration_item.cwd,
+                        details: migration_item.details.map(map_details_to_core),
                     })
                     .collect(),
             )
+            .await
             .map_err(map_io_error)?;
 
         Ok(ExternalAgentConfigImportResponse {})
@@ -102,5 +117,65 @@ fn map_io_error(err: io::Error) -> JSONRPCErrorError {
         code: INTERNAL_ERROR_CODE,
         message: err.to_string(),
         data: None,
+    }
+}
+
+fn map_plugin_marketplace_to_api(
+    details: CorePluginMarketplaceMigration,
+) -> PluginMarketplaceMigration {
+    PluginMarketplaceMigration {
+        name: details.name,
+        source: map_plugin_marketplace_source_to_api(details.source),
+        repo: details.repo,
+        ref_name: details.ref_name,
+    }
+}
+
+fn map_plugin_marketplace_to_core(
+    details: PluginMarketplaceMigration,
+) -> CorePluginMarketplaceMigration {
+    CorePluginMarketplaceMigration {
+        name: details.name,
+        source: map_plugin_marketplace_source_to_core(details.source),
+        repo: details.repo,
+        ref_name: details.ref_name,
+    }
+}
+
+fn map_plugin_marketplace_source_to_api(
+    source: CorePluginMarketplaceSource,
+) -> PluginMarketplaceSource {
+    match source {
+        CorePluginMarketplaceSource::Github => PluginMarketplaceSource::Github,
+    }
+}
+
+fn map_plugin_marketplace_source_to_core(
+    source: PluginMarketplaceSource,
+) -> CorePluginMarketplaceSource {
+    match source {
+        PluginMarketplaceSource::Github => CorePluginMarketplaceSource::Github,
+    }
+}
+
+fn map_details_to_api(details: CorePluginsMigrationDetails) -> PluginsMigrationDetails {
+    PluginsMigrationDetails {
+        marketplaces: details
+            .marketplaces
+            .into_iter()
+            .map(map_plugin_marketplace_to_api)
+            .collect(),
+        plugin_ids: details.plugin_ids,
+    }
+}
+
+fn map_details_to_core(details: PluginsMigrationDetails) -> CorePluginsMigrationDetails {
+    CorePluginsMigrationDetails {
+        marketplaces: details
+            .marketplaces
+            .into_iter()
+            .map(map_plugin_marketplace_to_core)
+            .collect(),
+        plugin_ids: details.plugin_ids,
     }
 }
