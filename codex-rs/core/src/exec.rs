@@ -675,18 +675,6 @@ fn finalize_exec_result(
     }
 }
 
-/// We don't have a fully deterministic way to tell if our command failed
-/// because of the sandbox - a command in the user's zshrc file might hit an
-/// error, but the command itself might fail or succeed for other reasons.
-/// For now, we conservatively check for well known command failure exit codes and
-/// also look for common sandbox denial keywords in the command output.
-pub(crate) fn is_likely_sandbox_denied(
-    sandbox_type: SandboxType,
-    exec_output: &ExecToolCallOutput,
-) -> bool {
-    codex_sandboxing::is_likely_sandbox_denied(sandbox_type, exec_output)
-}
-
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
