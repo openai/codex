@@ -33,7 +33,6 @@ use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::config::Config;
 use crate::config_loader::resolve_project_root;
 use crate::event_mapping::parse_turn_item;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -267,9 +266,12 @@ async fn apply_execpolicy_amendment_destination(
                 .map_err(|err| format!("failed to persist user prefix rule: {err}"))
         }
         PermissionSuggestionDestination::ProjectSettings => {
-            let project_codex_home = project_codex_home(turn_context.config.as_ref())
+            let config = turn_context.config.as_ref();
+            let project_codex_home = resolve_project_root(&config.config_layer_stack, &config.cwd)
                 .await
-                .map_err(|err| format!("failed to resolve project root for rules file: {err}"))?;
+                .map_err(|err| format!("failed to resolve project root for rules file: {err}"))?
+                .join(".codex")
+                .to_path_buf();
             tokio::fs::create_dir_all(project_codex_home.join("rules"))
                 .await
                 .map_err(|err| format!("failed to create project rules directory: {err}"))?;
@@ -280,15 +282,6 @@ async fn apply_execpolicy_amendment_destination(
                 .map_err(|err| format!("failed to persist project prefix rule: {err}"))
         }
     }
-}
-
-async fn project_codex_home(config: &Config) -> std::io::Result<std::path::PathBuf> {
-    Ok(
-        resolve_project_root(&config.config_layer_stack, &config.cwd)
-            .await?
-            .join(".codex")
-            .to_path_buf(),
-    )
 }
 
 pub(crate) async fn run_post_tool_use_hooks(
