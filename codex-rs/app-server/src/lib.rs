@@ -873,6 +873,12 @@ pub async fn run_main_with_transport(
             }
 
             if !shutdown_state.forced() {
+                futures::future::join_all(
+                    connections
+                        .values()
+                        .map(|connection_state| connection_state.session.rpc_gate.shutdown()),
+                )
+                .await;
                 processor.drain_background_tasks().await;
                 processor.shutdown_threads().await;
             }

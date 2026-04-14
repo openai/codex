@@ -182,7 +182,7 @@ pub(crate) struct MessageProcessor {
 
 #[derive(Debug, Default)]
 pub(crate) struct ConnectionSessionState {
-    rpc_gate: Arc<ConnectionRpcGate>,
+    pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
