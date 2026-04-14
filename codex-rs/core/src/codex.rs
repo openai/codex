@@ -4915,6 +4915,8 @@ mod handlers {
     use crate::config_loader::CloudRequirementsLoader;
     use crate::config_loader::LoaderOverrides;
     use crate::config_loader::load_config_layers_state;
+    use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
+    use crate::realtime_context::truncate_realtime_text_to_token_budget;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -5132,6 +5134,10 @@ mod handlers {
 
     async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
         let text = UserMessageItem::new(items).message();
+        if text.is_empty() {
+            return;
+        }
+        let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
         if text.is_empty() {
             return;
         }
@@ -7143,11 +7149,24 @@ pub(crate) async fn built_tools(
     );
     let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
 
+    let parallel_mcp_server_names = turn_context
+        .config
+        .mcp_servers
+        .get()
+        .iter()
+        .filter_map(|(server_name, server_config)| {
+            server_config
+                .supports_parallel_tool_calls
+                .then_some(server_name.clone())
+        })
+        .collect::<HashSet<_>>();
+
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
             mcp_tools: direct_mcp_tools,
+            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

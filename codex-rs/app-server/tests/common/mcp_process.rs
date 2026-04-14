@@ -62,6 +62,7 @@ use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
@@ -600,6 +601,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/start", params).await
+    }
+
+    /// Send a `thread/inject_items` JSON-RPC request (v2).
+    pub async fn send_thread_inject_items_request(
+        &mut self,
+        params: ThreadInjectItemsParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/inject_items", params).await
     }
 
     /// Send a `command/exec` JSON-RPC request (v2).

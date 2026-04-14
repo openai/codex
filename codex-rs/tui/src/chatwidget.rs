@@ -3423,6 +3423,42 @@ impl ChatWidget {
             return;
         }
 
+        if ev.status == GuardianAssessmentStatus::TimedOut {
+            let cell = if let Some(command) = guardian_command(&ev.action) {
+                history_cell::new_approval_decision_cell(
+                    command,
+                    codex_protocol::protocol::ReviewDecision::TimedOut,
+                    history_cell::ApprovalDecisionActor::Guardian,
+                )
+            } else {
+                match &ev.action {
+                    GuardianAssessmentAction::ApplyPatch { files, .. } => {
+                        let files = files
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>();
+                        history_cell::new_guardian_timed_out_patch_request(files)
+                    }
+                    GuardianAssessmentAction::McpToolCall {
+                        server, tool_name, ..
+                    } => history_cell::new_guardian_timed_out_action_request(format!(
+                        "codex could call MCP tool {server}.{tool_name}"
+                    )),
+                    GuardianAssessmentAction::NetworkAccess { target, .. } => {
+                        history_cell::new_guardian_timed_out_action_request(format!(
+                            "codex could access {target}"
+                        ))
+                    }
+                    GuardianAssessmentAction::Command { .. } => unreachable!(),
+                    GuardianAssessmentAction::Execve { .. } => unreachable!(),
+                }
+            };
+
+            self.add_boxed_history(cell);
+            self.request_redraw();
+            return;
+        }
+
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }

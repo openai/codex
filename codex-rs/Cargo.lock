@@ -1902,7 +1902,6 @@ dependencies = [
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",
- "codex-arg0",
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",
@@ -1932,6 +1931,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-state",
  "codex-terminal-detection",
+ "codex-test-binary-support",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -2102,9 +2102,10 @@ dependencies = [
  "codex-config",
  "codex-protocol",
  "codex-sandboxing",
+ "codex-test-binary-support",
  "codex-utils-absolute-path",
- "codex-utils-cargo-bin",
  "codex-utils-pty",
+ "ctor 0.6.3",
  "futures",
  "pretty_assertions",
  "serde",
@@ -2812,6 +2813,14 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "tracing",
+]
+
+[[package]]
+name = "codex-test-binary-support"
+version = "0.0.0"
+dependencies = [
+ "codex-arg0",
+ "tempfile",
 ]
 
 [[package]]
