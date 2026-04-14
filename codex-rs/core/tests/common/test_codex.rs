@@ -169,20 +169,19 @@ pub async fn test_env() -> Result<TestEnv> {
                 )
                 .await?;
             remote_process.process.register_cleanup_path(cwd.as_path());
+            let remote_codex_self_exe =
+                PathBuf::from(&remote_process.process.remote_exec_server_path);
+            let remote_codex_linux_sandbox_exe = remote_codex_self_exe
+                .parent()
+                .expect("remote exec-server path should have a parent")
+                .join(REMOTE_CODEX_LINUX_SANDBOX_EXE);
             Ok(TestEnv {
                 _remote_exec_server_process: Some(remote_process.process),
                 environment,
                 cwd,
                 local_cwd_temp_dir: None,
-                remote_codex_self_exe: Some(PathBuf::from(
-                    &remote_process.process.remote_exec_server_path,
-                )),
-                remote_codex_linux_sandbox_exe: Some(
-                    Path::new(&remote_process.process.remote_exec_server_path)
-                        .parent()
-                        .expect("remote exec-server path should have a parent")
-                        .join(REMOTE_CODEX_LINUX_SANDBOX_EXE),
-                ),
+                remote_codex_self_exe: Some(remote_codex_self_exe),
+                remote_codex_linux_sandbox_exe: Some(remote_codex_linux_sandbox_exe),
             })
         }
         None => TestEnv::local().await,
