@@ -2936,14 +2936,10 @@ impl Session {
     }
 
     async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
-        let EventMsg::TurnComplete(event) = msg else {
+        if !matches!(msg, EventMsg::TurnComplete(_)) {
             return;
-        };
-        if let Err(err) = self
-            .conversation
-            .handoff_complete(event.last_agent_message.clone())
-            .await
-        {
+        }
+        if let Err(err) = self.conversation.handoff_complete().await {
             debug!("failed to finalize realtime handoff output: {err}");
         }
         self.conversation.clear_active_handoff().await;
