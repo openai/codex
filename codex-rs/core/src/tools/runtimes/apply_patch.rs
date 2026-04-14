@@ -99,13 +99,16 @@ impl ApplyPatchRuntime {
 
     #[cfg(target_os = "linux")]
     fn normalize_apply_patch_program(path: PathBuf) -> PathBuf {
-        use std::os::unix::ffi::OsStrExt;
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
 
-        if path.as_os_str().as_bytes().ends_with(b" (deleted)") {
-            PathBuf::from("/proc/self/exe")
-        } else {
-            path
+        const DELETED_SUFFIX: &[u8] = b" (deleted)";
+
+        let mut bytes = path.into_os_string().into_vec();
+        if bytes.ends_with(DELETED_SUFFIX) {
+            bytes.truncate(bytes.len() - DELETED_SUFFIX.len());
         }
+        PathBuf::from(OsString::from_vec(bytes))
     }
 
     #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
