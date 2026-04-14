@@ -8,9 +8,10 @@ The workflows in this directory are split so that pull requests get fast, review
   It runs Bazel `test` and Bazel `clippy` on the supported Bazel targets,
   including the generated Rust test binaries needed to lint inline `#[cfg(test)]`
   code.
-- `rust-ci.yml` keeps the Cargo-native PR checks intentionally small:
+- `rust-ci.yml` keeps a small set of supplemental PR checks intentionally small:
   - `cargo fmt --check`
   - `cargo shear`
+  - Linux remote-env smoke tests
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
 
@@ -24,7 +25,7 @@ The workflows in this directory are split so that pull requests get fast, review
   - the full Cargo `nextest` matrix
   - release-profile Cargo builds
   - cross-platform `argument-comment-lint`
-  - Linux remote-env tests
+  - the broader Linux remote-env coverage
 
 ## Rule Of Thumb
 

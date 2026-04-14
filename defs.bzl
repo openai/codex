@@ -230,6 +230,16 @@ def codex_rust_crate(
 
         maybe_deps += [name + "-build-script"]
 
+    sanitized_binaries = []
+    cargo_env = {}
+    for binary in binaries.keys():
+        sanitized_binaries.append(binary)
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath :%s)" % binary
+    for binary_label in extra_binaries:
+        sanitized_binaries.append(binary_label)
+        binary = Label(binary_label).name
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
+
     if lib_srcs:
         lib_rule = rust_proc_macro if proc_macro else rust_library
         lib_rule(
@@ -263,7 +273,7 @@ def codex_rust_crate(
                 "--remap-path-prefix=codex-rs=",
             ],
             rustc_env = rustc_env,
-            data = test_data_extra,
+            data = test_data_extra + sanitized_binaries,
             tags = test_tags + ["manual"],
         )
 
@@ -273,7 +283,7 @@ def codex_rust_crate(
 
         workspace_root_test(
             name = name + "-unit-tests",
-            env = test_env,
+            env = test_env | cargo_env,
             test_bin = ":" + unit_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             tags = test_tags,
@@ -282,13 +292,7 @@ def codex_rust_crate(
 
         maybe_deps += [name]
 
-    sanitized_binaries = []
-    cargo_env = {}
     for binary, main in binaries.items():
-        #binary = binary.replace("-", "_")
-        sanitized_binaries.append(binary)
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath :%s)" % binary
-
         rust_binary(
             name = binary,
             crate_name = binary.replace("-", "_"),
@@ -299,11 +303,6 @@ def codex_rust_crate(
             srcs = native.glob(["src/**/*.rs"]),
             visibility = ["//visibility:public"],
         )
-
-    for binary_label in extra_binaries:
-        sanitized_binaries.append(binary_label)
-        binary = Label(binary_label).name
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
     integration_test_kwargs = {}
     if integration_test_args:

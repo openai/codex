@@ -32,19 +32,21 @@ setup_remote_env() {
     return 1
   fi
 
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "cargo is required to build codex" >&2
-    return 1
-  fi
+  if [[ "${CODEX_TEST_REMOTE_ENV_SKIP_CODEX_BUILD:-0}" != "1" ]]; then
+    if ! command -v cargo >/dev/null 2>&1; then
+      echo "cargo is required to build codex" >&2
+      return 1
+    fi
 
-  (
-    cd "${REPO_ROOT}/codex-rs"
-    cargo build -p codex-cli --bin codex
-  )
+    (
+      cd "${REPO_ROOT}/codex-rs"
+      cargo build -p codex-cli --bin codex
+    )
 
-  if [[ ! -f "${codex_binary_path}" ]]; then
-    echo "codex binary not found at ${codex_binary_path}" >&2
-    return 1
+    if [[ ! -f "${codex_binary_path}" ]]; then
+      echo "codex binary not found at ${codex_binary_path}" >&2
+      return 1
+    fi
   fi
 
   docker rm -f "${container_name}" >/dev/null 2>&1 || true
