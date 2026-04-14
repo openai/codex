@@ -82,10 +82,12 @@ fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {
     toml::to_string(&Value::Table(root)).expect("plugin test config should serialize")
 }
 
-fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> PluginLoadOutcome {
+async fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> PluginLoadOutcome {
     write_file(&codex_home.join(CONFIG_TOML_FILE), config_toml);
-    let config = load_config_blocking(codex_home, codex_home);
-    PluginsManager::new(codex_home.to_path_buf()).plugins_for_config(&config)
+    let config = load_config(codex_home, codex_home).await;
+    PluginsManager::new(codex_home.to_path_buf())
+        .plugins_for_config(&config)
+        .await
 }
 
 async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
@@ -97,16 +99,8 @@ async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
         .expect("config should load")
 }
 
-fn load_config_blocking(codex_home: &Path, cwd: &Path) -> crate::config::Config {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime should build")
-        .block_on(load_config(codex_home, cwd))
-}
-
-#[test]
-fn load_plugins_loads_default_skills_and_mcp_servers() {
+#[tokio::test]
+async fn load_plugins_loads_default_skills_and_mcp_servers() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -153,7 +147,8 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-    );
+    )
+    .await;
 
     assert_eq!(
         outcome.plugins(),
@@ -179,6 +174,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
                     },
                     enabled: true,
                     required: false,
+                    supports_parallel_tool_calls: false,
                     disabled_reason: None,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
@@ -215,8 +211,8 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
     );
 }
 
-#[test]
-fn load_plugins_resolves_disabled_skill_names_against_loaded_plugin_skills() {
+#[tokio::test]
+async fn load_plugins_resolves_disabled_skill_names_against_loaded_plugin_skills() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -243,7 +239,7 @@ enabled = false
 [plugins."sample@test"]
 enabled = true
 "#;
-    let outcome = load_plugins_from_config(config_toml, codex_home.path());
+    let outcome = load_plugins_from_config(config_toml, codex_home.path()).await;
     let skill_path = dunce::canonicalize(skill_path)
         .expect("skill path should canonicalize")
         .abs();
@@ -256,8 +252,8 @@ enabled = true
     assert!(outcome.capability_summaries().is_empty());
 }
 
-#[test]
-fn load_plugins_ignores_unknown_disabled_skill_names() {
+#[tokio::test]
+async fn load_plugins_ignores_unknown_disabled_skill_names() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -283,7 +279,7 @@ enabled = false
 [plugins."sample@test"]
 enabled = true
 "#;
-    let outcome = load_plugins_from_config(config_toml, codex_home.path());
+    let outcome = load_plugins_from_config(config_toml, codex_home.path()).await;
 
     assert!(outcome.plugins()[0].disabled_skill_paths.is_empty());
     assert!(outcome.plugins()[0].has_enabled_skills);
@@ -300,8 +296,8 @@ enabled = true
     );
 }
 
-#[test]
-fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
+#[tokio::test]
+async fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -329,7 +325,8 @@ fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
     let metadata = plugin_telemetry_metadata_from_root(
         &PluginId::parse("sample@test").expect("plugin id should parse"),
         &plugin_root.abs(),
-    );
+    )
+    .await;
 
     assert_eq!(
         metadata.capability_summary,
@@ -344,8 +341,8 @@ fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
     );
 }
 
-#[test]
-fn capability_summary_sanitizes_plugin_descriptions_to_one_line() {
+#[tokio::test]
+async fn capability_summary_sanitizes_plugin_descriptions_to_one_line() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -367,7 +364,8 @@ fn capability_summary_sanitizes_plugin_descriptions_to_one_line() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-    );
+    )
+    .await;
 
     assert_eq!(
         outcome.plugins()[0].manifest_description.as_deref(),
@@ -379,8 +377,8 @@ fn capability_summary_sanitizes_plugin_descriptions_to_one_line() {
     );
 }
 
-#[test]
-fn capability_summary_truncates_overlong_plugin_descriptions() {
+#[tokio::test]
+async fn capability_summary_truncates_overlong_plugin_descriptions() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -405,7 +403,8 @@ fn capability_summary_truncates_overlong_plugin_descriptions() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-    );
+    )
+    .await;
 
     assert_eq!(
         outcome.plugins()[0].manifest_description.as_deref(),
@@ -417,8 +416,8 @@ fn capability_summary_truncates_overlong_plugin_descriptions() {
     );
 }
 
-#[test]
-fn load_plugins_uses_manifest_configured_component_paths() {
+#[tokio::test]
+async fn load_plugins_uses_manifest_configured_component_paths() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -488,7 +487,8 @@ fn load_plugins_uses_manifest_configured_component_paths() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-    );
+    )
+    .await;
 
     assert_eq!(
         outcome.plugins()[0].skill_roots,
@@ -510,6 +510,7 @@ fn load_plugins_uses_manifest_configured_component_paths() {
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -527,8 +528,8 @@ fn load_plugins_uses_manifest_configured_component_paths() {
     );
 }
 
-#[test]
-fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
+#[tokio::test]
+async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -598,7 +599,8 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
-    );
+    )
+    .await;
 
     assert_eq!(
         outcome.plugins()[0].skill_roots,
@@ -617,6 +619,7 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -634,8 +637,8 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
     );
 }
 
-#[test]
-fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
+#[tokio::test]
+async fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -663,7 +666,8 @@ fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
             /*enabled*/ false, /*plugins_feature_enabled*/ true,
         ),
         codex_home.path(),
-    );
+    )
+    .await;
 
     assert_eq!(
         outcome.plugins(),
@@ -685,8 +689,8 @@ fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
     assert!(outcome.effective_mcp_servers().is_empty());
 }
 
-#[test]
-fn effective_apps_dedupes_connector_ids_across_plugins() {
+#[tokio::test]
+async fn effective_apps_dedupes_connector_ids_across_plugins() {
     let codex_home = TempDir::new().unwrap();
     let plugin_a_root = codex_home
         .path()
@@ -748,7 +752,7 @@ fn effective_apps_dedupes_connector_ids_across_plugins() {
     let config_toml =
         toml::to_string(&Value::Table(root)).expect("plugin test config should serialize");
 
-    let outcome = load_plugins_from_config(&config_toml, codex_home.path());
+    let outcome = load_plugins_from_config(&config_toml, codex_home.path()).await;
 
     assert_eq!(
         outcome.effective_apps(),
@@ -772,6 +776,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         },
         enabled: true,
         required: false,
+        supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -854,8 +859,8 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
     );
 }
 
-#[test]
-fn load_plugins_returns_empty_when_feature_disabled() {
+#[tokio::test]
+async fn load_plugins_returns_empty_when_feature_disabled() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -877,14 +882,16 @@ fn load_plugins_returns_empty_when_feature_disabled() {
         ),
     );
 
-    let config = load_config_blocking(codex_home.path(), codex_home.path());
-    let outcome = PluginsManager::new(codex_home.path().to_path_buf()).plugins_for_config(&config);
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let outcome = PluginsManager::new(codex_home.path().to_path_buf())
+        .plugins_for_config(&config)
+        .await;
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }
 
-#[test]
-fn load_plugins_rejects_invalid_plugin_keys() {
+#[tokio::test]
+async fn load_plugins_rejects_invalid_plugin_keys() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -911,7 +918,8 @@ fn load_plugins_rejects_invalid_plugin_keys() {
     let outcome = load_plugins_from_config(
         &toml::to_string(&Value::Table(root)).expect("plugin test config should serialize"),
         codex_home.path(),
-    );
+    )
+    .await;
 
     assert_eq!(outcome.plugins().len(), 1);
     assert_eq!(
@@ -1342,6 +1350,7 @@ enabled = true
                 marketplace_path,
             },
         )
+        .await
         .unwrap_err();
 
     assert!(matches!(err, MarketplaceError::PluginsDisabled));
@@ -1406,6 +1415,7 @@ enabled = false
                 .unwrap(),
             },
         )
+        .await
         .unwrap();
 
     assert!(outcome.plugin.disabled_skill_paths.is_empty());
@@ -2723,8 +2733,8 @@ enabled = true
     );
 }
 
-#[test]
-fn load_plugins_ignores_project_config_files() {
+#[tokio::test]
+async fn load_plugins_ignores_project_config_files() {
     let codex_home = TempDir::new().unwrap();
     let project_root = codex_home.path().join("project");
     let plugin_root = codex_home
@@ -2760,7 +2770,8 @@ fn load_plugins_ignores_project_config_files() {
         &stack,
         &PluginStore::new(codex_home.path().to_path_buf()),
         Some(Product::Codex),
-    );
+    )
+    .await;
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }

@@ -21,10 +21,12 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::approx_token_count;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::start_mock_server;
@@ -247,6 +249,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -380,6 +383,7 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -463,6 +467,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ConversationStartTransport::Webrtc {
@@ -600,6 +605,7 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -661,6 +667,7 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -746,6 +753,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -789,6 +797,7 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -879,6 +888,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("old".to_string())),
             session_id: Some("conv_old".to_string()),
             transport: None,
@@ -897,6 +907,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("new".to_string())),
             session_id: Some("conv_new".to_string()),
             transport: None,
@@ -986,6 +997,7 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1043,6 +1055,7 @@ async fn conversation_uses_default_realtime_backend_prompt() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: None,
             session_id: None,
             transport: None,
@@ -1108,6 +1121,7 @@ async fn conversation_uses_empty_instructions_for_null_or_empty_prompt() -> Resu
     ] {
         test.codex
             .submit(Op::RealtimeConversationStart(ConversationStartParams {
+                output_modality: RealtimeOutputModality::Audio,
                 prompt,
                 session_id: None,
                 transport: None,
@@ -1166,6 +1180,7 @@ async fn conversation_uses_explicit_start_voice() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1216,6 +1231,7 @@ async fn conversation_uses_configured_realtime_voice() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1254,6 +1270,7 @@ async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1297,6 +1314,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("prompt from op".to_string())),
             session_id: None,
             transport: None,
@@ -1362,6 +1380,7 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("prompt from op".to_string())),
             session_id: None,
             transport: None,
@@ -1425,6 +1444,7 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("prompt from op".to_string())),
             session_id: None,
             transport: None,
@@ -1481,6 +1501,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1592,6 +1613,7 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
 
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1696,6 +1718,7 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1750,6 +1773,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1825,6 +1849,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1911,6 +1936,124 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp_long_user_text"),
+            responses::ev_assistant_message("msg_long_user_text", "ack"),
+            responses::ev_completed("resp_long_user_text"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_long_user_text", "instructions": "backend prompt" }
+        })],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.experimental_realtime_ws_startup_context = Some(String::new());
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    // Phase 1: start realtime so the next normal user turn mirrors over the
+    // active WebSocket session.
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_updated, "sess_long_user_text");
+
+    // Phase 2: submit one oversized text turn. The model request should keep
+    // the exact user text, while the realtime mirror should get the capped copy.
+    let user_text = format!(
+        "mirror-head {} mirror-middle {} mirror-tail",
+        "alpha ".repeat(900),
+        "omega ".repeat(900),
+    );
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: user_text.clone(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    // Phase 3: capture the mirrored WebSocket item; the snapshot below records
+    // the capped payload shape.
+    let realtime_text_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "capped normal user turn text mirrored to realtime",
+        |request| websocket_request_text(request).is_some_and(|text| text.contains("mirror-head")),
+    )
+    .await;
+    let realtime_text =
+        websocket_request_text(&realtime_text_request).expect("realtime request text");
+    let model_user_texts = response_mock.single_request().message_input_texts("user");
+
+    let realtime_request_body = realtime_text_request.body_json();
+    let content = &realtime_request_body["item"]["content"][0];
+
+    // Snapshot the request envelope and capped text together so reviewers can
+    // see the preserved head/tail and truncation marker in one place.
+    let snapshot = format!(
+        "type: {}\nitem.type: {}\nitem.role: {}\ncontent[0].type: {}\nmodel_has_full_user_text: {}\nrealtime_text_equal_full_user_text: {}\nrealtime_text_approx_tokens: {}\ncontent[0].text: {}",
+        realtime_request_body["type"].as_str().unwrap_or_default(),
+        realtime_request_body["item"]["type"]
+            .as_str()
+            .unwrap_or_default(),
+        realtime_request_body["item"]["role"]
+            .as_str()
+            .unwrap_or_default(),
+        content["type"].as_str().unwrap_or_default(),
+        model_user_texts.iter().any(|text| text == &user_text),
+        realtime_text == user_text,
+        approx_token_count(&realtime_text),
+        realtime_text,
+    );
+    insta::assert_snapshot!(
+        "conversation_user_text_turn_is_capped_when_mirrored_to_realtime",
+        snapshot
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1957,6 +2100,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2086,6 +2230,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2230,6 +2375,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2327,6 +2473,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2422,6 +2569,7 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2524,6 +2672,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2639,6 +2788,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2784,6 +2934,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -2914,6 +3065,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -3065,6 +3217,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,

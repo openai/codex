@@ -104,6 +104,8 @@ pub(crate) fn spawn_runtime(
     request: ExecuteRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
 ) -> Result<(std_mpsc::Sender<RuntimeCommand>, v8::IsolateHandle), String> {
+    initialize_v8()?;
+
     let (command_tx, command_rx) = std_mpsc::channel();
     let runtime_command_tx = command_tx.clone();
     let (isolate_handle_tx, isolate_handle_rx) = std_mpsc::sync_channel(1);
@@ -164,15 +166,20 @@ pub(super) enum CompletionState {
     },
 }
 
-fn initialize_v8() {
-    static PLATFORM: OnceLock<v8::SharedRef<v8::Platform>> = OnceLock::new();
+fn initialize_v8() -> Result<(), String> {
+    static PLATFORM: OnceLock<Result<v8::SharedRef<v8::Platform>, String>> = OnceLock::new();
 
-    let _ = PLATFORM.get_or_init(|| {
+    match PLATFORM.get_or_init(|| {
+        v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA)
+            .map_err(|error_code| format!("failed to initialize ICU data: {error_code}"))?;
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform.clone());
         v8::V8::initialize();
-        platform
-    });
+        Ok(platform)
+    }) {
+        Ok(_) => Ok(()),
+        Err(error_text) => Err(error_text.clone()),
+    }
 }
 
 fn run_runtime(
@@ -182,8 +189,6 @@ fn run_runtime(
     isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
 ) {
-    initialize_v8();
-
     let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
     let isolate_handle = isolate.thread_safe_handle();
     if isolate_handle_tx.send(isolate_handle).is_err() {

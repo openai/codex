@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -128,10 +129,31 @@ impl FileSystemSandboxRunner {
         &self,
         additional_permissions: Option<&PermissionProfile>,
     ) -> PermissionProfile {
+        let helper_read_root = self
+            .runtime_paths
+            .codex_self_exe
+            .parent()
+            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
+        let file_system =
+            match additional_permissions.and_then(|permissions| permissions.file_system.clone()) {
+                Some(mut file_system) => {
+                    if let Some(helper_read_root) = &helper_read_root {
+                        let read_paths = file_system.read.get_or_insert_with(Vec::new);
+                        if !read_paths.contains(helper_read_root) {
+                            read_paths.push(helper_read_root.clone());
+                        }
+                    }
+                    Some(file_system)
+                }
+                None => helper_read_root.map(|helper_read_root| FileSystemPermissions {
+                    read: Some(vec![helper_read_root]),
+                    write: None,
+                }),
+            };
+
         PermissionProfile {
             network: None,
-            file_system: additional_permissions
-                .and_then(|permissions| permissions.file_system.clone()),
+            file_system,
         }
     }
 }
@@ -522,7 +544,7 @@ mod tests {
                 enabled: Some(true),
             }),
             file_system: Some(FileSystemPermissions {
-                read: Some(vec![readable.clone()]),
+                read: Some(vec![]),
                 write: Some(vec![writable.clone()]),
             }),
         }));
@@ -541,6 +563,32 @@ mod tests {
                 .as_ref()
                 .and_then(|fs| fs.read.clone()),
             Some(vec![readable])
+        );
+    }
+
+    #[test]
+    fn helper_permissions_include_helper_read_root_without_additional_permissions() {
+        let codex_self_exe = std::env::current_exe().expect("current exe");
+        let runtime_paths = ExecServerRuntimePaths::new(
+            codex_self_exe.clone(),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let runner = FileSystemSandboxRunner::new(runtime_paths);
+        let readable = AbsolutePathBuf::from_absolute_path(
+            codex_self_exe.parent().expect("current exe parent"),
+        )
+        .expect("absolute readable path");
+
+        let permissions = runner.helper_permissions(/*additional_permissions*/ None);
+
+        assert_eq!(permissions.network, None);
+        assert_eq!(
+            permissions.file_system,
+            Some(FileSystemPermissions {
+                read: Some(vec![readable]),
+                write: None,
+            })
         );
     }
 }

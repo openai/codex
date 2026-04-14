@@ -229,7 +229,7 @@ impl ActionKind {
                 let event = shell_event(
                     call_id,
                     &command,
-                    /*timeout_ms*/ 5_000,
+                    /*timeout_ms*/ 30_000,
                     sandbox_permissions,
                 )?;
                 Ok((event, Some(command)))

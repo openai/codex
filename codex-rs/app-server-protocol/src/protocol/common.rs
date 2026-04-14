@@ -322,9 +322,18 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    /// Append raw Responses API items to the thread history without starting a user turn.
+    ThreadInjectItems => "thread/inject_items" {
+        params: v2::ThreadInjectItemsParams,
+        response: v2::ThreadInjectItemsResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
+    },
+    MarketplaceAdd => "marketplace/add" {
+        params: v2::MarketplaceAddParams,
+        response: v2::MarketplaceAddResponse,
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
@@ -1017,8 +1026,10 @@ server_notification_definitions! {
     ThreadRealtimeStarted => "thread/realtime/started" (v2::ThreadRealtimeStartedNotification),
     #[experimental("thread/realtime/itemAdded")]
     ThreadRealtimeItemAdded => "thread/realtime/itemAdded" (v2::ThreadRealtimeItemAddedNotification),
-    #[experimental("thread/realtime/transcriptUpdated")]
-    ThreadRealtimeTranscriptUpdated => "thread/realtime/transcriptUpdated" (v2::ThreadRealtimeTranscriptUpdatedNotification),
+    #[experimental("thread/realtime/transcript/delta")]
+    ThreadRealtimeTranscriptDelta => "thread/realtime/transcript/delta" (v2::ThreadRealtimeTranscriptDeltaNotification),
+    #[experimental("thread/realtime/transcript/done")]
+    ThreadRealtimeTranscriptDone => "thread/realtime/transcript/done" (v2::ThreadRealtimeTranscriptDoneNotification),
     #[experimental("thread/realtime/outputAudio/delta")]
     ThreadRealtimeOutputAudioDelta => "thread/realtime/outputAudio/delta" (v2::ThreadRealtimeOutputAudioDeltaNotification),
     #[experimental("thread/realtime/sdp")]
@@ -1051,6 +1062,8 @@ mod tests {
     use codex_protocol::account::PlanType;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
+    use codex_protocol::protocol::RealtimeOutputModality;
+    use codex_protocol::protocol::RealtimeVoice;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1779,10 +1792,11 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
                 session_id: Some("sess_456".to_string()),
                 transport: None,
-                voice: Some(codex_protocol::protocol::RealtimeVoice::Marin),
+                voice: Some(RealtimeVoice::Marin),
             },
         };
         assert_eq!(
@@ -1791,6 +1805,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "outputModality": "audio",
                     "prompt": "You are on a call",
                     "sessionId": "sess_456",
                     "transport": null,
@@ -1808,6 +1823,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: None,
                 session_id: None,
                 transport: None,
@@ -1820,6 +1836,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "outputModality": "audio",
                     "sessionId": null,
                     "transport": null,
                     "voice": null
@@ -1832,6 +1849,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(None),
                 session_id: None,
                 transport: None,
@@ -1844,6 +1862,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "outputModality": "audio",
                     "prompt": null,
                     "sessionId": null,
                     "transport": null,
@@ -1858,6 +1877,7 @@ mod tests {
             "id": 9,
             "params": {
                 "threadId": "thr_123",
+                "outputModality": "audio",
                 "sessionId": null,
                 "transport": null,
                 "voice": null
@@ -1873,6 +1893,7 @@ mod tests {
             "id": 9,
             "params": {
                 "threadId": "thr_123",
+                "outputModality": "audio",
                 "prompt": null,
                 "sessionId": null,
                 "transport": null,
@@ -1957,6 +1978,7 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
                 session_id: None,
                 transport: None,

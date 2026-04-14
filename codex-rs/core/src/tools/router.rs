@@ -20,6 +20,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -36,11 +37,13 @@ pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
+    parallel_mcp_server_names: HashSet<String>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
@@ -50,6 +53,7 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
+            parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools,
         } = params;
@@ -83,6 +87,7 @@ impl ToolRouter {
             registry,
             specs,
             model_visible_specs,
+            parallel_mcp_server_names,
         }
     }
 
@@ -104,13 +109,23 @@ impl ToolRouter {
             .map(|config| config.spec.clone())
     }
 
-    pub fn tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
+    fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
         tool_name.namespace.is_none()
             && self
                 .specs
                 .iter()
                 .filter(|config| config.supports_parallel_tool_calls)
                 .any(|config| config.name() == tool_name.name.as_str())
+    }
+
+    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
+        match &call.payload {
+            // MCP parallel support is configured per server, including for deferred
+            // tools that may not have a matching spec entry. Use the parsed payload
+            // server so similarly named servers/tools cannot collide.
+            ToolPayload::Mcp { server, .. } => self.parallel_mcp_server_names.contains(server),
+            _ => self.configured_tool_supports_parallel(&call.tool_name),
+        }
     }
 
     #[instrument(level = "trace", skip_all, err)]

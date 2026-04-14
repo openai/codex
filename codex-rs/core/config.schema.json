@@ -398,9 +398,6 @@
             "guardian_approval": {
               "type": "boolean"
             },
-            "image_detail_original": {
-              "type": "boolean"
-            },
             "image_generation": {
               "type": "boolean"
             },
@@ -483,6 +480,9 @@
               "type": "boolean"
             },
             "steer": {
+              "type": "boolean"
+            },
+            "telepathy": {
               "type": "boolean"
             },
             "tool_call_mcp_elicitation": {
@@ -1522,6 +1522,10 @@
           "format": "double",
           "type": "number"
         },
+        "supports_parallel_tool_calls": {
+          "default": null,
+          "type": "boolean"
+        },
         "tool_timeout_sec": {
           "default": null,
           "format": "double",
@@ -2247,9 +2251,6 @@
         "guardian_approval": {
           "type": "boolean"
         },
-        "image_detail_original": {
-          "type": "boolean"
-        },
         "image_generation": {
           "type": "boolean"
         },
@@ -2332,6 +2333,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "telepathy": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

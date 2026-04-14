@@ -38,6 +38,7 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<PermissionProfile>,
+    next_turn_is_first: bool,
 }
 
 impl SessionState {
@@ -57,6 +58,7 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             granted_permissions: None,
+            next_turn_is_first: true,
         }
     }
 
@@ -92,6 +94,16 @@ impl SessionState {
         namespace: Option<&str>,
     ) -> Option<ToolInfo> {
         self.advertised_mcp_tools.resolve(name, namespace)
+    }
+
+    pub(crate) fn set_next_turn_is_first(&mut self, value: bool) {
+        self.next_turn_is_first = value;
+    }
+
+    pub(crate) fn take_next_turn_is_first(&mut self) -> bool {
+        let is_first_turn = self.next_turn_is_first;
+        self.next_turn_is_first = false;
+        is_first_turn
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

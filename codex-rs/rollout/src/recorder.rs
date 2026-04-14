@@ -1255,7 +1255,7 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
                 model_provider: Some(item.model_provider),
                 cli_version: Some(item.cli_version),
                 created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
-                updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+                updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
             })
             .collect();
         Self {

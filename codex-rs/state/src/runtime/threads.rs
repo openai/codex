@@ -1,35 +1,36 @@
 use super::*;
 use codex_protocol::protocol::SessionSource;
+use std::sync::atomic::Ordering;
 
 impl StateRuntime {
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
         let row = sqlx::query(
             r#"
 SELECT
-    id,
-    rollout_path,
-    created_at,
-    updated_at,
-    source,
-    agent_nickname,
-    agent_role,
-    agent_path,
-    model_provider,
-    model,
-    reasoning_effort,
-    cwd,
-    cli_version,
-    title,
-    sandbox_policy,
-    approval_mode,
-    tokens_used,
-    first_user_message,
-    archived_at,
-    git_sha,
-    git_branch,
-    git_origin_url
+    threads.id,
+    threads.rollout_path,
+    threads.created_at_ms AS created_at,
+    threads.updated_at_ms AS updated_at,
+    threads.source,
+    threads.agent_nickname,
+    threads.agent_role,
+    threads.agent_path,
+    threads.model_provider,
+    threads.model,
+    threads.reasoning_effort,
+    threads.cwd,
+    threads.cli_version,
+    threads.title,
+    threads.sandbox_policy,
+    threads.approval_mode,
+    threads.tokens_used,
+    threads.first_user_message,
+    threads.archived_at,
+    threads.git_sha,
+    threads.git_branch,
+    threads.git_origin_url
 FROM threads
-WHERE id = ?
+WHERE threads.id = ?
             "#,
         )
         .bind(id.to_string())
@@ -336,34 +337,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
         archived_only: bool,
         cwd: Option<&Path>,
     ) -> anyhow::Result<Option<crate::ThreadMetadata>> {
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            r#"
-SELECT
-    id,
-    rollout_path,
-    created_at,
-    updated_at,
-    source,
-    agent_nickname,
-    agent_role,
-    agent_path,
-    model_provider,
-    model,
-    reasoning_effort,
-    cwd,
-    cli_version,
-    title,
-    sandbox_policy,
-    approval_mode,
-    tokens_used,
-    first_user_message,
-    archived_at,
-    git_sha,
-    git_branch,
-    git_origin_url
-FROM threads
-            "#,
-        );
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_thread_select_columns(&mut builder);
+        builder.push(" FROM threads");
         push_thread_filters(
             &mut builder,
             archived_only,
@@ -373,10 +349,10 @@ FROM threads
             crate::SortKey::UpdatedAt,
             /*search_term*/ None,
         );
-        builder.push(" AND title = ");
+        builder.push(" AND threads.title = ");
         builder.push_bind(title);
         if let Some(cwd) = cwd {
-            builder.push(" AND cwd = ");
+            builder.push(" AND threads.cwd = ");
             builder.push_bind(cwd.display().to_string());
         }
         push_thread_order_and_limit(&mut builder, crate::SortKey::UpdatedAt, /*limit*/ 1);
@@ -400,34 +376,9 @@ FROM threads
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
 
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            r#"
-SELECT
-    id,
-    rollout_path,
-    created_at,
-    updated_at,
-    source,
-    agent_nickname,
-    agent_role,
-    agent_path,
-    model_provider,
-    model,
-    reasoning_effort,
-    cwd,
-    cli_version,
-    title,
-    sandbox_policy,
-    approval_mode,
-    tokens_used,
-    first_user_message,
-    archived_at,
-    git_sha,
-    git_branch,
-    git_origin_url
-FROM threads
-            "#,
-        );
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_thread_select_columns(&mut builder);
+        builder.push(" FROM threads");
         push_thread_filters(
             &mut builder,
             archived_only,
@@ -470,7 +421,7 @@ FROM threads
         model_providers: Option<&[String]>,
         archived_only: bool,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads");
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT threads.id FROM threads");
         push_thread_filters(
             &mut builder,
             archived_only,
@@ -501,6 +452,7 @@ FROM threads
         &self,
         metadata: &crate::ThreadMetadata,
     ) -> anyhow::Result<bool> {
+        let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let result = sqlx::query(
             r#"
 INSERT INTO threads (
@@ -508,6 +460,8 @@ INSERT INTO threads (
     rollout_path,
     created_at,
     updated_at,
+    created_at_ms,
+    updated_at_ms,
     source,
     agent_nickname,
     agent_role,
@@ -528,14 +482,16 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
         .bind(metadata.id.to_string())
         .bind(metadata.rollout_path.display().to_string())
         .bind(datetime_to_epoch_seconds(metadata.created_at))
-        .bind(datetime_to_epoch_seconds(metadata.updated_at))
+        .bind(datetime_to_epoch_seconds(updated_at))
+        .bind(datetime_to_epoch_millis(metadata.created_at))
+        .bind(datetime_to_epoch_millis(updated_at))
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
@@ -599,12 +555,61 @@ ON CONFLICT(id) DO NOTHING
         thread_id: ThreadId,
         updated_at: DateTime<Utc>,
     ) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET updated_at = ? WHERE id = ?")
-            .bind(datetime_to_epoch_seconds(updated_at))
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?;
+        let updated_at = self.allocate_thread_updated_at(updated_at)?;
+        let result =
+            sqlx::query("UPDATE threads SET updated_at = ?, updated_at_ms = ? WHERE id = ?")
+                .bind(datetime_to_epoch_seconds(updated_at))
+                .bind(datetime_to_epoch_millis(updated_at))
+                .bind(thread_id.to_string())
+                .execute(self.pool.as_ref())
+                .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Allocate a persisted `updated_at` value for thread-list cursor ordering.
+    ///
+    /// We keep a process-local high-water mark so hot rollout writes can get unique,
+    /// monotonic millisecond timestamps without querying SQLite on every update. Older
+    /// backfill/repair timestamps are allowed through unchanged so historical ordering
+    /// remains tied to the rollout file mtimes.
+    fn allocate_thread_updated_at(
+        &self,
+        updated_at: DateTime<Utc>,
+    ) -> anyhow::Result<DateTime<Utc>> {
+        let candidate = datetime_to_epoch_millis(updated_at);
+        let allocated = loop {
+            let current = self.thread_updated_at_millis.load(Ordering::Relaxed);
+
+            // New wall-clock time: advance the process-local high-water mark and use it as-is.
+            if candidate > current {
+                if self
+                    .thread_updated_at_millis
+                    .compare_exchange(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    break candidate;
+                }
+                continue;
+            }
+
+            // Older timestamps come from backfill/repair paths that preserve rollout mtimes.
+            // Do not drag historical rows forward just because this process has seen newer writes.
+            if candidate.saturating_add(1000) <= current {
+                break candidate;
+            }
+
+            // Same hot one-second bucket as the current high-water mark. Allocate the next
+            // millisecond so updated_at remains unique and cursor-orderable inside the process.
+            let bumped = current.saturating_add(1);
+            if self
+                .thread_updated_at_millis
+                .compare_exchange(current, bumped, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break bumped;
+            }
+        };
+        epoch_millis_to_datetime(allocated)
     }
 
     pub async fn update_thread_git_info(
@@ -641,6 +646,7 @@ WHERE id = ?
         metadata: &crate::ThreadMetadata,
         creation_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
+        let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         sqlx::query(
             r#"
 INSERT INTO threads (
@@ -648,6 +654,8 @@ INSERT INTO threads (
     rollout_path,
     created_at,
     updated_at,
+    created_at_ms,
+    updated_at_ms,
     source,
     agent_nickname,
     agent_role,
@@ -668,11 +676,13 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
+    created_at_ms = excluded.created_at_ms,
+    updated_at_ms = excluded.updated_at_ms,
     source = excluded.source,
     agent_nickname = excluded.agent_nickname,
     agent_role = excluded.agent_role,
@@ -697,7 +707,9 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.id.to_string())
         .bind(metadata.rollout_path.display().to_string())
         .bind(datetime_to_epoch_seconds(metadata.created_at))
-        .bind(datetime_to_epoch_seconds(metadata.updated_at))
+        .bind(datetime_to_epoch_seconds(updated_at))
+        .bind(datetime_to_epoch_millis(metadata.created_at))
+        .bind(datetime_to_epoch_millis(updated_at))
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
@@ -909,6 +921,36 @@ fn one_thread_id_from_rows(
     }
 }
 
+pub(super) fn push_thread_select_columns(builder: &mut QueryBuilder<'_, Sqlite>) {
+    builder.push(
+        r#"
+SELECT
+    threads.id,
+    threads.rollout_path,
+    threads.created_at_ms AS created_at,
+    threads.updated_at_ms AS updated_at,
+    threads.source,
+    threads.agent_nickname,
+    threads.agent_role,
+    threads.agent_path,
+    threads.model_provider,
+    threads.model,
+    threads.reasoning_effort,
+    threads.cwd,
+    threads.cli_version,
+    threads.title,
+    threads.sandbox_policy,
+    threads.approval_mode,
+    threads.tokens_used,
+    threads.first_user_message,
+    threads.archived_at,
+    threads.git_sha,
+    threads.git_branch,
+    threads.git_origin_url
+"#,
+    );
+}
+
 pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicToolSpec>>> {
     items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
@@ -954,13 +996,13 @@ pub(super) fn push_thread_filters<'a>(
 ) {
     builder.push(" WHERE 1 = 1");
     if archived_only {
-        builder.push(" AND archived = 1");
+        builder.push(" AND threads.archived = 1");
     } else {
-        builder.push(" AND archived = 0");
+        builder.push(" AND threads.archived = 0");
     }
-    builder.push(" AND first_user_message <> ''");
+    builder.push(" AND threads.first_user_message <> ''");
     if !allowed_sources.is_empty() {
-        builder.push(" AND source IN (");
+        builder.push(" AND threads.source IN (");
         let mut separated = builder.separated(", ");
         for source in allowed_sources {
             separated.push_bind(source);
@@ -970,7 +1012,7 @@ pub(super) fn push_thread_filters<'a>(
     if let Some(model_providers) = model_providers
         && !model_providers.is_empty()
     {
-        builder.push(" AND model_provider IN (");
+        builder.push(" AND threads.model_provider IN (");
         let mut separated = builder.separated(", ");
         for provider in model_providers {
             separated.push_bind(provider);
@@ -978,15 +1020,15 @@ pub(super) fn push_thread_filters<'a>(
         separated.push_unseparated(")");
     }
     if let Some(search_term) = search_term {
-        builder.push(" AND instr(title, ");
+        builder.push(" AND instr(threads.title, ");
         builder.push_bind(search_term);
         builder.push(") > 0");
     }
     if let Some(anchor) = anchor {
-        let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
+        let anchor_ts = datetime_to_epoch_millis(anchor.ts);
         let column = match sort_key {
-            SortKey::CreatedAt => "created_at",
-            SortKey::UpdatedAt => "updated_at",
+            SortKey::CreatedAt => "threads.created_at_ms",
+            SortKey::UpdatedAt => "threads.updated_at_ms",
         };
         builder.push(" AND (");
         builder.push(column);
@@ -1008,8 +1050,8 @@ pub(super) fn push_thread_order_and_limit(
     limit: usize,
 ) {
     let order_column = match sort_key {
-        SortKey::CreatedAt => "created_at",
-        SortKey::UpdatedAt => "updated_at",
+        SortKey::CreatedAt => "threads.created_at_ms",
+        SortKey::UpdatedAt => "threads.updated_at_ms",
     };
     builder.push(" ORDER BY ");
     builder.push(order_column);
@@ -1209,12 +1251,13 @@ mod tests {
             .await
             .expect("initial upsert should succeed");
 
-        let updated_at = datetime_to_epoch_seconds(
+        let updated_at = datetime_to_epoch_millis(
             DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
         );
         sqlx::query(
-            "UPDATE threads SET updated_at = ?, tokens_used = ?, first_user_message = ? WHERE id = ?",
+            "UPDATE threads SET updated_at = ?, updated_at_ms = ?, tokens_used = ?, first_user_message = ? WHERE id = ?",
         )
+        .bind(updated_at / 1000)
         .bind(updated_at)
         .bind(123_i64)
         .bind("newer preview")
@@ -1244,7 +1287,7 @@ mod tests {
             persisted.first_user_message.as_deref(),
             Some("newer preview")
         );
-        assert_eq!(datetime_to_epoch_seconds(persisted.updated_at), updated_at);
+        assert_eq!(datetime_to_epoch_millis(persisted.updated_at), updated_at);
         assert_eq!(persisted.git_sha.as_deref(), Some("abc123"));
         assert_eq!(persisted.git_branch.as_deref(), Some("feature/branch"));
         assert_eq!(
@@ -1293,8 +1336,8 @@ mod tests {
             Some("newer preview")
         );
         assert_eq!(
-            datetime_to_epoch_seconds(persisted.updated_at),
-            datetime_to_epoch_seconds(existing.updated_at)
+            datetime_to_epoch_millis(persisted.updated_at),
+            datetime_to_epoch_millis(existing.updated_at)
         );
     }
 
@@ -1366,6 +1409,104 @@ mod tests {
         assert_eq!(
             persisted.first_user_message.as_deref(),
             Some("first-user-message")
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_updated_at_uses_unique_epoch_millis_and_reads_legacy_seconds() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let first_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000901").expect("valid thread id");
+        let second_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000902").expect("valid thread id");
+        let older_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000903").expect("valid thread id");
+        let updated_at =
+            DateTime::<Utc>::from_timestamp_millis(1_700_001_111_123).expect("timestamp millis");
+        let mut first = test_thread_metadata(&codex_home, first_id, codex_home.clone());
+        first.updated_at = updated_at;
+        let mut second = test_thread_metadata(&codex_home, second_id, codex_home.clone());
+        second.updated_at = updated_at;
+
+        runtime
+            .upsert_thread(&first)
+            .await
+            .expect("first upsert should succeed");
+        runtime
+            .upsert_thread(&second)
+            .await
+            .expect("second upsert should succeed");
+
+        let first = runtime
+            .get_thread(first_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        let second = runtime
+            .get_thread(second_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(
+            datetime_to_epoch_millis(first.updated_at),
+            1_700_001_111_123
+        );
+        assert_eq!(
+            datetime_to_epoch_millis(second.updated_at),
+            1_700_001_111_124
+        );
+        let second_row: (i64, i64, Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT created_at, updated_at, created_at_ms, updated_at_ms FROM threads WHERE id = ?",
+        )
+        .bind(second_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("thread timestamp row should load");
+        assert_eq!(
+            second_row,
+            (
+                datetime_to_epoch_seconds(second.created_at),
+                1_700_001_111,
+                Some(datetime_to_epoch_millis(second.created_at)),
+                Some(1_700_001_111_124)
+            )
+        );
+
+        let older_updated_at =
+            DateTime::<Utc>::from_timestamp_millis(1_700_001_100_123).expect("timestamp millis");
+        let mut older = test_thread_metadata(&codex_home, older_id, codex_home.clone());
+        older.updated_at = older_updated_at;
+        runtime
+            .upsert_thread(&older)
+            .await
+            .expect("older upsert should succeed");
+        let older = runtime
+            .get_thread(older_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(
+            datetime_to_epoch_millis(older.updated_at),
+            1_700_001_100_123
+        );
+
+        sqlx::query("UPDATE threads SET updated_at = ? WHERE id = ?")
+            .bind(1_700_001_112_i64)
+            .bind(first_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("legacy timestamp write should succeed");
+        let legacy = runtime
+            .get_thread(first_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(
+            datetime_to_epoch_millis(legacy.updated_at),
+            1_700_001_112_000
         );
     }
 
