@@ -37,6 +37,7 @@ use crate::tools::sandboxing::ToolCtx;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
 
@@ -501,6 +502,15 @@ impl ShellHandler {
         );
         emitter.begin(event_ctx).await;
 
+        let exec_approval_file_system_sandbox_policy =
+            if effective_additional_permissions.permissions_preapproved {
+                effective_file_system_sandbox_policy(
+                    &turn.file_system_sandbox_policy,
+                    normalized_additional_permissions.as_ref(),
+                )
+            } else {
+                turn.file_system_sandbox_policy.clone()
+            };
         let exec_approval_requirement = session
             .services
             .exec_policy
@@ -508,7 +518,7 @@ impl ShellHandler {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy.value(),
                 sandbox_policy: turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &turn.file_system_sandbox_policy,
+                file_system_sandbox_policy: &exec_approval_file_system_sandbox_policy,
                 sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
                     codex_protocol::models::SandboxPermissions::UseDefault
                 } else {

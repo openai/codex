@@ -34,7 +34,7 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
-use codex_hooks::PermissionSuggestionDestination;
+use codex_hooks::PermissionUpdateDestination;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -191,7 +191,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             req.exec_approval_requirement
                 .proposed_execpolicy_amendment(),
             req.additional_permissions.as_ref(),
-            &[PermissionSuggestionDestination::UserSettings],
+            &[PermissionUpdateDestination::UserSettings],
         );
         Some(PermissionRequestPayload {
             tool_name: "Bash".to_string(),

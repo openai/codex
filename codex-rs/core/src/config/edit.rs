@@ -51,6 +51,8 @@ pub enum ConfigEdit {
     SetSkillConfig { path: PathBuf, enabled: bool },
     /// Set or clear a skill config entry under `[[skills.config]]` by name.
     SetSkillConfigByName { name: String, enabled: bool },
+    /// Append normalized writable roots under `[sandbox_workspace_write]`.
+    AppendSandboxWorkspaceWriteRoots { roots: Vec<PathBuf> },
     /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
     SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
@@ -425,6 +427,9 @@ impl ConfigDocument {
             ConfigEdit::SetSkillConfigByName { name, enabled } => {
                 Ok(self.set_skill_config(SkillConfigSelector::Name(name.clone()), *enabled))
             }
+            ConfigEdit::AppendSandboxWorkspaceWriteRoots { roots } => {
+                Ok(self.append_sandbox_workspace_write_roots(roots))
+            }
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
             ConfigEdit::SetProjectTrustLevel { path, level } => {
@@ -620,6 +625,58 @@ impl ConfigDocument {
         if remove_skills_table {
             let root = self.doc.as_table_mut();
             root.remove("skills");
+        }
+
+        mutated
+    }
+
+    fn append_sandbox_workspace_write_roots(&mut self, roots: &[PathBuf]) -> bool {
+        if roots.is_empty() {
+            return false;
+        }
+
+        let Some(table) = self.descend(
+            &["sandbox_workspace_write".to_string()],
+            TraversalMode::Create,
+        ) else {
+            return false;
+        };
+
+        let mut created_writable_roots = false;
+        let writable_roots = table.entry("writable_roots").or_insert_with(|| {
+            created_writable_roots = true;
+            let array = roots
+                .iter()
+                .map(|root| root.to_string_lossy().to_string())
+                .collect::<toml_edit::Array>();
+            TomlItem::Value(array.into())
+        });
+
+        let Some(array) = writable_roots
+            .as_value_mut()
+            .and_then(toml_edit::Value::as_array_mut)
+        else {
+            let replacement = roots
+                .iter()
+                .map(|root| root.to_string_lossy().to_string())
+                .collect::<toml_edit::Array>();
+            let mut replacement = TomlItem::Value(replacement.into());
+            Self::preserve_decor(writable_roots, &mut replacement);
+            *writable_roots = replacement;
+            return true;
+        };
+
+        let mut mutated = created_writable_roots;
+        for root in roots {
+            let root = root.to_string_lossy().to_string();
+            if !array
+                .iter()
+                .filter_map(toml_edit::Value::as_str)
+                .any(|entry| entry == root)
+            {
+                array.push(root);
+                mutated = true;
+            }
         }
 
         mutated

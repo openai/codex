@@ -22,7 +22,7 @@ pub(crate) struct PreToolUseOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionRequestDecision {
     Allow {
-        updated_permissions: Vec<crate::events::permission_request::PermissionSuggestion>,
+        updated_permissions: Vec<crate::events::permission_request::PermissionUpdate>,
     },
     Deny {
         message: String,
@@ -483,18 +483,51 @@ mod tests {
         assert_eq!(
             parsed.decision,
             Some(PermissionRequestDecision::Allow {
-                updated_permissions: vec![crate::events::permission_request::PermissionSuggestion {
-                    suggestion_type:
-                        crate::events::permission_request::PermissionSuggestionType::AddRules,
+                updated_permissions: vec![crate::events::permission_request::PermissionUpdate::AddRules {
                     rules: vec![
-                        crate::events::permission_request::PermissionSuggestionRule::PrefixRule {
+                        crate::events::permission_request::PermissionUpdateRule::PrefixRule {
                             command: vec!["rm".to_string(), "-f".to_string()],
                         },
                     ],
                     behavior:
-                        crate::events::permission_request::PermissionSuggestionBehavior::Allow,
-                    destination: crate::events::permission_request::PermissionSuggestionDestination::UserSettings,
+                        crate::events::permission_request::PermissionUpdateBehavior::Allow,
+                    destination: crate::events::permission_request::PermissionUpdateDestination::UserSettings,
                 }],
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_accepts_add_directories_for_allow_decision() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {
+                            "behavior": "allow",
+                            "updatedPermissions": [{
+                                "type": "addDirectories",
+                                "directories": ["./logs", "/tmp/output"],
+                                "destination": "session"
+                            }]
+                        }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.decision,
+            Some(PermissionRequestDecision::Allow {
+                updated_permissions: vec![
+                    crate::events::permission_request::PermissionUpdate::AddDirectories {
+                        directories: vec!["./logs".to_string(), "/tmp/output".to_string()],
+                        destination:
+                            crate::events::permission_request::PermissionUpdateDestination::Session,
+                    },
+                ],
             })
         );
     }
@@ -518,6 +551,35 @@ mod tests {
                             "destination": "userSettings"
                         }]
                     }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.invalid_reason,
+            Some(
+                "PermissionRequest hook returned updatedPermissions for deny decision".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_add_directories_for_deny_decision() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {
+                            "behavior": "deny",
+                            "updatedPermissions": [{
+                                "type": "addDirectories",
+                                "directories": ["./logs"],
+                                "destination": "session"
+                            }]
+                        }
                 }
             })
             .to_string(),

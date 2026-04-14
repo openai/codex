@@ -48,6 +48,7 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 
@@ -658,6 +659,15 @@ impl UnifiedExecProcessManager {
             self,
             context.turn.tools_config.unified_exec_shell_mode.clone(),
         );
+        let exec_approval_file_system_sandbox_policy = if request.additional_permissions_preapproved
+        {
+            effective_file_system_sandbox_policy(
+                &context.turn.file_system_sandbox_policy,
+                request.additional_permissions.as_ref(),
+            )
+        } else {
+            context.turn.file_system_sandbox_policy.clone()
+        };
         let exec_approval_requirement = context
             .session
             .services
@@ -666,7 +676,7 @@ impl UnifiedExecProcessManager {
                 command: &request.command,
                 approval_policy: context.turn.approval_policy.value(),
                 sandbox_policy: context.turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
+                file_system_sandbox_policy: &exec_approval_file_system_sandbox_policy,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {

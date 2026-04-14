@@ -326,6 +326,48 @@ elif mode == "allow_selected_user":
             }}
         }}
     }}))
+elif mode == "allow_add_directories_session":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "allow",
+                "updatedPermissions": [{{
+                    "type": "addDirectories",
+                    "directories": [reason],
+                    "destination": "session"
+                }}]
+            }}
+        }}
+    }}))
+elif mode == "allow_add_directories_project":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "allow",
+                "updatedPermissions": [{{
+                    "type": "addDirectories",
+                    "directories": [reason],
+                    "destination": "projectSettings"
+                }}]
+            }}
+        }}
+    }}))
+elif mode == "allow_add_directories_user":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "allow",
+                "updatedPermissions": [{{
+                    "type": "addDirectories",
+                    "directories": [reason],
+                    "destination": "userSettings"
+                }}]
+            }}
+        }}
+    }}))
 elif mode == "allow_unoffered_permission":
     print(json.dumps({{
         "hookSpecificOutput": {{
@@ -1525,6 +1567,125 @@ async fn permission_request_hook_persists_selected_user_exec_rule() -> Result<()
     assert!(
         rules_contents.contains(&expected_rule),
         "expected {rules_path:?} to contain {expected_rule}, got:\n{rules_contents}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_persists_user_writable_root_and_reuses_it() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id_first = "permissionrequest-user-dir-first";
+    let call_id_second = "permissionrequest-user-dir-second";
+    let requested_dir = std::env::temp_dir().join("permissionrequest-user-dir");
+    fs::create_dir_all(&requested_dir)?;
+    let first_file = requested_dir.join("first.txt");
+    let second_file = requested_dir.join("second.txt");
+    let first_command = format!("printf first > {}", first_file.display());
+    let second_command = format!("printf second > {}", second_file.display());
+    let first_args = serde_json::json!({
+        "command": first_command,
+        "sandbox_permissions": "require_escalated",
+    });
+    let second_args = serde_json::json!({
+        "command": second_command,
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id_first,
+                    "shell_command",
+                    &serde_json::to_string(&first_args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "persisted writable root"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_function_call(
+                    call_id_second,
+                    "shell_command",
+                    &serde_json::to_string(&second_args)?,
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-4"),
+                ev_assistant_message("msg-2", "reused writable root"),
+                ev_completed("resp-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let requested_dir_string = requested_dir.display().to_string();
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some(PERMISSION_REQUEST_HOOK_MATCHER),
+                "allow_add_directories_user",
+                &requested_dir_string,
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    let _ = fs::remove_file(&first_file);
+    let _ = fs::remove_file(&second_file);
+
+    test.submit_turn_with_policies(
+        "run the first shell command after hook approval",
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_read_only_policy(),
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&first_file)?, "first");
+
+    test.submit_turn_with_policies(
+        "run the second shell command with the persisted writable root",
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_read_only_policy(),
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&second_file)?, "second");
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    requests[1].function_call_output(call_id_first);
+    requests[3].function_call_output(call_id_second);
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(
+        hook_inputs.len(),
+        1,
+        "persisted writable root should bypass the second permission hook"
+    );
+
+    let config_path = test.codex_home_path().join("config.toml");
+    let config_contents = fs::read_to_string(&config_path)
+        .with_context(|| format!("read {}", config_path.display()))?;
+    assert!(
+        config_contents.contains("writable_roots")
+            && config_contents.contains(&requested_dir.display().to_string()),
+        "expected {config_path:?} to contain writable root for {}, got:\n{config_contents}",
+        requested_dir.display(),
     );
 
     Ok(())

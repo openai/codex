@@ -3490,6 +3490,11 @@ impl Session {
         state.granted_permissions()
     }
 
+    pub(crate) async fn record_granted_session_permissions(&self, permissions: PermissionProfile) {
+        let mut state = self.state.lock().await;
+        state.record_granted_permissions(permissions);
+    }
+
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
         let entry = {
             let mut active = self.active_turn.lock().await;
