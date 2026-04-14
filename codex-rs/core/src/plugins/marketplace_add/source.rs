@@ -124,12 +124,14 @@ fn normalize_git_url(url: &str) -> String {
 }
 
 fn looks_like_local_path(source: &str) -> bool {
+    let path = Path::new(source);
     source.starts_with("./")
         || source.starts_with("../")
         || source.starts_with('/')
         || source.starts_with("~/")
         || source == "."
         || source == ".."
+        || path.is_absolute()
 }
 
 fn resolve_local_source_path(source: &str) -> Result<PathBuf, MarketplaceAddError> {
@@ -308,6 +310,20 @@ mod tests {
             panic!("expected local path source");
         };
         assert!(path.is_absolute());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_absolute_path_source_parses() {
+        let source =
+            parse_marketplace_source(r"C:\temp\marketplace", /*explicit_ref*/ None).unwrap();
+
+        assert_eq!(
+            source,
+            MarketplaceSource::Local {
+                path: PathBuf::from(r"C:\temp\marketplace"),
+            }
+        );
     }
 
     #[test]
