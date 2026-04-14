@@ -968,11 +968,7 @@ fn session_configured_from_thread_start_response(
     session_configured_from_thread_response(
         &response.thread.id,
         response.thread.name.clone(),
-        response
-            .thread
-            .path
-            .as_ref()
-            .map(AbsolutePathBuf::to_path_buf),
+        response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -990,11 +986,7 @@ fn session_configured_from_thread_resume_response(
     session_configured_from_thread_response(
         &response.thread.id,
         response.thread.name.clone(),
-        response
-            .thread
-            .path
-            .as_ref()
-            .map(AbsolutePathBuf::to_path_buf),
+        response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1193,17 +1185,17 @@ fn all_thread_source_kinds() -> Vec<ThreadSourceKind> {
     ]
 }
 
-async fn latest_thread_cwd(thread: &AppServerThread) -> AbsolutePathBuf {
-    if let Some(path) = thread.path.as_ref()
+async fn latest_thread_cwd(thread: &AppServerThread) -> PathBuf {
+    if let Some(path) = thread.path.as_deref()
         && let Some(cwd) = parse_latest_turn_context_cwd(path).await
     {
         return cwd;
     }
-    thread.cwd.clone()
+    thread.cwd.to_path_buf()
 }
 
-async fn parse_latest_turn_context_cwd(path: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
-    let text = tokio::fs::read_to_string(path.as_path()).await.ok()?;
+async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+    let text = tokio::fs::read_to_string(path).await.ok()?;
     for line in text.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -1213,11 +1205,7 @@ async fn parse_latest_turn_context_cwd(path: &AbsolutePathBuf) -> Option<Absolut
             continue;
         };
         if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(
-                path.parent()
-                    .unwrap_or_else(|| path.clone())
-                    .join(&item.cwd),
-            );
+            return Some(item.cwd);
         }
     }
     None

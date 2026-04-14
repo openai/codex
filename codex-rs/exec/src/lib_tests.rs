@@ -397,7 +397,7 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
             created_at: 0,
             updated_at: 0,
             status: codex_app_server_protocol::ThreadStatus::Idle,
-            path: Some(PathBuf::from("/tmp/rollout.jsonl").abs()),
+            path: Some(PathBuf::from("/tmp/rollout.jsonl")),
             cwd: PathBuf::from("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source: codex_app_server_protocol::SessionSource::Cli,

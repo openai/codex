@@ -977,11 +977,7 @@ async fn thread_session_state_from_thread_start_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
-        response
-            .thread
-            .path
-            .as_ref()
-            .map(AbsolutePathBuf::to_path_buf),
+        response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1004,11 +1000,7 @@ async fn thread_session_state_from_thread_resume_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
-        response
-            .thread
-            .path
-            .as_ref()
-            .map(AbsolutePathBuf::to_path_buf),
+        response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1031,11 +1023,7 @@ async fn thread_session_state_from_thread_fork_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
-        response
-            .thread
-            .path
-            .as_ref()
-            .map(AbsolutePathBuf::to_path_buf),
+        response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,

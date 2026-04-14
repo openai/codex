@@ -2641,11 +2641,7 @@ impl App {
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
-        let rollout_path = notification
-            .thread
-            .path
-            .as_ref()
-            .map(AbsolutePathBuf::to_path_buf);
+        let rollout_path = notification.thread.path.clone();
         if let Some(model) =
             read_session_model(&self.config, thread_id, rollout_path.as_deref()).await
         {
@@ -3094,20 +3090,16 @@ impl App {
                 history_log_id: 0,
                 history_entry_count: 0,
                 network_proxy: None,
-                rollout_path: thread.path.as_ref().map(AbsolutePathBuf::to_path_buf),
+                rollout_path: thread.path.clone(),
             });
         session.thread_id = thread_id;
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
         session.cwd = thread.cwd.clone();
         session.instruction_source_paths = Vec::new();
-        session.rollout_path = thread.path.as_ref().map(AbsolutePathBuf::to_path_buf);
-        if let Some(model) = read_session_model(
-            &self.config,
-            thread_id,
-            thread.path.as_ref().map(AbsolutePathBuf::as_path),
-        )
-        .await
+        session.rollout_path = thread.path.clone();
+        if let Some(model) =
+            read_session_model(&self.config, thread_id, thread.path.as_deref()).await
         {
             session.model = model;
         } else if thread.path.is_some() {
@@ -8872,7 +8864,7 @@ guardian_approval = true
                     created_at: 1,
                     updated_at: 2,
                     status: codex_app_server_protocol::ThreadStatus::Idle,
-                    path: Some(rollout_path.clone().abs()),
+                    path: Some(rollout_path.clone()),
                     cwd: PathBuf::from("/tmp/agent").abs(),
                     cli_version: "0.0.0".to_string(),
                     source: codex_app_server_protocol::SessionSource::Unknown,

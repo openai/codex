@@ -3747,7 +3747,7 @@ pub struct Thread {
     /// Current runtime status for the thread.
     pub status: ThreadStatus,
     /// [UNSTABLE] Path to the thread on disk.
-    pub path: Option<AbsolutePathBuf>,
+    pub path: Option<PathBuf>,
     /// Working directory captured for the thread.
     pub cwd: AbsolutePathBuf,
     /// Version of the CLI that created the thread.

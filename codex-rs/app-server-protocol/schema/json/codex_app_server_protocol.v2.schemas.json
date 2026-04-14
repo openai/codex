@@ -10526,15 +10526,11 @@
           ]
         },
         "path": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "[UNSTABLE] Path to the thread on disk."
+          "description": "[UNSTABLE] Path to the thread on disk.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "preview": {
           "description": "Usually the first user message in the thread, if available.",

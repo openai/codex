@@ -3179,7 +3179,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let mut thread = summary_to_thread(summary);
+        let mut thread = summary_to_thread(summary, &self.config.cwd);
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -3487,7 +3487,7 @@ impl CodexMessageProcessor {
                         message: format!("failed to read unarchived thread: {err}"),
                         data: None,
                     })?;
-            Ok(summary_to_thread(summary))
+            Ok(summary_to_thread(summary, &self.config.cwd))
         }
         .await;
 
@@ -3703,7 +3703,7 @@ impl CodexMessageProcessor {
             cwd,
             search_term,
         } = params;
-        let cwd = match normalize_thread_list_cwd_filter(cwd, &self.config.cwd) {
+        let cwd = match normalize_thread_list_cwd_filter(cwd) {
             Ok(cwd) => cwd,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -3748,7 +3748,7 @@ impl CodexMessageProcessor {
             let conversation_id = summary.conversation_id;
             thread_ids.insert(conversation_id);
 
-            let thread = summary_to_thread(summary);
+            let thread = summary_to_thread(summary, &self.config.cwd);
             status_ids.push(thread.id.clone());
             threads.push((conversation_id, thread));
         }
@@ -3892,11 +3892,11 @@ impl CodexMessageProcessor {
         }
 
         let mut thread = if let Some(summary) = db_summary {
-            summary_to_thread(summary)
+            summary_to_thread(summary, &self.config.cwd)
         } else if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => summary_to_thread(summary, &self.config.cwd),
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -4577,14 +4577,7 @@ impl CodexMessageProcessor {
         };
         let mut thread = thread?;
         thread.id = thread_id.to_string();
-        thread.path = Some(
-            AbsolutePathBuf::from_absolute_path_checked(rollout_path).map_err(|err| {
-                format!(
-                    "rollout path `{}` is not absolute for thread {thread_id}: {err}",
-                    rollout_path.display()
-                )
-            })?,
-        );
+        thread.path = Some(rollout_path.to_path_buf());
         let history_items = thread_history.get_rollout_items();
         populate_thread_turns(
             &mut thread,
@@ -4792,7 +4785,7 @@ impl CodexMessageProcessor {
             .await
             {
                 Ok(summary) => {
-                    let mut thread = summary_to_thread(summary);
+                    let mut thread = summary_to_thread(summary, &self.config.cwd);
                     thread.forked_from_id =
                         forked_from_id_from_rollout(fork_rollout_path.as_path()).await;
                     thread
@@ -6286,7 +6279,22 @@ impl CodexMessageProcessor {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
-            let cwd_abs = self.config.cwd.join(cwd.as_path());
+            let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    let message = err.to_string();
+                    let cwd_for_entry = self.config.cwd.join(cwd.as_path());
+                    data.push(codex_app_server_protocol::SkillsListEntry {
+                        cwd: cwd_for_entry.clone(),
+                        skills: Vec::new(),
+                        errors: vec![codex_app_server_protocol::SkillErrorInfo {
+                            path: cwd_for_entry,
+                            message,
+                        }],
+                    });
+                    continue;
+                }
+            };
             let config_layer_stack = match load_config_layers_state(
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
@@ -7538,7 +7546,7 @@ impl CodexMessageProcessor {
         if let Some(rollout_path) = review_thread.rollout_path() {
             match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
                 Ok(summary) => {
-                    let mut thread = summary_to_thread(summary);
+                    let mut thread = summary_to_thread(summary, &self.config.cwd);
                     self.thread_watch_manager
                         .upsert_thread_silently(thread.clone())
                         .await;
@@ -8411,18 +8419,24 @@ impl CodexMessageProcessor {
 
 fn normalize_thread_list_cwd_filter(
     cwd: Option<String>,
-    base_cwd: &AbsolutePathBuf,
 ) -> Result<Option<PathBuf>, JSONRPCErrorError> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
-    Ok(Some(base_cwd.join(cwd.as_str()).into_path_buf()))
+    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
+        .map(AbsolutePathBuf::into_path_buf)
+        .map(Some)
+        .map_err(|err| JSONRPCErrorError {
+            code: INVALID_PARAMS_ERROR_CODE,
+            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
+            data: None,
+        })
 }
 
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
     use super::normalize_thread_list_cwd_filter;
-    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -8435,8 +8449,7 @@ mod thread_list_cwd_filter_tests {
         };
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(cwd.clone()), &PathBuf::from("/").abs())
-                .expect("cwd filter should parse"),
+            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
             Some(PathBuf::from(cwd))
         );
     }
@@ -8444,15 +8457,10 @@ mod thread_list_cwd_filter_tests {
     #[test]
     fn normalize_thread_list_cwd_filter_resolves_relative_paths_against_server_cwd()
     -> std::io::Result<()> {
-        let base_cwd = if cfg!(windows) {
-            PathBuf::from(r"C:\srv").abs()
-        } else {
-            PathBuf::from("/srv").abs()
-        };
-        let expected = base_cwd.join("repo-b").to_path_buf();
+        let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(String::from("repo-b")), &base_cwd)
+            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
                 .expect("cwd filter should parse"),
             Some(expected)
         );
@@ -9521,7 +9529,7 @@ async fn load_thread_summary_for_rollout(
 ) -> std::result::Result<Thread, String> {
     let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
-        .map(summary_to_thread)
+        .map(|summary| summary_to_thread(summary, &config.cwd))
         .map_err(|err| {
             format!(
                 "failed to load rollout `{}` for thread {thread_id}: {err}",
@@ -9532,10 +9540,13 @@ async fn load_thread_summary_for_rollout(
     if let Some(persisted_metadata) = persisted_metadata {
         merge_mutable_thread_metadata(
             &mut thread,
-            summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
+            summary_to_thread(
+                summary_from_thread_metadata(persisted_metadata),
+                &config.cwd,
+            ),
         );
     } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
-        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
+        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary, &config.cwd));
     }
     let title = if let Some(metadata) = persisted_metadata {
         non_empty_title(metadata)
@@ -9634,10 +9645,6 @@ fn build_thread_from_snapshot(
     path: Option<PathBuf>,
 ) -> Thread {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let path = path.map(|path| {
-        AbsolutePathBuf::from_absolute_path_checked(path)
-            .expect("thread rollout path from snapshot must be absolute")
-    });
     Thread {
         id: thread_id.to_string(),
         forked_from_id: None,
@@ -9659,7 +9666,10 @@ fn build_thread_from_snapshot(
     }
 }
 
-pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
+pub(crate) fn summary_to_thread(
+    summary: ConversationSummary,
+    fallback_cwd: &AbsolutePathBuf,
+) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
@@ -9680,16 +9690,19 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         branch: info.branch,
         origin_url: info.origin_url,
     });
-
-    let path =
-        AbsolutePathBuf::from_absolute_path_checked(&path).expect("thread path must be absolute");
     let cwd = if cwd.is_absolute() {
-        AbsolutePathBuf::from_absolute_path_checked(&cwd).expect("thread cwd must be absolute")
+        AbsolutePathBuf::from_absolute_path(cwd.as_path())
     } else {
-        path.parent()
-            .unwrap_or_else(|| path.clone())
-            .join(cwd.as_path())
-    };
+        let base = path.parent().unwrap_or(path.as_path());
+        AbsolutePathBuf::from_absolute_path(base.join(cwd.as_path()))
+    }
+    .unwrap_or_else(|err| {
+        warn!(
+            path = %path.display(),
+            "failed to normalize thread cwd while summarizing thread: {err}"
+        );
+        fallback_cwd.clone()
+    });
 
     Thread {
         id: conversation_id.to_string(),
@@ -10202,7 +10215,8 @@ mod tests {
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
 
         let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
-        let thread = summary_to_thread(summary);
+        let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
+        let thread = summary_to_thread(summary, &fallback_cwd);
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
@@ -10336,7 +10350,8 @@ mod tests {
             /*git_origin_url*/ None,
         );
 
-        let thread = summary_to_thread(summary);
+        let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
+        let thread = summary_to_thread(summary, &fallback_cwd);
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));

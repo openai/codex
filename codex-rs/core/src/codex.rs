@@ -1265,7 +1265,15 @@ impl SessionConfiguration {
         let absolute_cwd = updates
             .cwd
             .as_ref()
-            .map(|cwd| self.cwd.join(normalize_for_native_workdir(cwd.as_path())))
+            .map(|cwd| {
+                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
+                    cwd.as_path(),
+                ))
+                .unwrap_or_else(|e| {
+                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
+                    self.cwd.clone()
+                })
+            })
             .unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
@@ -4897,6 +4905,7 @@ mod handlers {
     use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
     use crate::realtime_context::truncate_realtime_text_to_token_budget;
     use codex_features::Feature;
+    use codex_utils_absolute_path::AbsolutePathBuf;
 
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::RolloutRecorder;
@@ -5387,7 +5396,22 @@ mod handlers {
         let mut skills = Vec::new();
         let empty_cli_overrides: &[(String, toml::Value)] = &[];
         for cwd in cwds {
-            let cwd_abs = session_cwd.join(cwd.as_path());
+            let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    let message = err.to_string();
+                    let cwd_for_entry = session_cwd.join(cwd.as_path());
+                    skills.push(SkillsListEntry {
+                        cwd: cwd_for_entry.clone(),
+                        skills: Vec::new(),
+                        errors: vec![SkillErrorInfo {
+                            path: cwd_for_entry,
+                            message,
+                        }],
+                    });
+                    continue;
+                }
+            };
             let config_layer_stack = match load_config_layers_state(
                 &codex_home,
                 Some(cwd_abs.clone()),

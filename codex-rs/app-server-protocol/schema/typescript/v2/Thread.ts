@@ -39,7 +39,7 @@ status: ThreadStatus,
 /**
  * [UNSTABLE] Path to the thread on disk.
  */
-path: AbsolutePathBuf | null,
+path: string | null,
 /**
  * Working directory captured for the thread.
  */

@@ -1801,7 +1801,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await
                 {
                     Ok(summary) => {
-                        let mut thread = summary_to_thread(summary);
+                        let fallback_cwd = conversation.config_snapshot().await.cwd;
+                        let mut thread = summary_to_thread(summary, &fallback_cwd);
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);
