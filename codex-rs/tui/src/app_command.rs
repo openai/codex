@@ -98,7 +98,6 @@ pub(crate) enum AppCommandView<'a> {
     SetThreadName {
         name: &'a str,
     },
-    SendAddCreditsNudgeEmail,
     Shutdown,
     ThreadRollback {
         num_turns: u32,
@@ -125,11 +124,6 @@ impl AppCommand {
     #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn realtime_conversation_audio(params: ConversationAudioParams) -> Self {
         Self(Op::RealtimeConversationAudio(params))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn realtime_conversation_text(params: ConversationTextParams) -> Self {
-        Self(Op::RealtimeConversationText(params))
     }
 
     pub(crate) fn realtime_conversation_close() -> Self {
@@ -266,16 +260,6 @@ impl AppCommand {
         Self(Op::Review { review_request })
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn kind(&self) -> &'static str {
-        self.0.kind()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn as_core(&self) -> &Op {
-        &self.0
-    }
-
     pub(crate) fn into_core(self) -> Op {
         self.0
     }
@@ -392,7 +376,6 @@ impl AppCommand {
                 num_turns: *num_turns,
             },
             Op::Review { review_request } => AppCommandView::Review { review_request },
-            Op::SendAddCreditsNudgeEmail => AppCommandView::SendAddCreditsNudgeEmail,
             op => AppCommandView::Other(op),
         }
     }

@@ -489,30 +489,6 @@
             },
             "method": {
               "enum": [
-                "thread/addCreditsNudgeEmail"
-              ],
-              "title": "Thread/addCreditsNudgeEmailRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadAddCreditsNudgeEmailParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/addCreditsNudgeEmailRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -603,6 +579,31 @@
           "type": "object"
         },
         {
+          "description": "Append raw Responses API items to the thread history without starting a user turn.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/inject_items"
+              ],
+              "title": "Thread/injectItemsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadInjectItemsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/injectItemsRequest",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "$ref": "#/definitions/v2/RequestId"
@@ -624,6 +625,30 @@
             "params"
           ],
           "title": "Skills/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "marketplace/add"
+              ],
+              "title": "Marketplace/addRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/MarketplaceAddParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/addRequest",
           "type": "object"
         },
         {
@@ -1247,6 +1272,30 @@
             "params"
           ],
           "title": "McpServer/resource/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "mcpServer/tool/call"
+              ],
+              "title": "McpServer/tool/callRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/McpServerToolCallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "McpServer/tool/callRequest",
           "type": "object"
         },
         {
@@ -3423,6 +3472,13 @@
           "type": "string"
         },
         {
+          "description": "Automatic approval review timed out before reaching a decision.",
+          "enum": [
+            "timed_out"
+          ],
+          "type": "string"
+        },
+        {
           "description": "User has denied this command and the agent should not do anything until the user's next command.",
           "enum": [
             "abort"
@@ -4062,26 +4118,6 @@
           "properties": {
             "method": {
               "enum": [
-                "account/addCreditsNudgeEmail/completed"
-              ],
-              "title": "Account/addCreditsNudgeEmail/completedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/AddCreditsNudgeEmailNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Account/addCreditsNudgeEmail/completedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
                 "app/list/updated"
               ],
               "title": "App/list/updatedNotificationMethod",
@@ -4343,20 +4379,40 @@
           "properties": {
             "method": {
               "enum": [
-                "thread/realtime/transcriptUpdated"
+                "thread/realtime/transcript/delta"
               ],
-              "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
+              "title": "Thread/realtime/transcript/deltaNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptUpdatedNotification"
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptDeltaNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Thread/realtime/transcriptUpdatedNotification",
+          "title": "Thread/realtime/transcript/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/transcript/done"
+              ],
+              "title": "Thread/realtime/transcript/doneNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptDoneNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/transcript/doneNotification",
           "type": "object"
         },
         {
@@ -4965,12 +5021,6 @@
               }
             ]
           },
-          "isWorkspaceOwner": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "planType": {
             "anyOf": [
               {
@@ -4980,91 +5030,10 @@
                 "type": "null"
               }
             ]
-          },
-          "workspaceRole": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WorkspaceRole"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "title": "AccountUpdatedNotification",
         "type": "object"
-      },
-      "AddCreditsNudgeEmailNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "result": {
-            "$ref": "#/definitions/v2/AddCreditsNudgeEmailResult"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "result",
-          "threadId"
-        ],
-        "title": "AddCreditsNudgeEmailNotification",
-        "type": "object"
-      },
-      "AddCreditsNudgeEmailResult": {
-        "oneOf": [
-          {
-            "properties": {
-              "status": {
-                "enum": [
-                  "sent"
-                ],
-                "title": "SentAddCreditsNudgeEmailResultStatus",
-                "type": "string"
-              }
-            },
-            "required": [
-              "status"
-            ],
-            "title": "SentAddCreditsNudgeEmailResult",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "status": {
-                "enum": [
-                  "cooldownActive"
-                ],
-                "title": "CooldownActiveAddCreditsNudgeEmailResultStatus",
-                "type": "string"
-              }
-            },
-            "required": [
-              "status"
-            ],
-            "title": "CooldownActiveAddCreditsNudgeEmailResult",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "message": {
-                "type": "string"
-              },
-              "status": {
-                "enum": [
-                  "failed"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "message",
-              "status"
-            ],
-            "type": "object"
-          }
-        ]
       },
       "AgentMessageDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5666,6 +5635,13 @@
             "type": "string"
           }
         ]
+      },
+      "AutoReviewDecisionSource": {
+        "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+        "enum": [
+          "agent"
+        ],
+        "type": "string"
       },
       "ByteRange": {
         "properties": {
@@ -7572,6 +7548,15 @@
               "null"
             ]
           },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "threadId": {
             "type": [
               "string",
@@ -7772,11 +7757,15 @@
             "type": "integer"
           },
           "isDirectory": {
-            "description": "Whether the path currently resolves to a directory.",
+            "description": "Whether the path resolves to a directory.",
             "type": "boolean"
           },
           "isFile": {
-            "description": "Whether the path currently resolves to a regular file.",
+            "description": "Whether the path resolves to a regular file.",
+            "type": "boolean"
+          },
+          "isSymlink": {
+            "description": "Whether the path itself is a symbolic link.",
             "type": "boolean"
           },
           "modifiedAtMs": {
@@ -7789,6 +7778,7 @@
           "createdAtMs",
           "isDirectory",
           "isFile",
+          "isSymlink",
           "modifiedAtMs"
         ],
         "title": "FsGetMetadataResponse",
@@ -8142,24 +8132,8 @@
               }
             ]
           },
-          "isWorkspaceOwner": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "requiresOpenaiAuth": {
             "type": "boolean"
-          },
-          "workspaceRole": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WorkspaceRole"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -8437,6 +8411,7 @@
           "inProgress",
           "approved",
           "denied",
+          "timedOut",
           "aborted"
         ],
         "type": "string"
@@ -8719,16 +8694,27 @@
       },
       "ItemGuardianApprovalReviewCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
         "properties": {
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
           },
+          "decisionSource": {
+            "$ref": "#/definitions/v2/AutoReviewDecisionSource"
+          },
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
-          "targetItemId": {
+          "reviewId": {
+            "description": "Stable identifier for this review.",
             "type": "string"
+          },
+          "targetItemId": {
+            "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"
@@ -8739,8 +8725,9 @@
         },
         "required": [
           "action",
+          "decisionSource",
           "review",
-          "targetItemId",
+          "reviewId",
           "threadId",
           "turnId"
         ],
@@ -8749,7 +8736,7 @@
       },
       "ItemGuardianApprovalReviewStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
         "properties": {
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
@@ -8757,8 +8744,16 @@
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
-          "targetItemId": {
+          "reviewId": {
+            "description": "Stable identifier for this review.",
             "type": "string"
+          },
+          "targetItemId": {
+            "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"
@@ -8770,7 +8765,7 @@
         "required": [
           "action",
           "review",
-          "targetItemId",
+          "reviewId",
           "threadId",
           "turnId"
         ],
@@ -9109,6 +9104,55 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "MarketplaceAddParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "refName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "sparsePaths": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "MarketplaceAddParams",
+        "type": "object"
+      },
+      "MarketplaceAddResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "alreadyAdded": {
+            "type": "boolean"
+          },
+          "installedRoot": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "marketplaceName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alreadyAdded",
+          "installedRoot",
+          "marketplaceName"
+        ],
+        "title": "MarketplaceAddResponse",
+        "type": "object"
+      },
       "MarketplaceInterface": {
         "properties": {
           "displayName": {
@@ -9324,6 +9368,51 @@
           "status"
         ],
         "title": "McpServerStatusUpdatedNotification",
+        "type": "object"
+      },
+      "McpServerToolCallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "_meta": true,
+          "arguments": true,
+          "server": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "threadId",
+          "tool"
+        ],
+        "title": "McpServerToolCallParams",
+        "type": "object"
+      },
+      "McpServerToolCallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "_meta": true,
+          "content": {
+            "items": true,
+            "type": "array"
+          },
+          "isError": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "structuredContent": true
+        },
+        "required": [
+          "content"
+        ],
+        "title": "McpServerToolCallResponse",
         "type": "object"
       },
       "McpToolCallError": {
@@ -9958,6 +10047,7 @@
           "go",
           "plus",
           "pro",
+          "prolite",
           "team",
           "self_serve_business_usage_based",
           "business",
@@ -10543,16 +10633,6 @@
                 "type": "null"
               }
             ]
-          },
-          "spendControl": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/SpendControlSnapshot"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "type": "object"
@@ -10655,6 +10735,13 @@
         "enum": [
           "v1",
           "v2"
+        ],
+        "type": "string"
+      },
+      "RealtimeOutputModality": {
+        "enum": [
+          "text",
+          "audio"
         ],
         "type": "string"
       },
@@ -12129,7 +12216,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "scope": {
             "$ref": "#/definitions/v2/SkillScope"
@@ -12182,7 +12269,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "shortDescription": {
             "type": [
@@ -12374,17 +12461,6 @@
           "data"
         ],
         "title": "SkillsListResponse",
-        "type": "object"
-      },
-      "SpendControlSnapshot": {
-        "properties": {
-          "reached": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "reached"
-        ],
         "type": "object"
       },
       "SubAgentSource": {
@@ -12678,24 +12754,6 @@
         ],
         "type": "string"
       },
-      "ThreadAddCreditsNudgeEmailParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadAddCreditsNudgeEmailParams",
-        "type": "object"
-      },
-      "ThreadAddCreditsNudgeEmailResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadAddCreditsNudgeEmailResponse",
-        "type": "object"
-      },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12878,6 +12936,14 @@
           "cwd": {
             "type": "string"
           },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "model": {
             "type": "string"
           },
@@ -12925,6 +12991,30 @@
       },
       "ThreadId": {
         "type": "string"
+      },
+      "ThreadInjectItemsParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "items": {
+            "description": "Raw Responses API items to append to the thread's model-visible history.",
+            "items": true,
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "threadId"
+        ],
+        "title": "ThreadInjectItemsParams",
+        "type": "object"
+      },
+      "ThreadInjectItemsResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadInjectItemsResponse",
+        "type": "object"
       },
       "ThreadItem": {
         "oneOf": [
@@ -13711,6 +13801,13 @@
         "title": "ThreadLoadedListResponse",
         "type": "object"
       },
+      "ThreadMemoryMode": {
+        "enum": [
+          "enabled",
+          "disabled"
+        ],
+        "type": "string"
+      },
       "ThreadMetadataGitInfoUpdateParams": {
         "properties": {
           "branch": {
@@ -14018,14 +14115,38 @@
         "title": "ThreadRealtimeStartedNotification",
         "type": "object"
       },
-      "ThreadRealtimeTranscriptUpdatedNotification": {
+      "ThreadRealtimeTranscriptDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+        "properties": {
+          "delta": {
+            "description": "Live transcript delta from the realtime event.",
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta",
+          "role",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeTranscriptDeltaNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeTranscriptDoneNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - final transcript text emitted when realtime completes a transcript part.",
         "properties": {
           "role": {
             "type": "string"
           },
           "text": {
+            "description": "Final complete text for the transcript part.",
             "type": "string"
           },
           "threadId": {
@@ -14037,7 +14158,7 @@
           "text",
           "threadId"
         ],
-        "title": "ThreadRealtimeTranscriptUpdatedNotification",
+        "title": "ThreadRealtimeTranscriptDoneNotification",
         "type": "object"
       },
       "ThreadResumeParams": {
@@ -14166,6 +14287,14 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "model": {
             "type": "string"
@@ -14426,6 +14555,16 @@
                 "type": "null"
               }
             ]
+          },
+          "sessionStartSource": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadStartSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "ThreadStartParams",
@@ -14447,6 +14586,14 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "model": {
             "type": "string"
@@ -14492,6 +14639,13 @@
         ],
         "title": "ThreadStartResponse",
         "type": "object"
+      },
+      "ThreadStartSource": {
+        "enum": [
+          "startup",
+          "clear"
+        ],
+        "type": "string"
       },
       "ThreadStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -15603,14 +15757,6 @@
         ],
         "title": "WindowsWorldWritableWarningNotification",
         "type": "object"
-      },
-      "WorkspaceRole": {
-        "enum": [
-          "account-owner",
-          "account-admin",
-          "standard-user"
-        ],
-        "type": "string"
       },
       "WriteStatus": {
         "enum": [

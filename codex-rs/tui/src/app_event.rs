@@ -30,6 +30,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
+use crate::legacy_core::plugins::PluginCapabilitySummary;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -170,10 +171,6 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
-    /// Ask Codex to notify the current workspace owner that credits need to be
-    /// added.
-    NotifyWorkspaceOwner,
-
     /// Result of prefetching connectors.
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
@@ -272,6 +269,14 @@ pub(crate) enum AppEvent {
         plugin_id: String,
         plugin_display_name: String,
         result: Result<PluginUninstallResponse, String>,
+    },
+
+    /// Refresh plugin mention bindings from the current config.
+    RefreshPluginMentions,
+
+    /// Result of refreshing plugin mention bindings.
+    PluginMentionsLoaded {
+        plugins: Option<Vec<PluginCapabilitySummary>>,
     },
 
     /// Advance the post-install plugin app-auth flow.
@@ -506,7 +511,7 @@ pub(crate) enum AppEvent {
 
     /// Enable or disable a skill by path.
     SetSkillEnabled {
-        path: PathBuf,
+        path: AbsolutePathBuf,
         enabled: bool,
     },
 
@@ -563,6 +568,7 @@ pub(crate) enum AppEvent {
     SubmitFeedback {
         category: FeedbackCategory,
         reason: Option<String>,
+        turn_id: Option<String>,
         include_logs: bool,
     },
 

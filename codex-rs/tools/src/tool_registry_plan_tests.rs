@@ -362,9 +362,9 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
 }
 
 #[test]
-fn view_image_tool_omits_detail_without_original_detail_feature() {
+fn view_image_tool_omits_detail_without_original_detail_support() {
     let mut model_info = model_info();
-    model_info.supports_image_detail_original = true;
+    model_info.supports_image_detail_original = false;
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -392,11 +392,10 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
 }
 
 #[test]
-fn view_image_tool_includes_detail_with_original_detail_feature() {
+fn view_image_tool_includes_detail_with_original_detail_support() {
     let mut model_info = model_info();
     model_info.supports_image_detail_original = true;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ImageDetailOriginal);
+    let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1285,11 +1284,11 @@ fn search_tool_description_lists_each_mcp_source_once() {
     assert!(!description.contains("mcp__rmcp__echo"));
 
     assert!(handlers.contains(&ToolHandlerSpec {
-        name: "mcp__codex_apps__calendar:_create_event".to_string(),
+        name: ToolName::namespaced("mcp__codex_apps__calendar", "_create_event"),
         kind: ToolHandlerKind::Mcp,
     }));
     assert!(handlers.contains(&ToolHandlerSpec {
-        name: "mcp__rmcp__:echo".to_string(),
+        name: ToolName::namespaced("mcp__rmcp__", "echo"),
         kind: ToolHandlerKind::Mcp,
     }));
 }

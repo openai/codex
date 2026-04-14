@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::info;
 use tracing::warn;
 
@@ -25,16 +24,16 @@ use codex_config::SkillsConfig;
 
 #[derive(Debug, Clone)]
 pub struct SkillsLoadInput {
-    pub cwd: PathBuf,
-    pub effective_skill_roots: Vec<PathBuf>,
+    pub cwd: AbsolutePathBuf,
+    pub effective_skill_roots: Vec<AbsolutePathBuf>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
 }
 
 impl SkillsLoadInput {
     pub fn new(
-        cwd: PathBuf,
-        effective_skill_roots: Vec<PathBuf>,
+        cwd: AbsolutePathBuf,
+        effective_skill_roots: Vec<AbsolutePathBuf>,
         config_layer_stack: ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Self {
@@ -48,19 +47,19 @@ impl SkillsLoadInput {
 }
 
 pub struct SkillsManager {
-    codex_home: PathBuf,
+    codex_home: AbsolutePathBuf,
     restriction_product: Option<Product>,
-    cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
+    cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
 impl SkillsManager {
-    pub fn new(codex_home: PathBuf, bundled_skills_enabled: bool) -> Self {
+    pub fn new(codex_home: AbsolutePathBuf, bundled_skills_enabled: bool) -> Self {
         Self::new_with_restriction_product(codex_home, bundled_skills_enabled, Some(Product::Codex))
     }
 
     pub fn new_with_restriction_product(
-        codex_home: PathBuf,
+        codex_home: AbsolutePathBuf,
         bundled_skills_enabled: bool,
         restriction_product: Option<Product>,
     ) -> Self {
@@ -106,7 +105,7 @@ impl SkillsManager {
     pub fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
             &input.config_layer_stack,
-            input.cwd.as_path(),
+            &input.cwd,
             input.effective_skill_roots.clone(),
         );
         if !input.bundled_skills_enabled {
@@ -120,7 +119,7 @@ impl SkillsManager {
         input: &SkillsLoadInput,
         force_reload: bool,
     ) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(input.cwd.as_path()) {
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(&input.cwd) {
             return outcome;
         }
 
@@ -132,16 +131,16 @@ impl SkillsManager {
         &self,
         input: &SkillsLoadInput,
         force_reload: bool,
-        extra_user_roots: &[PathBuf],
+        extra_user_roots: &[AbsolutePathBuf],
     ) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(input.cwd.as_path()) {
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(&input.cwd) {
             return outcome;
         }
         let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
 
         let mut roots = skill_roots(
             &input.config_layer_stack,
-            input.cwd.as_path(),
+            &input.cwd,
             input.effective_skill_roots.clone(),
         );
         if !bundled_skills_enabled_from_stack(&input.config_layer_stack) {
@@ -202,7 +201,7 @@ impl SkillsManager {
         info!("skills cache cleared ({cleared} entries)");
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<SkillLoadOutcome> {
+    fn cached_outcome_for_cwd(&self, cwd: &AbsolutePathBuf) -> Option<SkillLoadOutcome> {
         match self.cache_by_cwd.read() {
             Ok(cache) => cache.get(cwd).cloned(),
             Err(err) => err.into_inner().get(cwd).cloned(),
@@ -222,7 +221,7 @@ impl SkillsManager {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(PathBuf, u8)>,
+    roots: Vec<(AbsolutePathBuf, u8)>,
     skill_config_rules: SkillConfigRules,
 }
 
@@ -271,7 +270,7 @@ fn config_skills_cache_key(
 
 fn finalize_skill_outcome(
     mut outcome: SkillLoadOutcome,
-    disabled_paths: HashSet<PathBuf>,
+    disabled_paths: HashSet<AbsolutePathBuf>,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths;
     let (by_scripts_dir, by_doc_path) =
@@ -281,10 +280,10 @@ fn finalize_skill_outcome(
     outcome
 }
 
-fn normalize_extra_user_roots(extra_user_roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut normalized: Vec<PathBuf> = extra_user_roots
+fn normalize_extra_user_roots(extra_user_roots: &[AbsolutePathBuf]) -> Vec<AbsolutePathBuf> {
+    let mut normalized: Vec<AbsolutePathBuf> = extra_user_roots
         .iter()
-        .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| path.clone()))
+        .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
         .collect();
     normalized.sort_unstable();
     normalized.dedup();

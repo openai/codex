@@ -302,14 +302,6 @@ impl CodexAuth {
             .and_then(|t| t.id_token.chatgpt_user_id)
     }
 
-    /// Returns `Some(true)` when the current ChatGPT token marks the user as a
-    /// workspace owner, `Some(false)` for non-owners, and `None` when auth is
-    /// unavailable or the token omits the claim.
-    pub fn is_workspace_owner(&self) -> Option<bool> {
-        self.get_current_token_data()
-            .and_then(|t| t.id_token.is_org_owner)
-    }
-
     /// Account-facing plan classification derived from the current token.
     /// Returns a high-level `AccountPlanType` (e.g., Free/Plus/Pro/Team/…)
     /// mapped from the ID token's internal plan value. Prefer this when you
@@ -322,6 +314,7 @@ impl CodexAuth {
             InternalKnownPlan::Go => AccountPlanType::Go,
             InternalKnownPlan::Plus => AccountPlanType::Plus,
             InternalKnownPlan::Pro => AccountPlanType::Pro,
+            InternalKnownPlan::ProLite => AccountPlanType::ProLite,
             InternalKnownPlan::Team => AccountPlanType::Team,
             InternalKnownPlan::SelfServeBusinessUsageBased => {
                 AccountPlanType::SelfServeBusinessUsageBased

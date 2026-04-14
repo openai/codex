@@ -1,9 +1,10 @@
+use std::io::Write as _;
 use std::net::SocketAddr;
-
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tracing::warn;
 
+use crate::ExecServerRuntimePaths;
 use crate::connection::JsonRpcConnection;
 use crate::server::processor::ConnectionProcessor;
 
@@ -48,19 +49,22 @@ pub(crate) fn parse_listen_url(
 
 pub(crate) async fn run_transport(
     listen_url: &str,
+    runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bind_address = parse_listen_url(listen_url)?;
-    run_websocket_listener(bind_address).await
+    run_websocket_listener(bind_address, runtime_paths).await
 }
 
 async fn run_websocket_listener(
     bind_address: SocketAddr,
+    runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
-    let processor = ConnectionProcessor::new();
+    let processor = ConnectionProcessor::new(runtime_paths);
     tracing::info!("codex-exec-server listening on ws://{local_addr}");
     println!("ws://{local_addr}");
+    std::io::stdout().flush()?;
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;

@@ -9,6 +9,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
+use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
@@ -28,6 +29,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
 pub use codex_protocol::mcp::ResourceContent as McpResourceContent;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
@@ -72,6 +74,7 @@ use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
@@ -82,7 +85,6 @@ use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
-use codex_protocol::protocol::SpendControlSnapshot as CoreSpendControlSnapshot;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
@@ -412,6 +414,14 @@ v2_enum_from_core!(
         Warning, Stop, Feedback, Context, Error
     }
 );
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadStartSource {
+    Startup,
+    Clear,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1061,6 +1071,7 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
             },
             CoreReviewDecision::Abort => Self::Cancel,
             CoreReviewDecision::Denied => Self::Decline,
+            CoreReviewDecision::TimedOut => Self::Decline,
         }
     }
 }
@@ -1739,27 +1750,11 @@ pub struct GetAccountParams {
     pub refresh_token: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[ts(export_to = "v2/")]
-pub enum WorkspaceRole {
-    #[serde(rename = "account-owner")]
-    #[ts(rename = "account-owner")]
-    AccountOwner,
-    #[serde(rename = "account-admin")]
-    #[ts(rename = "account-admin")]
-    AccountAdmin,
-    #[serde(rename = "standard-user")]
-    #[ts(rename = "standard-user")]
-    StandardUser,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Option<Account>,
-    pub workspace_role: Option<WorkspaceRole>,
-    pub is_workspace_owner: Option<bool>,
     pub requires_openai_auth: bool,
 }
 
@@ -2024,6 +2019,48 @@ pub struct McpResourceReadResponse {
     pub contents: Vec<McpResourceContent>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerToolCallParams {
+    pub thread_id: String,
+    pub server: String,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub arguments: Option<JsonValue>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meta: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerToolCallResponse {
+    pub content: Vec<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub structured_content: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub is_error: Option<bool>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meta: Option<JsonValue>,
+}
+
+impl From<CoreMcpCallToolResult> for McpServerToolCallResponse {
+    fn from(result: CoreMcpCallToolResult) -> Self {
+        Self {
+            content: result.content,
+            structured_content: result.structured_content,
+            is_error: result.is_error,
+            meta: result.meta,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2206,6 +2243,8 @@ pub struct FeedbackUploadParams {
     pub include_logs: bool,
     #[ts(optional = nullable)]
     pub extra_log_files: Option<Vec<PathBuf>>,
+    #[ts(optional = nullable)]
+    pub tags: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2282,10 +2321,12 @@ pub struct FsGetMetadataParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsGetMetadataResponse {
-    /// Whether the path currently resolves to a directory.
+    /// Whether the path resolves to a directory.
     pub is_directory: bool,
-    /// Whether the path currently resolves to a regular file.
+    /// Whether the path resolves to a regular file.
     pub is_file: bool,
+    /// Whether the path itself is a symbolic link.
+    pub is_symlink: bool,
     /// File creation time in Unix milliseconds when available, otherwise `0`.
     #[ts(type = "number")]
     pub created_at_ms: i64,
@@ -2633,6 +2674,8 @@ pub struct ThreadStartParams {
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    #[ts(optional = nullable)]
+    pub session_start_source: Option<ThreadStartSource>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -2679,6 +2722,9 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2765,6 +2811,9 @@ pub struct ThreadResumeResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2842,6 +2891,9 @@ pub struct ThreadForkResponse {
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<PathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -3000,6 +3052,43 @@ pub struct ThreadMetadataUpdateResponse {
     pub thread: Thread,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum ThreadMemoryMode {
+    Enabled,
+    Disabled,
+}
+
+impl ThreadMemoryMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn to_core(self) -> codex_protocol::protocol::ThreadMemoryMode {
+        match self {
+            Self::Enabled => codex_protocol::protocol::ThreadMemoryMode::Enabled,
+            Self::Disabled => codex_protocol::protocol::ThreadMemoryMode::Disabled,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryModeSetParams {
+    pub thread_id: String,
+    pub mode: ThreadMemoryMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoryModeSetResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3035,18 +3124,6 @@ pub struct ThreadShellCommandParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadShellCommandResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAddCreditsNudgeEmailParams {
-    pub thread_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAddCreditsNudgeEmailResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -3253,6 +3330,26 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct MarketplaceAddParams {
+    pub source: String,
+    #[ts(optional = nullable)]
+    pub ref_name: Option<String>,
+    #[ts(optional = nullable)]
+    pub sparse_paths: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceAddResponse {
+    pub marketplace_name: String,
+    pub installed_root: AbsolutePathBuf,
+    pub already_added: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
     /// only home-scoped marketplaces and the official curated marketplace are considered.
@@ -3326,7 +3423,7 @@ pub struct SkillMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dependencies: Option<SkillDependencies>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
 }
@@ -3472,7 +3569,7 @@ pub struct SkillSummary {
     pub description: String,
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub enabled: bool,
 }
 
@@ -3685,8 +3782,6 @@ pub struct Thread {
 pub struct AccountUpdatedNotification {
     pub auth_mode: Option<AuthMode>,
     pub plan_type: Option<PlanType>,
-    pub workspace_role: Option<WorkspaceRole>,
-    pub is_workspace_owner: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3882,11 +3977,14 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 }
 
 /// EXPERIMENTAL - start a thread-scoped realtime session.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
+    /// Selects text or audio output for the realtime session. Transport and voice stay
+    /// independent so clients can choose how they connect separately from what the model emits.
+    pub output_modality: RealtimeOutputModality,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_double_option",
@@ -4004,9 +4102,22 @@ pub struct ThreadRealtimeItemAddedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadRealtimeTranscriptUpdatedNotification {
+pub struct ThreadRealtimeTranscriptDeltaNotification {
     pub thread_id: String,
     pub role: String,
+    /// Live transcript delta from the realtime event.
+    pub delta: String,
+}
+
+/// EXPERIMENTAL - final transcript text emitted when realtime completes
+/// a transcript part.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeTranscriptDoneNotification {
+    pub thread_id: String,
+    pub role: String,
+    /// Final complete text for the transcript part.
     pub text: String,
 }
 
@@ -4178,6 +4289,20 @@ pub enum ReviewTarget {
 pub struct TurnStartResponse {
     pub turn: Turn,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadInjectItemsParams {
+    pub thread_id: String,
+    /// Raw Responses API items to append to the thread's model-visible history.
+    pub items: Vec<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadInjectItemsResponse {}
 
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
@@ -4552,7 +4677,24 @@ pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
     Denied,
+    TimedOut,
     Aborted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Source that produced a terminal guardian approval review decision.
+pub enum AutoReviewDecisionSource {
+    Agent,
+}
+
+impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
+    fn from(value: CoreGuardianAssessmentDecisionSource) -> Self {
+        match value {
+            CoreGuardianAssessmentDecisionSource::Agent => Self::Agent,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -5311,14 +5453,23 @@ pub struct ItemStartedNotification {
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review. This shape is expected to change soon.
-///
-/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
-/// lifecycle instead of sending separate standalone review notifications so the
-/// app-server API can persist and replay review state via `thread/read`.
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub target_item_id: String,
+    /// Stable identifier for this review.
+    pub review_id: String,
+    /// Identifier for the reviewed item or tool call when one exists.
+    ///
+    /// In most cases, one review maps to one target item. The exceptions are
+    /// - execve reviews, where a single command may contain multiple execve
+    ///   calls to review (only possible when using the shell_zsh_fork feature)
+    /// - network policy reviews, where there is no target item
+    ///
+    /// A network call is triggered by a CommandExecution item, so having a
+    /// target_item_id set to the CommandExecution item would be misleading
+    /// because the review is about the network call, not the command execution.
+    /// Therefore, target_item_id is set to None for network policy reviews.
+    pub target_item_id: Option<String>,
     pub review: GuardianApprovalReview,
     pub action: GuardianApprovalReviewAction,
 }
@@ -5328,14 +5479,24 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review. This shape is expected to change soon.
-///
-/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
-/// lifecycle instead of sending separate standalone review notifications so the
-/// app-server API can persist and replay review state via `thread/read`.
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub target_item_id: String,
+    /// Stable identifier for this review.
+    pub review_id: String,
+    /// Identifier for the reviewed item or tool call when one exists.
+    ///
+    /// In most cases, one review maps to one target item. The exceptions are
+    /// - execve reviews, where a single command may contain multiple execve
+    ///   calls to review (only possible when using the shell_zsh_fork feature)
+    /// - network policy reviews, where there is no target item
+    ///
+    /// A network call is triggered by a CommandExecution item, so having a
+    /// target_item_id set to the CommandExecution item would be misleading
+    /// because the review is about the network call, not the command execution.
+    /// Therefore, target_item_id is set to None for network policy reviews.
+    pub target_item_id: Option<String>,
+    pub decision_source: AutoReviewDecisionSource,
     pub review: GuardianApprovalReview,
     pub action: GuardianApprovalReviewAction,
 }
@@ -6258,24 +6419,6 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AddCreditsNudgeEmailNotification {
-    pub thread_id: String,
-    pub result: AddCreditsNudgeEmailResult,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "status", rename_all = "camelCase")]
-#[ts(tag = "status", rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum AddCreditsNudgeEmailResult {
-    Sent,
-    CooldownActive,
-    Failed { message: String },
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6285,7 +6428,6 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
-    pub spend_control: Option<SpendControlSnapshot>,
     pub plan_type: Option<PlanType>,
 }
 
@@ -6297,7 +6439,6 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
-            spend_control: value.spend_control.map(SpendControlSnapshot::from),
             plan_type: value.plan_type,
         }
     }
@@ -6339,21 +6480,6 @@ impl From<CoreCreditsSnapshot> for CreditsSnapshot {
             has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SpendControlSnapshot {
-    pub reached: bool,
-}
-
-impl From<CoreSpendControlSnapshot> for SpendControlSnapshot {
-    fn from(value: CoreSpendControlSnapshot) -> Self {
-        Self {
-            reached: value.reached,
         }
     }
 }
@@ -6678,6 +6804,7 @@ mod tests {
         let response = FsGetMetadataResponse {
             is_directory: false,
             is_file: true,
+            is_symlink: false,
             created_at_ms: 123,
             modified_at_ms: 456,
         };
@@ -6688,6 +6815,7 @@ mod tests {
             json!({
                 "isDirectory": false,
                 "isFile": true,
+                "isSymlink": false,
                 "createdAtMs": 123,
                 "modifiedAtMs": 456,
             })
@@ -8262,6 +8390,37 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_add_params_serialization_uses_optional_ref_name_and_sparse_paths() {
+        assert_eq!(
+            serde_json::to_value(MarketplaceAddParams {
+                source: "owner/repo".to_string(),
+                ref_name: None,
+                sparse_paths: None,
+            })
+            .unwrap(),
+            json!({
+                "source": "owner/repo",
+                "refName": null,
+                "sparsePaths": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceAddParams {
+                source: "owner/repo".to_string(),
+                ref_name: Some("main".to_string()),
+                sparse_paths: Some(vec!["plugins/foo".to_string()]),
+            })
+            .unwrap(),
+            json!({
+                "source": "owner/repo",
+                "refName": "main",
+                "sparsePaths": ["plugins/foo"],
+            }),
+        );
+    }
+
+    #[test]
     fn plugin_install_params_serialization_uses_force_remote_sync() {
         let marketplace_path = if cfg!(windows) {
             r"C:\plugins\marketplace.json"
@@ -8477,6 +8636,50 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_lifecycle_responses_default_missing_instruction_sources() {
+        let response = json!({
+            "thread": {
+                "id": "thread-id",
+                "forkedFromId": null,
+                "preview": "",
+                "ephemeral": false,
+                "modelProvider": "openai",
+                "createdAt": 1,
+                "updatedAt": 1,
+                "status": { "type": "idle" },
+                "path": null,
+                "cwd": "/tmp",
+                "cliVersion": "0.0.0",
+                "source": "exec",
+                "agentNickname": null,
+                "agentRole": null,
+                "gitInfo": null,
+                "name": null,
+                "turns": []
+            },
+            "model": "gpt-5",
+            "modelProvider": "openai",
+            "serviceTier": null,
+            "cwd": "/tmp",
+            "approvalPolicy": "on-failure",
+            "approvalsReviewer": "user",
+            "sandbox": { "type": "dangerFullAccess" },
+            "reasoningEffort": null
+        });
+
+        let start: ThreadStartResponse =
+            serde_json::from_value(response.clone()).expect("thread/start response");
+        let resume: ThreadResumeResponse =
+            serde_json::from_value(response.clone()).expect("thread/resume response");
+        let fork: ThreadForkResponse =
+            serde_json::from_value(response).expect("thread/fork response");
+
+        assert_eq!(start.instruction_sources, Vec::<PathBuf>::new());
+        assert_eq!(resume.instruction_sources, Vec::<PathBuf>::new());
+        assert_eq!(fork.instruction_sources, Vec::<PathBuf>::new());
     }
 
     #[test]
