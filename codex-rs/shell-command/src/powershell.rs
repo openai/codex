@@ -68,19 +68,6 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
     None
 }
 
-/// This function attempts to find a valid PowerShell executable on the system.
-/// It first tries to find pwsh.exe, and if that fails, it tries to find
-/// powershell.exe.
-#[cfg(windows)]
-#[allow(dead_code)]
-pub(crate) fn try_find_powershellish_executable_blocking() -> Option<AbsolutePathBuf> {
-    if let Some(pwsh_path) = try_find_pwsh_executable_blocking() {
-        Some(pwsh_path)
-    } else {
-        try_find_powershell_executable_blocking()
-    }
-}
-
 /// This function attempts to find a powershell.exe executable on the system.
 pub fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBuf> {
     try_find_powershellish_executable_in_path(&["powershell.exe"])

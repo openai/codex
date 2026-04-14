@@ -61,7 +61,7 @@ impl SkillsWatcher {
         plugins_manager: &PluginsManager,
         fs: Option<Arc<dyn codex_exec_server::ExecutorFileSystem>>,
     ) -> WatchRegistration {
-        let plugin_outcome = plugins_manager.plugins_for_config(config);
+        let plugin_outcome = plugins_manager.plugins_for_config(config).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(config, effective_skill_roots);
         let roots = skills_manager

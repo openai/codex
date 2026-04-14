@@ -124,7 +124,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
     let directory_connectors =
         list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    let connector_ids = tool_suggest_connector_ids(config);
+    let connector_ids = tool_suggest_connector_ids(config).await;
     let discoverable_connectors = filter_tool_suggest_discoverable_connectors(
         directory_connectors,
         accessible_connectors,
@@ -202,7 +202,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
+    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config).await;
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = filter_disallowed_connectors(cached_connectors);
@@ -213,7 +213,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let mcp_config = config.to_mcp_config(plugins_manager.as_ref());
+    let mcp_config = config.to_mcp_config(plugins_manager.as_ref()).await;
     let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
@@ -396,9 +396,10 @@ fn filter_tool_suggest_discoverable_connectors(
     connectors
 }
 
-fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
+async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
     let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(config)
+        .await
         .capability_summaries()
         .iter()
         .flat_map(|plugin| plugin.app_connector_ids.iter())

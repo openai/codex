@@ -19,11 +19,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
-#[cfg(test)]
-use crate::legacy_core::McpManager;
 use crate::legacy_core::config::Config;
-#[cfg(test)]
-use crate::legacy_core::plugins::PluginsManager;
 use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
@@ -88,8 +84,6 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
@@ -1877,10 +1871,7 @@ pub(crate) fn new_mcp_tools_output(
         lines.push("".into());
     }
 
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
-        config.codex_home.to_path_buf(),
-    )));
-    let effective_servers = mcp_manager.effective_servers(config, /*auth*/ None);
+    let effective_servers = config.mcp_servers.get().clone();
     let mut servers: Vec<_> = effective_servers.iter().collect();
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
 

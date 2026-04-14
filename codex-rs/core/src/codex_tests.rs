@@ -2913,7 +2913,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config);
+        .plugins_for_config(&per_turn_config)
+        .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
@@ -3764,7 +3765,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config);
+        .plugins_for_config(&per_turn_config)
+        .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
