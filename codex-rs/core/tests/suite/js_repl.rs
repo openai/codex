@@ -624,6 +624,7 @@ async fn js_repl_can_invoke_mcp_tools_by_display_name() -> Result<()> {
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
