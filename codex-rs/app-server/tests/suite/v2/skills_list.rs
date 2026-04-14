@@ -54,7 +54,7 @@ async fn skills_list_includes_skills_from_per_cwd_extra_user_roots() -> Result<(
     .await??;
     let SkillsListResponse { data } = to_response(response)?;
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0].cwd, cwd.path().to_path_buf());
+    assert_eq!(data[0].cwd.as_path(), cwd.path());
     assert!(
         data[0]
             .skills
@@ -156,7 +156,7 @@ async fn skills_list_ignores_per_cwd_extra_roots_for_unknown_cwd() -> Result<()>
     .await??;
     let SkillsListResponse { data } = to_response(response)?;
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0].cwd, requested_cwd.path().to_path_buf());
+    assert_eq!(data[0].cwd.as_path(), requested_cwd.path());
     assert!(
         data[0]
             .skills

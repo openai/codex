@@ -511,8 +511,11 @@ fn discover_skills_under_root(
     }
 }
 
-fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, SkillParseError> {
-    let contents = fs::read_to_string(path).map_err(SkillParseError::Read)?;
+fn parse_skill_file(
+    path: &AbsolutePathBuf,
+    scope: SkillScope,
+) -> Result<SkillMetadata, SkillParseError> {
+    let contents = fs::read_to_string(path.as_path()).map_err(SkillParseError::Read)?;
 
     let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
 
@@ -524,8 +527,8 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_skill_name(path));
-    let name = namespaced_skill_name(path, &base_name);
+        .unwrap_or_else(|| default_skill_name(path.as_path()));
+    let name = namespaced_skill_name(path.as_path(), &base_name);
     let description = parsed
         .description
         .as_deref()
@@ -553,9 +556,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         )?;
     }
 
-    let resolved_path = AbsolutePathBuf::from_absolute_path_checked(path)
-        .and_then(|path| path.canonicalize())
-        .map_err(SkillParseError::Read)?;
+    let resolved_path = path.canonicalize().map_err(SkillParseError::Read)?;
 
     Ok(SkillMetadata {
         name,
@@ -584,7 +585,7 @@ fn namespaced_skill_name(path: &Path, base_name: &str) -> String {
         .unwrap_or_else(|| base_name.to_string())
 }
 
-fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
+fn load_skill_metadata(skill_path: &AbsolutePathBuf) -> LoadedSkillMetadata {
     // Fail open: optional metadata should not block loading SKILL.md.
     let Some(skill_dir) = skill_path.parent() else {
         return LoadedSkillMetadata::default();
@@ -592,11 +593,11 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
     let metadata_path = skill_dir
         .join(SKILLS_METADATA_DIR)
         .join(SKILLS_METADATA_FILENAME);
-    if !metadata_path.exists() {
+    if !metadata_path.as_path().exists() {
         return LoadedSkillMetadata::default();
     }
 
-    let contents = match fs::read_to_string(&metadata_path) {
+    let contents = match fs::read_to_string(metadata_path.as_path()) {
         Ok(contents) => contents,
         Err(error) => {
             tracing::warn!(
@@ -609,7 +610,7 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
     };
 
     let parsed: SkillMetadataFile = {
-        let _guard = AbsolutePathBufGuard::new(skill_dir);
+        let _guard = AbsolutePathBufGuard::new(skill_dir.as_path());
         match serde_yaml::from_str(&contents) {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -629,13 +630,16 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         policy,
     } = parsed;
     LoadedSkillMetadata {
-        interface: resolve_interface(interface, skill_dir),
+        interface: resolve_interface(interface, &skill_dir),
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
     }
 }
 
-fn resolve_interface(interface: Option<Interface>, skill_dir: &Path) -> Option<SkillInterface> {
+fn resolve_interface(
+    interface: Option<Interface>,
+    skill_dir: &AbsolutePathBuf,
+) -> Option<SkillInterface> {
     let interface = interface?;
     let interface = SkillInterface {
         display_name: resolve_str(
@@ -726,10 +730,10 @@ fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> 
 }
 
 fn resolve_asset_path(
-    skill_dir: &Path,
+    skill_dir: &AbsolutePathBuf,
     field: &'static str,
     path: Option<PathBuf>,
-) -> Option<PathBuf> {
+) -> Option<AbsolutePathBuf> {
     // Icons must be relative paths under the skill's assets/ directory; otherwise return None.
     let path = path?;
     if path.as_os_str().is_empty() {

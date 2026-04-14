@@ -35,9 +35,9 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// internal `apply_patch` path.
 ///
 /// Although this constant lives in `codex-apply-patch` (to avoid forcing
-/// `codex-arg0` to depend on `codex-core`), it is part of the "codex core"
-/// process-invocation contract between the apply-patch runtime and the arg0
-/// dispatcher.
+/// `codex-arg0` to depend on `codex-core`), it remains part of the "codex core"
+/// process-invocation contract for the standalone `apply_patch` command
+/// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
 #[derive(Debug, Error, PartialEq)]
@@ -134,8 +134,8 @@ pub enum MaybeApplyPatchVerified {
 pub struct ApplyPatchAction {
     changes: HashMap<PathBuf, ApplyPatchFileChange>,
 
-    /// The raw patch argument that can be used with `apply_patch` as an exec
-    /// call. i.e., if the original arg was parsed in "lenient" mode with a
+    /// The raw patch argument that can be used to apply the patch. i.e., if the
+    /// original arg was parsed in "lenient" mode with a
     /// heredoc, this should be the value without the heredoc wrapper.
     pub patch: String,
 
@@ -274,23 +274,13 @@ async fn apply_hunks_to_files(
         let path_abs = hunk.resolve_path(cwd);
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                if let Some(parent_abs) = path_abs.parent() {
-                    fs.create_directory(
-                        &parent_abs,
-                        CreateDirectoryOptions { recursive: true },
-                        sandbox,
-                    )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to create parent directories for {}",
-                            path_abs.display()
-                        )
-                    })?;
-                }
-                fs.write_file(&path_abs, contents.clone().into_bytes(), sandbox)
-                    .await
-                    .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                write_file_with_missing_parent_retry(
+                    fs,
+                    &path_abs,
+                    contents.clone().into_bytes(),
+                    sandbox,
+                )
+                .await?;
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
@@ -323,23 +313,13 @@ async fn apply_hunks_to_files(
                     derive_new_contents_from_chunks(&path_abs, chunks, fs, sandbox).await?;
                 if let Some(dest) = move_path {
                     let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
-                    if let Some(parent_abs) = dest_abs.parent() {
-                        fs.create_directory(
-                            &parent_abs,
-                            CreateDirectoryOptions { recursive: true },
-                            sandbox,
-                        )
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to create parent directories for {}",
-                                dest_abs.display()
-                            )
-                        })?;
-                    }
-                    fs.write_file(&dest_abs, new_contents.into_bytes(), sandbox)
-                        .await
-                        .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
+                    write_file_with_missing_parent_retry(
+                        fs,
+                        &dest_abs,
+                        new_contents.into_bytes(),
+                        sandbox,
+                    )
+                    .await?;
                     let result: io::Result<()> = async {
                         let metadata = fs.get_metadata(&path_abs, sandbox).await?;
                         if metadata.is_directory {
@@ -377,6 +357,40 @@ async fn apply_hunks_to_files(
         modified,
         deleted,
     })
+}
+
+async fn write_file_with_missing_parent_retry(
+    fs: &dyn ExecutorFileSystem,
+    path_abs: &AbsolutePathBuf,
+    contents: Vec<u8>,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> anyhow::Result<()> {
+    match fs.write_file(path_abs, contents.clone(), sandbox).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent_abs) = path_abs.parent() {
+                fs.create_directory(
+                    &parent_abs,
+                    CreateDirectoryOptions { recursive: true },
+                    sandbox,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to create parent directories for {}",
+                        path_abs.display()
+                    )
+                })?;
+            }
+            fs.write_file(path_abs, contents, sandbox)
+                .await
+                .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+            Ok(())
+        }
+        Err(err) => {
+            Err(err).with_context(|| format!("Failed to write file {}", path_abs.display()))
+        }
+    }
 }
 
 struct AppliedPatch {

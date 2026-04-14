@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -55,10 +54,10 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::Serialize;
-use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 use tracing::Instrument;
@@ -1545,7 +1544,7 @@ async fn maybe_persist_mcp_tool_approval(
 }
 
 async fn persist_codex_app_tool_approval(
-    codex_home: &Path,
+    codex_home: &AbsolutePathBuf,
     connector_id: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
@@ -1578,7 +1577,7 @@ async fn persist_custom_mcp_tool_approval(
         if !servers.contains_key(server) {
             anyhow::bail!("MCP server `{server}` is not configured in config.toml");
         }
-        config.codex_home.to_path_buf()
+        config.codex_home.clone()
     };
 
     ConfigEditsBuilder::new(&config_folder)
@@ -1596,7 +1595,10 @@ async fn persist_custom_mcp_tool_approval(
         .await
 }
 
-fn project_mcp_tool_approval_config_folder(config: &Config, server: &str) -> Option<PathBuf> {
+fn project_mcp_tool_approval_config_folder(
+    config: &Config,
+    server: &str,
+) -> Option<AbsolutePathBuf> {
     config
         .config_layer_stack
         .layers_high_to_low()
@@ -1615,9 +1617,7 @@ fn project_mcp_tool_approval_config_folder(config: &Config, server: &str) -> Opt
                     HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
                 })?;
             if servers.contains_key(server) {
-                layer
-                    .config_folder()
-                    .map(|folder| folder.as_path().to_path_buf())
+                layer.config_folder()
             } else {
                 None
             }

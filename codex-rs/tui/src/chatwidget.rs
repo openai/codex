@@ -42,8 +42,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use url::Url;
-
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
@@ -942,7 +940,7 @@ pub(crate) struct ChatWidget {
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
     // Instruction source files loaded for the current session, supplied by app-server.
-    instruction_source_paths: Vec<PathBuf>,
+    instruction_source_paths: Vec<AbsolutePathBuf>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -1370,6 +1368,7 @@ fn app_server_request_id_to_mcp_request_id(
 
 fn exec_approval_request_from_params(
     params: CommandExecutionRequestApprovalParams,
+    fallback_cwd: &AbsolutePathBuf,
 ) -> ExecApprovalRequestEvent {
     ExecApprovalRequestEvent {
         call_id: params.item_id,
@@ -1378,7 +1377,7 @@ fn exec_approval_request_from_params(
             .as_deref()
             .map(split_command_string)
             .unwrap_or_default(),
-        cwd: params.cwd.unwrap_or_default(),
+        cwd: params.cwd.unwrap_or_else(|| fallback_cwd.clone()),
         reason: params.reason,
         network_approval_context: params
             .network_approval_context
@@ -1972,13 +1971,8 @@ impl ChatWidget {
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
-        self.current_cwd = Some(event.cwd.clone());
-        match AbsolutePathBuf::try_from(event.cwd.clone()) {
-            Ok(cwd) => self.config.cwd = cwd,
-            Err(err) => {
-                tracing::warn!(path = %event.cwd.display(), %err, "session cwd should be absolute");
-            }
-        }
+        self.current_cwd = Some(event.cwd.to_path_buf());
+        self.config.cwd = event.cwd.clone();
         if let Err(err) = self
             .config
             .permissions
@@ -2039,10 +2033,7 @@ impl ChatWidget {
             self.replay_initial_messages(messages);
         }
         self.saw_copy_source_this_turn = false;
-        self.submit_op(AppCommand::list_skills(
-            Vec::new(),
-            /*force_reload*/ true,
-        ));
+        self.refresh_skills_for_current_cwd(/*force_reload*/ true);
         if self.connectors_enabled() {
             self.prefetch_connectors();
         }
@@ -3632,15 +3623,10 @@ impl ChatWidget {
 
     fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
         self.flush_answer_stream_with_separator();
-        let saved_path = event.saved_path.map(|saved_path| {
-            Url::from_file_path(Path::new(&saved_path))
-                .map(|url| url.to_string())
-                .unwrap_or(saved_path)
-        });
         self.add_to_history(history_cell::new_image_generation_call(
             event.call_id,
             event.revised_prompt,
-            saved_path,
+            event.saved_path,
         ));
         self.request_redraw();
     }
@@ -4538,7 +4524,7 @@ impl ChatWidget {
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
-            cwd: self.config.cwd.to_path_buf(),
+            cwd: self.config.cwd.clone(),
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -5926,10 +5912,7 @@ impl ChatWidget {
                 });
             }
             ThreadItem::ImageView { id, path } => {
-                self.on_view_image_tool_call(ViewImageToolCallEvent {
-                    call_id: id,
-                    path: path.into(),
-                });
+                self.on_view_image_tool_call(ViewImageToolCallEvent { call_id: id, path });
             }
             ThreadItem::ImageGeneration {
                 id,
@@ -5995,7 +5978,11 @@ impl ChatWidget {
         let id = request.id().to_string();
         match request {
             ServerRequest::CommandExecutionRequestApproval { params, .. } => {
-                self.on_exec_approval_request(id, exec_approval_request_from_params(params));
+                let fallback_cwd = self.config.cwd.clone();
+                self.on_exec_approval_request(
+                    id,
+                    exec_approval_request_from_params(params, &fallback_cwd),
+                );
             }
             ServerRequest::FileChangeRequestApproval { params, .. } => {
                 self.on_apply_patch_approval_request(
@@ -6159,10 +6146,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::SkillsChanged(_) => {
-                self.submit_op(AppCommand::list_skills(
-                    Vec::new(),
-                    /*force_reload*/ true,
-                ));
+                self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
             ServerNotification::ModelRerouted(_) => {}
             ServerNotification::DeprecationNotice(notification) => {
@@ -6736,10 +6720,7 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
-                self.submit_op(AppCommand::list_skills(
-                    Vec::new(),
-                    /*force_reload*/ true,
-                ));
+                self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
@@ -10234,6 +10215,14 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    fn refresh_skills_for_current_cwd(&mut self, force_reload: bool) {
+        self.submit_op(AppCommand::list_skills(
+            vec![self.config.cwd.to_path_buf()],
+            force_reload,
+        ));
+    }
+
     /// Forward a command directly to codex.
     pub(crate) fn submit_op<T>(&mut self, op: T) -> bool
     where

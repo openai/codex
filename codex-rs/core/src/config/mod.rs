@@ -272,7 +272,7 @@ pub struct Config {
     pub user_instructions: Option<String>,
 
     /// Path to the global AGENTS file loaded into `user_instructions`.
-    pub user_instructions_path: Option<PathBuf>,
+    pub user_instructions_path: Option<AbsolutePathBuf>,
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
@@ -1578,7 +1578,6 @@ impl Config {
         };
         let memories_root = memory_root(&codex_home);
         std::fs::create_dir_all(&memories_root)?;
-        let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
         if !additional_writable_roots
             .iter()
             .any(|existing| existing == &memories_root)
@@ -2210,11 +2209,10 @@ impl Config {
         Ok(config)
     }
 
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<LoadedUserInstructions> {
+    fn load_instructions(codex_dir: Option<&AbsolutePathBuf>) -> Option<LoadedUserInstructions> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
-            let mut path = base.to_path_buf();
-            path.push(candidate);
+            let path = base.join(candidate);
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
@@ -2297,7 +2295,7 @@ impl Config {
 
 struct LoadedUserInstructions {
     contents: String,
-    path: PathBuf,
+    path: AbsolutePathBuf,
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {

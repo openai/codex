@@ -43,6 +43,7 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+codex-utils-absolute-path = { workspace = true }
 codex-shell-command = { workspace = true }
 core_test_support = { workspace = true }
 mcp_test_support = { workspace = true }
