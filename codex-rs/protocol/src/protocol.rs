@@ -28,6 +28,7 @@ use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::TurnItem;
+use crate::mcp::AdvertisedMcpToolCatalog;
 use crate::mcp::CallToolResult;
 use crate::mcp::RequestId;
 use crate::mcp::Resource as McpResource;
@@ -2771,43 +2772,6 @@ pub struct SessionMetaLine {
     pub meta: SessionMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitInfo>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct AdvertisedMcpToolCatalog {
-    pub has_servers: bool,
-    pub tools: HashMap<String, AdvertisedMcpToolInfo>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct AdvertisedMcpToolInfo {
-    /// Raw MCP server name used for routing the tool call.
-    pub server_name: String,
-    /// Model-visible tool name used in Responses API tool declarations.
-    pub callable_name: String,
-    /// Model-visible namespace used for deferred tool loading.
-    pub callable_namespace: String,
-    /// Instructions from the MCP server initialize result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub server_instructions: Option<String>,
-    /// Serialized raw MCP tool definition used to rebuild model-visible schemas on resume.
-    pub tool: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub connector_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub connector_name: Option<String>,
-    #[serde(default)]
-    pub plugin_display_names: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub connector_description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]

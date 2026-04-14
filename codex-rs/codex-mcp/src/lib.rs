@@ -1,6 +1,7 @@
 pub(crate) mod mcp;
 pub(crate) mod mcp_connection_manager;
 pub(crate) mod mcp_tool_names;
+mod tool_catalog;
 
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::McpAuthStatusEntry;
@@ -44,3 +45,7 @@ pub use mcp_connection_manager::ToolInfo;
 pub use mcp_connection_manager::codex_apps_tools_cache_key;
 pub use mcp_connection_manager::declared_openai_file_input_param_names;
 pub use mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+pub use tool_catalog::McpToolCatalog;
+pub use tool_catalog::McpToolCatalogMerge;
+pub use tool_catalog::McpToolCatalogSnapshot;
+pub use tool_catalog::McpToolCatalogUpdate;

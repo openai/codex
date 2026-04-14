@@ -3,9 +3,12 @@
 //!
 //! We intentionally keep these types TS/JSON-schema friendly (via `ts-rs` and
 //! `schemars`) so they can be embedded in Codex's own protocol structures.
+use std::collections::HashMap;
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use ts_rs::TS;
 
 /// ID of a request, which can be either a string or an integer.
@@ -50,6 +53,43 @@ pub struct Tool {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AdvertisedMcpToolCatalog {
+    pub has_servers: bool,
+    pub tools: HashMap<String, AdvertisedMcpToolInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AdvertisedMcpToolInfo {
+    /// Raw MCP server name used for routing the tool call.
+    pub server_name: String,
+    /// Model-visible tool name used in Responses API tool declarations.
+    pub callable_name: String,
+    /// Model-visible namespace used for deferred tool loading.
+    pub callable_namespace: String,
+    /// Instructions from the MCP server initialize result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub server_instructions: Option<String>,
+    /// Serialized raw MCP tool definition used to rebuild model-visible schemas on resume.
+    pub tool: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub connector_name: Option<String>,
+    #[serde(default)]
+    pub plugin_display_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub connector_description: Option<String>,
 }
 
 /// A known resource that the server is capable of reading.

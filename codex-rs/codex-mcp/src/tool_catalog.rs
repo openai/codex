@@ -1,36 +1,37 @@
 use std::collections::HashMap;
 
-use codex_mcp::ToolInfo;
-use codex_protocol::protocol::AdvertisedMcpToolCatalog;
-use codex_protocol::protocol::AdvertisedMcpToolInfo;
+use codex_protocol::mcp::AdvertisedMcpToolCatalog;
+use codex_protocol::mcp::AdvertisedMcpToolInfo;
 use tracing::warn;
 
+use crate::mcp_connection_manager::ToolInfo;
+
 #[derive(Debug, Default)]
-pub(crate) struct McpToolCatalog {
+pub struct McpToolCatalog {
     has_servers: bool,
     tools: HashMap<String, ToolInfo>,
 }
 
 #[derive(Debug)]
-pub(crate) struct McpToolCatalogUpdate {
-    pub(crate) has_servers: bool,
-    pub(crate) tools: HashMap<String, ToolInfo>,
+pub struct McpToolCatalogUpdate {
+    pub has_servers: bool,
+    pub tools: HashMap<String, ToolInfo>,
 }
 
 #[derive(Debug)]
-pub(crate) struct McpToolCatalogSnapshot {
-    pub(crate) has_servers: bool,
-    pub(crate) tools: HashMap<String, ToolInfo>,
+pub struct McpToolCatalogSnapshot {
+    pub has_servers: bool,
+    pub tools: HashMap<String, ToolInfo>,
 }
 
 #[derive(Debug)]
-pub(crate) struct McpToolCatalogMerge {
-    pub(crate) snapshot: McpToolCatalogSnapshot,
-    pub(crate) changed: bool,
+pub struct McpToolCatalogMerge {
+    pub snapshot: McpToolCatalogSnapshot,
+    pub changed: bool,
 }
 
 impl McpToolCatalog {
-    pub(crate) fn merge(&mut self, update: McpToolCatalogUpdate) -> McpToolCatalogMerge {
+    pub fn merge(&mut self, update: McpToolCatalogUpdate) -> McpToolCatalogMerge {
         let McpToolCatalogUpdate { has_servers, tools } = update;
         let mut changed = false;
         if has_servers && !self.has_servers {
@@ -49,21 +50,21 @@ impl McpToolCatalog {
         }
     }
 
-    pub(crate) fn snapshot(&self) -> McpToolCatalogSnapshot {
+    pub fn snapshot(&self) -> McpToolCatalogSnapshot {
         McpToolCatalogSnapshot {
             has_servers: self.has_servers,
             tools: self.tools.clone(),
         }
     }
 
-    pub(crate) fn resolve(&self, name: &str, namespace: Option<&str>) -> Option<ToolInfo> {
+    pub fn resolve(&self, name: &str, namespace: Option<&str>) -> Option<ToolInfo> {
         let qualified_name = qualified_mcp_tool_name(name, namespace);
         self.tools.get(&qualified_name).cloned()
     }
 }
 
 impl McpToolCatalogUpdate {
-    pub(crate) fn from_advertised(catalog: AdvertisedMcpToolCatalog) -> Self {
+    pub fn from_advertised(catalog: AdvertisedMcpToolCatalog) -> Self {
         let tools = catalog
             .tools
             .into_iter()
@@ -85,7 +86,7 @@ impl McpToolCatalogUpdate {
 }
 
 impl McpToolCatalogSnapshot {
-    pub(crate) fn to_advertised(&self) -> Option<AdvertisedMcpToolCatalog> {
+    pub fn to_advertised(&self) -> Option<AdvertisedMcpToolCatalog> {
         if !self.has_servers && self.tools.is_empty() {
             return None;
         }
