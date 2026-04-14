@@ -21,6 +21,7 @@ use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use core_test_support::assert_regex_match;
+use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -56,7 +57,7 @@ async fn apply_patch_harness_with(
     });
     // Box harness construction so apply_patch_cli tests do not inline the
     // full test-thread startup path into each test future.
-    Box::pin(TestCodexHarness::with_remote_aware_builder(builder)).await
+    Box::pin(TestCodexHarness::with_builder(builder)).await
 }
 
 pub async fn mount_apply_patch(
@@ -132,6 +133,44 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
         &out,
     );
     assert_eq!(harness.read_file_text("helper-alias.txt").await?, "hello\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_cli_updates_remote_workspace_when_configured() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let builder = test_codex().with_config(|config| {
+        config.include_apply_patch_tool = true;
+    });
+    let harness = Box::pin(TestCodexHarness::with_remote_aware_builder(builder)).await?;
+    harness.write_file("remote.txt", "before\n").await?;
+
+    let patch = "*** Begin Patch\n*** Update File: remote.txt\n@@\n-before\n+after\n*** End Patch";
+    let call_id = "apply-remote";
+    mount_apply_patch(
+        &harness,
+        call_id,
+        patch,
+        "done",
+        ApplyPatchModelOutput::Function,
+    )
+    .await;
+
+    harness.submit("please apply remote patch").await?;
+
+    let out = harness
+        .apply_patch_output(call_id, ApplyPatchModelOutput::Function)
+        .await;
+    assert_regex_match(
+        r"(?s)^Exit code: 0.*Success\. Updated the following files:\nM remote\.txt\n?$",
+        &out,
+    );
+    assert_eq!(harness.read_file_text("remote.txt").await?, "after\n");
 
     Ok(())
 }
