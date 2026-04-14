@@ -216,7 +216,7 @@ pub(super) async fn try_run_zsh_fork(
     let exec_result = escalate_server
         .exec(exec_params, cancel_token, Arc::new(command_executor))
         .await
-        .map_err(|err| ToolError::Rejected(err.to_string()))?;
+        .map_err(map_escalation_error)?;
 
     map_exec_result(attempt.sandbox, exec_result).map(Some)
 }
@@ -325,6 +325,13 @@ struct PromptDecision {
     decision: ReviewDecision,
     guardian_review_id: Option<String>,
     rejection_message: Option<String>,
+    stop_turn: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("stop turn")]
+struct StopTurnRequested {
+    reason: Option<String>,
 }
 
 fn execve_prompt_is_rejected_by_policy(
@@ -406,19 +413,28 @@ impl CoreShellActionProvider {
                     description: None,
                 };
                 let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
-                match run_permission_request_hooks(
+                let permission_request_outcome = run_permission_request_hooks(
                     &session,
                     &turn,
                     &effective_approval_id,
                     permission_request,
                 )
-                .await
-                {
+                .await;
+                if permission_request_outcome.should_stop {
+                    return PromptDecision {
+                        decision: ReviewDecision::Denied,
+                        guardian_review_id: None,
+                        rejection_message: None,
+                        stop_turn: permission_request_outcome.stop_reason,
+                    };
+                }
+                match permission_request_outcome.decision {
                     Some(PermissionRequestDecision::Allow) => {
                         return PromptDecision {
                             decision: ReviewDecision::Approved,
                             guardian_review_id: None,
                             rejection_message: None,
+                            stop_turn: None,
                         };
                     }
                     Some(PermissionRequestDecision::Deny { message }) => {
@@ -426,6 +442,7 @@ impl CoreShellActionProvider {
                             decision: ReviewDecision::Denied,
                             guardian_review_id: None,
                             rejection_message: Some(message),
+                            stop_turn: None,
                         };
                     }
                     None => {}
@@ -452,6 +469,7 @@ impl CoreShellActionProvider {
                         decision,
                         guardian_review_id,
                         rejection_message: None,
+                        stop_turn: None,
                     };
                 }
 
@@ -474,6 +492,7 @@ impl CoreShellActionProvider {
                     decision,
                     guardian_review_id: None,
                     rejection_message: None,
+                    stop_turn: None,
                 }
             })
             .await)
@@ -504,6 +523,12 @@ impl CoreShellActionProvider {
                     let prompt_decision = self
                         .prompt(program, argv, workdir, &self.stopwatch, prompt_permissions)
                         .await?;
+                    if let Some(reason) = prompt_decision.stop_turn {
+                        return Err(StopTurnRequested {
+                            reason: Some(reason),
+                        }
+                        .into());
+                    }
                     match prompt_decision.decision {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedForSession
@@ -563,6 +588,14 @@ impl CoreShellActionProvider {
             "Policy decision for command {program:?} is {decision:?}, leading to escalation action {action:?}",
         );
         Ok(action)
+    }
+}
+
+fn map_escalation_error(err: anyhow::Error) -> ToolError {
+    if let Some(stop_turn) = err.downcast_ref::<StopTurnRequested>() {
+        ToolError::StopTurn(stop_turn.reason.clone())
+    } else {
+        ToolError::Rejected(err.to_string())
     }
 }
 

@@ -54,11 +54,15 @@ pub enum PermissionRequestDecision {
 #[derive(Debug)]
 pub struct PermissionRequestOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
+    pub should_stop: bool,
+    pub stop_reason: Option<String>,
     pub decision: Option<PermissionRequestDecision>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PermissionRequestHandlerData {
+    should_stop: bool,
+    stop_reason: Option<String>,
     decision: Option<PermissionRequestDecision>,
 }
 
@@ -94,6 +98,8 @@ pub(crate) async fn run(
     if matched.is_empty() {
         return PermissionRequestOutcome {
             hook_events: Vec::new(),
+            should_stop: false,
+            stop_reason: None,
             decision: None,
         };
     }
@@ -109,6 +115,8 @@ pub(crate) async fn run(
             );
             return PermissionRequestOutcome {
                 hook_events,
+                should_stop: false,
+                stop_reason: None,
                 decision: None,
             };
         }
@@ -124,6 +132,10 @@ pub(crate) async fn run(
     )
     .await;
 
+    let should_stop = results.iter().any(|result| result.data.should_stop);
+    let stop_reason = results
+        .iter()
+        .find_map(|result| result.data.stop_reason.clone());
     // Preserve the most specific matching allow, but treat any deny as final so
     // broader policy layers cannot accidentally overrule a more specific block.
     let decision = resolve_permission_request_decision(
@@ -139,7 +151,9 @@ pub(crate) async fn run(
                 common::hook_completed_for_tool_use(result.completed, &request.run_id_suffix)
             })
             .collect(),
-        decision,
+        should_stop,
+        stop_reason,
+        decision: (!should_stop).then_some(decision).flatten(),
     }
 }
 
@@ -189,6 +203,8 @@ fn parse_completed(
 ) -> dispatcher::ParsedHandler<PermissionRequestHandlerData> {
     let mut entries = Vec::new();
     let mut status = HookRunStatus::Completed;
+    let mut should_stop = false;
+    let mut stop_reason = None;
     let mut decision = None;
 
     match run_result.error.as_deref() {
@@ -212,7 +228,18 @@ fn parse_completed(
                             text: system_message,
                         });
                     }
-                    if let Some(invalid_reason) = parsed.invalid_reason {
+                    if !parsed.universal.continue_processing {
+                        status = HookRunStatus::Stopped;
+                        should_stop = true;
+                        stop_reason = parsed.universal.stop_reason.clone();
+                        let stop_text = parsed.universal.stop_reason.unwrap_or_else(|| {
+                            "PermissionRequest hook stopped execution".to_string()
+                        });
+                        entries.push(HookOutputEntry {
+                            kind: HookOutputEntryKind::Stop,
+                            text: stop_text,
+                        });
+                    } else if let Some(invalid_reason) = parsed.invalid_reason {
                         status = HookRunStatus::Failed;
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Error,
@@ -281,16 +308,28 @@ fn parse_completed(
 
     dispatcher::ParsedHandler {
         completed,
-        data: PermissionRequestHandlerData { decision },
+        data: PermissionRequestHandlerData {
+            should_stop,
+            stop_reason,
+            decision,
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookOutputEntry;
+    use codex_protocol::protocol::HookOutputEntryKind;
+    use codex_protocol::protocol::HookRunStatus;
     use pretty_assertions::assert_eq;
 
     use super::PermissionRequestDecision;
+    use super::PermissionRequestHandlerData;
+    use super::parse_completed;
     use super::resolve_permission_request_decision;
+    use crate::engine::ConfiguredHandler;
+    use crate::engine::command_runner::CommandRunResult;
 
     #[test]
     fn permission_request_deny_overrides_earlier_allow() {
@@ -327,5 +366,59 @@ mod tests {
         let decisions = Vec::<PermissionRequestDecision>::new();
 
         assert_eq!(resolve_permission_request_decision(decisions.iter()), None);
+    }
+
+    #[test]
+    fn continue_false_stops_permission_request_flow() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"continue":false,"stopReason":"stop now","hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PermissionRequestHandlerData {
+                should_stop: true,
+                stop_reason: Some("stop now".to_string()),
+                decision: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Stop,
+                text: "stop now".to_string(),
+            }]
+        );
+    }
+
+    fn handler() -> ConfiguredHandler {
+        ConfiguredHandler {
+            event_name: HookEventName::PermissionRequest,
+            matcher: None,
+            command: "python3 hook.py".to_string(),
+            timeout_sec: 30,
+            status_message: None,
+            source_path: std::path::PathBuf::from("/tmp/hooks.json"),
+            display_order: 0,
+        }
+    }
+
+    fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> CommandRunResult {
+        CommandRunResult {
+            started_at: 0,
+            completed_at: 1,
+            duration_ms: 1,
+            exit_code,
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            error: None,
+        }
     }
 }

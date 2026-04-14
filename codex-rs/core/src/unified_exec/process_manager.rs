@@ -778,7 +778,12 @@ impl UnifiedExecProcessManager {
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))
-            .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))
+            .map_err(|err| match err {
+                crate::tools::sandboxing::ToolError::StopTurn(reason) => {
+                    UnifiedExecError::stop_turn(reason)
+                }
+                other => UnifiedExecError::create_process(format!("{other:?}")),
+            })
     }
 
     pub(super) async fn collect_output_until_deadline(

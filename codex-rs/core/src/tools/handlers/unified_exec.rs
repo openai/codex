@@ -309,7 +309,7 @@ impl ToolHandler for UnifiedExecHandler {
                 }
 
                 emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-                manager
+                match manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
@@ -331,11 +331,17 @@ impl ToolHandler for UnifiedExecHandler {
                         &context,
                     )
                     .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
+                {
+                    Ok(output) => output,
+                    Err(crate::unified_exec::UnifiedExecError::StopTurn(reason)) => {
+                        return Err(FunctionCallError::StopTurn(reason));
+                    }
+                    Err(err) => {
+                        return Err(FunctionCallError::RespondToModel(format!(
                             "exec_command failed for `{command_for_display}`: {err:?}"
-                        ))
-                    })?
+                        )));
+                    }
+                }
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
