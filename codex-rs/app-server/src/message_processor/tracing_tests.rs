@@ -1,4 +1,4 @@
-use super::ConnectionSessionState;
+use super::ConnectionState;
 use super::MessageProcessor;
 use super::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -111,7 +111,7 @@ struct TracingHarness {
     _codex_home: TempDir,
     processor: Arc<MessageProcessor>,
     outgoing_rx: mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
-    session: Arc<ConnectionSessionState>,
+    session: Arc<ConnectionState>,
     tracing: &'static TestTracing,
 }
 
@@ -129,7 +129,7 @@ impl TracingHarness {
             _codex_home: codex_home,
             processor,
             outgoing_rx,
-            session: Arc::new(ConnectionSessionState::default()),
+            session: Arc::new(ConnectionState::default()),
             tracing,
         };
 

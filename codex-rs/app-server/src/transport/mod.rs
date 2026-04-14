@@ -1,7 +1,7 @@
 pub(crate) mod auth;
 
 use crate::error_code::OVERLOADED_ERROR_CODE;
-use crate::message_processor::ConnectionSessionState;
+use crate::message_processor::ConnectionState;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
@@ -11,12 +11,9 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
@@ -117,32 +114,8 @@ pub(crate) enum TransportEvent {
     },
 }
 
-pub(crate) struct ConnectionState {
-    pub(crate) outbound_initialized: Arc<AtomicBool>,
-    pub(crate) outbound_experimental_api_enabled: Arc<AtomicBool>,
-    pub(crate) outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
-    pub(crate) session: Arc<ConnectionSessionState>,
-}
-
-impl ConnectionState {
-    pub(crate) fn new(
-        outbound_initialized: Arc<AtomicBool>,
-        outbound_experimental_api_enabled: Arc<AtomicBool>,
-        outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
-    ) -> Self {
-        Self {
-            outbound_initialized,
-            outbound_experimental_api_enabled,
-            outbound_opted_out_notification_methods,
-            session: Arc::new(ConnectionSessionState::default()),
-        }
-    }
-}
-
 pub(crate) struct OutboundConnectionState {
-    pub(crate) initialized: Arc<AtomicBool>,
-    pub(crate) experimental_api_enabled: Arc<AtomicBool>,
-    pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+    pub(crate) connection_state: Arc<ConnectionState>,
     pub(crate) writer: mpsc::Sender<QueuedOutgoingMessage>,
     disconnect_sender: Option<CancellationToken>,
 }
@@ -150,15 +123,11 @@ pub(crate) struct OutboundConnectionState {
 impl OutboundConnectionState {
     pub(crate) fn new(
         writer: mpsc::Sender<QueuedOutgoingMessage>,
-        initialized: Arc<AtomicBool>,
-        experimental_api_enabled: Arc<AtomicBool>,
-        opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+        connection_state: Arc<ConnectionState>,
         disconnect_sender: Option<CancellationToken>,
     ) -> Self {
         Self {
-            initialized,
-            experimental_api_enabled,
-            opted_out_notification_methods,
+            connection_state,
             writer,
             disconnect_sender,
         }
@@ -260,11 +229,9 @@ fn should_skip_notification_for_connection(
     connection_state: &OutboundConnectionState,
     message: &OutgoingMessage,
 ) -> bool {
-    let Ok(opted_out_notification_methods) = connection_state.opted_out_notification_methods.read()
-    else {
-        warn!("failed to read outbound opted-out notifications");
-        return false;
-    };
+    let opted_out_notification_methods = connection_state
+        .connection_state
+        .opted_out_notification_methods();
     match message {
         OutgoingMessage::AppServerNotification(notification) => {
             let method = notification.to_string();
@@ -329,9 +296,7 @@ fn filter_outgoing_message_for_connection(
     connection_state: &OutboundConnectionState,
     message: OutgoingMessage,
 ) -> OutgoingMessage {
-    let experimental_api_enabled = connection_state
-        .experimental_api_enabled
-        .load(Ordering::Acquire);
+    let experimental_api_enabled = connection_state.connection_state.experimental_api_enabled();
     match message {
         OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
             request_id,
@@ -367,7 +332,10 @@ pub(crate) async fn route_outgoing_envelope(
             let target_connections: Vec<ConnectionId> = connections
                 .iter()
                 .filter_map(|(connection_id, connection_state)| {
-                    if connection_state.initialized.load(Ordering::Acquire)
+                    if connection_state
+                        .connection_state
+                        .outbound_initialized
+                        .load(Ordering::Acquire)
                         && !should_skip_notification_for_connection(connection_state, &message)
                     {
                         Some(*connection_id)
@@ -402,11 +370,30 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::HashSet;
+
     use tokio::time::Duration;
     use tokio::time::timeout;
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+    }
+
+    fn outbound_connection_state(
+        writer: mpsc::Sender<QueuedOutgoingMessage>,
+        experimental_api_enabled: bool,
+        opted_out_notification_methods: impl IntoIterator<Item = &'static str>,
+        disconnect_sender: Option<CancellationToken>,
+    ) -> OutboundConnectionState {
+        let opted_out_notification_methods = opted_out_notification_methods
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        let connection_state = Arc::new(ConnectionState::new_test(
+            experimental_api_enabled,
+            opted_out_notification_methods,
+        ));
+        OutboundConnectionState::new(writer, connection_state, disconnect_sender)
     }
 
     #[test]
@@ -615,18 +602,14 @@ mod tests {
     async fn to_connection_notification_respects_opt_out_filters() {
         let connection_id = ConnectionId(7);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
-        let initialized = Arc::new(AtomicBool::new(true));
-        let opted_out_notification_methods =
-            Arc::new(RwLock::new(HashSet::from(["configWarning".to_string()])));
 
         let mut connections = HashMap::new();
         connections.insert(
             connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 writer_tx,
-                initialized,
-                Arc::new(AtomicBool::new(true)),
-                opted_out_notification_methods,
+                /*experimental_api_enabled*/ true,
+                ["configWarning"],
                 /*disconnect_sender*/ None,
             ),
         );
@@ -662,11 +645,10 @@ mod tests {
         let mut connections = HashMap::new();
         connections.insert(
             connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 writer_tx,
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(RwLock::new(HashSet::from(["configWarning".to_string()]))),
+                /*experimental_api_enabled*/ true,
+                ["configWarning"],
                 /*disconnect_sender*/ None,
             ),
         );
@@ -702,11 +684,10 @@ mod tests {
         let mut connections = HashMap::new();
         connections.insert(
             connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 writer_tx,
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(RwLock::new(HashSet::new())),
+                /*experimental_api_enabled*/ true,
+                [],
                 /*disconnect_sender*/ None,
             ),
         );
@@ -748,11 +729,10 @@ mod tests {
         let mut connections = HashMap::new();
         connections.insert(
             connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 writer_tx,
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(false)),
-                Arc::new(RwLock::new(HashSet::new())),
+                /*experimental_api_enabled*/ false,
+                [],
                 /*disconnect_sender*/ None,
             ),
         );
@@ -810,11 +790,10 @@ mod tests {
         let mut connections = HashMap::new();
         connections.insert(
             connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 writer_tx,
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(RwLock::new(HashSet::new())),
+                /*experimental_api_enabled*/ true,
+                [],
                 /*disconnect_sender*/ None,
             ),
         );
@@ -887,21 +866,19 @@ mod tests {
         let mut connections = HashMap::new();
         connections.insert(
             fast_connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 fast_writer_tx,
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(RwLock::new(HashSet::new())),
+                /*experimental_api_enabled*/ true,
+                [],
                 Some(fast_disconnect_token.clone()),
             ),
         );
         connections.insert(
             slow_connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 slow_writer_tx.clone(),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(RwLock::new(HashSet::new())),
+                /*experimental_api_enabled*/ true,
+                [],
                 Some(slow_disconnect_token.clone()),
             ),
         );
@@ -982,11 +959,10 @@ mod tests {
         let mut connections = HashMap::new();
         connections.insert(
             connection_id,
-            OutboundConnectionState::new(
+            outbound_connection_state(
                 writer_tx,
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(RwLock::new(HashSet::new())),
+                /*experimental_api_enabled*/ true,
+                [],
                 /*disconnect_sender*/ None,
             ),
         );

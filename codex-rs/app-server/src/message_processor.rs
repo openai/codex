@@ -176,19 +176,20 @@ pub(crate) struct MessageProcessor {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ConnectionSessionState {
-    initialized: OnceLock<InitializedConnectionSessionState>,
+pub(crate) struct ConnectionState {
+    initialized: OnceLock<InitializedConnectionState>,
+    pub(crate) outbound_initialized: AtomicBool,
 }
 
 #[derive(Debug)]
-struct InitializedConnectionSessionState {
+struct InitializedConnectionState {
     experimental_api_enabled: bool,
     opted_out_notification_methods: HashSet<String>,
     app_server_client_name: String,
     client_version: String,
 }
 
-impl ConnectionSessionState {
+impl ConnectionState {
     pub(crate) fn initialized(&self) -> bool {
         self.initialized.get().is_some()
     }
@@ -218,8 +219,26 @@ impl ConnectionSessionState {
             .map(|session| session.client_version.as_str())
     }
 
-    fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
+    fn initialize(&self, session: InitializedConnectionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_test(
+        experimental_api_enabled: bool,
+        opted_out_notification_methods: HashSet<String>,
+    ) -> Self {
+        let state = Self::default();
+        state
+            .initialize(InitializedConnectionState {
+                experimental_api_enabled,
+                opted_out_notification_methods,
+                app_server_client_name: "codex-app-server-tests".to_string(),
+                client_version: "0.1.0".to_string(),
+            })
+            .expect("test connection state should initialize once");
+        state.outbound_initialized.store(true, Ordering::Release);
+        state
     }
 }
 
@@ -344,7 +363,7 @@ impl MessageProcessor {
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         transport: AppServerTransport,
-        session: Arc<ConnectionSessionState>,
+        connection_state: Arc<ConnectionState>,
     ) {
         let request_method = request.method.as_str();
         tracing::trace!(
@@ -356,8 +375,12 @@ impl MessageProcessor {
             connection_id,
             request_id: request.id.clone(),
         };
-        let request_span =
-            crate::app_server_tracing::request_span(&request, transport, connection_id, &session);
+        let request_span = crate::app_server_tracing::request_span(
+            &request,
+            transport,
+            connection_id,
+            &connection_state,
+        );
         let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
             traceparent: trace.traceparent.clone(),
             tracestate: trace.tracestate.clone(),
@@ -392,15 +415,13 @@ impl MessageProcessor {
                         return;
                     }
                 };
-                // Websocket callers finalize outbound readiness in lib.rs after mirroring
-                // session state into outbound state and sending initialize notifications to
-                // this specific connection. Passing `None` avoids marking the connection
-                // ready too early from inside the shared request handler.
+                // Websocket callers finalize outbound readiness in lib.rs after sending
+                // initialize notifications to this specific connection.
                 self.handle_client_request(
                     request_id.clone(),
                     codex_request,
-                    Arc::clone(&session),
-                    /*outbound_initialized*/ None,
+                    Arc::clone(&connection_state),
+                    /*initialize_outbound*/ false,
                     request_context.clone(),
                 )
                 .await;
@@ -417,15 +438,17 @@ impl MessageProcessor {
         self: &Arc<Self>,
         connection_id: ConnectionId,
         request: ClientRequest,
-        session: Arc<ConnectionSessionState>,
-        outbound_initialized: &AtomicBool,
+        connection_state: Arc<ConnectionState>,
     ) {
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: request.id().clone(),
         };
-        let request_span =
-            crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
+        let request_span = crate::app_server_tracing::typed_request_span(
+            &request,
+            connection_id,
+            &connection_state,
+        );
         let request_context =
             RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
         tracing::trace!(
@@ -443,8 +466,8 @@ impl MessageProcessor {
                 self.handle_client_request(
                     request_id.clone(),
                     request,
-                    Arc::clone(&session),
-                    Some(outbound_initialized),
+                    Arc::clone(&connection_state),
+                    /*initialize_outbound*/ true,
                     request_context.clone(),
                 )
                 .await;
@@ -569,11 +592,11 @@ impl MessageProcessor {
         self: &Arc<Self>,
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
-        session: Arc<ConnectionSessionState>,
-        // `Some(...)` means the caller wants initialize to immediately mark the
-        // connection outbound-ready. Websocket JSON-RPC calls pass `None` so
+        connection_state: Arc<ConnectionState>,
+        // `true` means the caller wants initialize to immediately mark the
+        // connection outbound-ready. Websocket JSON-RPC calls pass `false` so
         // lib.rs can deliver connection-scoped initialize notifications first.
-        outbound_initialized: Option<&AtomicBool>,
+        initialize_outbound: bool,
         request_context: RequestContext,
     ) {
         let connection_id = connection_request_id.connection_id;
@@ -584,7 +607,7 @@ impl MessageProcessor {
                 connection_id,
                 request_id,
             };
-            if session.initialized() {
+            if connection_state.initialized() {
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message: "Already initialized".to_string(),
@@ -634,8 +657,8 @@ impl MessageProcessor {
             let originator = name.clone();
             let user_agent_suffix = format!("{name}; {version}");
             let codex_home = self.config.codex_home.clone();
-            if session
-                .initialize(InitializedConnectionSessionState {
+            if connection_state
+                .initialize(InitializedConnectionState {
                     experimental_api_enabled,
                     opted_out_notification_methods: opt_out_notification_methods
                         .into_iter()
@@ -697,11 +720,13 @@ impl MessageProcessor {
                 .send_response(connection_request_id, response)
                 .await;
 
-            if let Some(outbound_initialized) = outbound_initialized {
+            if initialize_outbound {
                 // In-process clients can complete readiness immediately here. The
                 // websocket path defers this until lib.rs finishes transport-layer
                 // initialize handling for the specific connection.
-                outbound_initialized.store(true, Ordering::Release);
+                connection_state
+                    .outbound_initialized
+                    .store(true, Ordering::Release);
                 self.codex_message_processor
                     .connection_initialized(connection_id)
                     .await;
@@ -712,7 +737,7 @@ impl MessageProcessor {
         self.dispatch_initialized_client_request(
             connection_request_id,
             codex_request,
-            session,
+            connection_state,
             request_context,
         )
         .await;
@@ -722,12 +747,10 @@ impl MessageProcessor {
         self: &Arc<Self>,
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
-        session: Arc<ConnectionSessionState>,
+        connection_state: Arc<ConnectionState>,
         request_context: RequestContext,
     ) {
-        let connection_id = connection_request_id.connection_id;
-
-        if !session.initialized() {
+        if !connection_state.initialized() {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "Not initialized".to_string(),
@@ -738,7 +761,7 @@ impl MessageProcessor {
         }
 
         if let Some(reason) = codex_request.experimental_reason()
-            && !session.experimental_api_enabled()
+            && !connection_state.experimental_api_enabled()
         {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -753,14 +776,16 @@ impl MessageProcessor {
             | ClientRequest::TurnSteer { request_id, .. } = &codex_request
         {
             self.analytics_events_client.track_request(
-                connection_id.0,
+                connection_request_id.connection_id.0,
                 request_id.clone(),
                 codex_request.clone(),
             );
         }
 
-        let app_server_client_name = session.app_server_client_name().map(str::to_string);
-        let client_version = session.client_version().map(str::to_string);
+        let app_server_client_name = connection_state
+            .app_server_client_name()
+            .map(str::to_string);
+        let client_version = connection_state.client_version().map(str::to_string);
         Arc::clone(self)
             .handle_initialized_client_request(
                 connection_request_id,
