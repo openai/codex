@@ -179,6 +179,7 @@ fn compute_desc_col(
             };
 
             name_column_width
+                .map(|width| width.max(max_name_width))
                 .unwrap_or(max_name_width)
                 .saturating_add(2)
                 .min(max_auto_desc_col)
