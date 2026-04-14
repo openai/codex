@@ -482,8 +482,13 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "delta": "working"
             }),
             json!({
-                "type": "response.output_text.done",
-                "text": "working on it"
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_assistant_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": "working on it" }]
+                }
             }),
             json!({
                 "type": "conversation.item.done",
