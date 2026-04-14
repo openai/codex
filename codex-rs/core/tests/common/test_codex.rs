@@ -105,6 +105,8 @@ pub struct TestEnv {
     environment: codex_exec_server::Environment,
     cwd: AbsolutePathBuf,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
+    remote_codex_self_exe: Option<PathBuf>,
+    remote_codex_linux_sandbox_exe: Option<PathBuf>,
     _remote_exec_server_process: Option<RemoteExecServerProcess>,
 }
 
@@ -117,6 +119,8 @@ impl TestEnv {
             environment,
             cwd,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
+            remote_codex_self_exe: None,
+            remote_codex_linux_sandbox_exe: None,
             _remote_exec_server_process: None,
         })
     }
@@ -135,6 +139,14 @@ impl TestEnv {
 
     fn local_cwd_temp_dir(&self) -> Option<Arc<TempDir>> {
         self.local_cwd_temp_dir.clone()
+    }
+
+    fn remote_codex_self_exe(&self) -> Option<&PathBuf> {
+        self.remote_codex_self_exe.as_ref()
+    }
+
+    fn remote_codex_linux_sandbox_exe(&self) -> Option<&PathBuf> {
+        self.remote_codex_linux_sandbox_exe.as_ref()
     }
 }
 
@@ -159,6 +171,15 @@ pub async fn test_env() -> Result<TestEnv> {
                 environment,
                 cwd,
                 local_cwd_temp_dir: None,
+                remote_codex_self_exe: Some(PathBuf::from(
+                    &remote_process.process.remote_exec_server_path,
+                )),
+                remote_codex_linux_sandbox_exe: Some(
+                    Path::new(&remote_process.process.remote_exec_server_path)
+                        .parent()
+                        .expect("remote exec-server path should have a parent")
+                        .join(CODEX_LINUX_SANDBOX_ARG0),
+                ),
                 _remote_exec_server_process: Some(remote_process.process),
             })
         }
@@ -519,9 +540,15 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
     ) -> anyhow::Result<TestCodex> {
-        let (config, fallback_cwd) = self
+        let (mut config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
+        if let Some(path) = test_env.remote_codex_self_exe() {
+            config.codex_self_exe = Some(path.clone());
+        }
+        if let Some(path) = test_env.remote_codex_linux_sandbox_exe() {
+            config.codex_linux_sandbox_exe = Some(path.clone());
+        }
         let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
             test_env.exec_server_url().map(str::to_owned),
         ));
