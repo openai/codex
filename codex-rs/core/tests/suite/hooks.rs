@@ -1203,8 +1203,11 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         "approved command should remove marker file"
     );
 
-    let hook_inputs =
-        assert_single_permission_request_hook_input(test.codex_home_path(), &command, None)?;
+    let hook_inputs = assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        /*description*/ None,
+    )?;
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
@@ -1442,7 +1445,7 @@ allow_local_binding = true
     assert_single_permission_request_hook_input(
         test.codex_home_path(),
         command,
-        Some("network-access codex-network-test.invalid"),
+        Some("network-access http://codex-network-test.invalid:80"),
     )?;
 
     test.codex.submit(Op::Shutdown {}).await?;
@@ -1516,7 +1519,11 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
         "retry"
     );
 
-    assert_single_permission_request_hook_input(test.codex_home_path(), &command, None)?;
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        /*description*/ None,
+    )?;
 
     Ok(())
 }
