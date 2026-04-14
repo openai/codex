@@ -129,8 +129,11 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
     );
 
     let serialized = serde_json::to_value(ToolSpec::Function(
-        mcp_tool_to_deferred_responses_api_tool("mcp__codex_apps__lookup_order".to_string(), &tool)
-            .expect("convert deferred tool"),
+        mcp_tool_to_deferred_responses_api_tool(
+            &ToolName::namespaced("mcp__codex_apps__", "lookup_order"),
+            &tool,
+        )
+        .expect("convert deferred tool"),
     ))
     .expect("serialize deferred tool");
 
@@ -138,7 +141,7 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
         serialized,
         serde_json::json!({
             "type": "function",
-            "name": "mcp__codex_apps__lookup_order",
+            "name": "lookup_order",
             "description": "Look up an order",
             "strict": false,
             "defer_loading": true,

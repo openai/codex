@@ -472,29 +472,15 @@ pub fn build_tool_registry_plan(
         let mut namespace_entries = BTreeMap::new();
 
         for tool in entries {
-            if let Some(namespace) = tool.name.namespace.as_ref() {
-                namespace_entries
-                    .entry(namespace.clone())
-                    .or_insert_with(Vec::new)
-                    .push(tool);
-            } else {
+            let Some(namespace) = tool.name.namespace.as_ref() else {
                 let display_name = tool.name.display();
-                match mcp_tool_to_responses_api_tool(display_name.clone(), tool.tool) {
-                    Ok(converted_tool) => {
-                        plan.push_spec(
-                            ToolSpec::Function(converted_tool),
-                            /*supports_parallel_tool_calls*/ false,
-                            config.code_mode_enabled,
-                        );
-                        plan.register_handler(tool.name, ToolHandlerKind::Mcp);
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            "Failed to convert {display_name:?} MCP tool to OpenAI tool: {error:?}"
-                        );
-                    }
-                }
-            }
+                tracing::error!("Skipping MCP tool {display_name:?}: MCP tools must be namespaced");
+                continue;
+            };
+            namespace_entries
+                .entry(namespace.clone())
+                .or_insert_with(Vec::new)
+                .push(tool);
         }
 
         for (namespace, mut entries) in namespace_entries {
@@ -506,9 +492,8 @@ pub fn build_tool_registry_plan(
                 .unwrap_or_default();
             let mut tools = Vec::new();
             for tool in entries {
-                let child_name = tool.name.name.clone();
                 let display_name = tool.name.display();
-                match mcp_tool_to_responses_api_tool(child_name, tool.tool) {
+                match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
                     Ok(converted_tool) => {
                         tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
                         plan.register_handler(tool.name, ToolHandlerKind::Mcp);
