@@ -632,7 +632,6 @@ pub struct MarketplaceConfig {
 #[serde(rename_all = "snake_case")]
 pub enum MarketplaceSourceType {
     Git,
-    #[serde(alias = "path")]
     Local,
 }
 

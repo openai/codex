@@ -10,7 +10,7 @@ pub(super) enum MarketplaceSource {
         url: String,
         ref_name: Option<String>,
     },
-    Path {
+    Local {
         path: PathBuf,
     },
 }
@@ -41,7 +41,7 @@ pub(super) fn parse_marketplace_source(
                 "local marketplace source must be a directory, not a file".to_string(),
             ));
         }
-        return Ok(MarketplaceSource::Path { path });
+        return Ok(MarketplaceSource::Local { path });
     }
 
     if is_ssh_git_url(&base_source) || is_git_url(&base_source) {
@@ -82,7 +82,7 @@ where
         MarketplaceSource::Git { url, ref_name } => {
             clone_source(url, ref_name.as_deref(), sparse_paths, staged_root)
         }
-        MarketplaceSource::Path { .. } => unreachable!(
+        MarketplaceSource::Local { .. } => unreachable!(
             "local marketplace sources are added without staging a copied install root"
         ),
     }
@@ -196,7 +196,7 @@ impl MarketplaceSource {
                 Some(ref_name) => format!("{url}#{ref_name}"),
                 None => url.clone(),
             },
-            Self::Path { path } => path.display().to_string(),
+            Self::Local { path } => path.display().to_string(),
         }
     }
 }
@@ -304,7 +304,7 @@ mod tests {
     fn local_path_source_parses() {
         let source = parse_marketplace_source(".", /*explicit_ref*/ None).unwrap();
 
-        let MarketplaceSource::Path { path } = source else {
+        let MarketplaceSource::Local { path } = source else {
             panic!("expected local path source");
         };
         assert!(path.is_absolute());
@@ -341,7 +341,7 @@ mod tests {
     fn non_git_sources_reject_sparse_checkout() {
         let path = std::env::current_dir().unwrap();
         let err = stage_marketplace_source(
-            &MarketplaceSource::Path { path },
+            &MarketplaceSource::Local { path },
             &["plugins/foo".to_string()],
             Path::new("/tmp"),
             |_url, _ref_name, _sparse_paths, _staged_root| Ok(()),

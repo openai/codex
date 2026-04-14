@@ -23,7 +23,7 @@ enum InstalledMarketplaceSource {
         ref_name: Option<String>,
         sparse_paths: Vec<String>,
     },
-    Path {
+    Local {
         path: String,
     },
 }
@@ -141,7 +141,7 @@ impl MarketplaceInstallMetadata {
                 ref_name: ref_name.clone(),
                 sparse_paths: sparse_paths.to_vec(),
             },
-            MarketplaceSource::Path { path } => InstalledMarketplaceSource::Path {
+            MarketplaceSource::Local { path } => InstalledMarketplaceSource::Local {
                 path: path.display().to_string(),
             },
         };
@@ -151,28 +151,28 @@ impl MarketplaceInstallMetadata {
     fn config_source_type(&self) -> &'static str {
         match &self.source {
             InstalledMarketplaceSource::Git { .. } => "git",
-            InstalledMarketplaceSource::Path { .. } => "local",
+            InstalledMarketplaceSource::Local { .. } => "local",
         }
     }
 
     fn config_source(&self) -> String {
         match &self.source {
             InstalledMarketplaceSource::Git { url, .. } => url.clone(),
-            InstalledMarketplaceSource::Path { path } => path.clone(),
+            InstalledMarketplaceSource::Local { path } => path.clone(),
         }
     }
 
     fn ref_name(&self) -> Option<&str> {
         match &self.source {
             InstalledMarketplaceSource::Git { ref_name, .. } => ref_name.as_deref(),
-            InstalledMarketplaceSource::Path { .. } => None,
+            InstalledMarketplaceSource::Local { .. } => None,
         }
     }
 
     fn sparse_paths(&self) -> &[String] {
         match &self.source {
             InstalledMarketplaceSource::Git { sparse_paths, .. } => sparse_paths,
-            InstalledMarketplaceSource::Path { .. } => &[],
+            InstalledMarketplaceSource::Local { .. } => &[],
         }
     }
 
@@ -206,7 +206,7 @@ fn configured_marketplace_root(
     install_root: &Path,
 ) -> Option<PathBuf> {
     match marketplace.get("source_type").and_then(toml::Value::as_str) {
-        Some("local" | "path") => marketplace
+        Some("local") => marketplace
             .get("source")
             .and_then(toml::Value::as_str)
             .filter(|source| !source.is_empty())
@@ -298,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_marketplace_root_for_source_uses_path_source_root() {
+    fn installed_marketplace_root_for_source_uses_local_source_root() {
         let codex_home = TempDir::new().unwrap();
         let install_root = codex_home.path().join("marketplaces");
         let source_root = codex_home.path().join("source");
@@ -317,7 +317,7 @@ mod tests {
         )
         .unwrap();
 
-        let source = MarketplaceSource::Path {
+        let source = MarketplaceSource::Local {
             path: source_root.clone(),
         };
         let install_metadata = MarketplaceInstallMetadata::from_source(&source, &[]);

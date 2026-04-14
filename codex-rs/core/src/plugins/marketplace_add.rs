@@ -104,7 +104,7 @@ where
         });
     }
 
-    if let MarketplaceSource::Path { path } = &source {
+    if let MarketplaceSource::Local { path } = &source {
         let marketplace_name = validate_marketplace_source_root(path)?;
         if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
             return Err(MarketplaceAddError::InvalidRequest(format!(
