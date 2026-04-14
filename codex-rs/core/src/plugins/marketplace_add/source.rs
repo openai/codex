@@ -1,7 +1,6 @@
 use super::MarketplaceAddError;
 use crate::plugins::validate_marketplace_root;
 use crate::plugins::validate_plugin_segment;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -36,9 +35,13 @@ pub(super) fn parse_marketplace_source(
                 "--ref is only supported for git marketplace sources".to_string(),
             ));
         }
-        return Ok(MarketplaceSource::Path {
-            path: resolve_local_source_path(&base_source)?,
-        });
+        let path = resolve_local_source_path(&base_source)?;
+        if path.is_file() {
+            return Err(MarketplaceAddError::InvalidRequest(
+                "local marketplace source must be a directory, not a file".to_string(),
+            ));
+        }
+        return Ok(MarketplaceSource::Path { path });
     }
 
     if is_ssh_git_url(&base_source) || is_git_url(&base_source) {
@@ -79,7 +82,9 @@ where
         MarketplaceSource::Git { url, ref_name } => {
             clone_source(url, ref_name.as_deref(), sparse_paths, staged_root)
         }
-        MarketplaceSource::Path { path } => stage_local_source(path, staged_root),
+        MarketplaceSource::Path { .. } => unreachable!(
+            "local marketplace sources are added without staging a copied install root"
+        ),
     }
 }
 
@@ -159,78 +164,6 @@ fn expand_tilde_path(source: &str) -> PathBuf {
     PathBuf::from(home).join(rest)
 }
 
-fn stage_local_source(source_path: &Path, staged_root: &Path) -> Result<(), MarketplaceAddError> {
-    let metadata = fs::metadata(source_path).map_err(|err| {
-        MarketplaceAddError::Internal(format!(
-            "failed to read local marketplace source metadata {}: {err}",
-            source_path.display()
-        ))
-    })?;
-
-    if metadata.is_dir() {
-        copy_dir_recursive(source_path, staged_root)?;
-        return Ok(());
-    }
-
-    Err(MarketplaceAddError::InvalidRequest(format!(
-        "local marketplace source must be a directory, not a file: {}",
-        source_path.display()
-    )))
-}
-
-fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), MarketplaceAddError> {
-    fs::create_dir_all(target).map_err(|err| {
-        MarketplaceAddError::Internal(format!(
-            "failed to create local marketplace target directory {}: {err}",
-            target.display()
-        ))
-    })?;
-
-    for entry in fs::read_dir(source).map_err(|err| {
-        MarketplaceAddError::Internal(format!(
-            "failed to read local marketplace directory {}: {err}",
-            source.display()
-        ))
-    })? {
-        let entry = entry.map_err(|err| {
-            MarketplaceAddError::Internal(format!(
-                "failed to read local marketplace entry in {}: {err}",
-                source.display()
-            ))
-        })?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|err| {
-            MarketplaceAddError::Internal(format!(
-                "failed to read file type for local marketplace entry {}: {err}",
-                source_path.display()
-            ))
-        })?;
-
-        if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent).map_err(|err| {
-                    MarketplaceAddError::Internal(format!(
-                        "failed to create local marketplace target directory {}: {err}",
-                        parent.display()
-                    ))
-                })?;
-            }
-            fs::copy(&source_path, &target_path).map_err(|err| {
-                MarketplaceAddError::Internal(format!(
-                    "failed to copy local marketplace file {} to {}: {err}",
-                    source_path.display(),
-                    target_path.display()
-                ))
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
 fn is_ssh_git_url(source: &str) -> bool {
     source.starts_with("ssh://") || source.starts_with("git@") && source.contains(':')
 }
@@ -272,6 +205,7 @@ impl MarketplaceSource {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn github_shorthand_parses_ref_suffix() {
@@ -374,6 +308,22 @@ mod tests {
             panic!("expected local path source");
         };
         assert!(path.is_absolute());
+    }
+
+    #[test]
+    fn local_file_source_is_rejected() {
+        let tempdir = TempDir::new().unwrap();
+        let file = tempdir.path().join("marketplace.json");
+        std::fs::write(&file, "{}").unwrap();
+
+        let err =
+            parse_marketplace_source(file.to_str().unwrap(), /*explicit_ref*/ None).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("local marketplace source must be a directory, not a file"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

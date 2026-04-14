@@ -53,10 +53,7 @@ async fn marketplace_add_supports_local_directory_source() -> Result<()> {
         .success();
 
     let installed_root = marketplace_install_root(codex_home.path()).join("debug");
-    assert_eq!(
-        std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt"))?,
-        "local ref"
-    );
+    assert!(!installed_root.exists());
 
     let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
     let config: toml::Value = toml::from_str(&config)?;

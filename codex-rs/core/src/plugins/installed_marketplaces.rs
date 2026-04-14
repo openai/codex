@@ -45,7 +45,8 @@ pub(crate) fn installed_marketplace_roots_from_config(
                 );
                 return None;
             }
-            let path = default_install_root.join(marketplace_name);
+            let path =
+                configured_marketplace_root(marketplace_name, marketplace, &default_install_root)?;
             path.join(".agents/plugins/marketplace.json")
                 .is_file()
                 .then_some(path)
@@ -54,4 +55,19 @@ pub(crate) fn installed_marketplace_roots_from_config(
         .collect::<Vec<_>>();
     roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
     roots
+}
+
+fn configured_marketplace_root(
+    marketplace_name: &str,
+    marketplace: &toml::Value,
+    default_install_root: &Path,
+) -> Option<PathBuf> {
+    match marketplace.get("source_type").and_then(toml::Value::as_str) {
+        Some("path") => marketplace
+            .get("source")
+            .and_then(toml::Value::as_str)
+            .filter(|source| !source.is_empty())
+            .map(PathBuf::from),
+        _ => Some(default_install_root.join(marketplace_name)),
+    }
 }
