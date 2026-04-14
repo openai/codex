@@ -328,6 +328,21 @@ impl ExecPolicyManager {
             source,
         })?;
 
+        self.update_current_policy_if_needed(amendment)
+    }
+
+    pub(crate) async fn add_amendment_to_current_policy(
+        &self,
+        amendment: &ExecPolicyAmendment,
+    ) -> Result<(), ExecPolicyUpdateError> {
+        let _update_guard = self.update_lock.lock().await;
+        self.update_current_policy_if_needed(amendment)
+    }
+
+    fn update_current_policy_if_needed(
+        &self,
+        amendment: &ExecPolicyAmendment,
+    ) -> Result<(), ExecPolicyUpdateError> {
         let current_policy = self.current();
         let match_options = MatchOptions {
             resolve_host_executables: true,

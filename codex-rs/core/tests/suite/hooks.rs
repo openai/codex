@@ -284,6 +284,66 @@ if mode == "allow":
             "decision": {{"behavior": "allow"}}
         }}
     }}))
+elif mode == "allow_selected_session":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "allow",
+                "updatedPermissions": [
+                    suggestion
+                    for suggestion in payload.get("permission_suggestions", [])
+                    if suggestion.get("destination") == "session"
+                ]
+            }}
+        }}
+    }}))
+elif mode == "allow_selected_project":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "allow",
+                "updatedPermissions": [
+                    suggestion
+                    for suggestion in payload.get("permission_suggestions", [])
+                    if suggestion.get("destination") == "projectSettings"
+                ]
+            }}
+        }}
+    }}))
+elif mode == "allow_selected_user":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "allow",
+                "updatedPermissions": [
+                    suggestion
+                    for suggestion in payload.get("permission_suggestions", [])
+                    if suggestion.get("destination") == "userSettings"
+                ]
+            }}
+        }}
+    }}))
+elif mode == "allow_unoffered_permission":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "allow",
+                "updatedPermissions": [{{
+                    "type": "addRules",
+                    "rules": [{{
+                        "type": "prefixRule",
+                        "command": ["curl"]
+                    }}],
+                    "behavior": "allow",
+                    "destination": "userSettings"
+                }}]
+            }}
+        }}
+    }}))
 elif mode == "deny":
     print(json.dumps({{
         "hookSpecificOutput": {{
@@ -1336,6 +1396,136 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
                 "destination": "userSettings",
             }
         ]),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_persists_selected_user_exec_rule() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id_first = "permissionrequest-exec-rule-first";
+    let call_id_second = "permissionrequest-exec-rule-second";
+    let marker = std::env::temp_dir().join("permissionrequest-exec-rule-marker");
+    let command = format!("rm -f {}", marker.display());
+    let justification = "remove the temporary marker";
+    let args = serde_json::json!({
+        "cmd": command,
+        "login": true,
+        "sandbox_permissions": "require_escalated",
+        "justification": justification,
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id_first,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request hook persisted the exec rule"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                core_test_support::responses::ev_function_call(
+                    call_id_second,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-4"),
+                ev_assistant_message("msg-2", "the persisted exec rule was reused"),
+                ev_completed("resp-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some(PERMISSION_REQUEST_HOOK_MATCHER),
+                "allow_selected_user",
+                PERMISSION_REQUEST_ALLOW_REASON,
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    fs::write(&marker, "seed").context("create exec command marker for first run")?;
+
+    test.submit_turn_with_policies(
+        "run the exec command and persist the suggested permission",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+    )
+    .await?;
+
+    assert!(
+        !marker.exists(),
+        "first exec command should remove marker file"
+    );
+
+    fs::write(&marker, "seed").context("create exec command marker for second run")?;
+
+    test.submit_turn_with_policies(
+        "run the exec command again with the persisted permission",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+    )
+    .await?;
+
+    assert!(
+        !marker.exists(),
+        "second exec command should remove marker file"
+    );
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    requests[1].function_call_output(call_id_first);
+    requests[3].function_call_output(call_id_second);
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(
+        hook_inputs.len(),
+        1,
+        "persisted exec rule should bypass the second permission hook"
+    );
+
+    let rules_path = test.codex_home_path().join("rules").join("default.rules");
+    let rules_contents = fs::read_to_string(&rules_path)
+        .with_context(|| format!("read {}", rules_path.display()))?;
+    let marker_json =
+        serde_json::to_string(&marker.display().to_string()).context("serialize marker path")?;
+    let expected_rule =
+        format!(r#"prefix_rule(pattern=["rm", "-f", {marker_json}], decision="allow")"#);
+    assert!(
+        rules_contents.contains(&expected_rule),
+        "expected {rules_path:?} to contain {expected_rule}, got:\n{rules_contents}"
     );
 
     Ok(())

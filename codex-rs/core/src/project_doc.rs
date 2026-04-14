@@ -16,18 +16,13 @@
 //! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::default_project_root_markers;
-use crate::config_loader::merge_toml_values;
-use crate::config_loader::project_root_markers_from_config;
-use codex_app_server_protocol::ConfigLayerSource;
+use crate::config_loader::resolve_project_root;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
 use std::io;
-use toml::Value as TomlValue;
 use tracing::error;
 
 pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
@@ -226,51 +221,14 @@ pub async fn discover_project_doc_paths(
         dir = AbsolutePathBuf::try_from(canon)?;
     }
 
-    let mut merged = TomlValue::Table(toml::map::Map::new());
-    for layer in config.config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
-        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
-            continue;
-        }
-        merge_toml_values(&mut merged, &layer.config);
-    }
-    let project_root_markers = match project_root_markers_from_config(&merged) {
-        Ok(Some(markers)) => markers,
-        Ok(None) => default_project_root_markers(),
-        Err(err) => {
-            tracing::warn!("invalid project_root_markers: {err}");
-            default_project_root_markers()
-        }
-    };
-    let mut project_root = None;
-    if !project_root_markers.is_empty() {
-        for ancestor in dir.ancestors() {
-            for marker in &project_root_markers {
-                let marker_path = AbsolutePathBuf::try_from(ancestor.join(marker))?;
-                let marker_exists = match fs.get_metadata(&marker_path).await {
-                    Ok(_) => true,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(err),
-                };
-                if marker_exists {
-                    project_root = Some(AbsolutePathBuf::try_from(ancestor.to_path_buf())?);
-                    break;
-                }
-            }
-            if project_root.is_some() {
-                break;
-            }
-        }
-    }
+    let project_root = resolve_project_root(&config.config_layer_stack, &dir).await?;
 
-    let search_dirs: Vec<AbsolutePathBuf> = if let Some(root) = project_root {
+    let search_dirs: Vec<AbsolutePathBuf> = if project_root != dir {
         let mut dirs = Vec::new();
         let mut cursor = dir.clone();
         loop {
             dirs.push(cursor.clone());
-            if cursor == root {
+            if cursor == project_root {
                 break;
             }
             let Some(parent) = cursor.parent() else {

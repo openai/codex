@@ -414,7 +414,7 @@ impl CoreShellActionProvider {
                 )
                 .await
                 {
-                    Some(PermissionRequestDecision::Allow) => {
+                    Some(PermissionRequestDecision::Allow { .. }) => {
                         return PromptDecision {
                             decision: ReviewDecision::Approved,
                             guardian_review_id: None,

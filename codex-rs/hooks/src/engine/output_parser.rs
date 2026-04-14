@@ -21,8 +21,12 @@ pub(crate) struct PreToolUseOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionRequestDecision {
-    Allow,
-    Deny { message: String },
+    Allow {
+        updated_permissions: Vec<crate::events::permission_request::PermissionSuggestion>,
+    },
+    Deny {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -300,8 +304,10 @@ fn unsupported_permission_request_hook_specific_output(
     let decision = decision?;
     if decision.updated_input.is_some() {
         Some("PermissionRequest hook returned unsupported updatedInput".to_string())
-    } else if decision.updated_permissions.is_some() {
-        Some("PermissionRequest hook returned unsupported updatedPermissions".to_string())
+    } else if matches!(decision.behavior, PermissionRequestBehaviorWire::Deny)
+        && decision.updated_permissions.is_some()
+    {
+        Some("PermissionRequest hook returned updatedPermissions for deny decision".to_string())
     } else if decision.interrupt {
         Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
     } else {
@@ -313,7 +319,9 @@ fn permission_request_decision(
     decision: &PermissionRequestDecisionWire,
 ) -> PermissionRequestDecision {
     match decision.behavior {
-        PermissionRequestBehaviorWire::Allow => PermissionRequestDecision::Allow,
+        PermissionRequestBehaviorWire::Allow => PermissionRequestDecision::Allow {
+            updated_permissions: decision.updated_permissions.clone().unwrap_or_default(),
+        },
         PermissionRequestBehaviorWire::Deny => PermissionRequestDecision::Deny {
             message: decision
                 .message
@@ -421,6 +429,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
+    use super::PermissionRequestDecision;
     use super::parse_permission_request;
 
     #[test]
@@ -447,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_request_rejects_reserved_updated_permissions_field() {
+    fn permission_request_accepts_updated_permissions_for_allow_decision() {
         let parsed = parse_permission_request(
             &json!({
                 "continue": true,
@@ -455,7 +464,59 @@ mod tests {
                     "hookEventName": "PermissionRequest",
                     "decision": {
                         "behavior": "allow",
-                        "updatedPermissions": {}
+                        "updatedPermissions": [{
+                            "type": "addRules",
+                            "rules": [{
+                                "type": "prefixRule",
+                                "command": ["rm", "-f"]
+                            }],
+                            "behavior": "allow",
+                            "destination": "userSettings"
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.decision,
+            Some(PermissionRequestDecision::Allow {
+                updated_permissions: vec![crate::events::permission_request::PermissionSuggestion {
+                    suggestion_type:
+                        crate::events::permission_request::PermissionSuggestionType::AddRules,
+                    rules: vec![
+                        crate::events::permission_request::PermissionSuggestionRule::PrefixRule {
+                            command: vec!["rm".to_string(), "-f".to_string()],
+                        },
+                    ],
+                    behavior:
+                        crate::events::permission_request::PermissionSuggestionBehavior::Allow,
+                    destination: crate::events::permission_request::PermissionSuggestionDestination::UserSettings,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_updated_permissions_for_deny_decision() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "updatedPermissions": [{
+                            "type": "addRules",
+                            "rules": [{
+                                "type": "prefixRule",
+                                "command": ["rm", "-f"]
+                            }],
+                            "behavior": "allow",
+                            "destination": "userSettings"
+                        }]
                     }
                 }
             })
@@ -465,7 +526,9 @@ mod tests {
 
         assert_eq!(
             parsed.invalid_reason,
-            Some("PermissionRequest hook returned unsupported updatedPermissions".to_string())
+            Some(
+                "PermissionRequest hook returned updatedPermissions for deny decision".to_string()
+            )
         );
     }
 
