@@ -127,6 +127,7 @@ fn compute_desc_col(
     visible_items: usize,
     content_width: u16,
     col_width_mode: ColumnWidthMode,
+    name_column_width: Option<usize>,
 ) -> usize {
     if content_width <= 1 {
         return 0;
@@ -177,7 +178,10 @@ fn compute_desc_col(
                 ColumnWidthMode::Fixed => 0,
             };
 
-            max_name_width.saturating_add(2).min(max_auto_desc_col)
+            name_column_width
+                .unwrap_or(max_name_width)
+                .saturating_add(2)
+                .min(max_auto_desc_col)
         }
     }
 }
@@ -374,6 +378,7 @@ fn adjust_start_for_wrapped_selection_visibility(
     width: u16,
     viewport_height: u16,
     col_width_mode: ColumnWidthMode,
+    name_column_width: Option<usize>,
 ) -> usize {
     let mut start_idx = compute_item_window_start(rows_all, state, max_items);
     let Some(sel) = state.selected_idx else {
@@ -392,6 +397,7 @@ fn adjust_start_for_wrapped_selection_visibility(
             desc_measure_items,
             width,
             col_width_mode,
+            name_column_width,
         );
         if is_selected_visible_in_wrapped_viewport(
             rows_all,
@@ -507,6 +513,7 @@ fn render_rows_inner(
     max_results: usize,
     empty_message: &str,
     col_width_mode: ColumnWidthMode,
+    name_column_width: Option<usize>,
 ) -> u16 {
     if rows_all.is_empty() {
         if area.height > 0 {
@@ -532,6 +539,7 @@ fn render_rows_inner(
         area.width,
         area.height,
         col_width_mode,
+        name_column_width,
     );
 
     let desc_col = compute_desc_col(
@@ -540,6 +548,7 @@ fn render_rows_inner(
         desc_measure_items,
         area.width,
         col_width_mode,
+        name_column_width,
     );
 
     // Render items, wrapping descriptions and aligning wrapped lines under the
@@ -604,6 +613,7 @@ pub(crate) fn render_rows(
         max_results,
         empty_message,
         ColumnWidthMode::AutoVisible,
+        None,
     )
 }
 
@@ -632,6 +642,7 @@ pub(crate) fn render_rows_stable_col_widths(
         max_results,
         empty_message,
         ColumnWidthMode::AutoAllRows,
+        None,
     )
 }
 
@@ -649,6 +660,7 @@ pub(crate) fn render_rows_with_col_width_mode(
     max_results: usize,
     empty_message: &str,
     col_width_mode: ColumnWidthMode,
+    name_column_width: Option<usize>,
 ) -> u16 {
     render_rows_inner(
         area,
@@ -658,6 +670,7 @@ pub(crate) fn render_rows_with_col_width_mode(
         max_results,
         empty_message,
         col_width_mode,
+        name_column_width,
     )
 }
 
@@ -704,6 +717,7 @@ pub(crate) fn render_rows_single_line(
         visible_items,
         area.width,
         ColumnWidthMode::AutoVisible,
+        None,
     );
 
     let mut cur_y = area.y;
@@ -767,6 +781,7 @@ pub(crate) fn measure_rows_height(
         max_results,
         width,
         ColumnWidthMode::AutoVisible,
+        None,
     )
 }
 
@@ -785,6 +800,7 @@ pub(crate) fn measure_rows_height_stable_col_widths(
         max_results,
         width,
         ColumnWidthMode::AutoAllRows,
+        None,
     )
 }
 
@@ -797,8 +813,16 @@ pub(crate) fn measure_rows_height_with_col_width_mode(
     max_results: usize,
     width: u16,
     col_width_mode: ColumnWidthMode,
+    name_column_width: Option<usize>,
 ) -> u16 {
-    measure_rows_height_inner(rows_all, state, max_results, width, col_width_mode)
+    measure_rows_height_inner(
+        rows_all,
+        state,
+        max_results,
+        width,
+        col_width_mode,
+        name_column_width,
+    )
 }
 
 fn measure_rows_height_inner(
@@ -807,6 +831,7 @@ fn measure_rows_height_inner(
     max_results: usize,
     width: u16,
     col_width_mode: ColumnWidthMode,
+    name_column_width: Option<usize>,
 ) -> u16 {
     if rows_all.is_empty() {
         return 1; // placeholder "no matches" line
@@ -833,6 +858,7 @@ fn measure_rows_height_inner(
         visible_items,
         content_width,
         col_width_mode,
+        name_column_width,
     );
 
     let mut total: u16 = 0;

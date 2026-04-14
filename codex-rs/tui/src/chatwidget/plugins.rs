@@ -33,11 +33,13 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use unicode_width::UnicodeWidthStr;
 
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
 const ALL_PLUGINS_TAB_ID: &str = "all-plugins";
 const INSTALLED_PLUGINS_TAB_ID: &str = "installed-plugins";
 const OPENAI_CURATED_TAB_ID: &str = "marketplace:openai-curated";
+const PLUGIN_MENU_ROW_PREFIX_WIDTH: usize = 2;
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -738,6 +740,12 @@ impl ChatWidget {
             .count();
 
         let all_entries = plugin_entries_for_marketplaces(marketplaces.iter().copied());
+        let name_column_width = all_entries
+            .iter()
+            .map(|(_, _, display_name)| {
+                PLUGIN_MENU_ROW_PREFIX_WIDTH + UnicodeWidthStr::width(display_name.as_str())
+            })
+            .max();
         let installed_entries = all_entries
             .iter()
             .filter(|(_, plugin, _)| plugin.installed)
@@ -859,6 +867,7 @@ impl ChatWidget {
             is_searchable: true,
             search_placeholder: Some("Type to search plugins".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
+            name_column_width,
             ..Default::default()
         }
     }

@@ -25,11 +25,7 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 pub(crate) use super::selection_popup_common::ColumnWidthMode;
 use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::measure_rows_height;
-use super::selection_popup_common::measure_rows_height_stable_col_widths;
 use super::selection_popup_common::measure_rows_height_with_col_width_mode;
-use super::selection_popup_common::render_rows;
-use super::selection_popup_common::render_rows_stable_col_widths;
 use super::selection_popup_common::render_rows_with_col_width_mode;
 use super::selection_tabs::SelectionTab;
 use super::selection_tabs::render_tab_bar;
@@ -150,6 +146,8 @@ pub(crate) struct SelectionViewParams {
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub col_width_mode: ColumnWidthMode,
+    /// Rendered left-column width to use for auto-sized rows.
+    pub name_column_width: Option<usize>,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
 
@@ -194,6 +192,7 @@ impl Default for SelectionViewParams {
             is_searchable: false,
             search_placeholder: None,
             col_width_mode: ColumnWidthMode::AutoVisible,
+            name_column_width: None,
             header: Box::new(()),
             initial_selected_idx: None,
             side_content: Box::new(()),
@@ -226,6 +225,7 @@ pub(crate) struct ListSelectionView {
     search_query: String,
     search_placeholder: Option<String>,
     col_width_mode: ColumnWidthMode,
+    name_column_width: Option<usize>,
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
@@ -291,6 +291,7 @@ impl ListSelectionView {
                 None
             },
             col_width_mode: params.col_width_mode,
+            name_column_width: params.name_column_width,
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
@@ -805,27 +806,14 @@ impl Renderable for ListSelectionView {
 
         // Measure wrapped height for up to MAX_POPUP_ROWS items.
         let rows = self.build_rows();
-        let rows_height = match self.col_width_mode {
-            ColumnWidthMode::AutoVisible => measure_rows_height(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-                ColumnWidthMode::Fixed,
-            ),
-        };
+        let rows_height = measure_rows_height_with_col_width_mode(
+            &rows,
+            &self.state,
+            MAX_POPUP_ROWS,
+            effective_rows_width.saturating_add(1),
+            self.col_width_mode,
+            self.name_column_width,
+        );
 
         let header = self.active_header();
         let tab_height = tab_bar_height(&self.tabs, self.active_tab_idx.unwrap_or(0), inner_width);
@@ -893,27 +881,14 @@ impl Renderable for ListSelectionView {
         let header_height = header.desired_height(inner_width);
         let tab_height = tab_bar_height(&self.tabs, self.active_tab_idx.unwrap_or(0), inner_width);
         let rows = self.build_rows();
-        let rows_height = match self.col_width_mode {
-            ColumnWidthMode::AutoVisible => measure_rows_height(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-            ),
-            ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                effective_rows_width.saturating_add(1),
-                ColumnWidthMode::Fixed,
-            ),
-        };
+        let rows_height = measure_rows_height_with_col_width_mode(
+            &rows,
+            &self.state,
+            MAX_POPUP_ROWS,
+            effective_rows_width.saturating_add(1),
+            self.col_width_mode,
+            self.name_column_width,
+        );
 
         // Stacked (fallback) side content height — only used when not side-by-side.
         let stacked_side_h = if side_w.is_none() {
@@ -984,33 +959,16 @@ impl Renderable for ListSelectionView {
                 width: effective_rows_width.max(1),
                 height: list_area.height,
             };
-            match self.col_width_mode {
-                ColumnWidthMode::AutoVisible => render_rows(
-                    render_area,
-                    buf,
-                    &rows,
-                    &self.state,
-                    render_area.height as usize,
-                    "no matches",
-                ),
-                ColumnWidthMode::AutoAllRows => render_rows_stable_col_widths(
-                    render_area,
-                    buf,
-                    &rows,
-                    &self.state,
-                    render_area.height as usize,
-                    "no matches",
-                ),
-                ColumnWidthMode::Fixed => render_rows_with_col_width_mode(
-                    render_area,
-                    buf,
-                    &rows,
-                    &self.state,
-                    render_area.height as usize,
-                    "no matches",
-                    ColumnWidthMode::Fixed,
-                ),
-            };
+            render_rows_with_col_width_mode(
+                render_area,
+                buf,
+                &rows,
+                &self.state,
+                render_area.height as usize,
+                "no matches",
+                self.col_width_mode,
+                self.name_column_width,
+            );
         }
 
         // -- Side content (preview panel) --
