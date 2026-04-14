@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use futures::future::BoxFuture;
 use tokio::select;
+use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -29,6 +30,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
+use crate::state::TaskAbortState;
 use crate::state::TaskKind;
 use codex_login::AuthManager;
 use codex_models_manager::manager::ModelsManager;
@@ -281,7 +283,10 @@ impl Session {
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
+        let task_for_abort = Arc::clone(&task);
         let task_cancellation_token = cancellation_token.child_token();
+        let abort_state = Arc::new(Mutex::new(TaskAbortState::default()));
+        let abort_state_for_run = Arc::clone(&abort_state);
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
         let task_span = info_span!(
@@ -315,7 +320,17 @@ impl Session {
                     )
                     .await;
                 }
-                if !task_cancellation_token.is_cancelled() {
+                let abort_reason = {
+                    let mut abort_state = abort_state_for_run.lock().await;
+                    abort_state.take_for_finalization()
+                };
+                if let Some(reason) = abort_reason {
+                    task_for_abort
+                        .abort(Arc::clone(&session_ctx), Arc::clone(&ctx_for_finish))
+                        .await;
+                    sess.on_self_aborted_task_finished(Arc::clone(&ctx_for_finish), reason)
+                        .await;
+                } else if !task_cancellation_token.is_cancelled() {
                     // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                     sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                         .await;
@@ -329,6 +344,7 @@ impl Session {
             .start_timer(TURN_E2E_DURATION_METRIC, &[])
             .ok();
         let running_task = RunningTask {
+            abort_state,
             done,
             handle: Arc::new(AbortOnDropHandle::new(handle)),
             kind: task_kind,
@@ -394,6 +410,33 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
         }
+    }
+
+    pub(crate) async fn request_turn_abort(&self, sub_id: &str, reason: TurnAbortReason) {
+        let Some((abort_state, cancellation_token, turn_context)) = ({
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .and_then(|turn| turn.tasks.get(sub_id))
+                .map(|task| {
+                    (
+                        Arc::clone(&task.abort_state),
+                        task.cancellation_token.clone(),
+                        Arc::clone(&task.turn_context),
+                    )
+                })
+        }) else {
+            return;
+        };
+
+        {
+            let mut abort_state = abort_state.lock().await;
+            abort_state.request_abort(reason);
+        }
+        cancellation_token.cancel();
+        turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
     }
 
     pub async fn on_task_finished(
@@ -545,6 +588,43 @@ impl Session {
         }
     }
 
+    async fn on_self_aborted_task_finished(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        reason: TurnAbortReason,
+    ) {
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            if let Some(at) = active.as_mut()
+                && at.remove_task(&turn_context.sub_id)
+            {
+                let turn_state = Arc::clone(&at.turn_state);
+                *active = None;
+                Some(turn_state)
+            } else {
+                None
+            }
+        };
+        let should_start_turn = turn_state.is_some();
+
+        if let Some(turn_state) = turn_state {
+            let mut turn_state = turn_state.lock().await;
+            turn_state.clear_pending();
+        }
+
+        self.emit_turn_aborted(turn_context.as_ref(), reason.clone())
+            .await;
+
+        if should_start_turn && reason == TurnAbortReason::Interrupted {
+            let session = Arc::clone(self);
+            let _scheduler = tokio::task::spawn_blocking(move || {
+                tokio::runtime::Handle::current().block_on(async move {
+                    session.maybe_start_turn_for_pending_work().await;
+                });
+            });
+        }
+    }
+
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()
@@ -557,7 +637,7 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &Arc<TurnContext>) {
+    pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &TurnContext) {
         if let Some(manager) = turn_context.js_repl.manager_if_initialized()
             && let Err(err) = manager.interrupt_turn_exec(&turn_context.sub_id).await
         {
@@ -565,11 +645,49 @@ impl Session {
         }
     }
 
+    async fn emit_turn_aborted(
+        self: &Arc<Self>,
+        turn_context: &TurnContext,
+        reason: TurnAbortReason,
+    ) {
+        if reason == TurnAbortReason::Interrupted {
+            self.cleanup_after_interrupt(turn_context).await;
+
+            let marker = interrupted_turn_history_marker();
+            self.record_into_history(std::slice::from_ref(&marker), turn_context)
+                .await;
+            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
+                .await;
+            // Ensure the marker is durably visible before emitting TurnAborted: some clients
+            // synchronously re-read the rollout on receipt of the abort event.
+            if let Err(err) = self.flush_rollout().await {
+                warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
+            }
+        }
+
+        let (completed_at, duration_ms) = turn_context
+            .turn_timing_state
+            .completed_at_and_duration_ms()
+            .await;
+        let event = EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some(turn_context.sub_id.clone()),
+            reason,
+            completed_at,
+            duration_ms,
+        });
+        self.send_event(turn_context, event).await;
+    }
+
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
-        if task.cancellation_token.is_cancelled() {
-            return;
-        }
+        let reason = {
+            let mut abort_state = task.abort_state.lock().await;
+            abort_state.request_abort(reason);
+            let Some(reason) = abort_state.take_for_finalization() else {
+                return;
+            };
+            reason
+        };
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
@@ -592,34 +710,8 @@ impl Session {
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
-
-        if reason == TurnAbortReason::Interrupted {
-            self.cleanup_after_interrupt(&task.turn_context).await;
-
-            let marker = interrupted_turn_history_marker();
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
-                .await;
-            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
-                .await;
-            // Ensure the marker is durably visible before emitting TurnAborted: some clients
-            // synchronously re-read the rollout on receipt of the abort event.
-            if let Err(err) = self.flush_rollout().await {
-                warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
-            }
-        }
-
-        let (completed_at, duration_ms) = task
-            .turn_context
-            .turn_timing_state
-            .completed_at_and_duration_ms()
+        self.emit_turn_aborted(task.turn_context.as_ref(), reason)
             .await;
-        let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some(task.turn_context.sub_id.clone()),
-            reason,
-            completed_at,
-            duration_ms,
-        });
-        self.send_event(task.turn_context.as_ref(), event).await;
     }
 }
 

@@ -22,6 +22,7 @@ use crate::tasks::AnySessionTask;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnAbortReason;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -67,6 +68,7 @@ pub(crate) enum TaskKind {
 }
 
 pub(crate) struct RunningTask {
+    pub(crate) abort_state: Arc<Mutex<TaskAbortState>>,
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn AnySessionTask>,
@@ -75,6 +77,30 @@ pub(crate) struct RunningTask {
     pub(crate) turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct TaskAbortState {
+    reason: Option<TurnAbortReason>,
+    finalized: bool,
+}
+
+impl TaskAbortState {
+    pub(crate) fn request_abort(&mut self, reason: TurnAbortReason) {
+        if self.reason.is_none() {
+            self.reason = Some(reason);
+        }
+    }
+
+    pub(crate) fn take_for_finalization(&mut self) -> Option<TurnAbortReason> {
+        if self.finalized {
+            None
+        } else {
+            let reason = self.reason.clone()?;
+            self.finalized = true;
+            Some(reason)
+        }
+    }
 }
 
 impl ActiveTurn {

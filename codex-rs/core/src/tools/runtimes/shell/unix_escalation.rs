@@ -396,7 +396,7 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
-        Ok(stopwatch
+        stopwatch
             .pause_for(async move {
                 // 1) Run PermissionRequest hooks
                 let permission_request = PermissionRequestPayload {
@@ -414,18 +414,27 @@ impl CoreShellActionProvider {
                 .await
                 {
                     Some(PermissionRequestDecision::Allow) => {
-                        return PromptDecision {
+                        return Ok(PromptDecision {
                             decision: ReviewDecision::Approved,
                             guardian_review_id: None,
                             rejection_message: None,
-                        };
+                        });
                     }
-                    Some(PermissionRequestDecision::Deny { message }) => {
-                        return PromptDecision {
+                    Some(PermissionRequestDecision::Deny { message, interrupt }) => {
+                        if interrupt {
+                            session
+                                .request_turn_abort(
+                                    &turn.sub_id,
+                                    codex_protocol::protocol::TurnAbortReason::Interrupted,
+                                )
+                                .await;
+                            return Err(anyhow::Error::new(ToolError::Interrupted));
+                        }
+                        return Ok(PromptDecision {
                             decision: ReviewDecision::Denied,
                             guardian_review_id: None,
                             rejection_message: Some(message),
-                        };
+                        });
                     }
                     None => {}
                 }
@@ -447,11 +456,11 @@ impl CoreShellActionProvider {
                         /*retry_reason*/ None,
                     )
                     .await;
-                    return PromptDecision {
+                    return Ok(PromptDecision {
                         decision,
                         guardian_review_id,
                         rejection_message: None,
-                    };
+                    });
                 }
 
                 // 3) Fall back to regular user prompt
@@ -469,13 +478,13 @@ impl CoreShellActionProvider {
                         Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
                     )
                     .await;
-                PromptDecision {
+                Ok(PromptDecision {
                     decision,
                     guardian_review_id: None,
                     rejection_message: None,
-                }
+                })
             })
-            .await)
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]

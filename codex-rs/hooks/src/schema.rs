@@ -150,9 +150,8 @@ pub(crate) struct PermissionRequestDecisionWire {
     pub updated_permissions: Option<Value>,
     #[serde(default)]
     pub message: Option<String>,
-    /// Reserved for future short-circuiting semantics.
-    ///
-    /// PermissionRequest hooks currently fail closed if this field is `true`.
+    /// When `true` on a deny decision, interrupt the current turn instead of
+    /// treating the denial as a normal rejection.
     #[serde(default)]
     pub interrupt: bool,
 }

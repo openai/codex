@@ -28,7 +28,7 @@
         },
         "interrupt": {
           "default": false,
-          "description": "Reserved for future short-circuiting semantics.\n\nPermissionRequest hooks currently fail closed if this field is `true`.",
+          "description": "When `true` on a deny decision, interrupt the current turn instead of treating the denial as a normal rejection.",
           "type": "boolean"
         },
         "message": {

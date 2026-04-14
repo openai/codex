@@ -35,6 +35,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::Path;
 use std::sync::Arc;
+use thiserror::Error;
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
@@ -318,9 +319,13 @@ pub(crate) struct ToolCtx {
     pub tool_name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum ToolError {
+    #[error("turn interrupted")]
+    Interrupted,
+    #[error("{0}")]
     Rejected(String),
+    #[error(transparent)]
     Codex(CodexErr),
 }
 

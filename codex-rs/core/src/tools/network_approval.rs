@@ -118,6 +118,7 @@ enum PendingApprovalDecision {
 enum NetworkApprovalOutcome {
     DeniedByUser,
     DeniedByPolicy(String),
+    InterruptedByPolicy(String),
 }
 
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
@@ -402,13 +403,25 @@ impl NetworkApprovalService {
                     pending_approvals.remove(&key);
                     return NetworkDecision::Allow;
                 }
-                PermissionRequestDecision::Deny { message } => {
+                PermissionRequestDecision::Deny { message, interrupt } => {
                     if let Some(owner_call) = owner_call.as_ref() {
                         self.record_call_outcome(
                             &owner_call.registration_id,
-                            NetworkApprovalOutcome::DeniedByPolicy(message),
+                            if interrupt {
+                                NetworkApprovalOutcome::InterruptedByPolicy(message)
+                            } else {
+                                NetworkApprovalOutcome::DeniedByPolicy(message)
+                            },
                         )
                         .await;
+                    }
+                    if interrupt {
+                        session
+                            .request_turn_abort(
+                                &turn_context.sub_id,
+                                codex_protocol::protocol::TurnAbortReason::Interrupted,
+                            )
+                            .await;
                     }
                     pending.set_decision(PendingApprovalDecision::Deny).await;
                     let mut pending_approvals = self.pending_host_approvals.lock().await;
@@ -668,6 +681,7 @@ pub(crate) async fn finish_immediate_network_approval(
             Err(ToolError::Rejected("rejected by user".to_string()))
         }
         Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        Some(NetworkApprovalOutcome::InterruptedByPolicy(_message)) => Err(ToolError::Interrupted),
         None => Ok(()),
     }
 }

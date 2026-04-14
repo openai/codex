@@ -386,13 +386,23 @@ impl ToolOrchestrator {
                     );
                     return Ok(ReviewDecision::Approved);
                 }
-                Some(PermissionRequestDecision::Deny { message }) => {
+                Some(PermissionRequestDecision::Deny { message, interrupt }) => {
                     telemetry.otel.tool_decision(
                         telemetry.tool_name,
                         telemetry.call_id,
                         &ReviewDecision::Denied,
                         ToolDecisionSource::Config,
                     );
+                    if interrupt {
+                        approval_ctx
+                            .session
+                            .request_turn_abort(
+                                &approval_ctx.turn.sub_id,
+                                codex_protocol::protocol::TurnAbortReason::Interrupted,
+                            )
+                            .await;
+                        return Err(ToolError::Interrupted);
+                    }
                     return Err(ToolError::Rejected(message));
                 }
                 None => {}
