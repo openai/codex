@@ -2,14 +2,12 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
-use codex_hooks::PermissionDirectoryUpdate;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
-use codex_hooks::PermissionSuggestion;
-use codex_hooks::PermissionSuggestionDestination;
-use codex_hooks::PermissionSuggestionRule;
-use codex_hooks::PermissionSuggestionType;
+use codex_hooks::PermissionUpdate;
+use codex_hooks::PermissionUpdateDestination;
+use codex_hooks::PermissionUpdateRule;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -199,16 +197,9 @@ pub(crate) async fn run_permission_request_hooks(
 
     if let Some(PermissionRequestDecision::Allow {
         updated_permissions,
-        add_directories,
     }) = &decision
     {
-        apply_permission_updates_from_hook(
-            sess,
-            turn_context,
-            updated_permissions,
-            add_directories,
-        )
-        .await;
+        apply_permission_updates_from_hook(sess, turn_context, updated_permissions).await;
     }
 
     decision
@@ -217,28 +208,15 @@ pub(crate) async fn run_permission_request_hooks(
 async fn apply_permission_updates_from_hook(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    updated_permissions: &[PermissionSuggestion],
-    add_directories: &[PermissionDirectoryUpdate],
+    updated_permissions: &[PermissionUpdate],
 ) {
     for permission in updated_permissions {
         if let Err(err) = apply_permission_update_from_hook(sess, turn_context, permission).await {
-            let message =
-                format!("PermissionRequest hook failed to apply updated permission: {err}");
-            warn!("{message}");
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Warning(WarningEvent { message }),
-            })
-            .await;
-        }
-    }
-
-    for directory_update in add_directories {
-        if let Err(err) =
-            apply_directory_update_from_hook(sess, turn_context, directory_update).await
-        {
-            let message =
-                format!("PermissionRequest hook failed to apply updated writable roots: {err}");
+            let update_kind = match permission {
+                PermissionUpdate::AddRules { .. } => "updated permission",
+                PermissionUpdate::AddDirectories { .. } => "updated writable roots",
+            };
+            let message = format!("PermissionRequest hook failed to apply {update_kind}: {err}");
             warn!("{message}");
             sess.send_event_raw(Event {
                 id: turn_context.sub_id.clone(),
@@ -252,18 +230,20 @@ async fn apply_permission_updates_from_hook(
 async fn apply_permission_update_from_hook(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    permission: &PermissionSuggestion,
+    permission: &PermissionUpdate,
 ) -> Result<(), String> {
-    match permission.suggestion_type {
-        PermissionSuggestionType::AddRules => {
-            for rule in &permission.rules {
+    match permission {
+        PermissionUpdate::AddRules {
+            rules, destination, ..
+        } => {
+            for rule in rules {
                 match rule {
-                    PermissionSuggestionRule::PrefixRule { command } => {
+                    PermissionUpdateRule::PrefixRule { command } => {
                         let amendment = ExecPolicyAmendment::new(command.clone());
                         apply_execpolicy_amendment_destination(
                             sess,
                             turn_context,
-                            &permission.destination,
+                            destination,
                             &amendment,
                         )
                         .await?;
@@ -272,23 +252,26 @@ async fn apply_permission_update_from_hook(
             }
             Ok(())
         }
+        PermissionUpdate::AddDirectories { .. } => {
+            apply_directory_update_from_hook(sess, turn_context, permission).await
+        }
     }
 }
 
 async fn apply_execpolicy_amendment_destination(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    destination: &PermissionSuggestionDestination,
+    destination: &PermissionUpdateDestination,
     amendment: &ExecPolicyAmendment,
 ) -> Result<(), String> {
     match destination {
-        PermissionSuggestionDestination::Session => sess
+        PermissionUpdateDestination::Session => sess
             .services
             .exec_policy
             .add_amendment_to_current_policy(amendment)
             .await
             .map_err(|err| format!("failed to cache session prefix rule: {err}")),
-        PermissionSuggestionDestination::UserSettings => {
+        PermissionUpdateDestination::UserSettings => {
             let codex_home = sess.codex_home().await;
             sess.services
                 .exec_policy
@@ -296,7 +279,7 @@ async fn apply_execpolicy_amendment_destination(
                 .await
                 .map_err(|err| format!("failed to persist user prefix rule: {err}"))
         }
-        PermissionSuggestionDestination::ProjectSettings => {
+        PermissionUpdateDestination::ProjectSettings => {
             let config = turn_context.config.as_ref();
             let project_codex_home = resolve_project_root(&config.config_layer_stack, &config.cwd)
                 .await
@@ -318,17 +301,26 @@ async fn apply_execpolicy_amendment_destination(
 async fn apply_directory_update_from_hook(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    directory_update: &PermissionDirectoryUpdate,
+    permission: &PermissionUpdate,
 ) -> Result<(), String> {
-    let writable_roots = resolve_directory_update_paths(&turn_context.cwd, directory_update)?;
+    let writable_roots = resolve_directory_update_paths(&turn_context.cwd, permission)?;
 
-    match directory_update.destination {
-        PermissionSuggestionDestination::Session => {}
-        PermissionSuggestionDestination::UserSettings => {
+    match permission {
+        PermissionUpdate::AddDirectories {
+            destination: PermissionUpdateDestination::Session,
+            ..
+        } => {}
+        PermissionUpdate::AddDirectories {
+            destination: PermissionUpdateDestination::UserSettings,
+            ..
+        } => {
             let codex_home = sess.codex_home().await;
             append_writable_roots_to_config(codex_home.as_path(), &writable_roots).await?;
         }
-        PermissionSuggestionDestination::ProjectSettings => {
+        PermissionUpdate::AddDirectories {
+            destination: PermissionUpdateDestination::ProjectSettings,
+            ..
+        } => {
             let config = turn_context.config.as_ref();
             let project_codex_home = resolve_project_root(&config.config_layer_stack, &config.cwd)
                 .await
@@ -340,6 +332,9 @@ async fn apply_directory_update_from_hook(
                 .map_err(|err| format!("failed to create project config directory: {err}"))?;
             append_writable_roots_to_config(&project_codex_home, &writable_roots).await?;
         }
+        PermissionUpdate::AddRules { .. } => {
+            return Err("writable root update must use type:addDirectories".to_string());
+        }
     }
 
     sess.record_granted_session_permissions(permission_profile_for_writable_roots(&writable_roots))
@@ -349,10 +344,12 @@ async fn apply_directory_update_from_hook(
 
 fn resolve_directory_update_paths(
     cwd: &AbsolutePathBuf,
-    directory_update: &PermissionDirectoryUpdate,
+    permission: &PermissionUpdate,
 ) -> Result<Vec<AbsolutePathBuf>, String> {
-    let writable_roots = directory_update
-        .directories
+    let PermissionUpdate::AddDirectories { directories, .. } = permission else {
+        return Err("writable root update must use type:addDirectories".to_string());
+    };
+    let writable_roots = directories
         .iter()
         .map(|directory| {
             let trimmed = directory.trim();

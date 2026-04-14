@@ -1,9 +1,9 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
-use codex_hooks::PermissionSuggestion;
-use codex_hooks::PermissionSuggestionDestination;
-use codex_hooks::PermissionSuggestionRule;
-use codex_hooks::PermissionSuggestionType;
+use codex_hooks::PermissionUpdate;
+use codex_hooks::PermissionUpdateBehavior;
+use codex_hooks::PermissionUpdateDestination;
+use codex_hooks::PermissionUpdateRule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -129,22 +129,21 @@ fn command_approval_execpolicy_amendment_maps_to_user_settings_suggestion() {
             "node_modules".to_string(),
         ])),
         /*additional_permissions*/ None,
-        &[PermissionSuggestionDestination::UserSettings],
+        &[PermissionUpdateDestination::UserSettings],
     );
 
     assert_eq!(
         suggestions,
-        vec![PermissionSuggestion {
-            suggestion_type: PermissionSuggestionType::AddRules,
-            rules: vec![PermissionSuggestionRule::PrefixRule {
+        vec![PermissionUpdate::AddRules {
+            rules: vec![PermissionUpdateRule::PrefixRule {
                 command: vec![
                     "rm".to_string(),
                     "-rf".to_string(),
                     "node_modules".to_string(),
                 ],
             }],
-            behavior: PermissionSuggestionBehavior::Allow,
-            destination: PermissionSuggestionDestination::UserSettings,
+            behavior: PermissionUpdateBehavior::Allow,
+            destination: PermissionUpdateDestination::UserSettings,
         }]
     );
 }
@@ -167,10 +166,10 @@ fn command_approval_with_additional_permissions_has_no_persistent_suggestions() 
                 write: None,
             }),
         }),
-        &[PermissionSuggestionDestination::UserSettings],
+        &[PermissionUpdateDestination::UserSettings],
     );
 
-    assert_eq!(suggestions, Vec::<PermissionSuggestion>::new());
+    assert_eq!(suggestions, Vec::<PermissionUpdate>::new());
 }
 
 #[test]
@@ -185,8 +184,8 @@ fn network_approval_with_execpolicy_amendment_has_no_persistent_suggestions() {
             "https://example.com".to_string(),
         ])),
         /*additional_permissions*/ None,
-        &[PermissionSuggestionDestination::UserSettings],
+        &[PermissionUpdateDestination::UserSettings],
     );
 
-    assert_eq!(suggestions, Vec::<PermissionSuggestion>::new());
+    assert_eq!(suggestions, Vec::<PermissionUpdate>::new());
 }

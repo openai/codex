@@ -12,8 +12,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::events::permission_request::PermissionDirectoryUpdate;
-use crate::events::permission_request::PermissionSuggestion;
+use crate::events::permission_request::PermissionUpdate;
 
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
@@ -147,9 +146,7 @@ pub(crate) struct PermissionRequestDecisionWire {
     #[serde(default)]
     pub updated_input: Option<Value>,
     #[serde(default)]
-    pub updated_permissions: Option<Vec<PermissionSuggestion>>,
-    #[serde(default)]
-    pub add_directories: Option<Vec<PermissionDirectoryUpdate>>,
+    pub updated_permissions: Option<Vec<PermissionUpdate>>,
     #[serde(default)]
     pub message: Option<String>,
     /// Reserved for future short-circuiting semantics.
@@ -266,7 +263,7 @@ pub(crate) struct PermissionRequestCommandInput {
     pub tool_name: String,
     pub tool_input: PermissionRequestToolInput,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permission_suggestions: Option<Vec<PermissionSuggestion>>,
+    pub permission_suggestions: Option<Vec<PermissionUpdate>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

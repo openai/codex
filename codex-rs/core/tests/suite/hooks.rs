@@ -332,7 +332,8 @@ elif mode == "allow_add_directories_session":
             "hookEventName": "PermissionRequest",
             "decision": {{
                 "behavior": "allow",
-                "addDirectories": [{{
+                "updatedPermissions": [{{
+                    "type": "addDirectories",
                     "directories": [reason],
                     "destination": "session"
                 }}]
@@ -345,7 +346,8 @@ elif mode == "allow_add_directories_project":
             "hookEventName": "PermissionRequest",
             "decision": {{
                 "behavior": "allow",
-                "addDirectories": [{{
+                "updatedPermissions": [{{
+                    "type": "addDirectories",
                     "directories": [reason],
                     "destination": "projectSettings"
                 }}]
@@ -358,7 +360,8 @@ elif mode == "allow_add_directories_user":
             "hookEventName": "PermissionRequest",
             "decision": {{
                 "behavior": "allow",
-                "addDirectories": [{{
+                "updatedPermissions": [{{
+                    "type": "addDirectories",
                     "directories": [reason],
                     "destination": "userSettings"
                 }}]

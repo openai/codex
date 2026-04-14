@@ -10,11 +10,10 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
-use codex_hooks::PermissionSuggestion;
-use codex_hooks::PermissionSuggestionBehavior;
-use codex_hooks::PermissionSuggestionDestination;
-use codex_hooks::PermissionSuggestionRule;
-use codex_hooks::PermissionSuggestionType;
+use codex_hooks::PermissionUpdate;
+use codex_hooks::PermissionUpdateBehavior;
+use codex_hooks::PermissionUpdateDestination;
+use codex_hooks::PermissionUpdateRule;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -143,25 +142,24 @@ pub(crate) struct PermissionRequestPayload {
     pub tool_name: String,
     pub command: String,
     pub description: Option<String>,
-    pub permission_suggestions: Vec<PermissionSuggestion>,
+    pub permission_suggestions: Vec<PermissionUpdate>,
 }
 
 pub(crate) fn exec_policy_permission_suggestions(
     proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
-    destinations: &[PermissionSuggestionDestination],
-) -> Vec<PermissionSuggestion> {
+    destinations: &[PermissionUpdateDestination],
+) -> Vec<PermissionUpdate> {
     proposed_execpolicy_amendment
         .into_iter()
         .flat_map(|amendment| {
             destinations
                 .iter()
                 .cloned()
-                .map(move |destination| PermissionSuggestion {
-                    suggestion_type: PermissionSuggestionType::AddRules,
-                    rules: vec![PermissionSuggestionRule::PrefixRule {
+                .map(move |destination| PermissionUpdate::AddRules {
+                    rules: vec![PermissionUpdateRule::PrefixRule {
                         command: amendment.command.clone(),
                     }],
-                    behavior: PermissionSuggestionBehavior::Allow,
+                    behavior: PermissionUpdateBehavior::Allow,
                     destination,
                 })
         })
@@ -172,8 +170,8 @@ pub(crate) fn approval_permission_suggestions(
     network_approval_context: Option<&NetworkApprovalContext>,
     proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
     additional_permissions: Option<&PermissionProfile>,
-    destinations: &[PermissionSuggestionDestination],
-) -> Vec<PermissionSuggestion> {
+    destinations: &[PermissionUpdateDestination],
+) -> Vec<PermissionUpdate> {
     let available_decisions = ExecApprovalRequestEvent::default_available_decisions(
         network_approval_context,
         proposed_execpolicy_amendment,

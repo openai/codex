@@ -13,24 +13,6 @@
       ],
       "type": "string"
     },
-    "PermissionDirectoryUpdate": {
-      "properties": {
-        "destination": {
-          "$ref": "#/definitions/PermissionSuggestionDestination"
-        },
-        "directories": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "destination",
-        "directories"
-      ],
-      "type": "object"
-    },
     "PermissionRequestBehaviorWire": {
       "enum": [
         "allow",
@@ -41,13 +23,6 @@
     "PermissionRequestDecisionWire": {
       "additionalProperties": false,
       "properties": {
-        "addDirectories": {
-          "default": null,
-          "items": {
-            "$ref": "#/definitions/PermissionDirectoryUpdate"
-          },
-          "type": "array"
-        },
         "behavior": {
           "$ref": "#/definitions/PermissionRequestBehaviorWire"
         },
@@ -67,7 +42,7 @@
         "updatedPermissions": {
           "default": null,
           "items": {
-            "$ref": "#/definitions/PermissionSuggestion"
+            "$ref": "#/definitions/PermissionUpdate"
           },
           "type": "array"
         }
@@ -97,33 +72,65 @@
       ],
       "type": "object"
     },
-    "PermissionSuggestion": {
-      "properties": {
-        "behavior": {
-          "$ref": "#/definitions/PermissionSuggestionBehavior"
-        },
-        "destination": {
-          "$ref": "#/definitions/PermissionSuggestionDestination"
-        },
-        "rules": {
-          "items": {
-            "$ref": "#/definitions/PermissionSuggestionRule"
+    "PermissionUpdate": {
+      "oneOf": [
+        {
+          "properties": {
+            "behavior": {
+              "$ref": "#/definitions/PermissionUpdateBehavior"
+            },
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "rules": {
+              "items": {
+                "$ref": "#/definitions/PermissionUpdateRule"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "addRules"
+              ],
+              "type": "string"
+            }
           },
-          "type": "array"
+          "required": [
+            "behavior",
+            "destination",
+            "rules",
+            "type"
+          ],
+          "type": "object"
         },
-        "type": {
-          "$ref": "#/definitions/PermissionSuggestionType"
+        {
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "directories": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "addDirectories"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "destination",
+            "directories",
+            "type"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "behavior",
-        "destination",
-        "rules",
-        "type"
-      ],
-      "type": "object"
+      ]
     },
-    "PermissionSuggestionBehavior": {
+    "PermissionUpdateBehavior": {
       "enum": [
         "allow",
         "deny",
@@ -131,7 +138,7 @@
       ],
       "type": "string"
     },
-    "PermissionSuggestionDestination": {
+    "PermissionUpdateDestination": {
       "enum": [
         "session",
         "projectSettings",
@@ -139,7 +146,7 @@
       ],
       "type": "string"
     },
-    "PermissionSuggestionRule": {
+    "PermissionUpdateRule": {
       "oneOf": [
         {
           "properties": {
@@ -163,12 +170,6 @@
           "type": "object"
         }
       ]
-    },
-    "PermissionSuggestionType": {
-      "enum": [
-        "addRules"
-      ],
-      "type": "string"
     }
   },
   "properties": {

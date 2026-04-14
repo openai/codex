@@ -36,38 +36,29 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionSuggestion {
-    #[serde(rename = "type")]
-    pub suggestion_type: PermissionSuggestionType,
-    pub rules: Vec<PermissionSuggestionRule>,
-    pub behavior: PermissionSuggestionBehavior,
-    pub destination: PermissionSuggestionDestination,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionDirectoryUpdate {
-    pub directories: Vec<String>,
-    pub destination: PermissionSuggestionDestination,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PermissionSuggestionType {
-    AddRules,
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PermissionUpdate {
+    AddRules {
+        rules: Vec<PermissionUpdateRule>,
+        behavior: PermissionUpdateBehavior,
+        destination: PermissionUpdateDestination,
+    },
+    AddDirectories {
+        directories: Vec<String>,
+        destination: PermissionUpdateDestination,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum PermissionSuggestionBehavior {
+pub enum PermissionUpdateBehavior {
     Allow,
     Deny,
     Ask,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub enum PermissionSuggestionDestination {
+pub enum PermissionUpdateDestination {
     #[serde(rename = "session")]
     Session,
     #[serde(rename = "projectSettings")]
@@ -78,7 +69,7 @@ pub enum PermissionSuggestionDestination {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum PermissionSuggestionRule {
+pub enum PermissionUpdateRule {
     PrefixRule { command: Vec<String> },
 }
 
@@ -94,14 +85,13 @@ pub struct PermissionRequestRequest {
     pub run_id_suffix: String,
     pub command: String,
     pub description: Option<String>,
-    pub permission_suggestions: Vec<PermissionSuggestion>,
+    pub permission_suggestions: Vec<PermissionUpdate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRequestDecision {
     Allow {
-        updated_permissions: Vec<PermissionSuggestion>,
-        add_directories: Vec<PermissionDirectoryUpdate>,
+        updated_permissions: Vec<PermissionUpdate>,
     },
     Deny {
         message: String,
@@ -222,22 +212,15 @@ fn resolve_permission_request_decision<'a>(
 ) -> Option<PermissionRequestDecision> {
     let mut saw_allow = false;
     let mut updated_permissions = Vec::new();
-    let mut add_directories = Vec::new();
     for decision in decisions {
         match decision {
             PermissionRequestDecision::Allow {
                 updated_permissions: selected_permissions,
-                add_directories: selected_directories,
             } => {
                 saw_allow = true;
                 for permission in selected_permissions {
                     if !updated_permissions.contains(permission) {
                         updated_permissions.push(permission.clone());
-                    }
-                }
-                for directory_update in selected_directories {
-                    if !add_directories.contains(directory_update) {
-                        add_directories.push(directory_update.clone());
                     }
                 }
             }
@@ -250,17 +233,15 @@ fn resolve_permission_request_decision<'a>(
     }
     saw_allow.then_some(PermissionRequestDecision::Allow {
         updated_permissions,
-        add_directories,
     })
 }
 
 fn invalid_permission_updates(
     decision: Option<&PermissionRequestDecision>,
-    offered_permissions: &[PermissionSuggestion],
+    offered_permissions: &[PermissionUpdate],
 ) -> Option<String> {
     let PermissionRequestDecision::Allow {
         updated_permissions,
-        add_directories: _,
     } = decision?
     else {
         return None;
@@ -334,11 +315,9 @@ fn parse_completed(
                         match parsed_decision {
                             output_parser::PermissionRequestDecision::Allow {
                                 updated_permissions,
-                                add_directories,
                             } => {
                                 decision = Some(PermissionRequestDecision::Allow {
                                     updated_permissions,
-                                    add_directories,
                                 });
                             }
                             output_parser::PermissionRequestDecision::Deny { message } => {
@@ -407,13 +386,11 @@ fn parse_completed(
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use super::PermissionDirectoryUpdate;
     use super::PermissionRequestDecision;
-    use super::PermissionSuggestion;
-    use super::PermissionSuggestionBehavior;
-    use super::PermissionSuggestionDestination;
-    use super::PermissionSuggestionRule;
-    use super::PermissionSuggestionType;
+    use super::PermissionUpdate;
+    use super::PermissionUpdateBehavior;
+    use super::PermissionUpdateDestination;
+    use super::PermissionUpdateRule;
     use super::invalid_permission_updates;
     use super::resolve_permission_request_decision;
 
@@ -422,7 +399,6 @@ mod tests {
         let decisions = [
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
-                add_directories: vec![],
             },
             PermissionRequestDecision::Deny {
                 message: "repo deny".to_string(),
@@ -442,11 +418,9 @@ mod tests {
         let decisions = [
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
-                add_directories: vec![],
             },
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
-                add_directories: vec![],
             },
         ];
 
@@ -454,7 +428,6 @@ mod tests {
             resolve_permission_request_decision(decisions.iter()),
             Some(PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
-                add_directories: vec![],
             })
         );
     }
@@ -468,22 +441,19 @@ mod tests {
 
     #[test]
     fn permission_request_accumulates_distinct_updated_permissions() {
-        let permission = PermissionSuggestion {
-            suggestion_type: PermissionSuggestionType::AddRules,
-            rules: vec![PermissionSuggestionRule::PrefixRule {
+        let permission = PermissionUpdate::AddRules {
+            rules: vec![PermissionUpdateRule::PrefixRule {
                 command: vec!["rm".to_string(), "-f".to_string()],
             }],
-            behavior: PermissionSuggestionBehavior::Allow,
-            destination: PermissionSuggestionDestination::UserSettings,
+            behavior: PermissionUpdateBehavior::Allow,
+            destination: PermissionUpdateDestination::UserSettings,
         };
         let decisions = [
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![permission.clone()],
-                add_directories: vec![],
             },
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![permission.clone()],
-                add_directories: vec![],
             },
         ];
 
@@ -491,57 +461,50 @@ mod tests {
             resolve_permission_request_decision(decisions.iter()),
             Some(PermissionRequestDecision::Allow {
                 updated_permissions: vec![permission],
-                add_directories: vec![],
             })
         );
     }
 
     #[test]
     fn permission_request_accumulates_distinct_directory_updates() {
-        let directory_update = PermissionDirectoryUpdate {
+        let directory_update = PermissionUpdate::AddDirectories {
             directories: vec!["./logs".to_string(), "/tmp/output".to_string()],
-            destination: PermissionSuggestionDestination::Session,
+            destination: PermissionUpdateDestination::Session,
         };
         let decisions = [
             PermissionRequestDecision::Allow {
-                updated_permissions: vec![],
-                add_directories: vec![directory_update.clone()],
+                updated_permissions: vec![directory_update.clone()],
             },
             PermissionRequestDecision::Allow {
-                updated_permissions: vec![],
-                add_directories: vec![directory_update.clone()],
+                updated_permissions: vec![directory_update.clone()],
             },
         ];
 
         assert_eq!(
             resolve_permission_request_decision(decisions.iter()),
             Some(PermissionRequestDecision::Allow {
-                updated_permissions: vec![],
-                add_directories: vec![directory_update],
+                updated_permissions: vec![directory_update],
             })
         );
     }
 
     #[test]
     fn permission_request_rejects_unoffered_updated_permissions() {
-        let offered = vec![PermissionSuggestion {
-            suggestion_type: PermissionSuggestionType::AddRules,
-            rules: vec![PermissionSuggestionRule::PrefixRule {
+        let offered = vec![PermissionUpdate::AddRules {
+            rules: vec![PermissionUpdateRule::PrefixRule {
                 command: vec!["rm".to_string()],
             }],
-            behavior: PermissionSuggestionBehavior::Allow,
-            destination: PermissionSuggestionDestination::UserSettings,
+            behavior: PermissionUpdateBehavior::Allow,
+            destination: PermissionUpdateDestination::UserSettings,
         }];
         let selected = PermissionRequestDecision::Allow {
-            updated_permissions: vec![PermissionSuggestion {
-                suggestion_type: PermissionSuggestionType::AddRules,
-                rules: vec![PermissionSuggestionRule::PrefixRule {
+            updated_permissions: vec![PermissionUpdate::AddRules {
+                rules: vec![PermissionUpdateRule::PrefixRule {
                     command: vec!["curl".to_string()],
                 }],
-                behavior: PermissionSuggestionBehavior::Allow,
-                destination: PermissionSuggestionDestination::UserSettings,
+                behavior: PermissionUpdateBehavior::Allow,
+                destination: PermissionUpdateDestination::UserSettings,
             }],
-            add_directories: vec![],
         };
 
         assert_eq!(
