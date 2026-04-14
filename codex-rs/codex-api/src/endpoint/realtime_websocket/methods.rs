@@ -927,27 +927,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_realtime_v2_output_text_done_event() {
-        let payload = json!({
-            "type": "response.output_text.done",
-            "item_id": "item_output_1",
-            "output_index": 0,
-            "content_index": 1,
-            "text": "all done"
-        })
-        .to_string();
-
-        assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::OutputTranscriptDone(
-                RealtimeTranscriptDone {
-                    text: "all done".to_string(),
-                }
-            ))
-        );
-    }
-
-    #[test]
     fn parse_realtime_v2_item_done_output_text_event() {
         let payload = json!({
             "type": "conversation.item.done",

@@ -38,9 +38,6 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
         "response.output_text.delta" | "response.output_audio_transcript.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
         }
-        "response.output_text.done" => {
-            parse_transcript_done_event(&parsed, "text").map(RealtimeEvent::OutputTranscriptDone)
-        }
         "response.output_audio_transcript.done" => {
             parse_transcript_done_event(&parsed, "transcript")
                 .map(RealtimeEvent::OutputTranscriptDone)
