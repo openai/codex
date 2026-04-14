@@ -13,7 +13,7 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn marketplace_add_supports_local_directory_source() -> Result<()> {
+async fn marketplace_add_local_directory_source() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = codex_home.path().join("marketplace");
     std::fs::create_dir_all(source.join(".agents/plugins"))?;

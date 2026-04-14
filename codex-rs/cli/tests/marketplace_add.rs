@@ -39,7 +39,7 @@ fn write_marketplace_source(source: &Path, marker: &str) -> Result<()> {
 }
 
 #[tokio::test]
-async fn marketplace_add_supports_local_directory_source() -> Result<()> {
+async fn marketplace_add_local_directory_source() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
     write_marketplace_source(source.path(), "local ref")?;
