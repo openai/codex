@@ -19,6 +19,7 @@ use serde_json::to_string;
 use serde_json::to_value;
 use std::sync::Arc;
 use tracing::instrument;
+use tracing::trace;
 
 const MULTIPART_BOUNDARY: &str = "codex-realtime-call-boundary";
 const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data; boundary=codex-realtime-call-boundary";
@@ -200,6 +201,7 @@ fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError>
         .ok_or_else(|| ApiError::Stream("realtime call response missing Location".to_string()))?
         .to_str()
         .map_err(|err| ApiError::Stream(format!("invalid realtime call Location: {err}")))?;
+    trace!("realtime call Location: {location}");
 
     location
         .split('?')
