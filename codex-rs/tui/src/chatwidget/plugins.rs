@@ -1080,7 +1080,7 @@ impl ChatWidget {
 }
 
 fn plugins_popup_hint_line() -> Line<'static> {
-    Line::from("←/→ switch tabs · enter view details · esc close")
+    Line::from("←/→ select marketplace · enter view details · esc close")
 }
 
 fn plugin_detail_hint_line() -> Line<'static> {
