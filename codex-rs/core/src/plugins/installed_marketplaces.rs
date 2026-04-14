@@ -45,8 +45,11 @@ pub(crate) fn installed_marketplace_roots_from_config(
                 );
                 return None;
             }
-            let path =
-                configured_marketplace_root(marketplace_name, marketplace, &default_install_root)?;
+            let path = resolve_configured_marketplace_root(
+                marketplace_name,
+                marketplace,
+                &default_install_root,
+            )?;
             path.join(".agents/plugins/marketplace.json")
                 .is_file()
                 .then_some(path)
@@ -57,7 +60,7 @@ pub(crate) fn installed_marketplace_roots_from_config(
     roots
 }
 
-fn configured_marketplace_root(
+pub(crate) fn resolve_configured_marketplace_root(
     marketplace_name: &str,
     marketplace: &toml::Value,
     default_install_root: &Path,

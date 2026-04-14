@@ -16,7 +16,7 @@ use install::marketplace_staging_root;
 use install::replace_marketplace_root;
 use install::safe_marketplace_dir_name;
 use metadata::MarketplaceInstallMetadata;
-use metadata::installed_marketplace_root_for_name;
+use metadata::find_marketplace_root_by_name;
 use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
 use source::MarketplaceSource;
@@ -112,9 +112,7 @@ where
                 source.display()
             )));
         }
-        if installed_marketplace_root_for_name(codex_home, &install_root, &marketplace_name)?
-            .is_some()
-        {
+        if find_marketplace_root_by_name(codex_home, &install_root, &marketplace_name)?.is_some() {
             return Err(MarketplaceAddError::InvalidRequest(format!(
                 "marketplace '{marketplace_name}' is already added from a different source; remove it before adding {}",
                 source.display()

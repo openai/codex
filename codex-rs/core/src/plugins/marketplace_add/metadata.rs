@@ -1,5 +1,6 @@
 use super::MarketplaceAddError;
 use super::MarketplaceSource;
+use crate::plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use crate::plugins::validate_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
@@ -80,7 +81,8 @@ pub(super) fn installed_marketplace_root_for_source(
         if !install_metadata.matches_config(marketplace) {
             continue;
         }
-        let Some(root) = configured_marketplace_root(marketplace_name, marketplace, install_root)
+        let Some(root) =
+            resolve_configured_marketplace_root(marketplace_name, marketplace, install_root)
         else {
             continue;
         };
@@ -92,7 +94,7 @@ pub(super) fn installed_marketplace_root_for_source(
     Ok(None)
 }
 
-pub(super) fn installed_marketplace_root_for_name(
+pub(super) fn find_marketplace_root_by_name(
     codex_home: &Path,
     install_root: &Path,
     marketplace_name: &str,
@@ -122,7 +124,8 @@ pub(super) fn installed_marketplace_root_for_name(
         return Ok(None);
     };
 
-    let Some(root) = configured_marketplace_root(marketplace_name, marketplace, install_root)
+    let Some(root) =
+        resolve_configured_marketplace_root(marketplace_name, marketplace, install_root)
     else {
         return Ok(None);
     };
@@ -198,21 +201,6 @@ fn config_sparse_paths(marketplace: &toml::Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn configured_marketplace_root(
-    marketplace_name: &str,
-    marketplace: &toml::Value,
-    install_root: &Path,
-) -> Option<PathBuf> {
-    match marketplace.get("source_type").and_then(toml::Value::as_str) {
-        Some("local") => marketplace
-            .get("source")
-            .and_then(toml::Value::as_str)
-            .filter(|source| !source.is_empty())
-            .map(PathBuf::from),
-        _ => Some(install_root.join(marketplace_name)),
-    }
 }
 
 fn utc_timestamp_now() -> Result<String, MarketplaceAddError> {
