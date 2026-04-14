@@ -562,6 +562,7 @@ async fn emit_tool_call_begin(
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: call_id.to_string(),
                 invocation,
+                mcp_app_resource_uri: None,
             }),
         )
         .await;
@@ -581,6 +582,7 @@ async fn emit_tool_call_end(
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: call_id.to_string(),
                 invocation,
+                mcp_app_resource_uri: None,
                 duration,
                 result,
             }),

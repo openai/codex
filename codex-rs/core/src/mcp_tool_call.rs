@@ -101,6 +101,9 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    let mcp_app_resource_uri = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.mcp_app_resource_uri.clone());
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         connectors::app_tool_policy(
             &turn_context.config,
@@ -130,6 +133,7 @@ pub(crate) async fn handle_mcp_tool_call(
             turn_context.as_ref(),
             &call_id,
             invocation,
+            mcp_app_resource_uri.clone(),
             "MCP tool call blocked by app configuration".to_string(),
             /*already_started*/ false,
         )
@@ -161,6 +165,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
         invocation: invocation.clone(),
+        mcp_app_resource_uri: mcp_app_resource_uri.clone(),
     });
     notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
@@ -213,6 +218,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                     call_id: call_id.clone(),
                     invocation,
+                    mcp_app_resource_uri: mcp_app_resource_uri.clone(),
                     duration,
                     result: result.clone(),
                 });
@@ -239,6 +245,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         turn_context.as_ref(),
                         &call_id,
                         invocation,
+                        mcp_app_resource_uri.clone(),
                         message,
                         /*already_started*/ true,
                     )
@@ -254,6 +261,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         turn_context.as_ref(),
                         &call_id,
                         invocation,
+                        mcp_app_resource_uri.clone(),
                         message,
                         /*already_started*/ true,
                     )
@@ -268,6 +276,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         turn_context.as_ref(),
                         &call_id,
                         invocation,
+                        mcp_app_resource_uri.clone(),
                         message,
                         /*already_started*/ true,
                     )
@@ -325,6 +334,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.clone(),
         invocation,
+        mcp_app_resource_uri,
         duration,
         result: result.clone(),
     });
@@ -592,11 +602,14 @@ pub(crate) struct McpToolApprovalMetadata {
     connector_description: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
+    mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
+const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
+const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 
 fn custom_mcp_tool_approval_mode(
     turn_context: &TurnContext,
@@ -1050,6 +1063,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         connector_description,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
+        mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
         codex_apps_meta: tool_info
             .tool
             .meta
@@ -1062,6 +1076,25 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         ))
         .filter(|params| !params.is_empty()),
     })
+}
+
+fn get_mcp_app_resource_uri(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    let meta = meta?;
+    meta.get("ui")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|ui| ui.get("resourceUri"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            meta.get(MCP_TOOL_UI_RESOURCE_URI_META_KEY)
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            meta.get(MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY)
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_string)
 }
 
 async fn lookup_mcp_app_usage_metadata(
@@ -1615,6 +1648,7 @@ async fn notify_mcp_tool_call_skip(
     turn_context: &TurnContext,
     call_id: &str,
     invocation: McpInvocation,
+    mcp_app_resource_uri: Option<String>,
     message: String,
     already_started: bool,
 ) -> Result<CallToolResult, String> {
@@ -1622,6 +1656,7 @@ async fn notify_mcp_tool_call_skip(
         let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: call_id.to_string(),
             invocation: invocation.clone(),
+            mcp_app_resource_uri: mcp_app_resource_uri.clone(),
         });
         notify_mcp_tool_call_event(sess, turn_context, tool_call_begin_event).await;
     }
@@ -1629,6 +1664,7 @@ async fn notify_mcp_tool_call_skip(
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.to_string(),
         invocation,
+        mcp_app_resource_uri,
         duration: Duration::ZERO,
         result: Err(message.clone()),
     });

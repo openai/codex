@@ -750,11 +750,11 @@ impl MessageProcessor {
             && let ClientRequest::TurnStart { request_id, .. }
             | ClientRequest::TurnSteer { request_id, .. } = &codex_request
         {
-            self.analytics_events_client.track_request(
-                connection_id.0,
-                request_id.clone(),
-                codex_request.clone(),
-            );
+            // self.analytics_events_client.track_request(
+            //     connection_id.0,
+            //     request_id.clone(),
+            //     codex_request.clone(),
+            // );
         }
 
         let app_server_client_name = session.app_server_client_name().map(str::to_string);

@@ -15,6 +15,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -436,6 +437,19 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         })
         .await?;
 
+    let EventMsg::McpToolCallBegin(begin) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpToolCallBegin(_))
+    })
+    .await
+    else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(begin.call_id, "calendar-call-1");
+    assert_eq!(
+        begin.mcp_app_resource_uri.as_deref(),
+        Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
+    );
+
     let EventMsg::McpToolCallEnd(end) = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::McpToolCallEnd(_))
     })
@@ -444,6 +458,10 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         unreachable!("event guard guarantees McpToolCallEnd");
     };
     assert_eq!(end.call_id, "calendar-call-1");
+    assert_eq!(
+        end.mcp_app_resource_uri.as_deref(),
+        Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
+    );
     assert_eq!(
         end.invocation,
         McpInvocation {
