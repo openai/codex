@@ -204,7 +204,7 @@ mod tests {
         });
 
         let resolved = catalog
-            .resolve("mcp__observability__get_dashboard", None)
+            .resolve("mcp__observability__get_dashboard", /*namespace*/ None)
             .expect("tool should resolve");
         assert_eq!(resolved.server_name, "observability");
         assert_eq!(resolved.tool.name.as_ref(), "get_dashboard");
