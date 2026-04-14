@@ -20,6 +20,7 @@ use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
 use source::MarketplaceSource;
 use source::parse_marketplace_source;
+use source::stage_marketplace_source;
 use source::validate_marketplace_source_root;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,8 +121,7 @@ where
         })?;
     let staged_root = staged_root.keep();
 
-    let MarketplaceSource::Git { url, ref_name } = &source;
-    clone_source(url, ref_name.as_deref(), &sparse_paths, &staged_root)?;
+    stage_marketplace_source(&source, &sparse_paths, &staged_root, clone_source)?;
 
     let marketplace_name = validate_marketplace_source_root(&staged_root)?;
     if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -211,6 +211,36 @@ mod tests {
         assert!(config.contains("[marketplaces.debug]"));
         assert!(config.contains("source_type = \"git\""));
         assert!(config.contains("source = \"https://github.com/owner/repo.git\""));
+        Ok(())
+    }
+
+    #[test]
+    fn add_marketplace_sync_installs_local_directory_source_and_updates_config() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let source_root = TempDir::new()?;
+        write_marketplace_source(source_root.path(), "local copy")?;
+
+        let result = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            MarketplaceAddRequest {
+                source: source_root.path().display().to_string(),
+                ref_name: None,
+                sparse_paths: Vec::new(),
+            },
+            |_url, _ref_name, _sparse_paths, _destination| {
+                panic!("git cloner should not be called for local marketplace sources")
+            },
+        )?;
+
+        let expected_source = source_root.path().canonicalize()?.display().to_string();
+        assert_eq!(result.marketplace_name, "debug");
+        assert_eq!(result.source_display, expected_source);
+        assert!(!result.already_added);
+
+        let config = fs::read_to_string(codex_home.path().join(codex_config::CONFIG_TOML_FILE))?;
+        assert!(config.contains("[marketplaces.debug]"));
+        assert!(config.contains("source_type = \"path\""));
+        assert!(config.contains(&format!("source = \"{expected_source}\"")));
         Ok(())
     }
 
