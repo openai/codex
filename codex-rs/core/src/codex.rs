@@ -205,6 +205,7 @@ mod rollout_reconstruction_tests;
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
+    TurnAbortInProgress(Vec<UserInput>),
     ExpectedTurnMismatch { expected: String, actual: String },
     ActiveTurnNotSteerable { turn_kind: NonSteerableTurnKind },
     EmptyInput,
@@ -215,6 +216,10 @@ impl SteerInputError {
         match self {
             Self::NoActiveTurn(_) => ErrorEvent {
                 message: "no active turn to steer".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::TurnAbortInProgress(_) => ErrorEvent {
+                message: "turn abort is still in progress".to_string(),
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
             },
             Self::ExpectedTurnMismatch { expected, actual } => ErrorEvent {
@@ -4159,6 +4164,9 @@ impl Session {
         let Some(active_turn) = active.as_mut() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
+        if active_turn.is_aborting() {
+            return Err(SteerInputError::TurnAbortInProgress(input));
+        }
 
         let Some((active_turn_id, _)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
@@ -5016,6 +5024,21 @@ mod handlers {
             ),
             _ => unreachable!(),
         };
+
+        let abort_in_progress = {
+            let active = sess.active_turn.lock().await;
+            active
+                .as_ref()
+                .is_some_and(crate::state::ActiveTurn::is_aborting)
+        };
+        if abort_in_progress {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(SteerInputError::TurnAbortInProgress(items).to_error_event()),
+            })
+            .await;
+            return;
+        }
 
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.

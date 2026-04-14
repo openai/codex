@@ -25,6 +25,7 @@ use codex_protocol::protocol::TokenUsage;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
+    abort_in_progress: bool,
     pub(crate) tasks: IndexMap<String, RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
 }
@@ -53,6 +54,7 @@ pub(crate) enum MailboxDeliveryPhase {
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
+            abort_in_progress: false,
             tasks: IndexMap::new(),
             turn_state: Arc::new(Mutex::new(TurnState::default())),
         }
@@ -83,9 +85,21 @@ impl ActiveTurn {
         self.tasks.insert(sub_id, task);
     }
 
+    pub(crate) fn is_aborting(&self) -> bool {
+        self.abort_in_progress
+    }
+
     pub(crate) fn remove_task(&mut self, sub_id: &str) -> bool {
         self.tasks.swap_remove(sub_id);
         self.tasks.is_empty()
+    }
+
+    pub(crate) fn begin_abort(&mut self) -> Option<Vec<RunningTask>> {
+        if self.abort_in_progress {
+            return None;
+        }
+        self.abort_in_progress = true;
+        Some(self.drain_tasks())
     }
 
     pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
@@ -243,13 +257,5 @@ impl TurnState {
 
     pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
         self.granted_permissions.clone()
-    }
-}
-
-impl ActiveTurn {
-    /// Clear any pending approvals and input buffered for the current turn.
-    pub(crate) async fn clear_pending(&self) {
-        let mut ts = self.turn_state.lock().await;
-        ts.clear_pending();
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::codex::make_session_and_context_with_rx;
 use codex_network_proxy::BlockedRequestArgs;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -252,6 +253,60 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
         service.take_call_outcome("registration-1").await,
         Some(NetworkApprovalOutcome::DeniedByUser)
     );
+}
+
+#[tokio::test]
+async fn blocked_request_policy_does_not_override_interrupted_outcome() {
+    let service = NetworkApprovalService::default();
+    service
+        .register_call(
+            "registration-1".to_string(),
+            "turn-1".to_string(),
+            "curl http://example.com".to_string(),
+        )
+        .await;
+
+    service
+        .record_call_outcome("registration-1", NetworkApprovalOutcome::Interrupted)
+        .await;
+    service
+        .record_blocked_request(denied_blocked_request("example.com"))
+        .await;
+
+    assert_eq!(
+        service.take_call_outcome("registration-1").await,
+        Some(NetworkApprovalOutcome::Interrupted)
+    );
+}
+
+#[tokio::test]
+async fn finish_immediate_network_approval_returns_interrupted() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .services
+        .network_approval
+        .register_call(
+            "registration-1".to_string(),
+            "turn-1".to_string(),
+            "curl http://example.com".to_string(),
+        )
+        .await;
+    session
+        .services
+        .network_approval
+        .record_call_outcome("registration-1", NetworkApprovalOutcome::Interrupted)
+        .await;
+
+    let result = finish_immediate_network_approval(
+        &session,
+        ActiveNetworkApproval {
+            registration_id: Some("registration-1".to_string()),
+            mode: NetworkApprovalMode::Immediate,
+        },
+    )
+    .await;
+
+    assert!(matches!(result, Err(ToolError::Interrupted)));
 }
 
 #[tokio::test]

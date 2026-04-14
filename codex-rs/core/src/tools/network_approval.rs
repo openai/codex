@@ -118,6 +118,7 @@ enum PendingApprovalDecision {
 enum NetworkApprovalOutcome {
     DeniedByUser,
     DeniedByPolicy(String),
+    Interrupted,
 }
 
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
@@ -269,7 +270,7 @@ impl NetworkApprovalService {
         let mut call_outcomes = self.call_outcomes.lock().await;
         if matches!(
             call_outcomes.get(registration_id),
-            Some(NetworkApprovalOutcome::DeniedByUser)
+            Some(NetworkApprovalOutcome::DeniedByUser | NetworkApprovalOutcome::Interrupted)
         ) {
             return;
         }
@@ -404,11 +405,13 @@ impl NetworkApprovalService {
                 }
                 PermissionRequestDecision::Deny { message, interrupt } => {
                     if let Some(owner_call) = owner_call.as_ref() {
-                        self.record_call_outcome(
-                            &owner_call.registration_id,
-                            NetworkApprovalOutcome::DeniedByPolicy(message.clone()),
-                        )
-                        .await;
+                        let outcome = if interrupt {
+                            NetworkApprovalOutcome::Interrupted
+                        } else {
+                            NetworkApprovalOutcome::DeniedByPolicy(message.clone())
+                        };
+                        self.record_call_outcome(&owner_call.registration_id, outcome)
+                            .await;
                     }
                     if interrupt {
                         session.interrupt_task().await;
@@ -671,6 +674,7 @@ pub(crate) async fn finish_immediate_network_approval(
             Err(ToolError::Rejected("rejected by user".to_string()))
         }
         Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        Some(NetworkApprovalOutcome::Interrupted) => Err(ToolError::Interrupted),
         None => Ok(()),
     }
 }

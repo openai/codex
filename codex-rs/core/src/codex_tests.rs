@@ -4654,6 +4654,38 @@ impl SessionTask for NeverEndingTask {
     }
 }
 
+struct SlowAbortTask {
+    abort_started: Arc<tokio::sync::Notify>,
+    finish_abort: Arc<tokio::sync::Notify>,
+}
+
+impl SessionTask for SlowAbortTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.slow_abort"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        loop {
+            sleep(Duration::from_secs(60)).await;
+        }
+    }
+
+    async fn abort(&self, _session: Arc<SessionTaskContext>, _ctx: Arc<TurnContext>) {
+        self.abort_started.notify_waiters();
+        self.finish_abort.notified().await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
 async fn abort_regular_task_emits_turn_aborted_only() {
@@ -4719,6 +4751,67 @@ async fn abort_gracefully_emits_turn_aborted_only() {
     }
     // No extra events should be emitted after an abort.
     assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_keeps_active_turn_installed_until_abort_cleanup_finishes() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let abort_started = Arc::new(tokio::sync::Notify::new());
+    let finish_abort = Arc::new(tokio::sync::Notify::new());
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        SlowAbortTask {
+            abort_started: Arc::clone(&abort_started),
+            finish_abort: Arc::clone(&finish_abort),
+        },
+    )
+    .await;
+
+    sess.interrupt_task().await;
+    tokio::time::timeout(Duration::from_secs(2), abort_started.notified())
+        .await
+        .expect("timeout waiting for abort cleanup to start");
+
+    {
+        let active_turn = sess.active_turn.lock().await;
+        assert!(
+            active_turn
+                .as_ref()
+                .is_some_and(crate::state::ActiveTurn::is_aborting)
+        );
+    }
+
+    let err = sess
+        .steer_input(
+            vec![UserInput::Text {
+                text: "new prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            /*expected_turn_id*/ None,
+            /*responsesapi_client_metadata*/ None,
+        )
+        .await
+        .expect_err("interrupting turn should not accept new steer input");
+    assert!(matches!(err, SteerInputError::TurnAbortInProgress(_)));
+
+    finish_abort.notify_waiters();
+
+    let evt = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("timeout waiting for abort event")
+        .expect("event");
+    match evt.msg {
+        EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let active_turn = sess.active_turn.lock().await;
+    assert!(active_turn.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

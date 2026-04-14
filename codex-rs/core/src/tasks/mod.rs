@@ -261,6 +261,7 @@ impl Session {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
             debug_assert!(turn.tasks.is_empty());
+            debug_assert!(!turn.is_aborting());
             Arc::clone(&turn.turn_state)
         };
         {
@@ -277,6 +278,7 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
         debug_assert!(turn.tasks.is_empty());
+        debug_assert!(!turn.is_aborting());
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);
@@ -384,9 +386,16 @@ impl Session {
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         if let Some(mut active_turn) = self.take_active_turn().await {
-            let tasks = self.prepare_tasks_for_abort(&mut active_turn).await;
+            let turn_state = Arc::clone(&active_turn.turn_state);
+            let tasks = active_turn.drain_tasks();
+            self.prepare_tasks_for_abort(&tasks, &turn_state).await;
             for task in tasks {
-                self.handle_task_abort(task, reason.clone()).await;
+                self.handle_task_abort(
+                    task,
+                    reason.clone(),
+                    /*clear_active_turn_before_event*/ false,
+                )
+                .await;
             }
         }
         if reason == TurnAbortReason::Interrupted {
@@ -395,14 +404,24 @@ impl Session {
     }
 
     pub(crate) async fn request_task_abort(self: &Arc<Self>, reason: TurnAbortReason) {
-        let Some(mut active_turn) = self.take_active_turn().await else {
-            return;
+        let (tasks, turn_state) = {
+            let mut active = self.active_turn.lock().await;
+            let Some(active_turn) = active.as_mut() else {
+                return;
+            };
+            let Some(tasks) = active_turn.begin_abort() else {
+                return;
+            };
+            (tasks, Arc::clone(&active_turn.turn_state))
         };
-        let tasks = self.prepare_tasks_for_abort(&mut active_turn).await;
+        self.prepare_tasks_for_abort(&tasks, &turn_state).await;
         let session = Arc::clone(self);
         tokio::spawn(async move {
-            for task in tasks {
-                session.handle_task_abort(task, reason.clone()).await;
+            let num_tasks = tasks.len();
+            for (index, task) in tasks.into_iter().enumerate() {
+                session
+                    .handle_task_abort(task, reason.clone(), index + 1 == num_tasks)
+                    .await;
             }
             if reason == TurnAbortReason::Interrupted {
                 session.maybe_start_turn_for_pending_work().await;
@@ -564,9 +583,12 @@ impl Session {
         active.take()
     }
 
-    async fn prepare_tasks_for_abort(&self, active_turn: &mut ActiveTurn) -> Vec<RunningTask> {
-        let tasks = active_turn.drain_tasks();
-        for task in &tasks {
+    async fn prepare_tasks_for_abort(
+        &self,
+        tasks: &[RunningTask],
+        turn_state: &Arc<tokio::sync::Mutex<crate::state::TurnState>>,
+    ) {
+        for task in tasks {
             task.cancellation_token.cancel();
             task.turn_context
                 .turn_metadata_state
@@ -574,8 +596,8 @@ impl Session {
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-        active_turn.clear_pending().await;
-        tasks
+        let mut state = turn_state.lock().await;
+        state.clear_pending();
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {
@@ -593,7 +615,12 @@ impl Session {
         }
     }
 
-    async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
+    async fn handle_task_abort(
+        self: &Arc<Self>,
+        task: RunningTask,
+        reason: TurnAbortReason,
+        clear_active_turn_before_event: bool,
+    ) {
         let sub_id = task.turn_context.sub_id.clone();
         if !task.cancellation_token.is_cancelled() {
             trace!(task_kind = ?task.kind, sub_id, "aborting running task");
@@ -631,6 +658,13 @@ impl Session {
             // synchronously re-read the rollout on receipt of the abort event.
             if let Err(err) = self.flush_rollout().await {
                 warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
+            }
+        }
+
+        if clear_active_turn_before_event {
+            let mut active = self.active_turn.lock().await;
+            if active.as_ref().is_some_and(ActiveTurn::is_aborting) {
+                *active = None;
             }
         }
 
