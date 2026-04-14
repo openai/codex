@@ -2,6 +2,13 @@
 
 This crate is the first browser-facing seam for a Codex harness prototype.
 
+It now exposes two layers:
+
+- `EmbeddedHarness`: a pure Rust library API that downstream Rust/web repos can
+  depend on directly.
+- `BrowserCodex`: a `wasm_bindgen` adapter that preserves the current browser
+  demo API.
+
 It does not yet call `codex-core::run_turn` or `RegularTask::run`. Instead, it
 establishes the intended browser API shape:
 
@@ -22,6 +29,26 @@ long-lived API keys in the page origin.
 The next step is to replace the callback boundary with a real model transport
 and then wire the facade to the Codex turn loop after host services are
 injectable.
+
+## Library Boundary
+
+The intended downstream integration point is the pure Rust API:
+
+- `EmbeddedHarness`
+- `ResponsesClient`
+- `ToolExecutor`
+- `EventSink`
+- `HarnessConfig`
+
+That allows downstream webapps to:
+
+- depend on `codex-wasm-harness` from a Git branch or local path;
+- supply their own browser/runtime implementations for transport, tools, event
+  rendering, or persistence; and
+- keep app-specific browser glue out of the Codex repo.
+
+The current `BrowserCodex` type remains a thin compatibility wrapper around
+that library API so the demo page keeps working.
 
 The `real-core` feature is an explicit compile probe for depending on
 `codex-core`. It currently does not build for `wasm32-unknown-unknown`; the

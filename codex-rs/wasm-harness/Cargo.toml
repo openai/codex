@@ -16,6 +16,7 @@ workspace = true
 real-core = ["dep:codex-core"]
 
 [dependencies]
+async-trait = { workspace = true }
 codex-core = { workspace = true, optional = true }
 js-sys = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -32,3 +33,4 @@ web-sys = { workspace = true, features = [
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

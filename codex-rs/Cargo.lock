@@ -2927,11 +2927,13 @@ dependencies = [
 name = "codex-wasm-harness"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-core",
  "js-sys",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
