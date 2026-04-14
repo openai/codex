@@ -11,6 +11,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::approvals::GuardianRiskLevel;
 use codex_protocol::mcp::RequestId as McpRequestId;
 #[cfg(test)]
 use codex_protocol::protocol::Op;
@@ -166,7 +167,9 @@ pub(crate) struct McpServerElicitationFormRequest {
     thread_id: ThreadId,
     server_name: String,
     request_id: McpRequestId,
+    risk_level: Option<GuardianRiskLevel>,
     message: String,
+    subtitle: Option<String>,
     approval_display_params: Vec<McpToolApprovalDisplayParam>,
     response_mode: McpServerElicitationResponseMode,
     fields: Vec<McpServerElicitationField>,
@@ -264,6 +267,8 @@ impl McpServerElicitationFormRequest {
         message: String,
         requested_schema: Value,
     ) -> Option<Self> {
+        let risk_level = parse_elicitation_risk_level(meta.as_ref());
+        let subtitle = parse_elicitation_subtitle(meta.as_ref());
         let tool_suggestion = parse_tool_suggestion_request(meta.as_ref());
         let is_tool_approval = meta
             .as_ref()
@@ -367,7 +372,9 @@ impl McpServerElicitationFormRequest {
             thread_id,
             server_name,
             request_id,
+            risk_level,
             message,
+            subtitle,
             approval_display_params,
             response_mode,
             fields,
@@ -390,6 +397,28 @@ impl McpServerElicitationFormRequest {
     pub(crate) fn request_id(&self) -> &McpRequestId {
         &self.request_id
     }
+}
+
+fn parse_elicitation_risk_level(meta: Option<&Value>) -> Option<GuardianRiskLevel> {
+    let meta = meta?.as_object()?;
+    let value = meta.get("riskLevel")?.as_str()?;
+    match value {
+        "low" => Some(GuardianRiskLevel::Low),
+        "medium" => Some(GuardianRiskLevel::Medium),
+        "high" => Some(GuardianRiskLevel::High),
+        "critical" => Some(GuardianRiskLevel::Critical),
+        _ => None,
+    }
+}
+
+fn parse_elicitation_subtitle(meta: Option<&Value>) -> Option<String> {
+    meta?
+        .as_object()?
+        .get("subtitle")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|subtitle| !subtitle.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionRequest> {
@@ -946,25 +975,78 @@ impl McpServerElicitationOverlay {
             .collect()
     }
 
-    fn wrapped_prompt_lines(&self, width: u16) -> Vec<String> {
-        textwrap::wrap(&self.current_prompt_text(), width.max(1) as usize)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect()
+    fn wrapped_prompt_lines(
+        &self,
+        width: u16,
+        answered: bool,
+        is_high_risk: bool,
+    ) -> Vec<Line<'static>> {
+        let wrap_width = width.max(1) as usize;
+        let mut lines = Vec::new();
+        let mut prefixed_high_risk_message = false;
+
+        if let Some(message) = self.request_message() {
+            for line in textwrap::wrap(message.as_str(), wrap_width) {
+                let text = if is_high_risk && !prefixed_high_risk_message {
+                    prefixed_high_risk_message = true;
+                    format!("⚠ {line}")
+                } else {
+                    line.to_string()
+                };
+                let line = if is_high_risk {
+                    Line::from(text).red()
+                } else if answered {
+                    Line::from(text)
+                } else {
+                    Line::from(text).cyan()
+                };
+                lines.push(line);
+            }
+        }
+
+        if let Some(subtitle) = self.request_subtitle() {
+            lines.extend(
+                textwrap::wrap(subtitle, wrap_width)
+                    .into_iter()
+                    .map(|line| Line::from(line.to_string())),
+            );
+        }
+
+        if let Some(field_prompt) = self.field_prompt_text() {
+            if !lines.is_empty() {
+                lines.push(Line::from(String::new()));
+            }
+            for line in textwrap::wrap(field_prompt.as_str(), wrap_width) {
+                let line = if answered {
+                    Line::from(line.to_string())
+                } else {
+                    Line::from(line.to_string()).cyan()
+                };
+                lines.push(line);
+            }
+        }
+
+        lines
     }
 
-    fn current_prompt_text(&self) -> String {
+    fn request_message(&self) -> Option<String> {
         let request_message = format_tool_approval_display_message(
             &self.request.message,
             &self.request.approval_display_params,
         );
-        let Some(field) = self.current_field() else {
-            return request_message;
-        };
-        let mut sections = Vec::new();
-        if !request_message.trim().is_empty() {
-            sections.push(request_message);
-        }
+        (!request_message.trim().is_empty()).then_some(request_message)
+    }
+
+    fn request_subtitle(&self) -> Option<&str> {
+        self.request
+            .subtitle
+            .as_deref()
+            .map(str::trim)
+            .filter(|subtitle| !subtitle.is_empty())
+    }
+
+    fn field_prompt_text(&self) -> Option<String> {
+        let field = self.current_field()?;
         let field_prompt = if field.label.trim().is_empty()
             || field.prompt.trim().is_empty()
             || field.label == field.prompt
@@ -977,10 +1059,14 @@ impl McpServerElicitationOverlay {
         } else {
             format!("{}\n{}", field.label, field.prompt)
         };
-        if !field_prompt.trim().is_empty() {
-            sections.push(field_prompt);
-        }
-        sections.join("\n\n")
+        (!field_prompt.trim().is_empty()).then_some(field_prompt)
+    }
+
+    fn shows_high_risk_warning(&self) -> bool {
+        matches!(
+            self.request.risk_level,
+            Some(GuardianRiskLevel::High) | Some(GuardianRiskLevel::Critical)
+        )
     }
 
     fn footer_tips(&self) -> Vec<FooterTip> {
@@ -1268,17 +1354,17 @@ impl McpServerElicitationOverlay {
             return;
         }
         let answered = self.is_current_field_answered();
-        for (offset, line) in self.wrapped_prompt_lines(area.width).iter().enumerate() {
+        let is_high_risk = self.shows_high_risk_warning();
+        for (offset, line) in self
+            .wrapped_prompt_lines(area.width, answered, is_high_risk)
+            .iter()
+            .enumerate()
+        {
             let y = area.y.saturating_add(offset as u16);
             if y >= area.y + area.height {
                 break;
             }
-            let line = if answered {
-                Line::from(line.clone())
-            } else {
-                Line::from(line.clone()).cyan()
-            };
-            Paragraph::new(line).render(
+            Paragraph::new(line.clone()).render(
                 Rect {
                     x: area.x,
                     y,
@@ -1371,8 +1457,13 @@ impl Renderable for McpServerElicitationOverlay {
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
+        let answered = self.is_current_field_answered();
+        let is_high_risk = self.shows_high_risk_warning();
         let height = 1u16
-            .saturating_add(self.wrapped_prompt_lines(inner_width).len() as u16)
+            .saturating_add(
+                self.wrapped_prompt_lines(inner_width, answered, is_high_risk)
+                    .len() as u16,
+            )
             .saturating_add(self.input_height(inner_width))
             .saturating_add(self.footer_tip_lines(inner_width).len() as u16)
             .saturating_add(menu_surface_padding_height());
@@ -1387,7 +1478,9 @@ impl Renderable for McpServerElicitationOverlay {
         if content_area.width == 0 || content_area.height == 0 {
             return;
         }
-        let prompt_lines = self.wrapped_prompt_lines(content_area.width);
+        let answered = self.is_current_field_answered();
+        let is_high_risk = self.shows_high_risk_warning();
+        let prompt_lines = self.wrapped_prompt_lines(content_area.width, answered, is_high_risk);
         let footer_lines = self.footer_tip_lines(content_area.width);
         let mut remaining = content_area.height;
 
@@ -1461,7 +1554,9 @@ impl Renderable for McpServerElicitationOverlay {
         if content_area.width == 0 || content_area.height == 0 {
             return None;
         }
-        let prompt_lines = self.wrapped_prompt_lines(content_area.width);
+        let answered = self.is_current_field_answered();
+        let is_high_risk = self.shows_high_risk_warning();
+        let prompt_lines = self.wrapped_prompt_lines(content_area.width, answered, is_high_risk);
         let footer_lines = self.footer_tip_lines(content_area.width);
         let mut remaining = content_area.height;
         remaining = remaining.saturating_sub(u16::from(remaining > 0));
@@ -1691,6 +1786,7 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::render::renderable::Renderable;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Color;
     use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1704,12 +1800,46 @@ mod tests {
         requested_schema: Value,
         meta: Option<Value>,
     ) -> ElicitationRequestEvent {
+        form_request_with_details(
+            message,
+            /*subtitle*/ None,
+            requested_schema,
+            meta,
+            /*risk_level*/ None,
+        )
+    }
+
+    fn form_request_with_details(
+        message: &str,
+        subtitle: Option<&str>,
+        requested_schema: Value,
+        meta: Option<Value>,
+        risk_level: Option<GuardianRiskLevel>,
+    ) -> ElicitationRequestEvent {
+        let mut meta = meta
+            .and_then(|meta| meta.as_object().cloned())
+            .unwrap_or_default();
+        if let Some(subtitle) = subtitle {
+            meta.insert("subtitle".to_string(), Value::String(subtitle.to_string()));
+        }
+        if let Some(risk_level) = risk_level {
+            let risk_level = match risk_level {
+                GuardianRiskLevel::Low => "low",
+                GuardianRiskLevel::Medium => "medium",
+                GuardianRiskLevel::High => "high",
+                GuardianRiskLevel::Critical => "critical",
+            };
+            meta.insert(
+                "riskLevel".to_string(),
+                Value::String(risk_level.to_string()),
+            );
+        }
         ElicitationRequestEvent {
             turn_id: Some("turn-1".to_string()),
             server_name: "server-1".to_string(),
             id: McpRequestId::String("request-1".to_string()),
             request: ElicitationRequest::Form {
-                meta,
+                meta: (!meta.is_empty()).then_some(Value::Object(meta)),
                 message: message.to_string(),
                 requested_schema,
             },
@@ -1813,7 +1943,9 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
+                risk_level: None,
                 message: "Allow this request?".to_string(),
+                subtitle: None,
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::FormContent,
                 fields: vec![McpServerElicitationField {
@@ -1879,7 +2011,9 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
+                risk_level: None,
                 message: "Allow this request?".to_string(),
+                subtitle: None,
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::ApprovalAction,
                 fields: vec![McpServerElicitationField {
@@ -1936,7 +2070,9 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
+                risk_level: None,
                 message: "Allow this request?".to_string(),
+                subtitle: None,
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::ApprovalAction,
                 fields: vec![McpServerElicitationField {
@@ -2474,6 +2610,31 @@ mod tests {
     }
 
     #[test]
+    fn message_only_form_with_subtitle_snapshot() {
+        let (tx, _rx) = test_sender();
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request_with_details(
+                "Allow Codex to use Terminal?",
+                Some("This will open your computer up to new risks like data loss and theft."),
+                empty_object_schema(),
+                /*meta*/ None,
+                /*risk_level*/ None,
+            ),
+        )
+        .expect("expected message-only form");
+        let overlay = McpServerElicitationOverlay::new(
+            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+
+        insta::assert_snapshot!(
+            "mcp_server_elicitation_message_only_form_with_subtitle",
+            render_snapshot(&overlay, Rect::new(0, 0, 120, 16))
+        );
+    }
+
+    #[test]
     fn approval_form_tool_approval_with_persist_options_snapshot() {
         let (tx, _rx) = test_sender();
         let request = McpServerElicitationFormRequest::from_event(
@@ -2554,5 +2715,39 @@ mod tests {
             "mcp_server_elicitation_approval_form_with_param_summary",
             render_snapshot(&overlay, Rect::new(0, 0, 120, 16))
         );
+    }
+
+    #[test]
+    fn high_risk_prompt_renders_in_red() {
+        let (tx, _rx) = test_sender();
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request_with_details(
+                "Allow Codex to use Terminal?",
+                Some("This will open your computer up to new risks like data loss and theft."),
+                empty_object_schema(),
+                tool_approval_meta(
+                    &[APPROVAL_PERSIST_ALWAYS_VALUE],
+                    /*tool_params*/ None,
+                    /*tool_params_display*/ None,
+                ),
+                Some(GuardianRiskLevel::High),
+            ),
+        )
+        .expect("expected approval fallback");
+        let overlay = McpServerElicitationOverlay::new(
+            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+        let area = Rect::new(0, 0, 120, 16);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        assert_eq!(buf[(2, 2)].symbol(), "⚠");
+        assert_eq!(buf[(2, 2)].fg, Color::Red);
+        assert_eq!(buf[(4, 2)].symbol(), "A");
+        assert_eq!(buf[(4, 2)].fg, Color::Red);
+        assert_eq!(buf[(2, 3)].symbol(), "T");
+        assert_ne!(buf[(2, 3)].fg, Color::Red);
     }
 }

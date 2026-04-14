@@ -1,0 +1,20 @@
+---
+source: tui/src/bottom_pane/mcp_server_elicitation.rs
+assertion_line: 2619
+expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
+---
+                                                                                                                        
+  Field 1/1                                                                                                             
+  Allow Codex to use Terminal?                                                                                          
+  This will open your computer up to new risks like data loss and theft.                                                
+  › 1. Allow   Allow this request and continue.                                                                         
+    2. Deny    Decline this request and continue.                                                                       
+    3. Cancel  Cancel this request                                                                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  enter to submit | esc to cancel
