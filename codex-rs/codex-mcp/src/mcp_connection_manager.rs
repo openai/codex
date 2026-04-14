@@ -659,6 +659,27 @@ pub struct SandboxState {
     pub use_legacy_landlock: bool,
 }
 
+pub fn augment_request_meta_with_sandbox_state(
+    mut meta: Option<JsonValue>,
+    sandbox_state: SandboxState,
+) -> serde_json::Result<Option<JsonValue>> {
+    let sandbox_state = serde_json::to_value(sandbox_state)?;
+
+    match meta.as_mut() {
+        Some(JsonValue::Object(map)) => {
+            map.insert(MCP_SANDBOX_STATE_META_CAPABILITY.to_string(), sandbox_state);
+        }
+        Some(_) => {}
+        None => {
+            let mut map = Map::new();
+            map.insert(MCP_SANDBOX_STATE_META_CAPABILITY.to_string(), sandbox_state);
+            meta = Some(JsonValue::Object(map));
+        }
+    }
+
+    Ok(meta)
+}
+
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,

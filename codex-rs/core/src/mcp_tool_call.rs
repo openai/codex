@@ -489,7 +489,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     sess: &Session,
     turn_context: &TurnContext,
     server: &str,
-    mut meta: Option<serde_json::Value>,
+    meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     let supports_sandbox_state_meta = sess
         .services
@@ -503,32 +503,17 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
-    let sandbox_state = serde_json::to_value(SandboxState {
+    let sandbox_state = SandboxState {
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: turn_context.cwd.to_path_buf(),
         use_legacy_landlock: turn_context.features.use_legacy_landlock(),
-    })?;
+    };
 
-    match meta.as_mut() {
-        Some(serde_json::Value::Object(map)) => {
-            map.insert(
-                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
-                sandbox_state,
-            );
-        }
-        Some(_) => {}
-        None => {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
-                sandbox_state,
-            );
-            meta = Some(serde_json::Value::Object(map));
-        }
-    }
-
-    Ok(meta)
+    Ok(codex_mcp::augment_request_meta_with_sandbox_state(
+        meta,
+        sandbox_state,
+    )?)
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
