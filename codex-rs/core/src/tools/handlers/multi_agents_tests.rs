@@ -1492,33 +1492,24 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    let worker_path = AgentPath::try_from("/root/worker").expect("agent path");
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot worker",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn worker");
     let agent_id = session
         .services
         .agent_control
-        .spawn_agent_with_metadata(
-            (*turn.config).clone(),
-            Op::InterAgentCommunication {
-                communication: InterAgentCommunication::new(
-                    AgentPath::root(),
-                    worker_path.clone(),
-                    Vec::new(),
-                    "boot worker".to_string(),
-                    /*trigger_turn*/ false,
-                ),
-            },
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root.thread_id,
-                depth: 1,
-                agent_path: Some(worker_path),
-                agent_nickname: Some("worker".to_string()),
-                agent_role: None,
-            })),
-            crate::agent::control::SpawnAgentOptions::default(),
-        )
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
         .await
-        .expect("worker spawn should succeed")
-        .thread_id;
+        .expect("worker should resolve");
     let thread = manager
         .get_thread(agent_id)
         .await
