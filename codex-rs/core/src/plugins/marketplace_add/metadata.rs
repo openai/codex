@@ -189,8 +189,14 @@ mod tests {
 
     #[test]
     fn utc_timestamp_formats_unix_epoch_as_rfc3339_utc() {
-        assert_eq!(format_utc_timestamp(0), "1970-01-01T00:00:00Z");
-        assert_eq!(format_utc_timestamp(1_775_779_200), "2026-04-10T00:00:00Z");
+        assert_eq!(
+            format_utc_timestamp(/*seconds_since_epoch*/ 0),
+            "1970-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            format_utc_timestamp(/*seconds_since_epoch*/ 1_775_779_200),
+            "2026-04-10T00:00:00Z"
+        );
     }
 
     #[test]

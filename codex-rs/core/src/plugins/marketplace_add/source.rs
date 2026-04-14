@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn github_shorthand_parses_ref_suffix() {
         assert_eq!(
-            parse_marketplace_source("owner/repo@main", None).unwrap(),
+            parse_marketplace_source("owner/repo@main", /*explicit_ref*/ None).unwrap(),
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: Some("main".to_string()),
@@ -149,7 +149,11 @@ mod tests {
     #[test]
     fn git_url_parses_fragment_ref() {
         assert_eq!(
-            parse_marketplace_source("https://example.com/team/repo.git#v1", None).unwrap(),
+            parse_marketplace_source(
+                "https://example.com/team/repo.git#v1",
+                /*explicit_ref*/ None
+            )
+            .unwrap(),
             MarketplaceSource::Git {
                 url: "https://example.com/team/repo.git".to_string(),
                 ref_name: Some("v1".to_string()),
@@ -170,8 +174,12 @@ mod tests {
 
     #[test]
     fn github_shorthand_and_git_url_normalize_to_same_source() {
-        let shorthand = parse_marketplace_source("owner/repo", None).unwrap();
-        let git_url = parse_marketplace_source("https://github.com/owner/repo.git", None).unwrap();
+        let shorthand = parse_marketplace_source("owner/repo", /*explicit_ref*/ None).unwrap();
+        let git_url = parse_marketplace_source(
+            "https://github.com/owner/repo.git",
+            /*explicit_ref*/ None,
+        )
+        .unwrap();
 
         assert_eq!(shorthand, git_url);
         assert_eq!(
@@ -186,7 +194,8 @@ mod tests {
     #[test]
     fn github_url_with_trailing_slash_normalizes_without_extra_path_segment() {
         assert_eq!(
-            parse_marketplace_source("https://github.com/owner/repo/", None).unwrap(),
+            parse_marketplace_source("https://github.com/owner/repo/", /*explicit_ref*/ None)
+                .unwrap(),
             MarketplaceSource::Git {
                 url: "https://github.com/owner/repo.git".to_string(),
                 ref_name: None,
@@ -197,7 +206,8 @@ mod tests {
     #[test]
     fn non_github_https_source_parses_as_git_url() {
         assert_eq!(
-            parse_marketplace_source("https://gitlab.com/owner/repo", None).unwrap(),
+            parse_marketplace_source("https://gitlab.com/owner/repo", /*explicit_ref*/ None)
+                .unwrap(),
             MarketplaceSource::Git {
                 url: "https://gitlab.com/owner/repo".to_string(),
                 ref_name: None,
@@ -207,7 +217,9 @@ mod tests {
 
     #[test]
     fn file_url_source_is_rejected() {
-        let err = parse_marketplace_source("file:///tmp/marketplace.git", None).unwrap_err();
+        let err =
+            parse_marketplace_source("file:///tmp/marketplace.git", /*explicit_ref*/ None)
+                .unwrap_err();
 
         assert!(
             err.to_string()
@@ -218,7 +230,7 @@ mod tests {
 
     #[test]
     fn parse_marketplace_source_rejects_local_directory_source() {
-        let err = parse_marketplace_source("./marketplace", None).unwrap_err();
+        let err = parse_marketplace_source("./marketplace", /*explicit_ref*/ None).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -229,7 +241,11 @@ mod tests {
     #[test]
     fn ssh_url_parses_as_git_url() {
         assert_eq!(
-            parse_marketplace_source("ssh://git@github.com/owner/repo.git#main", None).unwrap(),
+            parse_marketplace_source(
+                "ssh://git@github.com/owner/repo.git#main",
+                /*explicit_ref*/ None,
+            )
+            .unwrap(),
             MarketplaceSource::Git {
                 url: "ssh://git@github.com/owner/repo.git".to_string(),
                 ref_name: Some("main".to_string()),
