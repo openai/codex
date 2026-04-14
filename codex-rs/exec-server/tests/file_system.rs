@@ -293,6 +293,37 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_write_file_reports_missing_parent(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let missing_parent_path = tmp.path().join("missing").join("note.txt");
+
+    let error = match file_system
+        .write_file(
+            &absolute_path(missing_parent_path.clone()),
+            b"hello from trait".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await
+    {
+        Ok(()) => anyhow::bail!("write should fail when parent directory is absent"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::NotFound,
+        "mode={use_remote}"
+    );
+    assert!(!missing_parent_path.exists(), "mode={use_remote}");
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_copy_rejects_directory_without_recursive(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
