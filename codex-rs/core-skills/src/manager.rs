@@ -131,13 +131,6 @@ impl SkillsManager {
         force_reload: bool,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        if fs.is_some()
-            && !force_reload
-            && let Some(outcome) = self.cached_outcome_for_cwd(&input.cwd)
-        {
-            return outcome;
-        }
-
         self.skills_for_cwd_with_extra_user_roots(input, force_reload, &[], fs)
             .await
     }
@@ -149,8 +142,8 @@ impl SkillsManager {
         extra_user_roots: &[AbsolutePathBuf],
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        let has_fs = fs.is_some();
-        if has_fs
+        let use_cwd_cache = fs.is_some();
+        if use_cwd_cache
             && !force_reload
             && let Some(outcome) = self.cached_outcome_for_cwd(&input.cwd)
         {
@@ -180,7 +173,7 @@ impl SkillsManager {
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        if has_fs {
+        if use_cwd_cache {
             let mut cache = self
                 .cache_by_cwd
                 .write()

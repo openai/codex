@@ -932,7 +932,7 @@ impl PluginsManager {
         })
     }
 
-    pub fn read_plugin_for_config(
+    pub async fn read_plugin_for_config(
         &self,
         config: &Config,
         request: &PluginReadRequest,
@@ -960,19 +960,21 @@ impl PluginsManager {
         )?;
         let plugin_key = plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let plugin = self.read_plugin_detail_for_marketplace_plugin(
-            config,
-            &marketplace.name,
-            ConfiguredMarketplacePlugin {
-                id: plugin_key.clone(),
-                name: plugin.name,
-                source: plugin.source,
-                policy: plugin.policy,
-                interface: plugin.interface,
-                installed: installed_plugins.contains(&plugin_key),
-                enabled: enabled_plugins.contains(&plugin_key),
-            },
-        )?;
+        let plugin = self
+            .read_plugin_detail_for_marketplace_plugin(
+                config,
+                &marketplace.name,
+                ConfiguredMarketplacePlugin {
+                    id: plugin_key.clone(),
+                    name: plugin.name,
+                    source: plugin.source,
+                    policy: plugin.policy,
+                    interface: plugin.interface,
+                    installed: installed_plugins.contains(&plugin_key),
+                    enabled: enabled_plugins.contains(&plugin_key),
+                },
+            )
+            .await?;
 
         Ok(PluginReadOutcome {
             marketplace_name: if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -985,7 +987,7 @@ impl PluginsManager {
         })
     }
 
-    pub(crate) fn read_plugin_detail_for_marketplace_plugin(
+    pub(crate) async fn read_plugin_detail_for_marketplace_plugin(
         &self,
         config: &Config,
         marketplace_name: &str,
@@ -1026,7 +1028,8 @@ impl PluginsManager {
             manifest_paths,
             self.restriction_product,
             &skill_config_rules,
-        );
+        )
+        .await;
         let apps = load_plugin_apps(source_path.as_path());
         let mcp_config_paths = plugin_mcp_config_paths(source_path.as_path(), manifest_paths);
         let mut mcp_server_names = Vec::new();
@@ -1378,9 +1381,8 @@ struct PluginAppConfig {
 pub(crate) fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     store: &PluginStore,
-    restriction_product: Option<Product>,
+    _restriction_product: Option<Product>,
 ) -> PluginLoadOutcome {
-    let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     let mut configured_plugins: Vec<_> = configured_plugins_from_stack(config_layer_stack)
         .into_iter()
         .collect();
@@ -1389,13 +1391,7 @@ pub(crate) fn load_plugins_from_layer_stack(
     let mut plugins = Vec::with_capacity(configured_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
     for (configured_name, plugin) in configured_plugins {
-        let loaded_plugin = load_plugin(
-            configured_name.clone(),
-            &plugin,
-            store,
-            restriction_product,
-            &skill_config_rules,
-        );
+        let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store);
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())
@@ -1664,13 +1660,7 @@ fn non_curated_plugin_ids_from_config_keys(
     configured_non_curated_plugin_ids
 }
 
-fn load_plugin(
-    config_name: String,
-    plugin: &PluginConfig,
-    store: &PluginStore,
-    restriction_product: Option<Product>,
-    skill_config_rules: &SkillConfigRules,
-) -> LoadedPlugin {
+fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) -> LoadedPlugin {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
         .as_ref()
@@ -1735,15 +1725,7 @@ fn load_plugin(
         .or_else(|| Some(manifest.name.clone()));
     loaded_plugin.manifest_description = manifest.description.clone();
     loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
-    let resolved_skills = load_plugin_skills(
-        &plugin_root,
-        manifest_paths,
-        restriction_product,
-        skill_config_rules,
-    );
-    let has_enabled_skills = resolved_skills.has_enabled_skills();
-    loaded_plugin.disabled_skill_paths = resolved_skills.disabled_skill_paths;
-    loaded_plugin.has_enabled_skills = has_enabled_skills;
+    loaded_plugin.has_enabled_skills = !loaded_plugin.skill_roots.is_empty();
     let mut mcp_servers = HashMap::new();
     for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path);
@@ -1766,21 +1748,9 @@ fn load_plugin(
 struct ResolvedPluginSkills {
     skills: Vec<SkillMetadata>,
     disabled_skill_paths: HashSet<AbsolutePathBuf>,
-    had_errors: bool,
 }
 
-impl ResolvedPluginSkills {
-    fn has_enabled_skills(&self) -> bool {
-        // Keep the plugin visible in capability summaries if skill loading was partial.
-        self.had_errors
-            || self
-                .skills
-                .iter()
-                .any(|skill| !self.disabled_skill_paths.contains(&skill.path_to_skills_md))
-    }
-}
-
-fn load_plugin_skills(
+async fn load_plugin_skills(
     plugin_root: &AbsolutePathBuf,
     manifest_paths: &PluginManifestPaths,
     restriction_product: Option<Product>,
@@ -1794,8 +1764,7 @@ fn load_plugin_skills(
             file_system: Arc::clone(&LOCAL_FS),
         })
         .collect::<Vec<_>>();
-    let outcome = load_skills_from_roots_blocking(roots);
-    let had_errors = !outcome.errors.is_empty();
+    let outcome = load_skills_from_roots(roots).await;
     let skills = outcome
         .skills
         .into_iter()
@@ -1806,31 +1775,6 @@ fn load_plugin_skills(
     ResolvedPluginSkills {
         skills,
         disabled_skill_paths,
-        had_errors,
-    }
-}
-
-fn load_skills_from_roots_blocking(roots: Vec<SkillRoot>) -> crate::SkillLoadOutcome {
-    let handle = std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                warn!("failed to create runtime for plugin skill loading: {err}");
-                return crate::SkillLoadOutcome::default();
-            }
-        };
-        runtime.block_on(load_skills_from_roots(roots))
-    });
-
-    match handle.join() {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            warn!("plugin skill loading thread panicked");
-            crate::SkillLoadOutcome::default()
-        }
     }
 }
 

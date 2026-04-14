@@ -6525,24 +6525,14 @@ impl CodexMessageProcessor {
             plugin_name,
             marketplace_path,
         };
-        let config_for_read = config.clone();
-        let outcome = match tokio::task::spawn_blocking(move || {
-            plugins_manager.read_plugin_for_config(&config_for_read, &request)
-        })
-        .await
+        let outcome = match plugins_manager
+            .read_plugin_for_config(&config, &request)
+            .await
         {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(err)) => {
+            Ok(outcome) => outcome,
+            Err(err) => {
                 self.send_marketplace_error(request_id, err, "read plugin details")
                     .await;
-                return;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to read plugin details: {err}"),
-                )
-                .await;
                 return;
             }
         };

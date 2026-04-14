@@ -217,7 +217,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
 }
 
 #[test]
-fn load_plugins_resolves_disabled_skill_names_against_loaded_plugin_skills() {
+fn load_plugins_does_not_parse_skills_to_resolve_disabled_skill_names() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
         .path()
@@ -245,16 +245,13 @@ enabled = false
 enabled = true
 "#;
     let outcome = load_plugins_from_config(config_toml, codex_home.path());
-    let skill_path = dunce::canonicalize(skill_path)
-        .expect("skill path should canonicalize")
-        .abs();
 
+    assert!(outcome.plugins()[0].disabled_skill_paths.is_empty());
+    assert!(outcome.plugins()[0].has_enabled_skills);
     assert_eq!(
-        outcome.plugins()[0].disabled_skill_paths,
-        HashSet::from([skill_path])
+        outcome.effective_skill_roots(),
+        vec![plugin_root.join("skills").abs()]
     );
-    assert!(!outcome.plugins()[0].has_enabled_skills);
-    assert!(outcome.capability_summaries().is_empty());
 }
 
 #[test]
@@ -1346,6 +1343,7 @@ enabled = true
                 marketplace_path,
             },
         )
+        .await
         .unwrap_err();
 
     assert!(matches!(err, MarketplaceError::PluginsDisabled));
@@ -1410,6 +1408,7 @@ enabled = false
                 .unwrap(),
             },
         )
+        .await
         .unwrap();
 
     assert!(outcome.plugin.disabled_skill_paths.is_empty());
