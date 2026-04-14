@@ -288,4 +288,65 @@ mod tests {
 
         assert_eq!(values, vec![3]);
     }
+
+    #[tokio::test]
+    async fn shutdown_of_live_gate_skips_already_queued_requests() {
+        let queues = RequestSerializationQueues::default();
+        let key = RequestSerializationQueueKey::Global("test");
+        let live_gate = gate();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (blocked_tx, blocked_rx) = oneshot::channel::<()>();
+
+        {
+            let tx = tx.clone();
+            queues
+                .enqueue(
+                    key.clone(),
+                    QueuedInitializedRequest::new(Arc::clone(&live_gate), async move {
+                        tx.send(1).expect("receiver should be open");
+                        let _ = blocked_rx.await;
+                    }),
+                )
+                .await;
+        }
+        {
+            let tx = tx.clone();
+            queues
+                .enqueue(
+                    key,
+                    QueuedInitializedRequest::new(live_gate.clone(), async move {
+                        tx.send(2).expect("receiver should be open");
+                    }),
+                )
+                .await;
+        }
+        drop(tx);
+
+        assert_eq!(
+            timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .expect("timed out waiting for first request"),
+            Some(1)
+        );
+
+        let gate_for_shutdown = Arc::clone(&live_gate);
+        let shutdown_task = tokio::spawn(async move {
+            gate_for_shutdown.shutdown().await;
+        });
+
+        timeout(Duration::from_millis(50), shutdown_task)
+            .await
+            .expect_err("shutdown should wait for the running request");
+
+        blocked_tx
+            .send(())
+            .expect("blocked request should still be waiting");
+
+        assert_eq!(
+            timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .expect("timed out waiting for queue to drain"),
+            None
+        );
+    }
 }
