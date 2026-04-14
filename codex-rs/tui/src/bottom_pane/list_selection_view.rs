@@ -31,6 +31,9 @@ use super::selection_popup_common::measure_rows_height_with_col_width_mode;
 use super::selection_popup_common::render_rows;
 use super::selection_popup_common::render_rows_stable_col_widths;
 use super::selection_popup_common::render_rows_with_col_width_mode;
+use super::selection_tabs::SelectionTab;
+use super::selection_tabs::render_tab_bar;
+use super::selection_tabs::tab_bar_height;
 use unicode_width::UnicodeWidthStr;
 
 /// Minimum list width (in content columns) required before the side-by-side
@@ -142,6 +145,8 @@ pub(crate) struct SelectionViewParams {
     pub footer_note: Option<Line<'static>>,
     pub footer_hint: Option<Line<'static>>,
     pub items: Vec<SelectionItem>,
+    pub tabs: Vec<SelectionTab>,
+    pub initial_tab_id: Option<String>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub col_width_mode: ColumnWidthMode,
@@ -184,6 +189,8 @@ impl Default for SelectionViewParams {
             footer_note: None,
             footer_hint: None,
             items: Vec::new(),
+            tabs: Vec::new(),
+            initial_tab_id: None,
             is_searchable: false,
             search_placeholder: None,
             col_width_mode: ColumnWidthMode::AutoVisible,
@@ -210,6 +217,8 @@ pub(crate) struct ListSelectionView {
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
     items: Vec<SelectionItem>,
+    tabs: Vec<SelectionTab>,
+    active_tab_idx: Option<usize>,
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
@@ -253,11 +262,24 @@ impl ListSelectionView {
                 Box::new(subtitle),
             ]));
         }
+        let active_tab_idx = params.initial_tab_id.as_ref().and_then(|initial_tab_id| {
+            params
+                .tabs
+                .iter()
+                .position(|tab| tab.id.as_str() == initial_tab_id.as_str())
+        });
+        let active_tab_idx = if params.tabs.is_empty() {
+            None
+        } else {
+            Some(active_tab_idx.unwrap_or(0))
+        };
         let mut s = Self {
             view_id: params.view_id,
             footer_note: params.footer_note,
             footer_hint: params.footer_hint,
             items: params.items,
+            tabs: params.tabs,
+            active_tab_idx,
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
@@ -282,11 +304,38 @@ impl ListSelectionView {
             on_cancel: params.on_cancel,
         };
         s.apply_filter();
+        if s.tabs_enabled() {
+            s.select_first_enabled_row();
+        }
         s
     }
 
     fn visible_len(&self) -> usize {
         self.filtered_indices.len()
+    }
+
+    fn tabs_enabled(&self) -> bool {
+        self.active_tab_idx.is_some()
+    }
+
+    fn active_items(&self) -> &[SelectionItem] {
+        self.active_tab_idx
+            .and_then(|idx| self.tabs.get(idx))
+            .map(|tab| tab.items.as_slice())
+            .unwrap_or(self.items.as_slice())
+    }
+
+    fn active_header(&self) -> &dyn Renderable {
+        self.active_tab_idx
+            .and_then(|idx| self.tabs.get(idx))
+            .map(|tab| tab.header.as_ref())
+            .unwrap_or(self.header.as_ref())
+    }
+
+    fn active_tab_id(&self) -> Option<&str> {
+        self.active_tab_idx
+            .and_then(|idx| self.tabs.get(idx))
+            .map(|tab| tab.id.as_str())
     }
 
     fn max_visible_rows(len: usize) -> usize {
@@ -304,7 +353,7 @@ impl ListSelectionView {
             .selected_actual_idx()
             .or_else(|| {
                 (!self.is_searchable)
-                    .then(|| self.items.iter().position(|item| item.is_current))
+                    .then(|| self.active_items().iter().position(|item| item.is_current))
                     .flatten()
             })
             .or_else(|| self.initial_selected_idx.take());
@@ -312,7 +361,7 @@ impl ListSelectionView {
         if self.is_searchable && !self.search_query.is_empty() {
             let query_lower = self.search_query.to_lowercase();
             self.filtered_indices = self
-                .items
+                .active_items()
                 .iter()
                 .positions(|item| {
                     item.search_value
@@ -321,7 +370,7 @@ impl ListSelectionView {
                 })
                 .collect();
         } else {
-            self.filtered_indices = (0..self.items.len()).collect();
+            self.filtered_indices = (0..self.active_items().len()).collect();
         }
 
         let len = self.filtered_indices.len();
@@ -359,7 +408,7 @@ impl ListSelectionView {
             .iter()
             .enumerate()
             .filter_map(|(visible_idx, actual_idx)| {
-                self.items.get(*actual_idx).map(|item| {
+                self.active_items().get(*actual_idx).map(|item| {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '›' } else { ' ' };
                     let name = item.name.as_str();
@@ -407,6 +456,42 @@ impl ListSelectionView {
             .collect()
     }
 
+    fn switch_tab(&mut self, step: isize) {
+        let Some(active_idx) = self.active_tab_idx else {
+            return;
+        };
+        let len = self.tabs.len();
+        if len == 0 {
+            return;
+        }
+
+        let next_idx = if step.is_negative() {
+            active_idx.checked_sub(1).unwrap_or(len - 1)
+        } else {
+            (active_idx + 1) % len
+        };
+        self.active_tab_idx = Some(next_idx);
+        self.search_query.clear();
+        self.state.reset();
+        self.apply_filter();
+        self.select_first_enabled_row();
+        self.fire_selection_changed();
+    }
+
+    fn select_first_enabled_row(&mut self) {
+        let selected_visible_idx = self
+            .filtered_indices
+            .iter()
+            .position(|actual_idx| {
+                self.active_items()
+                    .get(*actual_idx)
+                    .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled)
+            })
+            .or_else(|| (!self.filtered_indices.is_empty()).then_some(0));
+        self.state.selected_idx = selected_visible_idx;
+        self.state.scroll_top = 0;
+    }
+
     fn move_up(&mut self) {
         let before = self.selected_actual_idx();
         let len = self.visible_len();
@@ -440,27 +525,28 @@ impl ListSelectionView {
     }
 
     fn accept(&mut self) {
-        let selected_item = self
+        let selected_actual_idx = self
             .state
             .selected_idx
-            .and_then(|idx| self.filtered_indices.get(idx))
-            .and_then(|actual_idx| self.items.get(*actual_idx));
-        if let Some(item) = selected_item
-            && item.disabled_reason.is_none()
-            && !item.is_disabled
-        {
-            if let Some(idx) = self.state.selected_idx
-                && let Some(actual_idx) = self.filtered_indices.get(idx)
-            {
-                self.last_selected_actual_idx = Some(*actual_idx);
-            }
+            .and_then(|idx| self.filtered_indices.get(idx).copied());
+        let selected_is_enabled = selected_actual_idx
+            .and_then(|actual_idx| self.active_items().get(actual_idx))
+            .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled);
+        if selected_is_enabled {
+            self.last_selected_actual_idx = selected_actual_idx;
+            let Some(actual_idx) = selected_actual_idx else {
+                return;
+            };
+            let Some(item) = self.active_items().get(actual_idx) else {
+                return;
+            };
             for act in &item.actions {
                 act(&self.app_event_tx);
             }
             if item.dismiss_on_select {
                 self.complete = true;
             }
-        } else if selected_item.is_none() {
+        } else if selected_actual_idx.is_none() {
             if let Some(cb) = &self.on_cancel {
                 cb(&self.app_event_tx);
             }
@@ -545,7 +631,7 @@ impl ListSelectionView {
             if let Some(idx) = self.state.selected_idx
                 && let Some(actual_idx) = self.filtered_indices.get(idx)
                 && self
-                    .items
+                    .active_items()
                     .get(*actual_idx)
                     .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
             {
@@ -562,7 +648,7 @@ impl ListSelectionView {
             if let Some(idx) = self.state.selected_idx
                 && let Some(actual_idx) = self.filtered_indices.get(idx)
                 && self
-                    .items
+                    .active_items()
                     .get(*actual_idx)
                     .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
             {
@@ -593,6 +679,14 @@ impl BottomPaneView for ListSelectionView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } /* ^P */ => self.move_up(),
+            KeyEvent {
+                code: KeyCode::Left,
+                ..
+            } if self.tabs_enabled() => self.switch_tab(-1),
+            KeyEvent {
+                code: KeyCode::Right,
+                ..
+            } if self.tabs_enabled() => self.switch_tab(1),
             KeyEvent {
                 code: KeyCode::Char('k'),
                 modifiers: KeyModifiers::NONE,
@@ -652,9 +746,9 @@ impl BottomPaneView for ListSelectionView {
                     .to_digit(10)
                     .map(|d| d as usize)
                     .and_then(|d| d.checked_sub(1))
-                    && idx < self.items.len()
+                    && idx < self.active_items().len()
                     && self
-                        .items
+                        .active_items()
                         .get(idx)
                         .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled)
                 {
@@ -681,6 +775,10 @@ impl BottomPaneView for ListSelectionView {
 
     fn selected_index(&self) -> Option<usize> {
         self.selected_actual_idx()
+    }
+
+    fn active_tab_id(&self) -> Option<&str> {
+        ListSelectionView::active_tab_id(self)
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
@@ -729,7 +827,10 @@ impl Renderable for ListSelectionView {
             ),
         };
 
-        let mut height = self.header.desired_height(inner_width);
+        let header = self.active_header();
+        let tab_height = tab_bar_height(&self.tabs, self.active_tab_idx.unwrap_or(0), inner_width);
+        let mut height = header.desired_height(inner_width);
+        height = height.saturating_add(tab_height + u16::from(tab_height > 0));
         height = height.saturating_add(rows_height + 3);
         if self.is_searchable {
             height = height.saturating_add(1);
@@ -788,7 +889,9 @@ impl Renderable for ListSelectionView {
             full_rows_width
         };
 
-        let header_height = self.header.desired_height(inner_width);
+        let header = self.active_header();
+        let header_height = header.desired_height(inner_width);
+        let tab_height = tab_bar_height(&self.tabs, self.active_tab_idx.unwrap_or(0), inner_width);
         let rows = self.build_rows();
         let rows_height = match self.col_width_mode {
             ColumnWidthMode::AutoVisible => measure_rows_height(
@@ -820,9 +923,20 @@ impl Renderable for ListSelectionView {
         };
         let stacked_gap = if stacked_side_h > 0 { 1 } else { 0 };
 
-        let [header_area, _, search_area, list_area, _, stacked_side_area] = Layout::vertical([
+        let [
+            header_area,
+            _,
+            tabs_area,
+            _,
+            search_area,
+            list_area,
+            _,
+            stacked_side_area,
+        ] = Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
+            Constraint::Length(tab_height),
+            Constraint::Length(u16::from(tab_height > 0)),
             Constraint::Length(if self.is_searchable { 1 } else { 0 }),
             Constraint::Length(rows_height),
             Constraint::Length(stacked_gap),
@@ -834,13 +948,18 @@ impl Renderable for ListSelectionView {
         if header_area.height < header_height {
             let [header_area, elision_area] =
                 Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(header_area);
-            self.header.render(header_area, buf);
+            header.render(header_area, buf);
             Paragraph::new(vec![
                 Line::from(format!("[… {header_height} lines] ctrl + a view all")).dim(),
             ])
             .render(elision_area, buf);
         } else {
-            self.header.render(header_area, buf);
+            header.render(header_area, buf);
+        }
+
+        // -- Tabs --
+        if tab_height > 0 {
+            render_tab_bar(&self.tabs, self.active_tab_idx.unwrap_or(0), tabs_area, buf);
         }
 
         // -- Search bar --
