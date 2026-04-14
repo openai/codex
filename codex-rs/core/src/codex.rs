@@ -135,9 +135,11 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
+use codex_thread_store::LocalThreadStore;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
@@ -2071,6 +2073,7 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
+            thread_store: LocalThreadStore::new(RolloutConfig::from_view(config.as_ref())),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
