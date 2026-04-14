@@ -47,6 +47,8 @@ pub struct AuthDotJson {
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct AgentIdentityAuthRecord {
     pub workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt_user_id: Option<String>,
     pub agent_runtime_id: String,
     pub agent_private_key: String,
     pub registered_at: String,

@@ -331,7 +331,7 @@ impl StoredAgentIdentity {
         Ok(Self {
             binding_id: binding.binding_id.clone(),
             chatgpt_account_id: binding.chatgpt_account_id.clone(),
-            chatgpt_user_id: binding.chatgpt_user_id.clone(),
+            chatgpt_user_id: record.chatgpt_user_id,
             agent_runtime_id: record.agent_runtime_id,
             private_key_pkcs8_base64: record.agent_private_key,
             public_key_ssh: encode_ssh_ed25519_public_key(&signing_key.verifying_key()),
@@ -343,6 +343,7 @@ impl StoredAgentIdentity {
     fn to_auth_record(&self) -> AgentIdentityAuthRecord {
         AgentIdentityAuthRecord {
             workspace_id: self.chatgpt_account_id.clone(),
+            chatgpt_user_id: self.chatgpt_user_id.clone(),
             agent_runtime_id: self.agent_runtime_id.clone(),
             agent_private_key: self.private_key_pkcs8_base64.clone(),
             registered_at: self.registered_at.clone(),
@@ -589,6 +590,7 @@ mod tests {
             AgentIdentityBinding::from_auth(&auth, /*forced_workspace_id*/ None).expect("binding");
         auth.set_agent_identity(AgentIdentityAuthRecord {
             workspace_id: "account-123".to_string(),
+            chatgpt_user_id: Some("user-123".to_string()),
             agent_runtime_id: "agent_invalid".to_string(),
             agent_private_key: "not-valid-base64".to_string(),
             registered_at: "2026-01-01T00:00:00Z".to_string(),
@@ -606,6 +608,55 @@ mod tests {
             .get_agent_identity(&binding.chatgpt_account_id)
             .expect("stored identity");
         assert_eq!(persisted.agent_runtime_id, "agent_456");
+    }
+
+    #[tokio::test]
+    async fn ensure_registered_identity_deletes_different_user_identity_and_reregisters() {
+        let server = MockServer::start().await;
+        let chatgpt_base_url = server.uri();
+        mount_human_biscuit(&server, &chatgpt_base_url).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agent/register"))
+            .and(header("x-openai-authorization", "human-biscuit"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "agent_runtime_id": "agent_new",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let auth = make_chatgpt_auth("account-123", Some("user-new"));
+        let stale_key = generate_agent_key_material().expect("key material");
+        auth.set_agent_identity(AgentIdentityAuthRecord {
+            workspace_id: "account-123".to_string(),
+            chatgpt_user_id: Some("user-old".to_string()),
+            agent_runtime_id: "agent_old".to_string(),
+            agent_private_key: stale_key.private_key_pkcs8_base64,
+            registered_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .expect("seed stale identity");
+
+        let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
+        let manager = AgentIdentityManager::new_for_tests(
+            auth_manager,
+            /*feature_enabled*/ true,
+            chatgpt_base_url,
+            SessionSource::Cli,
+        );
+
+        let stored = manager
+            .ensure_registered_identity()
+            .await
+            .unwrap()
+            .expect("identity should be registered");
+
+        assert_eq!(stored.agent_runtime_id, "agent_new");
+        assert_eq!(stored.chatgpt_user_id.as_deref(), Some("user-new"));
+        let persisted = auth
+            .get_agent_identity("account-123")
+            .expect("stored identity");
+        assert_eq!(persisted.agent_runtime_id, "agent_new");
+        assert_eq!(persisted.chatgpt_user_id.as_deref(), Some("user-new"));
     }
 
     #[tokio::test]
