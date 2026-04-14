@@ -14,7 +14,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         approval_id: Some("call-short".into()),
         turn_id: "turn-short".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -54,8 +54,8 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
 #[test]
 fn app_server_exec_approval_request_splits_shell_wrapped_command() {
     let script = r#"python3 -c 'print("Hello, world!")'"#;
-    let request =
-        exec_approval_request_from_params(AppServerCommandExecutionRequestApprovalParams {
+    let request = exec_approval_request_from_params(
+        AppServerCommandExecutionRequestApprovalParams {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
@@ -66,13 +66,15 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
                 shlex::try_join(["/bin/zsh", "-lc", script])
                     .expect("round-trippable shell wrapper"),
             ),
-            cwd: Some(PathBuf::from("/tmp")),
+            cwd: Some(test_path_buf("/tmp").abs()),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             available_decisions: None,
-        });
+        },
+        &test_path_buf("/tmp").abs(),
+    );
 
     assert_eq!(
         request.command,
@@ -90,8 +92,8 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
         .expect("absolute read path");
     let write_path = AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/write")))
         .expect("absolute write path");
-    let request =
-        exec_approval_request_from_params(AppServerCommandExecutionRequestApprovalParams {
+    let request = exec_approval_request_from_params(
+        AppServerCommandExecutionRequestApprovalParams {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
@@ -102,7 +104,7 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
                 protocol: codex_app_server_protocol::NetworkApprovalProtocol::Socks5Tcp,
             }),
             command: Some("ls".to_string()),
-            cwd: Some(PathBuf::from("/tmp")),
+            cwd: Some(test_path_buf("/tmp").abs()),
             command_actions: None,
             additional_permissions: Some(AppServerAdditionalPermissionProfile {
                 network: Some(AppServerAdditionalNetworkPermissions {
@@ -116,7 +118,9 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             available_decisions: None,
-        });
+        },
+        &test_path_buf("/tmp").abs(),
+    );
 
     assert_eq!(
         request.network_approval_context,
@@ -187,7 +191,7 @@ async fn exec_approval_uses_approval_id_when_present() {
             approval_id: Some("approval-subcommand".into()),
             turn_id: "turn-short".into(),
             command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
             reason: Some(
                 "this is a test reason such as one that would be produced by the model".into(),
             ),
@@ -227,7 +231,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         approval_id: Some("call-multi".into()),
         turn_id: "turn-multi".into(),
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -282,7 +286,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         approval_id: Some("call-long".into()),
         turn_id: "turn-long".into(),
         command: vec!["bash".into(), "-lc".into(), long],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: None,
         network_approval_context: None,
         proposed_execpolicy_amendment: None,

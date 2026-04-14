@@ -611,15 +611,12 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
-    async fn instruction_sources_from_config(config: &Config) -> Vec<PathBuf> {
-        let mut paths: Vec<PathBuf> = config.user_instructions_path.iter().cloned().collect();
+    async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
+        let mut paths: Vec<AbsolutePathBuf> =
+            config.user_instructions_path.iter().cloned().collect();
         match codex_core::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await {
             Ok(project_doc_paths) => {
-                paths.extend(
-                    project_doc_paths
-                        .into_iter()
-                        .map(|path| path.as_path().to_path_buf()),
-                );
+                paths.extend(project_doc_paths);
             }
             Err(err) => {
                 tracing::warn!(error = %err, "failed to discover project docs for thread response");
@@ -2162,7 +2159,7 @@ impl CodexMessageProcessor {
             &effective_policy,
             &effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-            sandbox_cwd.as_path(),
+            &sandbox_cwd,
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
         ) {
@@ -3201,7 +3198,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let mut thread = summary_to_thread(summary);
+        let mut thread = summary_to_thread(summary, &self.config.cwd);
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -3284,7 +3281,7 @@ impl CodexMessageProcessor {
                 config_snapshot.session_source.clone(),
             );
             builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.clone();
+            builder.cwd = config_snapshot.cwd.to_path_buf();
             builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
             builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
             builder.approval_mode = config_snapshot.approval_policy;
@@ -3509,7 +3506,7 @@ impl CodexMessageProcessor {
                         message: format!("failed to read unarchived thread: {err}"),
                         data: None,
                     })?;
-            Ok(summary_to_thread(summary))
+            Ok(summary_to_thread(summary, &self.config.cwd))
         }
         .await;
 
@@ -3770,7 +3767,7 @@ impl CodexMessageProcessor {
             let conversation_id = summary.conversation_id;
             thread_ids.insert(conversation_id);
 
-            let thread = summary_to_thread(summary);
+            let thread = summary_to_thread(summary, &self.config.cwd);
             status_ids.push(thread.id.clone());
             threads.push((conversation_id, thread));
         }
@@ -3914,11 +3911,11 @@ impl CodexMessageProcessor {
         }
 
         let mut thread = if let Some(summary) = db_summary {
-            summary_to_thread(summary)
+            summary_to_thread(summary, &self.config.cwd)
         } else if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => summary_to_thread(summary, &self.config.cwd),
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -4424,9 +4421,7 @@ impl CodexMessageProcessor {
                 );
             }
             let mut config_for_instruction_sources = self.config.as_ref().clone();
-            if let Ok(cwd) = AbsolutePathBuf::try_from(config_snapshot.cwd.clone()) {
-                config_for_instruction_sources.cwd = cwd;
-            }
+            config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
             let instruction_sources =
                 Self::instruction_sources_from_config(&config_for_instruction_sources).await;
             let thread_summary = match load_thread_summary_for_rollout(
@@ -4809,7 +4804,7 @@ impl CodexMessageProcessor {
             .await
             {
                 Ok(summary) => {
-                    let mut thread = summary_to_thread(summary);
+                    let mut thread = summary_to_thread(summary, &self.config.cwd);
                     thread.forked_from_id =
                         forked_from_id_from_rollout(fork_rollout_path.as_path()).await;
                     thread
@@ -6348,7 +6343,7 @@ impl CodexMessageProcessor {
                 )
                 .await;
             let skills_input = codex_core::skills::SkillsLoadInput::new(
-                cwd_abs,
+                cwd_abs.clone(),
                 effective_skill_roots,
                 config_layer_stack,
                 config.bundled_skills_enabled(),
@@ -7615,7 +7610,7 @@ impl CodexMessageProcessor {
         if let Some(rollout_path) = review_thread.rollout_path() {
             match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
                 Ok(summary) => {
-                    let mut thread = summary_to_thread(summary);
+                    let mut thread = summary_to_thread(summary, &self.config.cwd);
                     self.thread_watch_manager
                         .upsert_thread_silently(thread.clone())
                         .await;
@@ -8817,7 +8812,7 @@ fn collect_resume_override_mismatches(
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
-        if requested_cwd_path != config_snapshot.cwd {
+        if requested_cwd_path != config_snapshot.cwd.as_path() {
             mismatch_details.push(format!(
                 "cwd requested={} active={}",
                 requested_cwd_path.display(),
@@ -9601,7 +9596,7 @@ async fn load_thread_summary_for_rollout(
 ) -> std::result::Result<Thread, String> {
     let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
-        .map(summary_to_thread)
+        .map(|summary| summary_to_thread(summary, &config.cwd))
         .map_err(|err| {
             format!(
                 "failed to load rollout `{}` for thread {thread_id}: {err}",
@@ -9612,10 +9607,13 @@ async fn load_thread_summary_for_rollout(
     if let Some(persisted_metadata) = persisted_metadata {
         merge_mutable_thread_metadata(
             &mut thread,
-            summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
+            summary_to_thread(
+                summary_from_thread_metadata(persisted_metadata),
+                &config.cwd,
+            ),
         );
     } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
-        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
+        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary, &config.cwd));
     }
     let title = if let Some(metadata) = persisted_metadata {
         non_empty_title(metadata)
@@ -9735,7 +9733,10 @@ fn build_thread_from_snapshot(
     }
 }
 
-pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
+pub(crate) fn summary_to_thread(
+    summary: ConversationSummary,
+    fallback_cwd: &AbsolutePathBuf,
+) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
@@ -9756,6 +9757,15 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         branch: info.branch,
         origin_url: info.origin_url,
     });
+    let cwd =
+        AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
+            .unwrap_or_else(|err| {
+                warn!(
+                    path = %path.display(),
+                    "failed to normalize thread cwd while summarizing thread: {err}"
+                );
+                fallback_cwd.clone()
+            });
 
     Thread {
         id: conversation_id.to_string(),
@@ -9789,6 +9799,8 @@ mod tests {
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -9923,7 +9935,7 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             ephemeral: false,
             reasoning_effort: None,
             personality: None,
@@ -10283,7 +10295,8 @@ mod tests {
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
 
         let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
-        let thread = summary_to_thread(summary);
+        let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
+        let thread = summary_to_thread(summary, &fallback_cwd);
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
@@ -10417,7 +10430,8 @@ mod tests {
             /*git_origin_url*/ None,
         );
 
-        let thread = summary_to_thread(summary);
+        let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
+        let thread = summary_to_thread(summary, &fallback_cwd);
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));

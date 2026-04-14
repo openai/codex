@@ -694,7 +694,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         approval_id: Some("call-approve-exec".into()),
         turn_id: "turn-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
-        cwd: PathBuf::from("/tmp"),
+        cwd: test_path_buf("/tmp").abs(),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -1442,7 +1442,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 handler_type: AppServerHookHandlerType::Command,
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("checking go-workflow input policy".to_string()),
@@ -1464,7 +1464,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 handler_type: AppServerHookHandlerType::Command,
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
                 display_order: 0,
                 status: AppServerHookRunStatus::Stopped,
                 status_message: Some("checking go-workflow input policy".to_string()),
@@ -1534,7 +1534,7 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Running,
                 status_message: None,
@@ -1559,7 +1559,7 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Completed,
                 status_message: None,
@@ -2034,7 +2034,7 @@ fn hook_run_summary(
         handler_type: codex_protocol::protocol::HookHandlerType::Command,
         execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
         scope: codex_protocol::protocol::HookScope::Turn,
-        source_path: PathBuf::from("/tmp/hooks.json"),
+        source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
         display_order: 0,
         status,
         status_message: status_message.map(str::to_string),
@@ -2083,7 +2083,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             path: "diff_render.rs".into(),
         },
     ];
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     chat.handle_codex_event(Event {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {

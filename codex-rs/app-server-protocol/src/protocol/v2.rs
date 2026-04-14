@@ -80,7 +80,6 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
-use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
@@ -449,7 +448,7 @@ pub struct HookRunSummary {
     pub handler_type: HookHandlerType,
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
-    pub source_path: PathBuf,
+    pub source_path: AbsolutePathBuf,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -1467,7 +1466,7 @@ pub enum CommandAction {
     Read {
         command: String,
         name: String,
-        path: PathBuf,
+        path: AbsolutePathBuf,
     },
     ListFiles {
         command: String,
@@ -1545,7 +1544,11 @@ impl CommandAction {
                 command: cmd,
                 name,
                 path,
-            } => CoreParsedCommand::Read { cmd, name, path },
+            } => CoreParsedCommand::Read {
+                cmd,
+                name,
+                path: path.into_path_buf(),
+            },
             CommandAction::ListFiles { command: cmd, path } => {
                 CoreParsedCommand::ListFiles { cmd, path }
             }
@@ -1559,13 +1562,13 @@ impl CommandAction {
     }
 }
 
-impl From<CoreParsedCommand> for CommandAction {
-    fn from(value: CoreParsedCommand) -> Self {
+impl CommandAction {
+    pub fn from_core_with_cwd(value: CoreParsedCommand, cwd: &AbsolutePathBuf) -> Self {
         match value {
             CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
                 command: cmd,
                 name,
-                path,
+                path: cwd.join(path),
             },
             CoreParsedCommand::ListFiles { cmd, path } => {
                 CommandAction::ListFiles { command: cmd, path }
@@ -2720,10 +2723,10 @@ pub struct ThreadStartResponse {
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<PathBuf>,
+    pub instruction_sources: Vec<AbsolutePathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2809,10 +2812,10 @@ pub struct ThreadResumeResponse {
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<PathBuf>,
+    pub instruction_sources: Vec<AbsolutePathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -2889,10 +2892,10 @@ pub struct ThreadForkResponse {
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<PathBuf>,
+    pub instruction_sources: Vec<AbsolutePathBuf>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -3436,9 +3439,9 @@ pub struct SkillInterface {
     #[ts(optional)]
     pub short_description: Option<String>,
     #[ts(optional)]
-    pub icon_small: Option<PathBuf>,
+    pub icon_small: Option<AbsolutePathBuf>,
     #[ts(optional)]
-    pub icon_large: Option<PathBuf>,
+    pub icon_large: Option<AbsolutePathBuf>,
     #[ts(optional)]
     pub brand_color: Option<String>,
     #[ts(optional)]
@@ -3722,15 +3725,6 @@ impl From<CoreSkillScope> for SkillScope {
     }
 }
 
-impl From<CoreSkillErrorInfo> for SkillErrorInfo {
-    fn from(value: CoreSkillErrorInfo) -> Self {
-        Self {
-            path: value.path,
-            message: value.message,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3755,7 +3749,7 @@ pub struct Thread {
     /// [UNSTABLE] Path to the thread on disk.
     pub path: Option<PathBuf>,
     /// Working directory captured for the thread.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     /// Version of the CLI that created the thread.
     pub cli_version: String,
     /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
@@ -4530,7 +4524,7 @@ pub enum ThreadItem {
         /// The command to be executed.
         command: String,
         /// The command's working directory.
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         /// Identifier for the underlying PTY process (when available).
         process_id: Option<String>,
         #[serde(default)]
@@ -4614,7 +4608,7 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ImageView { id: String, path: String },
+    ImageView { id: String, path: AbsolutePathBuf },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ImageGeneration {
@@ -4624,7 +4618,7 @@ pub enum ThreadItem {
         result: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        saved_path: Option<String>,
+        saved_path: Option<AbsolutePathBuf>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4786,7 +4780,7 @@ impl From<GuardianCommandSource> for CoreGuardianCommandSource {
 pub struct GuardianCommandReviewAction {
     pub source: GuardianCommandSource,
     pub command: String,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -4796,15 +4790,15 @@ pub struct GuardianExecveReviewAction {
     pub source: GuardianCommandSource,
     pub program: String,
     pub argv: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GuardianApplyPatchReviewAction {
-    pub cwd: PathBuf,
-    pub files: Vec<PathBuf>,
+    pub cwd: AbsolutePathBuf,
+    pub files: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -4838,7 +4832,7 @@ pub enum GuardianApprovalReviewAction {
     Command {
         source: GuardianCommandSource,
         command: String,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4846,11 +4840,14 @@ pub enum GuardianApprovalReviewAction {
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ApplyPatch { cwd: PathBuf, files: Vec<PathBuf> },
+    ApplyPatch {
+        cwd: AbsolutePathBuf,
+        files: Vec<AbsolutePathBuf>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     NetworkAccess {
@@ -5759,7 +5756,7 @@ pub struct CommandExecutionRequestApprovalParams {
     /// The command's working directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
     /// Best-effort parsed command actions for friendly display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
@@ -6564,22 +6561,20 @@ mod tests {
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
 
     fn absolute_path_string(path: &str) -> String {
-        let trimmed = path.trim_start_matches('/');
-        if cfg!(windows) {
-            format!(r"C:\{}", trimmed.replace('/', "\\"))
-        } else {
-            format!("/{trimmed}")
-        }
+        let path = format!("/{}", path.trim_start_matches('/'));
+        test_path_buf(&path).display().to_string()
     }
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::from_absolute_path(absolute_path_string(path))
-            .expect("path must be absolute")
+        let path = format!("/{}", path.trim_start_matches('/'));
+        test_path_buf(&path).abs()
     }
 
     fn test_absolute_path() -> AbsolutePathBuf {
@@ -6604,7 +6599,7 @@ mod tests {
             "turnId": "turn_123",
             "itemId": "call_123",
             "command": "cat file",
-            "cwd": "/tmp",
+            "cwd": absolute_path_string("tmp"),
             "commandActions": null,
             "reason": null,
             "networkApprovalContext": null,
@@ -8063,7 +8058,7 @@ mod tests {
             "type": "command",
             "source": "shell",
             "command": "rm -rf /tmp/example.sqlite",
-            "cwd": "/tmp",
+            "cwd": absolute_path_string("tmp"),
         });
         let action: GuardianApprovalReviewAction =
             serde_json::from_value(value.clone()).expect("guardian review action");
@@ -8073,7 +8068,7 @@ mod tests {
             GuardianApprovalReviewAction::Command {
                 source: GuardianCommandSource::Shell,
                 command: "rm -rf /tmp/example.sqlite".to_string(),
-                cwd: "/tmp".into(),
+                cwd: absolute_path("tmp"),
             }
         );
         assert_eq!(
@@ -8647,7 +8642,7 @@ mod tests {
                 "updatedAt": 1,
                 "status": { "type": "idle" },
                 "path": null,
-                "cwd": "/tmp",
+                "cwd": absolute_path_string("tmp"),
                 "cliVersion": "0.0.0",
                 "source": "exec",
                 "agentNickname": null,
@@ -8659,7 +8654,7 @@ mod tests {
             "model": "gpt-5",
             "modelProvider": "openai",
             "serviceTier": null,
-            "cwd": "/tmp",
+            "cwd": absolute_path_string("tmp"),
             "approvalPolicy": "on-failure",
             "approvalsReviewer": "user",
             "sandbox": { "type": "dangerFullAccess" },
@@ -8673,9 +8668,9 @@ mod tests {
         let fork: ThreadForkResponse =
             serde_json::from_value(response).expect("thread/fork response");
 
-        assert_eq!(start.instruction_sources, Vec::<PathBuf>::new());
-        assert_eq!(resume.instruction_sources, Vec::<PathBuf>::new());
-        assert_eq!(fork.instruction_sources, Vec::<PathBuf>::new());
+        assert_eq!(start.instruction_sources, Vec::<AbsolutePathBuf>::new());
+        assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
+        assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
     }
 
     #[test]
