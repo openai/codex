@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::io::ErrorKind;
 use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -30,6 +32,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -145,7 +148,11 @@ pub async fn test_env() -> Result<TestEnv> {
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
-                .create_directory(&cwd, CreateDirectoryOptions { recursive: true })
+                .create_directory(
+                    &cwd,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
                 .await?;
             remote_process.process.register_cleanup_path(cwd.as_path());
             Ok(TestEnv {
@@ -167,14 +174,19 @@ struct RemoteExecServerStart {
 fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecServerStart> {
     let container_name = remote_env.container_name.as_str();
     let instance_id = remote_exec_server_instance_id();
-    let remote_exec_server_path = format!("/tmp/codex-exec-server-{instance_id}");
+    let remote_exec_server_path = format!("/tmp/codex-{instance_id}");
+    let remote_linux_sandbox_path = format!("/tmp/codex-linux-sandbox-{instance_id}");
     let stdout_path = format!("/tmp/codex-exec-server-{instance_id}.stdout");
-    let local_binary = codex_utils_cargo_bin::cargo_bin("codex-exec-server")
-        .context("resolve codex-exec-server binary")?;
+    let local_binary = codex_utils_cargo_bin::cargo_bin("codex").context("resolve codex binary")?;
+    let local_linux_sandbox = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+        .context("resolve codex-linux-sandbox binary")?;
     let local_binary = local_binary.to_string_lossy().to_string();
+    let local_linux_sandbox = local_linux_sandbox.to_string_lossy().to_string();
     let remote_binary = format!("{container_name}:{remote_exec_server_path}");
+    let remote_linux_sandbox = format!("{container_name}:{remote_linux_sandbox_path}");
 
     docker_command_success(["cp", &local_binary, &remote_binary])?;
+    docker_command_success(["cp", &local_linux_sandbox, &remote_linux_sandbox])?;
     docker_command_success([
         "exec",
         container_name,
@@ -182,10 +194,18 @@ fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecSe
         "+x",
         &remote_exec_server_path,
     ])?;
+    docker_command_success([
+        "exec",
+        container_name,
+        "chmod",
+        "+x",
+        &remote_linux_sandbox_path,
+    ])?;
+    probe_remote_linux_sandbox(container_name, &remote_linux_sandbox_path)?;
 
     let start_script = format!(
         "rm -f {stdout_path}; \
-nohup {remote_exec_server_path} --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
+nohup {remote_exec_server_path} exec-server --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
 echo $!"
     );
     let pid_output =
@@ -203,10 +223,30 @@ echo $!"
             pid,
             remote_exec_server_path,
             stdout_path,
-            cleanup_paths: Vec::new(),
+            cleanup_paths: vec![remote_linux_sandbox_path],
         },
         listen_url,
     })
+}
+
+fn probe_remote_linux_sandbox(container_name: &str, remote_linux_sandbox_path: &str) -> Result<()> {
+    let policy = serde_json::to_string(&SandboxPolicy::new_read_only_policy())
+        .context("serialize remote sandbox probe policy")?;
+    let probe_script = format!(
+        "{remote_linux_sandbox_path} --sandbox-policy-cwd /tmp --sandbox-policy '{policy}' -- /bin/true"
+    );
+    let output = Command::new("docker")
+        .args(["exec", container_name, "sh", "-lc", &probe_script])
+        .output()
+        .with_context(|| format!("probe remote linux sandbox in container `{container_name}`"))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "remote linux sandbox probe failed in container `{container_name}`: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 fn remote_aware_cwd_path() -> AbsolutePathBuf {
@@ -451,6 +491,7 @@ impl TestCodexBuilder {
             config.model_provider.base_url = Some(base_url_clone);
             config.model_provider.supports_websockets = true;
             config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
+            config.realtime.version = RealtimeWsVersion::V1;
         }));
         let test_env = TestEnv::local().await?;
         Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
@@ -517,12 +558,13 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
+                /*analytics_events_client*/ None,
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 auth.clone(),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 Arc::clone(&environment_manager),
             )
         };
@@ -796,6 +838,12 @@ impl TestCodexHarness {
         Ok(Self { server, test })
     }
 
+    pub async fn with_remote_aware_builder(mut builder: TestCodexBuilder) -> Result<Self> {
+        let server = start_mock_server().await;
+        let test = builder.build_remote_aware(&server).await?;
+        Ok(Self { server, test })
+    }
+
     pub fn server(&self) -> &MockServer {
         &self.server
     }
@@ -805,11 +853,85 @@ impl TestCodexHarness {
     }
 
     pub fn cwd(&self) -> &Path {
-        self.test.cwd_path()
+        self.test.config.cwd.as_path()
     }
 
     pub fn path(&self, rel: impl AsRef<Path>) -> PathBuf {
-        self.test.workspace_path(rel)
+        self.path_abs(rel).into_path_buf()
+    }
+
+    pub fn path_abs(&self, rel: impl AsRef<Path>) -> AbsolutePathBuf {
+        self.test.config.cwd.join(rel)
+    }
+
+    pub async fn write_file(
+        &self,
+        rel: impl AsRef<Path>,
+        contents: impl AsRef<[u8]>,
+    ) -> Result<()> {
+        let abs_path = self.path_abs(rel);
+        if let Some(parent) = abs_path.parent() {
+            self.test
+                .fs()
+                .create_directory(
+                    &parent,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
+                .await?;
+        }
+        self.test
+            .fs()
+            .write_file(&abs_path, contents.as_ref().to_vec(), /*sandbox*/ None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
+        Ok(self
+            .test
+            .fs()
+            .read_file_text(&self.path_abs(rel), /*sandbox*/ None)
+            .await?)
+    }
+
+    pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
+        self.test
+            .fs()
+            .create_directory(
+                &self.path_abs(rel),
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn path_exists(&self, rel: impl AsRef<Path>) -> Result<bool> {
+        self.abs_path_exists(&self.path_abs(rel)).await
+    }
+
+    pub async fn remove_abs_path(&self, path: &AbsolutePathBuf) -> Result<()> {
+        self.test
+            .fs()
+            .remove(
+                path,
+                RemoveOptions {
+                    recursive: false,
+                    force: true,
+                },
+                /*sandbox*/ None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn abs_path_exists(&self, path: &AbsolutePathBuf) -> Result<bool> {
+        match self.test.fs().get_metadata(path, /*sandbox*/ None).await {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub async fn submit(&self, prompt: &str) -> Result<()> {

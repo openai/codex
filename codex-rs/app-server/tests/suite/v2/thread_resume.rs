@@ -73,7 +73,7 @@ use wiremock::matchers::path;
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::enable_analytics_capture;
 use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_thread_initialized_payload;
+use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
@@ -178,7 +178,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         /*git_info*/ None,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
@@ -194,7 +194,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    let payload = wait_for_thread_initialized_payload(&server, DEFAULT_READ_TIMEOUT).await?;
+    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
     assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.2-codex", "resumed");
     Ok(())
@@ -377,7 +377,6 @@ stream_max_retries = 0
         agent_role: None,
         model_provider: Some("mock_provider".to_string()),
         base_instructions: None,
-        developer_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
     };
@@ -1902,7 +1901,7 @@ fn create_config_toml_with_chatgpt_base_url(
     let general_analytics_toml = if general_analytics_enabled {
         "\ngeneral_analytics = true".to_string()
     } else {
-        String::new()
+        "\ngeneral_analytics = false".to_string()
     };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(

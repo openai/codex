@@ -53,16 +53,6 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
     assert!(message.contains(&expected_truncated));
 }
 
-#[test]
-fn build_consolidation_prompt_renders_embedded_template() {
-    let prompt =
-        build_consolidation_prompt(Path::new("/tmp/memories"), &Phase2InputSelection::default());
-
-    assert!(prompt.contains("Folder structure (under /tmp/memories/):"));
-    assert!(prompt.contains("**Diff since last consolidation:**"));
-    assert!(prompt.contains("- selected inputs this run: 0"));
-}
-
 #[tokio::test]
 async fn build_memory_tool_developer_instructions_renders_embedded_template() {
     let temp = tempdir().unwrap();

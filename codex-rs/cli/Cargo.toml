@@ -3,6 +3,7 @@ name = "codex-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "codex"
@@ -23,12 +24,14 @@ codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-test-client = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-api = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }

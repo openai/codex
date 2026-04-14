@@ -43,6 +43,9 @@ jobs:
   argument_comment_lint_package:
     name: Argument comment lint package
     runs-on: ubuntu-24.04
+    env:
+      CARGO_DYLINT_VERSION: 5.0.0
+      DYLINT_LINK_VERSION: 5.0.0
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
@@ -59,10 +62,13 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: argument-comment-lint-${{ runner.os }}-${{ hashFiles('tools/argument-comment-lint/Cargo.lock', 'tools/argument-comment-lint/rust-toolchain', '.github/workflows/rust-ci.yml', '.github/workflows/rust-ci-full.yml') }}
+          key: argument-comment-lint-${{ runner.os }}-${{ env.CARGO_DYLINT_VERSION }}-${{ env.DYLINT_LINK_VERSION }}-${{ hashFiles('tools/argument-comment-lint/Cargo.lock', 'tools/argument-comment-lint/rust-toolchain', '.github/workflows/rust-ci.yml', '.github/workflows/rust-ci-full.yml') }}
       - name: Install cargo-dylint tooling
         if: ${{ steps.cargo_dylint_cache.outputs.cache-hit != 'true' }}
-        run: cargo install --locked cargo-dylint dylint-link
+        shell: bash
+        run: |
+          cargo install --locked cargo-dylint --version "$CARGO_DYLINT_VERSION"
+          cargo install --locked dylint-link --version "$DYLINT_LINK_VERSION"
       - name: Check Python wrapper syntax
         run: python3 -m py_compile tools/argument-comment-lint/wrapper_common.py tools/argument-comment-lint/run.py tools/argument-comment-lint/run-prebuilt-linter.py tools/argument-comment-lint/test_wrapper_common.py
       - name: Test Python wrapper helpers
@@ -415,22 +421,10 @@ jobs:
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
-        name: Configure musl rusty_v8 artifact overrides
-        env:
-          TARGET: ${{ matrix.target }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
-          release_tag="rusty-v8-v${version}"
-          base_url="https://github.com/openai/codex/releases/download/${release_tag}"
-          archive="https://github.com/openai/codex/releases/download/rusty-v8-v${version}/librusty_v8_release_${TARGET}.a.gz"
-          binding_dir="${RUNNER_TEMP}/rusty_v8"
-          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
-          mkdir -p "${binding_dir}"
-          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
-          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
-          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+        name: Configure musl rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8-musl
+        with:
+          target: ${{ matrix.target }}
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}

@@ -3,7 +3,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -87,7 +86,11 @@ fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> 
 async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
     test.fs()
-        .create_directory(&abs_path, CreateDirectoryOptions { recursive: true })
+        .create_directory(
+            &abs_path,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
         .await?;
     Ok(abs_path.into_path_buf())
 }
@@ -100,10 +103,16 @@ async fn write_workspace_file(
     let abs_path = test.config.cwd.join(rel_path);
     if let Some(parent) = abs_path.parent() {
         test.fs()
-            .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+            .create_directory(
+                &parent,
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
             .await?;
     }
-    test.fs().write_file(&abs_path, contents).await?;
+    test.fs()
+        .write_file(&abs_path, contents, /*sandbox*/ None)
+        .await?;
     Ok(abs_path.into_path_buf())
 }
 
@@ -351,14 +360,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::ImageDetailOriginal)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
@@ -459,14 +461,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::ImageDetailOriginal)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
@@ -549,14 +544,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::ImageDetailOriginal)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
@@ -651,12 +639,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.2").with_config(|config| {
-        config
-            .features
-            .enable(Feature::ImageDetailOriginal)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex().with_model("gpt-5.2");
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
@@ -755,19 +738,12 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_does_not_force_original_resolution_with_capability_feature_only()
+async fn view_image_tool_does_not_force_original_resolution_with_capability_only()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::ImageDetailOriginal)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
@@ -1349,6 +1325,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
+        additional_speed_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -1522,3 +1499,4 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
 
     Ok(())
 }
+use codex_features::Feature;

@@ -225,6 +225,9 @@ mod document_helpers {
         if config.required {
             entry["required"] = value(true);
         }
+        if config.supports_parallel_tool_calls {
+            entry["supports_parallel_tool_calls"] = value(true);
+        }
         if let Some(timeout) = config.startup_timeout_sec {
             entry["startup_timeout_sec"] = value(timeout.as_secs_f64());
         }
@@ -1013,6 +1016,18 @@ impl ConfigEditsBuilder {
             Some(speaker) => self.edits.push(ConfigEdit::SetPath {
                 segments,
                 value: value(speaker),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
+    pub fn set_realtime_voice(mut self, voice: Option<&str>) -> Self {
+        let segments = vec!["realtime".to_string(), "voice".to_string()];
+        match voice {
+            Some(voice) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(voice),
             }),
             None => self.edits.push(ConfigEdit::ClearPath { segments }),
         }

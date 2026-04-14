@@ -10,7 +10,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::GuardianAssessmentAction;
-use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::McpInvocation;
@@ -311,22 +310,26 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
     })
     .await
     .expect("timed out waiting for guardian assessment");
+    let expected_action = GuardianAssessmentAction::Command {
+        source: GuardianCommandSource::Shell,
+        command: "rm -rf tmp".to_string(),
+        cwd: "/tmp".into(),
+    };
+    assert!(!assessment_event.id.is_empty());
     assert_eq!(
-        assessment_event,
-        GuardianAssessmentEvent {
-            id: "command-item-1".to_string(),
-            turn_id: parent_ctx.sub_id.clone(),
-            status: GuardianAssessmentStatus::InProgress,
-            risk_score: None,
-            risk_level: None,
-            rationale: None,
-            action: GuardianAssessmentAction::Command {
-                source: GuardianCommandSource::Shell,
-                command: "rm -rf tmp".to_string(),
-                cwd: "/tmp".into(),
-            },
-        }
+        assessment_event.target_item_id.as_deref(),
+        Some("command-item-1")
     );
+    assert_eq!(assessment_event.turn_id, parent_ctx.sub_id);
+    assert_eq!(
+        assessment_event.status,
+        GuardianAssessmentStatus::InProgress
+    );
+    assert_eq!(assessment_event.risk_level, None);
+    assert_eq!(assessment_event.user_authorization, None);
+    assert_eq!(assessment_event.rationale, None);
+    assert_eq!(assessment_event.decision_source, None);
+    assert_eq!(assessment_event.action, expected_action);
 
     cancel_token.cancel();
 

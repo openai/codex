@@ -1,5 +1,6 @@
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
+use codex_protocol::protocol::RealtimeTranscriptDone;
 use serde_json::Value;
 use tracing::debug;
 
@@ -51,6 +52,17 @@ pub(super) fn parse_transcript_delta_event(
         .and_then(Value::as_str)
         .map(str::to_string)
         .map(|delta| RealtimeTranscriptDelta { delta })
+}
+
+pub(super) fn parse_transcript_done_event(
+    parsed: &Value,
+    field: &str,
+) -> Option<RealtimeTranscriptDone> {
+    parsed
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .map(|text| RealtimeTranscriptDone { text })
 }
 
 pub(super) fn parse_error_event(parsed: &Value) -> Option<RealtimeEvent> {

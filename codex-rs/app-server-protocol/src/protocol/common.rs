@@ -284,6 +284,11 @@ client_request_definitions! {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,
     },
+    #[experimental("thread/memoryMode/set")]
+    ThreadMemoryModeSet => "thread/memoryMode/set" {
+        params: v2::ThreadMemoryModeSetParams,
+        response: v2::ThreadMemoryModeSetResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
@@ -317,9 +322,18 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    /// Append raw Responses API items to the thread history without starting a user turn.
+    ThreadInjectItems => "thread/inject_items" {
+        params: v2::ThreadInjectItemsParams,
+        response: v2::ThreadInjectItemsResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
+    },
+    MarketplaceAdd => "marketplace/add" {
+        params: v2::MarketplaceAddParams,
+        response: v2::MarketplaceAddResponse,
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
@@ -388,6 +402,7 @@ client_request_definitions! {
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
+        inspect_params: true,
         response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {
@@ -413,6 +428,11 @@ client_request_definitions! {
     ThreadRealtimeStop => "thread/realtime/stop" {
         params: v2::ThreadRealtimeStopParams,
         response: v2::ThreadRealtimeStopResponse,
+    },
+    #[experimental("thread/realtime/listVoices")]
+    ThreadRealtimeListVoices => "thread/realtime/listVoices" {
+        params: v2::ThreadRealtimeListVoicesParams,
+        response: v2::ThreadRealtimeListVoicesResponse,
     },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
@@ -462,6 +482,11 @@ client_request_definitions! {
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
         response: v2::McpResourceReadResponse,
+    },
+
+    McpServerToolCall => "mcpServer/tool/call" {
+        params: v2::McpServerToolCallParams,
+        response: v2::McpServerToolCallResponse,
     },
 
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
@@ -617,6 +642,41 @@ macro_rules! server_request_definitions {
                 match self {
                     $(Self::$variant { request_id, .. } => request_id,)*
                 }
+            }
+        }
+
+        /// Typed response from the client to the server.
+        #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ServerResponse {
+            $(
+                $(#[$variant_meta])*
+                $(#[serde(rename = $wire)])?
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    response: $response,
+                },
+            )*
+        }
+
+        impl ServerResponse {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
             }
         }
 
@@ -966,10 +1026,14 @@ server_notification_definitions! {
     ThreadRealtimeStarted => "thread/realtime/started" (v2::ThreadRealtimeStartedNotification),
     #[experimental("thread/realtime/itemAdded")]
     ThreadRealtimeItemAdded => "thread/realtime/itemAdded" (v2::ThreadRealtimeItemAddedNotification),
-    #[experimental("thread/realtime/transcriptUpdated")]
-    ThreadRealtimeTranscriptUpdated => "thread/realtime/transcriptUpdated" (v2::ThreadRealtimeTranscriptUpdatedNotification),
+    #[experimental("thread/realtime/transcript/delta")]
+    ThreadRealtimeTranscriptDelta => "thread/realtime/transcript/delta" (v2::ThreadRealtimeTranscriptDeltaNotification),
+    #[experimental("thread/realtime/transcript/done")]
+    ThreadRealtimeTranscriptDone => "thread/realtime/transcript/done" (v2::ThreadRealtimeTranscriptDoneNotification),
     #[experimental("thread/realtime/outputAudio/delta")]
     ThreadRealtimeOutputAudioDelta => "thread/realtime/outputAudio/delta" (v2::ThreadRealtimeOutputAudioDeltaNotification),
+    #[experimental("thread/realtime/sdp")]
+    ThreadRealtimeSdp => "thread/realtime/sdp" (v2::ThreadRealtimeSdpNotification),
     #[experimental("thread/realtime/error")]
     ThreadRealtimeError => "thread/realtime/error" (v2::ThreadRealtimeErrorNotification),
     #[experimental("thread/realtime/closed")]
@@ -998,6 +1062,8 @@ mod tests {
     use codex_protocol::account::PlanType;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
+    use codex_protocol::protocol::RealtimeOutputModality;
+    use codex_protocol::protocol::RealtimeVoice;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1231,6 +1297,30 @@ mod tests {
     }
 
     #[test]
+    fn serialize_server_response() -> Result<()> {
+        let response = ServerResponse::CommandExecutionRequestApproval {
+            request_id: RequestId::Integer(8),
+            response: v2::CommandExecutionRequestApprovalResponse {
+                decision: v2::CommandExecutionApprovalDecision::AcceptForSession,
+            },
+        };
+
+        assert_eq!(response.id(), &RequestId::Integer(8));
+        assert_eq!(response.method(), "item/commandExecution/requestApproval");
+        assert_eq!(
+            json!({
+                "method": "item/commandExecution/requestApproval",
+                "id": 8,
+                "response": {
+                    "decision": "acceptForSession"
+                }
+            }),
+            serde_json::to_value(&response)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_mcp_server_elicitation_request() -> Result<()> {
         let requested_schema: v2::McpElicitationSchema = serde_json::from_value(json!({
             "type": "object",
@@ -1333,6 +1423,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd: PathBuf::from("/tmp"),
+                instruction_sources: vec![PathBuf::from("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
@@ -1372,6 +1463,7 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": "/tmp",
+                    "instructionSources": ["/tmp/AGENTS.md"],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
@@ -1700,8 +1792,11 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
-                prompt: "You are on a call".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
+                prompt: Some(Some("You are on a call".to_string())),
                 session_id: Some("sess_456".to_string()),
+                transport: None,
+                voice: Some(RealtimeVoice::Marin),
             },
         };
         assert_eq!(
@@ -1710,12 +1805,106 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "outputModality": "audio",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456"
+                    "sessionId": "sess_456",
+                    "transport": null,
+                    "voice": "marin"
                 }
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_start_prompt_default_and_null() -> Result<()> {
+        let default_prompt_request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
+                prompt: None,
+                session_id: None,
+                transport: None,
+                voice: None,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "outputModality": "audio",
+                    "sessionId": null,
+                    "transport": null,
+                    "voice": null
+                }
+            }),
+            serde_json::to_value(&default_prompt_request)?,
+        );
+
+        let null_prompt_request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
+                prompt: Some(None),
+                session_id: None,
+                transport: None,
+                voice: None,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "outputModality": "audio",
+                    "prompt": null,
+                    "sessionId": null,
+                    "transport": null,
+                    "voice": null
+                }
+            }),
+            serde_json::to_value(&null_prompt_request)?,
+        );
+
+        let default_prompt_value = json!({
+            "method": "thread/realtime/start",
+            "id": 9,
+            "params": {
+                "threadId": "thr_123",
+                "outputModality": "audio",
+                "sessionId": null,
+                "transport": null,
+                "voice": null
+            }
+        });
+        assert_eq!(
+            serde_json::from_value::<ClientRequest>(default_prompt_value)?,
+            default_prompt_request,
+        );
+
+        let null_prompt_value = json!({
+            "method": "thread/realtime/start",
+            "id": 9,
+            "params": {
+                "threadId": "thr_123",
+                "outputModality": "audio",
+                "prompt": null,
+                "sessionId": null,
+                "transport": null,
+                "voice": null
+            }
+        });
+        assert_eq!(
+            serde_json::from_value::<ClientRequest>(null_prompt_value)?,
+            null_prompt_request,
+        );
+
         Ok(())
     }
 
@@ -1789,8 +1978,11 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
-                prompt: "You are on a call".to_string(),
+                output_modality: RealtimeOutputModality::Audio,
+                prompt: Some(Some("You are on a call".to_string())),
                 session_id: None,
+                transport: None,
+                voice: None,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);

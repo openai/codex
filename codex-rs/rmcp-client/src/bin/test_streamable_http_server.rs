@@ -90,6 +90,23 @@ impl TestToolServer {
             Cow::Borrowed("Echo back the provided message and include environment data."),
             Arc::new(schema),
         );
+        #[expect(clippy::expect_used)]
+        let output_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "echo": { "type": "string" },
+                "env": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "null" }
+                    ]
+                }
+            },
+            "required": ["echo", "env"],
+            "additionalProperties": false
+        }))
+        .expect("echo tool output schema should deserialize");
+        tool.output_schema = Some(Arc::new(output_schema));
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
     }

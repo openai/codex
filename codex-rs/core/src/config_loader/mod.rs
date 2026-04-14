@@ -564,29 +564,35 @@ impl ProjectTrustDecision {
 impl ProjectTrustContext {
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
         for dir_key in normalized_project_trust_keys(dir.as_path()) {
-            if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
+            if let Some((trust_key, trust_level)) =
+                project_trust_for_lookup_key(&self.projects_trust, &dir_key)
+            {
                 return ProjectTrustDecision {
                     trust_level: Some(trust_level),
-                    trust_key: dir_key,
+                    trust_key,
                 };
             }
         }
 
         for project_root_key in &self.project_root_lookup_keys {
-            if let Some(trust_level) = self.projects_trust.get(project_root_key).copied() {
+            if let Some((trust_key, trust_level)) =
+                project_trust_for_lookup_key(&self.projects_trust, project_root_key)
+            {
                 return ProjectTrustDecision {
                     trust_level: Some(trust_level),
-                    trust_key: project_root_key.clone(),
+                    trust_key,
                 };
             }
         }
 
         if let Some(repo_root_lookup_keys) = self.repo_root_lookup_keys.as_ref() {
             for repo_root_key in repo_root_lookup_keys {
-                if let Some(trust_level) = self.projects_trust.get(repo_root_key).copied() {
+                if let Some((trust_key, trust_level)) =
+                    project_trust_for_lookup_key(&self.projects_trust, repo_root_key)
+                {
                     return ProjectTrustDecision {
                         trust_level: Some(trust_level),
-                        trust_key: repo_root_key.clone(),
+                        trust_key,
                     };
                 }
             }
@@ -669,16 +675,7 @@ async fn project_trust_context(
 
     let projects_trust = projects
         .into_iter()
-        .flat_map(|(key, project)| {
-            project
-                .trust_level
-                .into_iter()
-                .flat_map(move |trust_level| {
-                    normalized_project_trust_key_strs(&key)
-                        .into_iter()
-                        .map(move |normalized_key| (normalized_key, trust_level))
-                })
-        })
+        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
         .collect();
 
     Ok(ProjectTrustContext {
@@ -714,17 +711,6 @@ fn normalized_project_trust_keys(path: &Path) -> Vec<String> {
     }
 }
 
-fn normalized_project_trust_key_strs(path: &str) -> Vec<String> {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        normalized_project_trust_keys(path)
-    } else {
-        vec![normalize_project_trust_lookup_key(
-            path.to_string_lossy().to_string(),
-        )]
-    }
-}
-
 fn normalize_project_trust_lookup_key(key: String) -> String {
     if cfg!(windows) {
         key.to_ascii_lowercase()
@@ -733,9 +719,27 @@ fn normalize_project_trust_lookup_key(key: String) -> String {
     }
 }
 /// Convert the path to the canonical trust key we store and compare against.
-/// On Windows this also normalizes case so alias paths still match.
+/// On Windows this also normalizes case so lookups remain case-insensitive.
 pub fn project_trust_key(project_path: &Path) -> String {
     normalized_project_trust_key(project_path)
+}
+
+fn project_trust_for_lookup_key(
+    projects_trust: &std::collections::HashMap<String, TrustLevel>,
+    lookup_key: &str,
+) -> Option<(String, TrustLevel)> {
+    if let Some(trust_level) = projects_trust.get(lookup_key).copied() {
+        return Some((lookup_key.to_string(), trust_level));
+    }
+
+    let mut normalized_matches: Vec<_> = projects_trust
+        .iter()
+        .filter(|(key, _)| normalize_project_trust_lookup_key((*key).clone()) == lookup_key)
+        .collect();
+    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches
+        .first()
+        .map(|(key, trust_level)| ((**key).clone(), **trust_level))
 }
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
@@ -923,8 +927,9 @@ async fn load_project_layers(
 /// exactly one value rather than a list of allowed values.
 ///
 /// If present, re-interpret `managed_config.toml` as a `requirements.toml`
-/// where each specified field is treated as a constraint allowing only that
-/// value.
+/// where each specified field is treated as a constraint. Most fields allow
+/// only the specified value. `approvals_reviewer = "guardian_subagent"` also
+/// allows `user` so people can opt out of the guardian reviewer.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
@@ -945,7 +950,11 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
         }
         if let Some(approvals_reviewer) = approvals_reviewer {
-            config_requirements_toml.allowed_approvals_reviewers = Some(vec![approvals_reviewer]);
+            let mut allowed_reviewers = vec![approvals_reviewer];
+            if approvals_reviewer == ApprovalsReviewer::GuardianSubagent {
+                allowed_reviewers.push(ApprovalsReviewer::User);
+            }
+            config_requirements_toml.allowed_approvals_reviewers = Some(allowed_reviewers);
         }
         if let Some(sandbox_mode) = sandbox_mode {
             let required_mode: SandboxModeRequirement = sandbox_mode.into();
@@ -1026,7 +1035,7 @@ foo = "xyzzy"
     }
 
     #[test]
-    fn legacy_managed_config_backfill_includes_approvals_reviewer() {
+    fn legacy_managed_config_backfill_allows_user_when_guardian_is_required() {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
@@ -1037,7 +1046,26 @@ foo = "xyzzy"
 
         assert_eq!(
             requirements.allowed_approvals_reviewers,
-            Some(vec![ApprovalsReviewer::GuardianSubagent])
+            Some(vec![
+                ApprovalsReviewer::GuardianSubagent,
+                ApprovalsReviewer::User
+            ])
+        );
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_preserves_user_only_approvals_reviewer() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            sandbox_mode: None,
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_approvals_reviewers,
+            Some(vec![ApprovalsReviewer::User])
         );
     }
 

@@ -16,6 +16,7 @@ use std::sync::Weak;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tracing::error;
 
 type PendingInterruptQueue = Vec<(
@@ -27,6 +28,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) rollout_path: PathBuf,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
+    pub(crate) instruction_sources: Vec<PathBuf>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,
 }
 
@@ -158,6 +160,7 @@ pub(crate) async fn resolve_server_request_on_thread_listener(
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
+    has_connections_watcher: watch::Sender<bool>,
 }
 
 impl Default for ThreadEntry {
@@ -165,7 +168,18 @@ impl Default for ThreadEntry {
         Self {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
+            has_connections_watcher: watch::channel(false).0,
         }
+    }
+}
+
+impl ThreadEntry {
+    fn update_has_connections(&self) {
+        let _ = self.has_connections_watcher.send_if_modified(|current| {
+            let prev = *current;
+            *current = !self.connection_ids.is_empty();
+            prev != *current
+        });
     }
 }
 
@@ -285,12 +299,14 @@ impl ThreadStateManager {
             }
             if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
                 thread_entry.connection_ids.remove(&connection_id);
+                thread_entry.update_has_connections();
             }
         };
 
         true
     }
 
+    #[cfg(test)]
     pub(crate) async fn has_subscribers(&self, thread_id: ThreadId) -> bool {
         self.state
             .lock()
@@ -318,6 +334,7 @@ impl ThreadStateManager {
                 .insert(thread_id);
             let thread_entry = state.threads.entry(thread_id).or_default();
             thread_entry.connection_ids.insert(connection_id);
+            thread_entry.update_has_connections();
             thread_entry.state.clone()
         };
         {
@@ -343,17 +360,14 @@ impl ThreadStateManager {
             .entry(connection_id)
             .or_default()
             .insert(thread_id);
-        state
-            .threads
-            .entry(thread_id)
-            .or_default()
-            .connection_ids
-            .insert(connection_id);
+        let thread_entry = state.threads.entry(thread_id).or_default();
+        thread_entry.connection_ids.insert(connection_id);
+        thread_entry.update_has_connections();
         true
     }
 
-    pub(crate) async fn remove_connection(&self, connection_id: ConnectionId) {
-        let thread_states = {
+    pub(crate) async fn remove_connection(&self, connection_id: ConnectionId) -> Vec<ThreadId> {
+        {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
             let thread_ids = state
@@ -363,40 +377,29 @@ impl ThreadStateManager {
             for thread_id in &thread_ids {
                 if let Some(thread_entry) = state.threads.get_mut(thread_id) {
                     thread_entry.connection_ids.remove(&connection_id);
+                    thread_entry.update_has_connections();
                 }
             }
             thread_ids
                 .into_iter()
-                .map(|thread_id| {
-                    (
-                        thread_id,
-                        state
-                            .threads
-                            .get(&thread_id)
-                            .is_none_or(|thread_entry| thread_entry.connection_ids.is_empty()),
-                        state
-                            .threads
-                            .get(&thread_id)
-                            .map(|thread_entry| thread_entry.state.clone()),
-                    )
+                .filter(|thread_id| {
+                    state
+                        .threads
+                        .get(thread_id)
+                        .is_some_and(|thread_entry| thread_entry.connection_ids.is_empty())
                 })
                 .collect::<Vec<_>>()
-        };
-
-        for (thread_id, no_subscribers, thread_state) in thread_states {
-            if !no_subscribers {
-                continue;
-            }
-            let Some(thread_state) = thread_state else {
-                continue;
-            };
-            let listener_generation = thread_state.lock().await.listener_generation;
-            tracing::debug!(
-                thread_id = %thread_id,
-                connection_id = ?connection_id,
-                listener_generation,
-                "retaining thread listener after connection disconnect left zero subscribers"
-            );
         }
+    }
+
+    pub(crate) async fn subscribe_to_has_connections(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<watch::Receiver<bool>> {
+        let state = self.state.lock().await;
+        state
+            .threads
+            .get(&thread_id)
+            .map(|thread_entry| thread_entry.has_connections_watcher.subscribe())
     }
 }

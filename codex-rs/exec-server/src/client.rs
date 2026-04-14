@@ -3,20 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use codex_app_server_protocol::FsCopyParams;
-use codex_app_server_protocol::FsCopyResponse;
-use codex_app_server_protocol::FsCreateDirectoryParams;
-use codex_app_server_protocol::FsCreateDirectoryResponse;
-use codex_app_server_protocol::FsGetMetadataParams;
-use codex_app_server_protocol::FsGetMetadataResponse;
-use codex_app_server_protocol::FsReadDirectoryParams;
-use codex_app_server_protocol::FsReadDirectoryResponse;
-use codex_app_server_protocol::FsReadFileParams;
-use codex_app_server_protocol::FsReadFileResponse;
-use codex_app_server_protocol::FsRemoveParams;
-use codex_app_server_protocol::FsRemoveResponse;
-use codex_app_server_protocol::FsWriteFileParams;
-use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -49,6 +35,20 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCopyParams;
+use crate::protocol::FsCopyResponse;
+use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsGetMetadataParams;
+use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsReadDirectoryParams;
+use crate::protocol::FsReadDirectoryResponse;
+use crate::protocol::FsReadFileParams;
+use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsRemoveParams;
+use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWriteFileParams;
+use crate::protocol::FsWriteFileResponse;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -71,6 +71,7 @@ impl Default for ExecServerClientConnectOptions {
         Self {
             client_name: "codex-core".to_string(),
             initialize_timeout: INITIALIZE_TIMEOUT,
+            resume_session_id: None,
         }
     }
 }
@@ -80,6 +81,7 @@ impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
         Self {
             client_name: value.client_name,
             initialize_timeout: value.initialize_timeout,
+            resume_session_id: value.resume_session_id,
         }
     }
 }
@@ -91,6 +93,7 @@ impl RemoteExecServerConnectArgs {
             client_name,
             connect_timeout: CONNECT_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,
+            resume_session_id: None,
         }
     }
 }
@@ -118,6 +121,7 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
+    session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -190,14 +194,29 @@ impl ExecServerClient {
         let ExecServerClientConnectOptions {
             client_name,
             initialize_timeout,
+            resume_session_id,
         } = options;
 
         timeout(initialize_timeout, async {
-            let response = self
+            let response: InitializeResponse = self
                 .inner
                 .client
-                .call(INITIALIZE_METHOD, &InitializeParams { client_name })
+                .call(
+                    INITIALIZE_METHOD,
+                    &InitializeParams {
+                        client_name,
+                        resume_session_id,
+                    },
+                )
                 .await?;
+            {
+                let mut session_id = self
+                    .inner
+                    .session_id
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *session_id = Some(response.session_id.clone());
+            }
             self.notify_initialized().await?;
             Ok(response)
         })
@@ -350,6 +369,14 @@ impl ExecServerClient {
         self.inner.remove_session(process_id).await;
     }
 
+    pub fn session_id(&self) -> Option<String> {
+        self.inner
+            .session_id
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
@@ -388,6 +415,7 @@ impl ExecServerClient {
                 client: rpc_client,
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
+                session_id: std::sync::RwLock::new(None),
                 reader_task,
             }
         });
@@ -693,8 +721,10 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
-                    result: serde_json::to_value(InitializeResponse {})
-                        .expect("initialize response should serialize"),
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "session-1".to_string(),
+                    })
+                    .expect("initialize response should serialize"),
                 }),
             )
             .await;

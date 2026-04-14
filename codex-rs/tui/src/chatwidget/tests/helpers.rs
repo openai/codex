@@ -11,7 +11,7 @@ pub(super) async fn test_config() -> Config {
     let mut config =
         Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), Vec::new())
             .expect("config");
-    config.codex_home = codex_home.clone();
+    config.codex_home = codex_home.abs();
     config.sqlite_home = codex_home.clone();
     config.log_dir = codex_home.join("log");
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
@@ -109,7 +109,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
 }
 
 pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info = codex_core::test_support::construct_model_info_offline(model, config);
+    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
     SessionTelemetry::new(
         ThreadId::new(),
         model,
@@ -131,7 +131,7 @@ pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
             .enabled(Feature::DefaultModeRequestUserInput),
     };
     Arc::new(ModelCatalog::new(
-        codex_core::test_support::all_model_presets().clone(),
+        crate::legacy_core::test_support::all_model_presets().clone(),
         collaboration_modes_config,
     ))
 }
@@ -148,9 +148,9 @@ pub(super) async fn make_chatwidget_manual(
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
-    let resolved_model = model_override
-        .map(str::to_owned)
-        .unwrap_or_else(|| codex_core::test_support::get_model_offline(cfg.model.as_deref()));
+    let resolved_model = model_override.map(str::to_owned).unwrap_or_else(|| {
+        crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref())
+    });
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
@@ -204,10 +204,11 @@ pub(super) async fn make_chatwidget_manual(
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
         stream_controller: None,
         plan_stream_controller: None,
+        clipboard_lease: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
-        last_copyable_output: None,
-        pending_turn_copyable_output: None,
+        last_agent_markdown: None,
+        saw_copy_source_this_turn: false,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
@@ -238,10 +239,12 @@ pub(super) async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status: StatusIndicatorState::working(),
+        active_hook_cell: None,
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
+        last_turn_id: None,
         thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
@@ -272,6 +275,7 @@ pub(super) async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_cwd: None,
+        instruction_source_paths: Vec::new(),
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -343,6 +347,69 @@ pub(super) fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiv
 pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.has_chatgpt_account = true;
     chat.model_catalog = test_model_catalog(&chat.config);
+}
+
+fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
+    let additional_speed_tiers = if supports_fast_mode {
+        vec![codex_protocol::openai_models::SPEED_TIER_FAST]
+    } else {
+        Vec::new()
+    };
+    serde_json::from_value(json!({
+        "slug": slug,
+        "display_name": slug,
+        "description": format!("{slug} description"),
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [{"effort": "medium", "description": "medium"}],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": priority,
+        "additional_speed_tiers": additional_speed_tiers,
+        "availability_nux": null,
+        "upgrade": null,
+        "base_instructions": "base instructions",
+        "supports_reasoning_summaries": false,
+        "default_reasoning_summary": "none",
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10_000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "context_window": 272_000,
+        "experimental_supported_tools": [],
+    }))
+    .expect("valid model info")
+}
+
+pub(crate) fn set_fast_mode_test_catalog(chat: &mut ChatWidget) {
+    let models: Vec<ModelPreset> = ModelsResponse {
+        models: vec![
+            test_model_info(
+                "gpt-5.4", /*priority*/ 0, /*supports_fast_mode*/ true,
+            ),
+            test_model_info(
+                "gpt-5.3-codex",
+                /*priority*/ 1,
+                /*supports_fast_mode*/ false,
+            ),
+        ],
+    }
+    .models
+    .into_iter()
+    .map(Into::into)
+    .collect();
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(
+        models,
+        CollaborationModesConfig {
+            default_mode_request_user_input: chat
+                .config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        },
+    ));
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -601,6 +668,35 @@ pub(super) fn active_blob(chat: &ChatWidget) -> String {
     lines_to_single_string(&lines)
 }
 
+pub(super) fn active_hook_blob(chat: &ChatWidget) -> String {
+    let Some(cell) = chat.active_hook_cell.as_ref() else {
+        return "<empty>\n".to_string();
+    };
+    let lines = cell.display_lines(/*width*/ 80);
+    lines_to_single_string(&lines)
+}
+
+pub(super) fn expire_quiet_hook_linger(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.expire_quiet_runs_now_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
+pub(super) fn reveal_running_hooks(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.reveal_running_runs_now_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
+pub(super) fn reveal_running_hooks_after_delayed_redraw(chat: &mut ChatWidget) {
+    if let Some(cell) = chat.active_hook_cell.as_mut() {
+        cell.reveal_running_runs_after_delayed_redraw_for_test();
+    }
+    chat.pre_draw_tick();
+}
+
 pub(super) fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .model_catalog
@@ -855,7 +951,7 @@ pub(super) fn plugins_test_detail(
                 description: format!("{name} description"),
                 short_description: None,
                 interface: None,
-                path: PathBuf::from(format!("/skills/{name}/SKILL.md")),
+                path: plugins_test_absolute_path(&format!("skills/{name}/SKILL.md")),
                 enabled: true,
             })
             .collect(),
@@ -914,6 +1010,18 @@ pub(super) async fn assert_hook_events_snapshot(
             },
         }),
     });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "hook start should update the live hook cell instead of writing history"
+    );
+    reveal_running_hooks(&mut chat);
+    assert!(
+        active_hook_blob(&chat).contains(&format!(
+            "Running {} hook: {status_message}",
+            hook_event_label(event_name)
+        )),
+        "hook start should render in the live hook cell"
+    );
 
     chat.handle_codex_event(Event {
         id: "hook-1".into(),
@@ -952,4 +1060,14 @@ pub(super) async fn assert_hook_events_snapshot(
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!(snapshot_name, combined);
+}
+
+fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
+    match event_name {
+        codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        codex_protocol::protocol::HookEventName::Stop => "Stop",
+    }
 }

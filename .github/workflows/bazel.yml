@@ -51,37 +51,23 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Set up Bazel CI
-        id: setup_bazel
-        uses: ./.github/actions/setup-bazel-ci
+      - name: Check rusty_v8 MODULE.bazel checksums
+        if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
+          python3 -m unittest discover -s .github/scripts -p test_rusty_v8_bazel.py
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
         with:
           target: ${{ matrix.target }}
           install-test-prereqs: "true"
-
-      # Restore the Bazel repository cache explicitly so external dependencies
-      # do not need to be re-downloaded on every CI run. Keep restore failures
-      # non-fatal so transient cache-service errors degrade to a cold build
-      # instead of failing the job.
-      - name: Restore bazel repository cache
-        id: cache_bazel_repository_restore
-        continue-on-error: true
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
-          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
-          restore-keys: |
-            bazel-cache-${{ matrix.target }}
-
       - name: Check MODULE.bazel.lock is up to date
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
-
-      - name: Set up Bazel execution logs
-        shell: bash
-        run: |
-          mkdir -p "${RUNNER_TEMP}/bazel-execution-logs"
-          echo "CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR=${RUNNER_TEMP}/bazel-execution-logs" >> "${GITHUB_ENV}"
 
       - name: bazel test //...
         env:
@@ -126,11 +112,11 @@ jobs:
       # Save bazel repository cache explicitly; make non-fatal so cache uploading
       # never fails the overall job. Only save when key wasn't hit.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.cache_bazel_repository_restore.outputs.cache-hit != 'true'
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
 
   clippy:
@@ -155,31 +141,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Set up Bazel CI
-        id: setup_bazel
-        uses: ./.github/actions/setup-bazel-ci
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
         with:
           target: ${{ matrix.target }}
-
-      # Restore the Bazel repository cache explicitly so external dependencies
-      # do not need to be re-downloaded on every CI run. Keep restore failures
-      # non-fatal so transient cache-service errors degrade to a cold build
-      # instead of failing the job.
-      - name: Restore bazel repository cache
-        id: cache_bazel_repository_restore
-        continue-on-error: true
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
-          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
-          restore-keys: |
-            bazel-cache-${{ matrix.target }}
-
-      - name: Set up Bazel execution logs
-        shell: bash
-        run: |
-          mkdir -p "${RUNNER_TEMP}/bazel-execution-logs"
-          echo "CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR=${RUNNER_TEMP}/bazel-execution-logs" >> "${GITHUB_ENV}"
 
       - name: bazel build --config=clippy lint targets
         env:
@@ -223,9 +189,9 @@ jobs:
       # Save bazel repository cache explicitly; make non-fatal so cache uploading
       # never fails the overall job. Only save when key wasn't hit.
       - name: Save bazel repository cache
-        if: always() && !cancelled()
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}

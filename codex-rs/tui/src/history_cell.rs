@@ -19,6 +19,8 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -29,6 +31,8 @@ use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
+#[cfg(test)]
+use crate::test_support::test_path_buf;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
@@ -42,12 +46,6 @@ use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_config::types::McpServerTransportConfig;
-#[cfg(test)]
-use codex_core::McpManager;
-use codex_core::config::Config;
-#[cfg(test)]
-use codex_core::plugins::PluginsManager;
-use codex_core::web_search_detail;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
@@ -86,13 +84,17 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+mod hook_cell;
+
+pub(crate) use hook_cell::HookCell;
+pub(crate) use hook_cell::new_active_hook_cell;
+pub(crate) use hook_cell::new_completed_hook_cell;
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -892,6 +894,18 @@ pub fn new_approval_decision_cell(
             };
             ("✗ ".red(), summary)
         }
+        TimedOut => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "Review ".into(),
+                    "timed out".bold(),
+                    " before codex could run ".into(),
+                    snippet,
+                ],
+            )
+        }
         Abort => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
@@ -968,6 +982,38 @@ pub fn new_guardian_approved_action_request(summary: String) -> Box<dyn HistoryC
         Span::from(summary).dim(),
     ]);
     Box::new(PrefixedWrappedHistoryCell::new(line, "✔ ".green(), "  "))
+}
+
+pub fn new_guardian_timed_out_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
+    let mut summary = vec![
+        "Review ".into(),
+        "timed out".bold(),
+        " before codex could apply ".into(),
+    ];
+    if files.len() == 1 {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files[0].clone()).dim());
+    } else {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files.len().to_string()).dim());
+        summary.push(" files".into());
+    }
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        "✗ ".red(),
+        "  ",
+    ))
+}
+
+pub fn new_guardian_timed_out_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Review ".into(),
+        "timed out".bold(),
+        " before ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
 }
 
 /// Cyan history cell line showing the current review status.
@@ -1825,8 +1871,7 @@ pub(crate) fn new_mcp_tools_output(
         lines.push("".into());
     }
 
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let effective_servers = mcp_manager.effective_servers(config, /*auth*/ None);
+    let effective_servers = config.mcp_servers.get().clone();
     let mut servers: Vec<_> = effective_servers.iter().collect();
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -2773,10 +2818,10 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::legacy_core::config::Config;
+    use crate::legacy_core::config::ConfigBuilder;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigBuilder;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;
@@ -2970,7 +3015,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
+            cwd: test_path_buf("/tmp/project"),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -3090,7 +3135,7 @@ mod tests {
     )]
     async fn session_info_availability_nux_tooltip_snapshot() {
         let mut config = test_config().await;
-        config.cwd = PathBuf::from("/tmp/project").abs();
+        config.cwd = test_path_buf("/tmp/project").abs();
         let cell = new_session_info(
             &config,
             "gpt-5",

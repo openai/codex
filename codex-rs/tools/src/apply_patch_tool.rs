@@ -102,9 +102,9 @@ pub fn create_apply_patch_freeform_tool() -> ToolSpec {
 pub fn create_apply_patch_json_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "input".to_string(),
-        JsonSchema::String {
-            description: Some("The entire contents of the apply_patch command".to_string()),
-        },
+        JsonSchema::string(Some(
+            "The entire contents of the apply_patch command".to_string(),
+        )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -112,11 +112,11 @@ pub fn create_apply_patch_json_tool() -> ToolSpec {
         description: APPLY_PATCH_JSON_TOOL_DESCRIPTION.to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec!["input".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+            Some(vec!["input".to_string()]),
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 }

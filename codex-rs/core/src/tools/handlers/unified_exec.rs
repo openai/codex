@@ -121,7 +121,9 @@ impl ToolHandler for UnifiedExecHandler {
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        if invocation.tool_name != "exec_command" {
+        if invocation.tool_name.namespace.is_some()
+            || invocation.tool_name.name.as_str() != "exec_command"
+        {
             return None;
         }
 
@@ -176,14 +178,20 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
+        let Some(environment) = turn.environment.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "unified exec is unavailable in this session".to_string(),
+            ));
+        };
+        let fs = environment.get_filesystem();
+
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
-        let response = match tool_name.as_str() {
+        let response = match tool_name.name.as_str() {
             "exec_command" => {
-                let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
-                let args: ExecCommandArgs =
-                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
+                let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
@@ -277,12 +285,12 @@ impl ToolHandler for UnifiedExecHandler {
                 if let Some(output) = intercept_apply_patch(
                     &command,
                     &cwd,
-                    Some(yield_time_ms),
+                    fs.as_ref(),
                     context.session.clone(),
                     context.turn.clone(),
                     Some(&tracker),
                     &context.call_id,
-                    tool_name.as_str(),
+                    &tool_name.name,
                 )
                 .await?
                 {

@@ -17,6 +17,7 @@ use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
@@ -116,8 +117,11 @@ async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
 async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<()> {
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
+            transport: None,
+            voice: None,
         }))
         .await?;
 
@@ -235,6 +239,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -249,6 +254,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -379,6 +385,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -453,6 +460,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -464,6 +472,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -579,6 +588,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -590,6 +600,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -607,6 +618,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -704,6 +716,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -715,6 +728,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -806,6 +820,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&baseline_codex, |event| {
@@ -820,6 +835,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&baseline_codex, |event| {
@@ -869,7 +885,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 let override_base_instructions = override_base_instructions.clone();
                 move |config| {
                     config.model_context_window = Some(override_context_window);
-                    config.base_instructions = Some(Some(override_base_instructions));
+                    config.base_instructions = Some(override_base_instructions);
                 }
             }),
     )
@@ -905,6 +921,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&override_codex, |event| {
@@ -919,6 +936,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&override_codex, |event| {
@@ -987,6 +1005,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -1065,6 +1084,7 @@ async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -1147,6 +1167,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1288,6 +1309,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1303,6 +1325,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1325,6 +1348,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1419,6 +1443,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1433,6 +1458,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1502,6 +1528,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_sta
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1513,6 +1540,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_sta
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1577,6 +1605,7 @@ async fn remote_request_uses_custom_experimental_realtime_start_instructions() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1635,6 +1664,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_end
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1648,6 +1678,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_end
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1720,6 +1751,7 @@ async fn snapshot_request_shape_remote_manual_compact_restates_realtime_start() 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1734,6 +1766,7 @@ async fn snapshot_request_shape_remote_manual_compact_restates_realtime_start() 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1814,6 +1847,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_does_not_restate_real
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1827,6 +1861,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_does_not_restate_real
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1915,6 +1950,7 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1942,6 +1978,7 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2035,6 +2072,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             })
             .await?;
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2119,6 +2157,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2145,6 +2184,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2261,6 +2301,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2272,6 +2313,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     let error_message = wait_for_event_match(&codex, |event| match event {
@@ -2354,6 +2396,7 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2429,6 +2472,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2512,6 +2556,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2526,6 +2571,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2605,6 +2651,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

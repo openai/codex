@@ -7,6 +7,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::sync::Arc;
@@ -181,15 +182,15 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
             }
         }"#;
 
-    let base_path = resolve_workdir_base_path(json, cwd.path())?;
-    let args: ExecCommandArgs = parse_arguments_with_base_path(json, base_path.as_path())?;
+    let base_path = resolve_workdir_base_path(json, &cwd.path().abs())?;
+    let args: ExecCommandArgs = parse_arguments_with_base_path(json, &base_path)?;
 
     assert_eq!(
         args.additional_permissions,
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: None,
-                write: Some(vec![AbsolutePathBuf::try_from(expected_write)?]),
+                write: Some(vec![expected_write.abs()]),
             }),
             ..Default::default()
         })
@@ -211,8 +212,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             turn: turn.into(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-43".to_string(),
-            tool_name: "exec_command".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("exec_command"),
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
@@ -235,8 +235,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
             turn: turn.into(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-44".to_string(),
-            tool_name: "write_stdin".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("write_stdin"),
             payload,
         }),
         None

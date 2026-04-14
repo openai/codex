@@ -9,6 +9,9 @@ use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+use tracing::Level;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_test::internal::MockWriter;
 
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plugins() {
@@ -18,7 +21,9 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -48,7 +53,9 @@ plugins = false
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -68,7 +75,9 @@ async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -103,7 +112,9 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
         .expect("plugin should install");
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config)
+        .await
+        .unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -124,7 +135,9 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -138,5 +151,67 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
             mcp_server_names: vec!["sample-docs".to_string()],
             app_connector_ids: vec!["connector_calendar".to_string()],
         }]
+    );
+}
+
+#[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_does_not_reload_marketplace_per_plugin() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(
+        &curated_root,
+        &["slack", "build-ios-apps", "life-science-research"],
+    );
+    write_plugins_feature_config(codex_home.path());
+
+    let too_long_prompt = "x".repeat(129);
+    for plugin_name in ["build-ios-apps", "life-science-research"] {
+        write_file(
+            &curated_root.join(format!("plugins/{plugin_name}/.codex-plugin/plugin.json")),
+            &format!(
+                r#"{{
+  "name": "{plugin_name}",
+  "description": "Plugin that includes skills, MCP servers, and app connectors",
+  "interface": {{
+    "defaultPrompt": "{too_long_prompt}"
+  }}
+}}"#
+            ),
+        );
+    }
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let buffer: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_ansi(false)
+        .with_max_level(Level::WARN)
+        .with_span_events(FmtSpan::NONE)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
+
+    assert_eq!(discoverable_plugins.len(), 1);
+    assert_eq!(discoverable_plugins[0].id, "slack@openai-curated");
+
+    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
+    assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 2);
+    let normalized_logs = logs.replace('\\', "/");
+    assert_eq!(
+        normalized_logs
+            .matches("build-ios-apps/.codex-plugin/plugin.json")
+            .count(),
+        1
+    );
+    assert_eq!(
+        normalized_logs
+            .matches("life-science-research/.codex-plugin/plugin.json")
+            .count(),
+        1
     );
 }

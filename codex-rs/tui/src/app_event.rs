@@ -30,6 +30,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
+use crate::legacy_core::plugins::PluginCapabilitySummary;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -39,6 +40,8 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_realtime_webrtc::RealtimeWebrtcEvent;
+use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -75,6 +78,23 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+/// Distinguishes why a rate-limit refresh was requested so the completion
+/// handler can route the result correctly.
+///
+/// A `StartupPrefetch` fires once, concurrently with the rest of TUI init, and
+/// only updates the cached snapshots (no status card to finalize). A
+/// `StatusCommand` is tied to a specific `/status` invocation and must call
+/// `finish_status_rate_limit_refresh` when done so the card stops showing a
+/// "refreshing" state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RateLimitRefreshOrigin {
+    /// Eagerly fetched after bootstrap so the first `/status` already has data.
+    StartupPrefetch,
+    /// User-initiated via `/status`; the `request_id` correlates with the
+    /// status card that should be updated when the fetch completes.
+    StatusCommand { request_id: u64 },
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -104,6 +124,9 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+
+    /// Resume a thread by UUID or thread name inside the running TUI session.
+    ResumeSessionByIdOrName(String),
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -139,12 +162,12 @@ pub(crate) enum AppEvent {
 
     /// Refresh account rate limits in the background.
     RefreshRateLimits {
-        request_id: u64,
+        origin: RateLimitRefreshOrigin,
     },
 
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
-        request_id: u64,
+        origin: RateLimitRefreshOrigin,
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
@@ -248,6 +271,14 @@ pub(crate) enum AppEvent {
         result: Result<PluginUninstallResponse, String>,
     },
 
+    /// Refresh plugin mention bindings from the current config.
+    RefreshPluginMentions,
+
+    /// Result of refreshing plugin mention bindings.
+    PluginMentionsLoaded {
+        plugins: Option<Vec<PluginCapabilitySummary>>,
+    },
+
     /// Advance the post-install plugin app-auth flow.
     PluginInstallAuthAdvance {
         refresh_connectors: bool,
@@ -323,6 +354,17 @@ pub(crate) enum AppEvent {
     RestartRealtimeAudioDevice {
         kind: RealtimeAudioDeviceKind,
     },
+
+    /// Result of creating a TUI-owned realtime WebRTC offer.
+    RealtimeWebrtcOfferCreated {
+        result: Result<RealtimeWebrtcOffer, String>,
+    },
+
+    /// Peer-connection lifecycle event from a TUI-owned realtime WebRTC session.
+    RealtimeWebrtcEvent(RealtimeWebrtcEvent),
+
+    /// Local microphone level from a TUI-owned realtime WebRTC session.
+    RealtimeWebrtcLocalAudioLevel(u16),
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
@@ -469,7 +511,7 @@ pub(crate) enum AppEvent {
 
     /// Enable or disable a skill by path.
     SetSkillEnabled {
-        path: PathBuf,
+        path: AbsolutePathBuf,
         enabled: bool,
     },
 
@@ -526,6 +568,7 @@ pub(crate) enum AppEvent {
     SubmitFeedback {
         category: FeedbackCategory,
         reason: Option<String>,
+        turn_id: Option<String>,
         include_logs: bool,
     },
 
@@ -567,6 +610,12 @@ pub(crate) enum AppEvent {
     SyntaxThemeSelected {
         name: String,
     },
+}
+
+#[derive(Debug)]
+pub(crate) struct RealtimeWebrtcOffer {
+    pub(crate) offer_sdp: String,
+    pub(crate) handle: RealtimeWebrtcSessionHandle,
 }
 
 /// The exit strategy requested by the UI layer.

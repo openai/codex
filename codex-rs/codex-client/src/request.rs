@@ -12,12 +12,27 @@ pub enum RequestCompression {
     Zstd,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestBody {
+    Json(Value),
+    Raw(Bytes),
+}
+
+impl RequestBody {
+    pub fn json(&self) -> Option<&Value> {
+        match self {
+            Self::Json(value) => Some(value),
+            Self::Raw(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Request {
     pub method: Method,
     pub url: String,
     pub headers: HeaderMap,
-    pub body: Option<Value>,
+    pub body: Option<RequestBody>,
     pub compression: RequestCompression,
     pub timeout: Option<Duration>,
 }
@@ -35,7 +50,12 @@ impl Request {
     }
 
     pub fn with_json<T: Serialize>(mut self, body: &T) -> Self {
-        self.body = serde_json::to_value(body).ok();
+        self.body = serde_json::to_value(body).ok().map(RequestBody::Json);
+        self
+    }
+
+    pub fn with_raw_body(mut self, body: impl Into<Bytes>) -> Self {
+        self.body = Some(RequestBody::Raw(body.into()));
         self
     }
 

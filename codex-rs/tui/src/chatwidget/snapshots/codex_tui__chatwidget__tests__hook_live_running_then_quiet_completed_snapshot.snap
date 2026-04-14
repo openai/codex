@@ -1,0 +1,21 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"{running_snapshot}\\n\\n{completed_lingering_snapshot}\\n\\n{completed_snapshot}\")"
+---
+running
+live hooks:
+• Running PostToolUse hook
+history:
+<empty>
+
+completed lingering
+live hooks:
+• Running PostToolUse hook
+history:
+<empty>
+
+completed after linger
+live hooks:
+<empty>
+history:
+<empty>

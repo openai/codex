@@ -38,13 +38,14 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
     }
 
     let success = if success { "true" } else { "false" };
+    let tool_name = invocation.tool_name.display();
     for kind in kinds {
         invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
             /*inc*/ 1,
             &[
                 ("kind", kind.as_tag()),
-                ("tool", invocation.tool_name.as_str()),
+                ("tool", &tool_name),
                 ("success", success),
             ],
         );
@@ -77,15 +78,26 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
         return None;
     };
 
-    match invocation.tool_name.as_str() {
-        "shell" => serde_json::from_str::<ShellToolCallParams>(arguments)
+    match (
+        invocation.tool_name.namespace.as_deref(),
+        invocation.tool_name.name.as_str(),
+    ) {
+        (None, "shell") => serde_json::from_str::<ShellToolCallParams>(arguments)
             .ok()
-            .map(|params| (params.command, invocation.turn.resolve_path(params.workdir))),
-        "shell_command" => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+            .map(|params| {
+                (
+                    params.command,
+                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                )
+            }),
+        (None, "shell_command") => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .ok()
             .map(|params| {
                 if !invocation.turn.tools_config.allow_login_shell && params.login == Some(true) {
-                    return (Vec::new(), invocation.turn.resolve_path(params.workdir));
+                    return (
+                        Vec::new(),
+                        invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                    );
                 }
                 let use_login_shell = params
                     .login
@@ -94,9 +106,12 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     .session
                     .user_shell()
                     .derive_exec_args(&params.command, use_login_shell);
-                (command, invocation.turn.resolve_path(params.workdir))
+                (
+                    command,
+                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                )
             }),
-        "exec_command" => serde_json::from_str::<ExecCommandArgs>(arguments)
+        (None, "exec_command") => serde_json::from_str::<ExecCommandArgs>(arguments)
             .ok()
             .and_then(|params| {
                 let command = crate::tools::handlers::unified_exec::get_command(
@@ -106,9 +121,12 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     invocation.turn.tools_config.allow_login_shell,
                 )
                 .ok()?;
-                Some((command, invocation.turn.resolve_path(params.workdir)))
+                Some((
+                    command,
+                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
+                ))
             }),
-        _ => None,
+        (Some(_), _) | (None, _) => None,
     }
 }
 

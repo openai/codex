@@ -1050,7 +1050,7 @@ impl JsReplManager {
                 "--experimental-vm-modules".to_string(),
                 kernel_path.to_string_lossy().to_string(),
             ],
-            cwd: turn.cwd.to_path_buf(),
+            cwd: turn.cwd.clone(),
             env,
             additional_permissions: None,
         };
@@ -1068,7 +1068,7 @@ impl JsReplManager {
                 enforce_managed_network: has_managed_network_requirements,
                 network: None,
                 sandbox_policy_cwd: &turn.cwd,
-                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
+                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
                 windows_sandbox_private_desktop: turn
@@ -1561,30 +1561,27 @@ impl JsReplManager {
             .await
             .list_all_tools()
             .await;
-
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
-                mcp_tools: Some(
-                    mcp_tools
-                        .into_iter()
-                        .map(|(name, tool)| (name, tool.tool))
-                        .collect(),
-                ),
-                app_tools: None,
+                deferred_mcp_tools: None,
+                mcp_tools: Some(mcp_tools),
+                // JS REPL dispatches nested tool calls directly, not through
+                // `ToolCallRuntime`'s parallel scheduling lock.
+                parallel_mcp_server_names: std::collections::HashSet::new(),
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             },
         );
 
-        let payload = if let Some((server, tool)) = exec
+        let payload = if let Some(tool_info) = exec
             .session
-            .parse_mcp_tool_name(&req.tool_name, &None)
+            .resolve_mcp_tool_info(&req.tool_name, /*namespace*/ None)
             .await
         {
             crate::tools::context::ToolPayload::Mcp {
-                server,
-                tool,
+                server: tool_info.server_name,
+                tool: tool_info.tool.name.to_string(),
                 raw_arguments: req.arguments.clone(),
             }
         } else if is_freeform_tool(&router.specs(), &req.tool_name) {
@@ -1599,8 +1596,7 @@ impl JsReplManager {
 
         let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
-            tool_name: tool_name.clone(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain(tool_name.clone()),
             call_id: req.id.clone(),
             payload,
         };
@@ -1718,7 +1714,7 @@ fn emitted_image_content_item(
 ) -> FunctionCallOutputContentItem {
     FunctionCallOutputContentItem::InputImage {
         image_url,
-        detail: normalize_output_image_detail(turn.features.get(), &turn.model_info, detail),
+        detail: normalize_output_image_detail(&turn.model_info, detail),
     }
 }
 

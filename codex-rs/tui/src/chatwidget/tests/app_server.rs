@@ -148,6 +148,43 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 }
 
 #[tokio::test]
+async fn live_app_server_turn_started_sets_feedback_turn_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    chat.open_feedback_note(
+        crate::app_event::FeedbackCategory::Bug,
+        /*include_logs*/ false,
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SubmitFeedback {
+            category: crate::app_event::FeedbackCategory::Bug,
+            reason: None,
+            turn_id: Some(turn_id),
+            include_logs: false,
+        }) if turn_id == "turn-1"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_file_change_item_started_preserves_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -588,6 +625,30 @@ async fn live_app_server_invalid_thread_name_update_is_ignored() {
 
     assert_eq!(chat.thread_id, Some(thread_id));
     assert_eq!(chat.thread_name, Some("original name".to_string()));
+}
+
+#[tokio::test]
+async fn live_app_server_thread_name_update_shows_resume_hint() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadNameUpdated(
+            codex_app_server_protocol::ThreadNameUpdatedNotification {
+                thread_id: thread_id.to_string(),
+                thread_name: Some("review-fix".to_string()),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.thread_name, Some("review-fix".to_string()));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Thread renamed to review-fix"));
+    assert!(rendered.contains("codex resume review-fix"));
 }
 
 #[tokio::test]

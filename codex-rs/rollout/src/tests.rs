@@ -977,7 +977,7 @@ async fn test_get_thread_contents() {
 }
 
 #[tokio::test]
-async fn test_base_instructions_missing_in_meta_stays_missing() {
+async fn test_base_instructions_missing_in_meta_defaults_to_null() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
@@ -1011,7 +1011,10 @@ async fn test_base_instructions_missing_in_meta_stays_missing() {
         .await
         .expect("session meta head");
     let first = head.first().expect("first head entry");
-    assert_eq!(first.get("base_instructions"), None);
+    assert_eq!(
+        first.get("base_instructions"),
+        Some(&serde_json::Value::Null)
+    );
 }
 
 #[tokio::test]
@@ -1140,7 +1143,6 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 agent_role: None,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
-                developer_instructions: None,
                 dynamic_tools: None,
                 memory_mode: None,
             },

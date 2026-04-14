@@ -17,6 +17,9 @@ jobs:
       - name: Verify codex-rs Cargo manifests inherit workspace settings
         run: python3 .github/scripts/verify_cargo_workspace_manifests.py
 
+      - name: Verify codex-tui does not import codex-core directly
+        run: python3 .github/scripts/verify_tui_core_boundary.py
+
       - name: Verify Bazel clippy flags match Cargo workspace lints
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
@@ -62,11 +65,6 @@ jobs:
         run: ./scripts/asciicheck.py README.md
       - name: Check root README ToC
         run: python3 scripts/readme_toc.py README.md
-
-      - name: Ensure codex-cli/README.md contains only ASCII and certain Unicode code points
-        run: ./scripts/asciicheck.py codex-cli/README.md
-      - name: Check codex-cli/README ToC
-        run: python3 scripts/readme_toc.py codex-cli/README.md
 
       - name: Prettier (run `pnpm run format:fix` to fix)
         run: pnpm run format

@@ -2,10 +2,10 @@ use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
+use crate::legacy_core::config::Config;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::config::Config;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -67,20 +67,10 @@ struct StatusRateLimitState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusHistoryHandle {
-    agents_summary: Arc<RwLock<String>>,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
 }
 
 impl StatusHistoryHandle {
-    pub(crate) fn finish_agents_summary_discovery(&self, agents_summary: String) {
-        #[expect(clippy::expect_used)]
-        let mut current = self
-            .agents_summary
-            .write()
-            .expect("status history agents summary state poisoned");
-        *current = agents_summary;
-    }
-
     pub(crate) fn finish_rate_limit_refresh(
         &self,
         rate_limits: &[RateLimitSnapshotDisplay],
@@ -360,13 +350,10 @@ impl StatusHistoryCell {
                 session_id,
                 forked_from,
                 token_usage,
-                agents_summary: agents_summary.clone(),
+                agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
             },
-            StatusHistoryHandle {
-                agents_summary,
-                rate_limit_state,
-            },
+            StatusHistoryHandle { rate_limit_state },
         )
     }
 
@@ -415,23 +402,11 @@ impl StatusHistoryCell {
                 if rows_data.is_empty() {
                     return vec![formatter.line(
                         "Limits",
-                        vec![if state.refreshing_rate_limits {
-                            Span::from("refreshing cached limits...").dim()
-                        } else {
-                            Span::from("data not available yet").dim()
-                        }],
+                        vec![Span::from("not available for this account").dim()],
                     )];
                 }
 
-                let mut lines =
-                    self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
-                if state.refreshing_rate_limits {
-                    lines.push(formatter.line(
-                        "Notice",
-                        vec![Span::from("refreshing limits in background...").dim()],
-                    ));
-                }
-                lines
+                self.rate_limit_row_lines(rows_data, available_inner_width, formatter)
             }
             StatusRateLimitData::Stale(rows_data) => {
                 let mut lines =
@@ -439,7 +414,7 @@ impl StatusHistoryCell {
                 lines.push(formatter.line(
                     "Warning",
                     vec![Span::from(if state.refreshing_rate_limits {
-                        "limits may be stale - refreshing in background..."
+                        "limits may be stale - run /status again shortly."
                     } else {
                         "limits may be stale - start new turn to refresh."
                     })
@@ -447,11 +422,17 @@ impl StatusHistoryCell {
                 ));
                 lines
             }
+            StatusRateLimitData::Unavailable => {
+                vec![formatter.line(
+                    "Limits",
+                    vec![Span::from("not available for this account").dim()],
+                )]
+            }
             StatusRateLimitData::Missing => {
                 vec![formatter.line(
                     "Limits",
                     vec![Span::from(if state.refreshing_rate_limits {
-                        "refreshing limits..."
+                        "refresh requested; run /status again shortly."
                     } else {
                         "data not available yet"
                     })
@@ -476,11 +457,21 @@ impl StatusHistoryCell {
                     resets_at,
                 } => {
                     let percent_remaining = (100.0 - percent_used).clamp(0.0, 100.0);
-                    let value_spans = vec![
+                    let summary = format_status_limit_summary(percent_remaining);
+                    let full_value_spans = vec![
                         Span::from(render_status_limit_progress_bar(percent_remaining)),
                         Span::from(" "),
-                        Span::from(format_status_limit_summary(percent_remaining)),
+                        Span::from(summary.clone()),
                     ];
+                    // On narrow terminals, keep the percentage visible rather than
+                    // letting the fixed-width progress bar crowd out the reset time.
+                    let value_spans = if line_display_width(&Line::from(full_value_spans.clone()))
+                        <= formatter.value_width(available_inner_width)
+                    {
+                        full_value_spans
+                    } else {
+                        vec![Span::from(summary)]
+                    };
                     let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
                     let base_line = Line::from(base_spans.clone());
 
@@ -496,7 +487,21 @@ impl StatusHistoryCell {
                             lines.push(Line::from(inline_spans));
                         } else {
                             lines.push(base_line);
-                            lines.push(formatter.continuation(vec![resets_span]));
+                            let reset_text = format!("(resets {resets_at})");
+                            let reset_width = formatter.value_width(available_inner_width).max(1);
+                            let wrap_options =
+                                textwrap::Options::new(reset_width).break_words(false);
+                            // Reset timestamps are the actionable part of this row, so wrap them
+                            // onto continuation lines instead of truncating partial times/dates.
+                            lines.extend(
+                                textwrap::wrap(reset_text.as_str(), wrap_options)
+                                    .into_iter()
+                                    .map(|wrapped| {
+                                        formatter.continuation(vec![
+                                            Span::from(wrapped.into_owned()).dim(),
+                                        ])
+                                    }),
+                            );
                         }
                     } else {
                         lines.push(base_line);
@@ -536,6 +541,7 @@ impl StatusHistoryCell {
                 }
                 push_label(labels, seen, "Warning");
             }
+            StatusRateLimitData::Unavailable => push_label(labels, seen, "Limits"),
             StatusRateLimitData::Missing => push_label(labels, seen, "Limits"),
         }
     }

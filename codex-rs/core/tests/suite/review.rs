@@ -726,6 +726,7 @@ async fn review_history_surfaces_in_parent_session() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();
