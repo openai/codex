@@ -481,6 +481,38 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
     compacted_history
 }
 
+/// Removes client-injected context scaffolding from retained, uncompacted suffix history.
+///
+/// Prefix compaction replaces only an earlier prefix and appends the still-live suffix. The suffix
+/// can contain context items that were injected before a later turn and are now stale after we
+/// re-inject canonical current context. Unlike compacted prefix cleanup, this intentionally keeps
+/// live model/tool state such as reasoning, function calls, and tool outputs.
+pub(crate) fn strip_injected_context_from_retained_suffix<I>(items: I) -> Vec<ResponseItem>
+where
+    I: IntoIterator<Item = ResponseItem>,
+{
+    items
+        .into_iter()
+        .filter(|item| !is_injected_context_item(item))
+        .collect()
+}
+
+fn is_injected_context_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, content, .. } if role == "developer" => {
+            crate::event_mapping::is_contextual_dev_message_content(content)
+        }
+        ResponseItem::Message { role, content, .. } if role == "user" => {
+            crate::event_mapping::is_contextual_user_message_content(content)
+                && !matches!(
+                    crate::event_mapping::parse_turn_item(item),
+                    Some(TurnItem::HookPrompt(_))
+                )
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],

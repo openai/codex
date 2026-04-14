@@ -6827,12 +6827,13 @@ async fn apply_prefix_compact_candidate(
         .await;
 
     let mut new_history = candidate.replacement_prefix;
-    new_history.extend(
+    let retained_suffix = compact::strip_injected_context_from_retained_suffix(
         current_items[candidate.base_history.len()..]
             .iter()
             .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
             .cloned(),
     );
+    new_history.extend(retained_suffix);
 
     if matches!(
         initial_context_injection,

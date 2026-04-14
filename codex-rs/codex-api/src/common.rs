@@ -32,8 +32,14 @@ pub struct CompactionInput<'a> {
     pub reasoning: Option<Reasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub prefix_mode: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<CompactionMode>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionMode {
+    Prefix,
 }
 
 /// Canonical input payload for the memory summarize endpoint.

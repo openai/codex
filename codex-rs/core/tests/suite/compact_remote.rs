@@ -134,10 +134,7 @@ impl Respond for PrefixRaceCompactResponder {
         let body = request
             .body_json::<serde_json::Value>()
             .expect("compact request body should be JSON");
-        let prefix_mode = body
-            .get("prefix_mode")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let prefix_mode = body.get("mode").and_then(serde_json::Value::as_str) == Some("prefix");
         self.requests
             .lock()
             .expect("request lock poisoned")
@@ -1262,7 +1259,7 @@ async fn prefix_compact_uses_configured_threshold_percent() -> Result<()> {
         .expect("request lock poisoned")
         .clone();
     assert_eq!(compact_requests.len(), 1);
-    assert_eq!(compact_requests[0]["prefix_mode"], json!(true));
+    assert_eq!(compact_requests[0]["mode"], json!("prefix"));
 
     Ok(())
 }
@@ -1320,10 +1317,25 @@ async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     wait_for_response_requests(&compact_mock, /*count*/ 1).await;
     assert_eq!(
-        compact_mock.single_request().body_json()["prefix_mode"],
-        json!(true)
+        compact_mock.single_request().body_json()["mode"],
+        json!("prefix")
     );
 
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -1360,6 +1372,15 @@ async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()
     assert!(!third_request_body.contains("FIRST_REMOTE_USER"));
     assert!(third_request_body.contains("SECOND_REMOTE_USER"));
     assert!(third_request_body.contains("THIRD_REMOTE_USER"));
+    let stale_context_count = requests[2]
+        .message_input_texts("user")
+        .iter()
+        .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
+        .count();
+    assert_eq!(
+        stale_context_count, 1,
+        "prefix compaction should strip stale retained suffix context before current context is reinjected"
+    );
 
     Ok(())
 }
@@ -1452,8 +1473,8 @@ async fn running_prefix_compact_is_abandoned_when_auto_compact_fires() -> Result
         .expect("request lock poisoned")
         .clone();
     assert_eq!(compact_requests.len(), 2);
-    assert_eq!(compact_requests[0]["prefix_mode"], json!(true));
-    assert!(compact_requests[1].get("prefix_mode").is_none());
+    assert_eq!(compact_requests[0]["mode"], json!("prefix"));
+    assert!(compact_requests[1].get("mode").is_none());
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 3);
@@ -1528,8 +1549,8 @@ async fn running_prefix_compact_started_on_follow_up_boundary_is_abandoned_when_
         .expect("request lock poisoned")
         .clone();
     assert_eq!(compact_requests.len(), 2);
-    assert_eq!(compact_requests[0]["prefix_mode"], json!(true));
-    assert!(compact_requests[1].get("prefix_mode").is_none());
+    assert_eq!(compact_requests[0]["mode"], json!("prefix"));
+    assert!(compact_requests[1].get("mode").is_none());
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 3);

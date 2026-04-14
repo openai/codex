@@ -122,7 +122,7 @@ pub(crate) async fn run_remote_prefix_compact_task(
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             &turn_context.session_telemetry,
-            /*prefix_mode*/ true,
+            Some(codex_api::CompactionMode::Prefix),
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
@@ -241,7 +241,7 @@ async fn run_remote_compact_task_inner_impl(
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             &turn_context.session_telemetry,
-            /*prefix_mode*/ false,
+            None,
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;

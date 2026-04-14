@@ -34,6 +34,7 @@ use std::sync::atomic::Ordering;
 use codex_api::ApiError;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
+use codex_api::CompactionMode as ApiCompactionMode;
 use codex_api::Compression;
 use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
@@ -417,7 +418,7 @@ impl ModelClient {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         session_telemetry: &SessionTelemetry,
-        prefix_mode: bool,
+        mode: Option<ApiCompactionMode>,
     ) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
@@ -462,7 +463,7 @@ impl ModelClient {
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             text,
-            prefix_mode,
+            mode,
         };
 
         let mut extra_headers = ApiHeaderMap::new();

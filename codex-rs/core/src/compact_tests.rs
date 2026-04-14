@@ -2,6 +2,9 @@ use super::*;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
+use codex_protocol::items::HookPromptFragment;
+use codex_protocol::items::build_hook_prompt_message;
+use codex_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
 
 async fn process_compacted_history_with_test_session(
@@ -21,6 +24,18 @@ async fn process_compacted_history_with_test_session(
     )
     .await;
     (refreshed, initial_context)
+}
+
+fn input_message(role: &str, text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: role.to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
 }
 
 #[test]
@@ -145,6 +160,80 @@ do things
     let collected = collect_user_messages(&items);
 
     assert_eq!(vec!["real user message".to_string()], collected);
+}
+
+#[test]
+fn strip_injected_context_from_retained_suffix_preserves_live_history() {
+    let contextual_developer = input_message("developer", "<permissions instructions>\nread only");
+    let mixed_developer = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "Persistent developer instruction.".to_string(),
+            },
+            ContentItem::InputText {
+                text: "<permissions instructions>\nworkspace-write".to_string(),
+            },
+        ],
+        end_turn: None,
+        phase: None,
+    };
+    let contextual_user = input_message(
+        "user",
+        r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#,
+    );
+    let real_user = input_message("user", "please continue");
+    let assistant = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "continuing".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    let function_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "read_file".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-1".to_string(),
+    };
+    let function_output = ResponseItem::FunctionCallOutput {
+        call_id: "call-1".to_string(),
+        output: FunctionCallOutputPayload::from_text("ok".to_string()),
+    };
+    let hook_prompt = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+        "Retry with tests.",
+        "hook-run-1",
+    )])
+    .expect("hook prompt message");
+
+    let cleaned = strip_injected_context_from_retained_suffix(vec![
+        contextual_developer,
+        mixed_developer,
+        contextual_user,
+        real_user.clone(),
+        assistant.clone(),
+        function_call.clone(),
+        function_output.clone(),
+        hook_prompt.clone(),
+    ]);
+
+    assert_eq!(
+        cleaned,
+        vec![
+            real_user,
+            assistant,
+            function_call,
+            function_output,
+            hook_prompt,
+        ]
+    );
 }
 
 #[test]
