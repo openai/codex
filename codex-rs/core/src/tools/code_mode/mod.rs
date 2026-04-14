@@ -116,14 +116,14 @@ struct CoreTurnHost {
 impl CodeModeTurnHost for CoreTurnHost {
     async fn invoke_tool(
         &self,
-        tool_name: String,
+        tool_name: ToolName,
         input: Option<JsonValue>,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String> {
         call_nested_tool(
             self.exec.clone(),
             self.tool_runtime.clone(),
-            ToolName::plain(tool_name),
+            tool_name,
             input,
             cancellation_token,
         )

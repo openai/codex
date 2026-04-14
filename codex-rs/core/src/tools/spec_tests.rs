@@ -19,6 +19,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -190,6 +191,25 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         .iter()
         .find(|tool| tool.name() == expected_name)
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
+}
+
+fn find_namespace_function_tool<'a>(
+    tools: &'a [ConfiguredToolSpec],
+    expected_namespace: &str,
+    expected_name: &str,
+) -> &'a ResponsesApiTool {
+    let namespace_tool = find_tool(tools, expected_namespace);
+    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+        panic!("expected namespace tool {expected_namespace}");
+    };
+    namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => Some(tool),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected tool {expected_namespace}{expected_name} in namespace"))
 }
 
 fn multi_agent_v2_tools_config() -> ToolsConfig {
@@ -929,8 +949,6 @@ fn search_tool_registers_namespaced_mcp_tool_aliases() {
     assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
     assert!(registry.has_handler(&app_alias));
     assert!(registry.has_handler(&mcp_alias));
-    assert!(registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
-    assert!(registry.has_handler(&ToolName::plain("mcp__rmcp__echo")));
 }
 
 #[test]
@@ -1011,11 +1029,11 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
     )
     .build();
 
-    let tool = find_tool(&tools, "dash/search");
+    let tool = find_namespace_function_tool(&tools, "dash/", "search");
     assert_eq!(
-        tool.spec,
-        ToolSpec::Function(ResponsesApiTool {
-            name: "dash/search".to_string(),
+        *tool,
+        ResponsesApiTool {
+            name: "search".to_string(),
             parameters: JsonSchema::object(
                 /*properties*/
                 BTreeMap::from([(
@@ -1029,7 +1047,7 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
-        })
+        }
     );
 }
 
@@ -1072,11 +1090,11 @@ fn test_mcp_tool_preserves_integer_schema() {
     )
     .build();
 
-    let tool = find_tool(&tools, "dash/paginate");
+    let tool = find_namespace_function_tool(&tools, "dash/", "paginate");
     assert_eq!(
-        tool.spec,
-        ToolSpec::Function(ResponsesApiTool {
-            name: "dash/paginate".to_string(),
+        *tool,
+        ResponsesApiTool {
+            name: "paginate".to_string(),
             parameters: JsonSchema::object(
                 /*properties*/
                 BTreeMap::from([(
@@ -1090,7 +1108,7 @@ fn test_mcp_tool_preserves_integer_schema() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
-        })
+        }
     );
 }
 
@@ -1134,11 +1152,11 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
     )
     .build();
 
-    let tool = find_tool(&tools, "dash/tags");
+    let tool = find_namespace_function_tool(&tools, "dash/", "tags");
     assert_eq!(
-        tool.spec,
-        ToolSpec::Function(ResponsesApiTool {
-            name: "dash/tags".to_string(),
+        *tool,
+        ResponsesApiTool {
+            name: "tags".to_string(),
             parameters: JsonSchema::object(
                 /*properties*/
                 BTreeMap::from([(
@@ -1155,7 +1173,7 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
-        })
+        }
     );
 }
 
@@ -1200,11 +1218,11 @@ fn test_mcp_tool_anyof_defaults_to_string() {
     )
     .build();
 
-    let tool = find_tool(&tools, "dash/value");
+    let tool = find_namespace_function_tool(&tools, "dash/", "value");
     assert_eq!(
-        tool.spec,
-        ToolSpec::Function(ResponsesApiTool {
-            name: "dash/value".to_string(),
+        *tool,
+        ResponsesApiTool {
+            name: "value".to_string(),
             parameters: JsonSchema::object(
                 /*properties*/
                 BTreeMap::from([(
@@ -1224,7 +1242,7 @@ fn test_mcp_tool_anyof_defaults_to_string() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
-        })
+        }
     );
 }
 
@@ -1285,11 +1303,11 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
     )
     .build();
 
-    let tool = find_tool(&tools, "test_server/do_something_cool");
+    let tool = find_namespace_function_tool(&tools, "test_server/", "do_something_cool");
     assert_eq!(
-        tool.spec,
-        ToolSpec::Function(ResponsesApiTool {
-            name: "test_server/do_something_cool".to_string(),
+        *tool,
+        ResponsesApiTool {
+            name: "do_something_cool".to_string(),
             parameters: JsonSchema::object(
                 /*properties*/
                 BTreeMap::from([
@@ -1339,7 +1357,7 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
-        })
+        }
     );
 }
 

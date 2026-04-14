@@ -1,5 +1,7 @@
 use crate::CommandToolOptions;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
+use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
@@ -468,23 +470,73 @@ pub fn build_tool_registry_plan(
     if let Some(mcp_tools) = params.mcp_tools {
         let mut entries = mcp_tools.to_vec();
         entries.sort_by_key(|tool| tool.name.display());
+        let mut namespace_entries = BTreeMap::new();
 
         for tool in entries {
-            let display_name = tool.name.display();
-            match mcp_tool_to_responses_api_tool(display_name.clone(), tool.tool) {
-                Ok(converted_tool) => {
-                    plan.push_spec(
-                        ToolSpec::Function(converted_tool),
-                        /*supports_parallel_tool_calls*/ false,
-                        config.code_mode_enabled,
-                    );
-                    plan.register_handler(tool.name, ToolHandlerKind::Mcp);
+            if let Some(namespace) = tool.name.namespace.as_ref() {
+                namespace_entries
+                    .entry(namespace.clone())
+                    .or_insert_with(Vec::new)
+                    .push(tool);
+            } else {
+                let display_name = tool.name.display();
+                match mcp_tool_to_responses_api_tool(display_name.clone(), tool.tool) {
+                    Ok(converted_tool) => {
+                        plan.push_spec(
+                            ToolSpec::Function(converted_tool),
+                            /*supports_parallel_tool_calls*/ false,
+                            config.code_mode_enabled,
+                        );
+                        plan.register_handler(tool.name, ToolHandlerKind::Mcp);
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            "Failed to convert {display_name:?} MCP tool to OpenAI tool: {error:?}"
+                        );
+                    }
                 }
-                Err(error) => {
-                    tracing::error!(
-                        "Failed to convert {display_name:?} MCP tool to OpenAI tool: {error:?}"
-                    );
+            }
+        }
+
+        for (namespace, mut entries) in namespace_entries {
+            entries.sort_by_key(|tool| tool.name.name.clone());
+            let description = entries
+                .iter()
+                .filter_map(|tool| {
+                    params
+                        .tool_namespaces
+                        .and_then(|namespaces| namespaces.get(&tool.name))
+                        .and_then(|namespace| namespace.description.clone())
+                })
+                .next()
+                .unwrap_or_default();
+            let mut tools = Vec::new();
+            for tool in entries {
+                let child_name = tool.name.name.clone();
+                let display_name = tool.name.display();
+                match mcp_tool_to_responses_api_tool(child_name, tool.tool) {
+                    Ok(converted_tool) => {
+                        tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
+                        plan.register_handler(tool.name, ToolHandlerKind::Mcp);
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            "Failed to convert {display_name:?} MCP tool to OpenAI tool: {error:?}"
+                        );
+                    }
                 }
+            }
+
+            if !tools.is_empty() {
+                plan.push_spec(
+                    ToolSpec::Namespace(ResponsesApiNamespace {
+                        name: namespace,
+                        description,
+                        tools,
+                    }),
+                    /*supports_parallel_tool_calls*/ false,
+                    config.code_mode_enabled,
+                );
             }
         }
     }

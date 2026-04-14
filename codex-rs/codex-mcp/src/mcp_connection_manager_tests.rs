@@ -648,7 +648,7 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
-async fn resolve_tool_info_accepts_plain_and_namespaced_tool_names() {
+async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
     let startup_tools = vec![create_test_tool("rmcp", "echo")];
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
@@ -666,44 +666,18 @@ async fn resolve_tool_info_accepts_plain_and_namespaced_tool_names() {
         },
     );
 
-    let flat = manager
-        .resolve_tool_info(&ToolName::plain("mcp__rmcp__echo"))
-        .await
-        .expect("flat qualified MCP tool name should resolve");
-    let split = manager
+    let tool = manager
         .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "echo"))
         .await
         .expect("split MCP tool namespace and name should resolve");
-    let split_with_flat_name = manager
-        .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "mcp__rmcp__echo"))
-        .await
-        .expect("split namespace with flat qualified MCP tool name should resolve");
 
     let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
     assert_eq!(
         (
-            flat.server_name.as_str(),
-            flat.callable_namespace.as_str(),
-            flat.callable_name.as_str(),
-            flat.tool.name.as_ref(),
-        ),
-        expected
-    );
-    assert_eq!(
-        (
-            split.server_name.as_str(),
-            split.callable_namespace.as_str(),
-            split.callable_name.as_str(),
-            split.tool.name.as_ref(),
-        ),
-        expected
-    );
-    assert_eq!(
-        (
-            split_with_flat_name.server_name.as_str(),
-            split_with_flat_name.callable_namespace.as_str(),
-            split_with_flat_name.callable_name.as_str(),
-            split_with_flat_name.tool.name.as_ref(),
+            tool.server_name.as_str(),
+            tool.callable_namespace.as_str(),
+            tool.callable_name.as_str(),
+            tool.tool.name.as_ref(),
         ),
         expected
     );

@@ -7,6 +7,7 @@ use crate::FreeformTool;
 use crate::JsonSchema;
 use crate::JsonSchemaPrimitiveType;
 use crate::JsonSchemaType;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
@@ -1103,11 +1104,11 @@ fn test_build_specs_mcp_tools_converted() {
         &[],
     );
 
-    let tool = find_tool(&tools, "test_server/do_something_cool");
+    let tool = find_namespace_function_tool(&tools, "test_server/", "do_something_cool");
     assert_eq!(
-        &tool.spec,
-        &ToolSpec::Function(ResponsesApiTool {
-            name: "test_server/do_something_cool".to_string(),
+        tool,
+        &ResponsesApiTool {
+            name: "do_something_cool".to_string(),
             parameters: JsonSchema::object(
                 BTreeMap::from([
                     (
@@ -1146,7 +1147,7 @@ fn test_build_specs_mcp_tools_converted() {
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: None,
-        })
+        }
     );
 }
 
@@ -1189,17 +1190,14 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
         &[],
     );
 
-    let mcp_names: Vec<_> = tools
-        .iter()
-        .map(|tool| tool.name().to_string())
-        .filter(|name| name.starts_with("test_server/"))
-        .collect();
-    let expected = vec![
-        "test_server/cool".to_string(),
-        "test_server/do".to_string(),
-        "test_server/something".to_string(),
-    ];
-    assert_eq!(mcp_names, expected);
+    assert_eq!(
+        namespace_function_names(&tools, "test_server/"),
+        vec![
+            "cool".to_string(),
+            "do".to_string(),
+            "something".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -1597,11 +1595,8 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
         &[],
     );
 
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
-        &find_tool(&tools, "mcp__sample__echo").spec
-    else {
-        panic!("expected function tool");
-    };
+    let ResponsesApiTool { description, .. } =
+        find_namespace_function_tool(&tools, "mcp__sample__", "echo");
 
     assert_eq!(
         description,
@@ -1686,11 +1681,8 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
         &[],
     );
 
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
-        &find_tool(&tools, "mcp__sample__fn").spec
-    else {
-        panic!("expected function tool");
-    };
+    let ResponsesApiTool { description, .. } =
+        find_namespace_function_tool(&tools, "mcp__sample__", "fn");
 
     assert!(description.contains(
         r#"exec tool declaration:
@@ -1992,11 +1984,8 @@ fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
         &[],
     );
 
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
-        &find_tool(&tools, "mcp__sample__echo").spec
-    else {
-        panic!("expected function tool");
-    };
+    let ResponsesApiTool { description, .. } =
+        find_namespace_function_tool(&tools, "mcp__sample__", "echo");
 
     assert_eq!(
         description,
@@ -2107,6 +2096,39 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
 }
 
+fn find_namespace_function_tool<'a>(
+    tools: &'a [ConfiguredToolSpec],
+    expected_namespace: &str,
+    expected_name: &str,
+) -> &'a ResponsesApiTool {
+    let namespace_tool = find_tool(tools, expected_namespace);
+    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+        panic!("expected namespace tool {expected_namespace}");
+    };
+    namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => Some(tool),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected tool {expected_namespace}{expected_name} in namespace"))
+}
+
+fn namespace_function_names(tools: &[ConfiguredToolSpec], expected_namespace: &str) -> Vec<String> {
+    let namespace_tool = find_tool(tools, expected_namespace);
+    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+        panic!("expected namespace tool {expected_namespace}");
+    };
+    namespace
+        .tools
+        .iter()
+        .map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
+        })
+        .collect()
+}
+
 fn expect_object_schema(
     schema: &JsonSchema,
 ) -> (&BTreeMap<String, JsonSchema>, Option<&Vec<String>>) {
@@ -2154,6 +2176,17 @@ fn strip_descriptions_tool(spec: &mut ToolSpec) {
         ToolSpec::ToolSearch { parameters, .. } => strip_descriptions_schema(parameters),
         ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
             strip_descriptions_schema(parameters);
+        }
+        ToolSpec::Namespace(namespace) => {
+            for tool in &mut namespace.tools {
+                match tool {
+                    ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                        parameters, ..
+                    }) => {
+                        strip_descriptions_schema(parameters);
+                    }
+                }
+            }
         }
         ToolSpec::Freeform(FreeformTool { .. })
         | ToolSpec::LocalShell {}

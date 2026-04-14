@@ -72,8 +72,9 @@ pub struct ToolNamespace {
     pub description: Option<String>,
 }
 
-/// Direct MCP tool metadata needed to expose the flat Responses API tool while
-/// registering its runtime handler with the canonical namespace/name identity.
+/// Direct MCP tool metadata needed to expose the Responses API namespace tool
+/// while registering its runtime handler with the canonical namespace/name
+/// identity.
 #[derive(Debug, Clone)]
 pub struct ToolRegistryPlanMcpTool<'a> {
     pub name: ToolName,

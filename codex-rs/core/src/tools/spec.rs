@@ -52,7 +52,10 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
                     tool.callable_tool_name(),
                     ToolNamespace {
                         name: tool.callable_namespace.clone(),
-                        description: tool.server_instructions.clone(),
+                        description: tool
+                            .connector_description
+                            .clone()
+                            .or_else(|| tool.server_instructions.clone()),
                     },
                 )
             })

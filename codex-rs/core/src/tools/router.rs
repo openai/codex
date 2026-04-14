@@ -16,6 +16,7 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
@@ -103,20 +104,47 @@ impl ToolRouter {
     }
 
     pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
-        let display_name = tool_name.display();
-        self.specs
-            .iter()
-            .find(|config| config.name() == display_name.as_str())
-            .map(|config| config.spec.clone())
+        self.specs.iter().find_map(|config| match &config.spec {
+            ToolSpec::Function(tool)
+                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
+            {
+                Some(config.spec.clone())
+            }
+            ToolSpec::Freeform(tool)
+                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
+            {
+                Some(config.spec.clone())
+            }
+            ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool)
+                    if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
+                        && tool.name == tool_name.name =>
+                {
+                    Some(ToolSpec::Function(tool.clone()))
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
     }
 
     fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
-        tool_name.namespace.is_none()
-            && self
-                .specs
-                .iter()
-                .filter(|config| config.supports_parallel_tool_calls)
-                .any(|config| config.name() == tool_name.name.as_str())
+        if tool_name.namespace.is_some() {
+            return false;
+        }
+
+        self.specs
+            .iter()
+            .filter(|config| config.supports_parallel_tool_calls)
+            .any(|config| match &config.spec {
+                ToolSpec::Function(tool) => tool.name == tool_name.name.as_str(),
+                ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
+                ToolSpec::Namespace(_)
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::LocalShell {}
+                | ToolSpec::ImageGeneration { .. }
+                | ToolSpec::WebSearch { .. } => false,
+            })
     }
 
     pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {

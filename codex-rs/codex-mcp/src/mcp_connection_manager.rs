@@ -1215,18 +1215,9 @@ impl McpConnectionManager {
 
     pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         let all_tools = self.list_all_tools().await;
-        let tools_by_name = all_tools
+        all_tools
             .into_values()
-            .map(|tool| (tool.callable_tool_name(), tool))
-            .collect::<HashMap<_, _>>();
-
-        if let Some(tool) = tools_by_name.get(tool_name) {
-            return Some(tool.clone());
-        }
-
-        tools_by_name
-            .into_iter()
-            .find_map(|(name, tool)| (name.display() == tool_name.name).then_some(tool))
+            .find(|tool| tool.callable_tool_name() == *tool_name)
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {

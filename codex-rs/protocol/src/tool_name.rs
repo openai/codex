@@ -1,6 +1,9 @@
+use serde::Deserialize;
+use serde::Serialize;
+
 /// Identifies a callable tool, preserving the namespace split when the model
 /// provides one.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ToolName {
     pub name: String,
     pub namespace: Option<String>,
