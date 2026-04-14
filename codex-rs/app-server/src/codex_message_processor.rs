@@ -19,6 +19,7 @@ use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
+use chrono::Duration as ChronoDuration;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
@@ -3674,12 +3675,13 @@ impl CodexMessageProcessor {
             ThreadSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
         };
+        let sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
         let list_result = self
             .list_threads_common(
                 requested_page_size,
                 cursor,
                 store_sort_key,
-                sort_direction.unwrap_or(SortDirection::Desc),
+                sort_direction,
                 ThreadListFilters {
                     model_providers,
                     source_kinds,
@@ -3696,6 +3698,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let backwards_cursor = summaries.first().and_then(|summary| {
+            thread_backwards_cursor_for_sort_key(summary, store_sort_key, sort_direction)
+        });
         let mut threads = Vec::with_capacity(summaries.len());
         let mut thread_ids = HashSet::with_capacity(summaries.len());
         let mut status_ids = Vec::with_capacity(summaries.len());
@@ -3728,9 +3733,6 @@ impl CodexMessageProcessor {
                 thread
             })
             .collect();
-        let backwards_cursor = data
-            .first()
-            .and_then(|thread| thread_backwards_cursor_for_sort_key(thread, store_sort_key));
         let response = ThreadListResponse {
             data,
             next_cursor,
@@ -9944,28 +9946,25 @@ pub(crate) fn summary_to_thread(
 }
 
 fn thread_backwards_cursor_for_sort_key(
-    thread: &Thread,
+    summary: &ConversationSummary,
     sort_key: StoreThreadSortKey,
+    sort_direction: SortDirection,
 ) -> Option<String> {
     let timestamp = match sort_key {
-        StoreThreadSortKey::CreatedAt => thread.created_at,
-        StoreThreadSortKey::UpdatedAt => thread.updated_at,
+        StoreThreadSortKey::CreatedAt => summary.timestamp.as_deref(),
+        StoreThreadSortKey::UpdatedAt => summary
+            .updated_at
+            .as_deref()
+            .or(summary.timestamp.as_deref()),
     };
-    let timestamp = DateTime::<Utc>::from_timestamp(timestamp, /*nsecs*/ 0)?;
-    serde_json::to_string(&ThreadListCursor {
-        timestamp: timestamp.to_rfc3339_opts(SecondsFormat::Secs, true),
-        id: thread.id.clone(),
-        include_timestamp_bucket: true,
-    })
-    .ok()
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ThreadListCursor {
-    timestamp: String,
-    id: String,
-    include_timestamp_bucket: bool,
+    let timestamp = parse_datetime(timestamp)?;
+    // The state DB stores unique millisecond timestamps. Offset the reverse cursor by one
+    // millisecond so the opposite-direction query includes the page anchor.
+    let timestamp = match sort_direction {
+        SortDirection::Asc => timestamp.checked_add_signed(ChronoDuration::milliseconds(1))?,
+        SortDirection::Desc => timestamp.checked_sub_signed(ChronoDuration::milliseconds(1))?,
+    };
+    Some(timestamp.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
 struct ThreadTurnsPage {

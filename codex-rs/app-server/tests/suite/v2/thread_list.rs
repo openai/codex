@@ -1319,10 +1319,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids_page1, vec![id_watermark.as_str()]);
     let backwards_cursor = backwards_cursor.expect("expected backwardsCursor on first page");
-    assert!(
-        backwards_cursor.contains(&id_watermark),
-        "backwardsCursor should preserve the actual first thread id"
-    );
+    assert_eq!(backwards_cursor, "2025-02-02T23:59:59.999Z");
 
     let id_new = create_fake_rollout(
         codex_home.path(),
