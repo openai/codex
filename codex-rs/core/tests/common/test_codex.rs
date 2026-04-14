@@ -4,6 +4,7 @@ use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -64,6 +65,7 @@ type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
 const REMOTE_EXEC_SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_EXEC_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const REMOTE_EXEC_SERVER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(7);
 const REMOTE_CODEX_LINUX_SANDBOX_EXE: &str = "codex-linux-sandbox";
 static REMOTE_EXEC_SERVER_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -109,7 +111,10 @@ impl Drop for RemoteExecServerProcess {
             remote_exec_server_path = self.remote_exec_server_path,
             stdout_path = self.stdout_path
         );
-        let _ = docker_command_capture_stdout(["exec", &self.container_name, "sh", "-lc", &script]);
+        let _ = docker_command_capture_stdout_with_timeout(
+            ["exec", &self.container_name, "sh", "-lc", &script],
+            REMOTE_EXEC_SERVER_CLEANUP_TIMEOUT,
+        );
     }
 }
 
@@ -388,6 +393,46 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
         ));
     }
     String::from_utf8(output.stdout).context("docker stdout must be utf-8")
+}
+
+fn docker_command_capture_stdout_with_timeout<const N: usize>(
+    args: [&str; N],
+    timeout: Duration,
+) -> Result<String> {
+    let mut child = Command::new("docker")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run docker {args:?}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            let output = child.wait_with_output()?;
+            if !output.status.success() {
+                return Err(anyhow!(
+                    "docker {:?} failed: stdout={} stderr={}",
+                    args,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            return String::from_utf8(output.stdout).context("docker stdout must be utf-8");
+        }
+
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output()?;
+            return Err(anyhow!(
+                "docker {:?} timed out after {timeout:?}: stdout={} stderr={}",
+                args,
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        std::thread::sleep(REMOTE_EXEC_SERVER_POLL_INTERVAL);
+    }
 }
 
 /// A collection of different ways the model can output an apply_patch call
