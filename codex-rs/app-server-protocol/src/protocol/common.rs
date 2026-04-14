@@ -331,6 +331,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    MarketplaceAdd => "marketplace/add" {
+        params: v2::MarketplaceAddParams,
+        response: v2::MarketplaceAddResponse,
+    },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
         response: v2::PluginListResponse,

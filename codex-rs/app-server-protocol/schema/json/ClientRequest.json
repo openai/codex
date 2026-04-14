@@ -1233,6 +1233,32 @@
         }
       ]
     },
+    "MarketplaceAddParams": {
+      "properties": {
+        "refName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "sparsePaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
     "McpResourceReadParams": {
       "properties": {
         "server": {
@@ -4023,6 +4049,30 @@
         "params"
       ],
       "title": "Skills/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "marketplace/add"
+          ],
+          "title": "Marketplace/addRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/MarketplaceAddParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Marketplace/addRequest",
       "type": "object"
     },
     {

@@ -1216,6 +1216,30 @@
             },
             "method": {
               "enum": [
+                "marketplace/add"
+              ],
+              "title": "Marketplace/addRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceAddParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/addRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/list"
               ],
               "title": "Plugin/listRequestMethod",
@@ -5854,6 +5878,55 @@
     "LogoutAccountResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "LogoutAccountResponse",
+      "type": "object"
+    },
+    "MarketplaceAddParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "refName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "sparsePaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "title": "MarketplaceAddParams",
+      "type": "object"
+    },
+    "MarketplaceAddResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "alreadyAdded": {
+          "type": "boolean"
+        },
+        "installedRoot": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "marketplaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "alreadyAdded",
+        "installedRoot",
+        "marketplaceName"
+      ],
+      "title": "MarketplaceAddResponse",
       "type": "object"
     },
     "MarketplaceInterface": {
