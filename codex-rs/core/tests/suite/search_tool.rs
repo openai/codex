@@ -91,7 +91,7 @@ fn tool_search_output_tools(request: &ResponsesRequest, call_id: &str) -> Vec<Va
         .unwrap_or_default()
 }
 
-fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) {
+fn configure_search_capable_apps(config: &mut Config, apps_base_url: &str) {
     config
         .features
         .enable(Feature::Apps)
@@ -110,12 +110,16 @@ fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) 
     config.model_catalog = Some(model_catalog);
 }
 
-fn configure_apps(config: &mut Config, apps_base_url: &str) {
-    configure_apps_without_tool_search(config, apps_base_url);
+fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) {
+    configure_search_capable_apps(config, apps_base_url);
     config
         .features
-        .enable(Feature::ToolSearch)
+        .disable(Feature::ToolSearch)
         .expect("test config should allow feature update");
+}
+
+fn configure_apps(config: &mut Config, apps_base_url: &str) {
+    configure_search_capable_apps(config, apps_base_url);
 }
 
 fn configured_builder(apps_base_url: String) -> TestCodexBuilder {
@@ -125,7 +129,7 @@ fn configured_builder(apps_base_url: String) -> TestCodexBuilder {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_flag_adds_tool_search() -> Result<()> {
+async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -183,7 +187,7 @@ async fn search_tool_flag_adds_tool_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_search_disabled_by_default_exposes_apps_tools_directly() -> Result<()> {
+async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
