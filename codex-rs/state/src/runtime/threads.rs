@@ -1093,6 +1093,7 @@ mod tests {
             meta: SessionMeta {
                 id: thread_id,
                 forked_from_id: None,
+                environment_id: None,
                 timestamp: metadata.created_at.to_rfc3339(),
                 cwd: PathBuf::new(),
                 originator: String::new(),
@@ -1151,6 +1152,7 @@ mod tests {
             meta: SessionMeta {
                 id: thread_id,
                 forked_from_id: None,
+                environment_id: None,
                 timestamp: created_at,
                 cwd: PathBuf::new(),
                 originator: String::new(),

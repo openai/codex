@@ -988,6 +988,7 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),

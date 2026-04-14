@@ -1288,6 +1288,7 @@ fn thread_session_state_to_legacy_event(
     codex_protocol::protocol::SessionConfiguredEvent {
         session_id: session.thread_id,
         forked_from_id: session.forked_from_id,
+        environment_id: None,
         thread_name: session.thread_name,
         model: session.model,
         model_provider_id: session.model_provider_id,

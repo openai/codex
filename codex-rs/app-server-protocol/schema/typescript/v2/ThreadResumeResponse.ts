@@ -8,7 +8,7 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
-export type ThreadResumeResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: string,
+export type ThreadResumeResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: string, environmentId: string | null,
 /**
  * Instruction source files currently loaded for this thread.
  */

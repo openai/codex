@@ -1331,6 +1331,7 @@ mod tests {
             model: "gpt-5.4".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
+            environment_id: None,
             cwd: PathBuf::from("/tmp/project"),
             instruction_sources: vec![PathBuf::from("/tmp/project/AGENTS.md")],
             approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),

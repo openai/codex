@@ -910,6 +910,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -1156,6 +1157,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),

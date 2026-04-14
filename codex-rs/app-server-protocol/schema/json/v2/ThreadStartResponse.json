@@ -2187,6 +2187,12 @@
     "cwd": {
       "type": "string"
     },
+    "environmentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "instructionSources": {
       "default": [],
       "description": "Instruction source files currently loaded for this thread.",

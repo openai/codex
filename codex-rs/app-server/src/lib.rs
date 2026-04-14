@@ -70,6 +70,7 @@ mod codex_message_processor;
 mod command_exec;
 mod config_api;
 mod dynamic_tools;
+mod environment_registry;
 mod error_code;
 mod external_agent_config_api;
 mod filters;

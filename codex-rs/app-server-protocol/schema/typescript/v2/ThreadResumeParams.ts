@@ -32,7 +32,10 @@ history?: Array<ResponseItem> | null, /**
 path?: string | null, /**
  * Configuration overrides for the resumed thread, if any.
  */
-model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
+model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, /**
+ * Override the execution environment used when resuming this thread.
+ */
+environmentId?: string | null, approvalPolicy?: AskForApproval | null, /**
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */

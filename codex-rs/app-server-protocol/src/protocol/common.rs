@@ -343,6 +343,14 @@ client_request_definitions! {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
     },
+    EnvironmentList => "environment/list" {
+        params: v2::EnvironmentListParams,
+        response: v2::EnvironmentListResponse,
+    },
+    EnvironmentRegister => "environment/register" {
+        params: v2::EnvironmentRegisterParams,
+        response: v2::EnvironmentRegisterResponse,
+    },
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         response: v2::FsReadFileResponse,
@@ -1414,6 +1422,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
+                environment_id: None,
                 cwd: PathBuf::from("/tmp"),
                 instruction_sources: vec![PathBuf::from("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
@@ -1454,6 +1463,7 @@ mod tests {
                     "model": "gpt-5",
                     "modelProvider": "openai",
                     "serviceTier": null,
+                    "environmentId": null,
                     "cwd": "/tmp",
                     "instructionSources": ["/tmp/AGENTS.md"],
                     "approvalPolicy": "on-failure",

@@ -1029,6 +1029,13 @@
         "null"
       ]
     },
+    "environmentId": {
+      "description": "Override the execution environment used when resuming this thread.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "description": "Configuration overrides for the resumed thread, if any.",
       "type": [

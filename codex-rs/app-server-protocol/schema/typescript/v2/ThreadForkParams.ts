@@ -23,7 +23,10 @@ export type ThreadForkParams = {threadId: string, /**
 path?: string | null, /**
  * Configuration overrides for the forked thread, if any.
  */
-model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
+model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, /**
+ * Override the execution environment used by the forked thread.
+ */
+environmentId?: string | null, approvalPolicy?: AskForApproval | null, /**
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */

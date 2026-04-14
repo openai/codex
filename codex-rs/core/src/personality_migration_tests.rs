@@ -33,6 +33,7 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
         meta: SessionMeta {
             id: thread_id,
             forked_from_id: None,
+            environment_id: None,
             timestamp: TEST_TIMESTAMP.to_string(),
             cwd: std::path::PathBuf::from("."),
             originator: "test_originator".to_string(),

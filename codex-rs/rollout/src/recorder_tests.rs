@@ -72,6 +72,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*environment_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
@@ -152,6 +153,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*environment_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
@@ -251,6 +253,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*environment_id*/ None,
             SessionSource::Cli,
             BaseInstructions::default(),
             Vec::new(),

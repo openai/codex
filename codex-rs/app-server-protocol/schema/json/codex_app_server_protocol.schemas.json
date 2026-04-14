@@ -706,6 +706,54 @@
             },
             "method": {
               "enum": [
+                "environment/list"
+              ],
+              "title": "Environment/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/EnvironmentListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Environment/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "environment/register"
+              ],
+              "title": "Environment/registerRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/EnvironmentRegisterParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Environment/registerRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "fs/readFile"
               ],
               "title": "Fs/readFileRequestMethod",
@@ -7195,6 +7243,76 @@
         ],
         "type": "object"
       },
+      "EnvironmentInfo": {
+        "properties": {
+          "execServerUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "EnvironmentListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "EnvironmentListParams",
+        "type": "object"
+      },
+      "EnvironmentListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/EnvironmentInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "EnvironmentListResponse",
+        "type": "object"
+      },
+      "EnvironmentRegisterParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "environmentId": {
+            "type": "string"
+          },
+          "execServerUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "environmentId"
+        ],
+        "title": "EnvironmentRegisterParams",
+        "type": "object"
+      },
+      "EnvironmentRegisterResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "environment": {
+            "$ref": "#/definitions/v2/EnvironmentInfo"
+          }
+        },
+        "required": [
+          "environment"
+        ],
+        "title": "EnvironmentRegisterResponse",
+        "type": "object"
+      },
       "ErrorNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12766,6 +12884,13 @@
               "null"
             ]
           },
+          "environmentId": {
+            "description": "Override the execution environment used by the forked thread.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ephemeral": {
             "type": "boolean"
           },
@@ -12835,6 +12960,12 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "instructionSources": {
             "default": [],
@@ -14087,6 +14218,13 @@
               "null"
             ]
           },
+          "environmentId": {
+            "description": "Override the execution environment used when resuming this thread.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -14163,6 +14301,12 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "instructionSources": {
             "default": [],
@@ -14371,6 +14515,13 @@
               "null"
             ]
           },
+          "environmentId": {
+            "description": "Select a registered app-server execution environment for this thread.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ephemeral": {
             "type": [
               "boolean",
@@ -14462,6 +14613,12 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "instructionSources": {
             "default": [],

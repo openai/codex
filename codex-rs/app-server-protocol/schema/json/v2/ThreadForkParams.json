@@ -123,6 +123,13 @@
         "null"
       ]
     },
+    "environmentId": {
+      "description": "Override the execution environment used by the forked thread.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "ephemeral": {
       "type": "boolean"
     },

@@ -524,6 +524,26 @@
       ],
       "type": "object"
     },
+    "EnvironmentListParams": {
+      "type": "object"
+    },
+    "EnvironmentRegisterParams": {
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "execServerUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "environmentId"
+      ],
+      "type": "object"
+    },
     "ExperimentalFeatureEnablementSetParams": {
       "properties": {
         "enablement": {
@@ -2663,6 +2683,13 @@
             "null"
           ]
         },
+        "environmentId": {
+          "description": "Override the execution environment used by the forked thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ephemeral": {
           "type": "boolean"
         },
@@ -3026,6 +3053,13 @@
             "null"
           ]
         },
+        "environmentId": {
+          "description": "Override the execution environment used when resuming this thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -3199,6 +3233,13 @@
           ]
         },
         "developerInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environmentId": {
+          "description": "Select a registered app-server execution environment for this thread.",
           "type": [
             "string",
             "null"
@@ -4095,6 +4136,54 @@
         "params"
       ],
       "title": "App/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "environment/list"
+          ],
+          "title": "Environment/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/EnvironmentListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Environment/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "environment/register"
+          ],
+          "title": "Environment/registerRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/EnvironmentRegisterParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Environment/registerRequest",
       "type": "object"
     },
     {

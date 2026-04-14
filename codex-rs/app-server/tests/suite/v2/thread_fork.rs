@@ -2,9 +2,11 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
+use app_test_support::create_fake_rollout_with_source_and_environment;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::EnvironmentRegisterParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -26,6 +28,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::protocol::SessionSource as RolloutSessionSource;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -269,6 +272,151 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
         fork_err.error.message
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_uses_registered_environment_id_from_source_rollout() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout_with_source_and_environment(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        RolloutSessionSource::Cli,
+        Some("devbox"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let register_id = mcp
+        .send_environment_register_request(EnvironmentRegisterParams {
+            environment_id: "devbox".to_string(),
+            exec_server_url: None,
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(register_id)),
+    )
+    .await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { environment_id, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    assert_eq!(environment_id.as_deref(), Some("devbox"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_prefers_explicit_environment_id_over_source_rollout_environment() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout_with_source_and_environment(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        RolloutSessionSource::Cli,
+        Some("persisted-devbox"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    for params in [
+        EnvironmentRegisterParams {
+            environment_id: "persisted-devbox".to_string(),
+            exec_server_url: None,
+        },
+        EnvironmentRegisterParams {
+            environment_id: "requested-devbox".to_string(),
+            exec_server_url: None,
+        },
+    ] {
+        let register_id = mcp.send_environment_register_request(params).await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(register_id)),
+        )
+        .await??;
+    }
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            environment_id: Some("requested-devbox".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { environment_id, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    assert_eq!(environment_id.as_deref(), Some("requested-devbox"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_rejects_unknown_environment_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout_with_source_and_environment(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        RolloutSessionSource::Cli,
+        Some("persisted-devbox"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            environment_id: Some("missing".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(error.error.message, "unknown environment id `missing`");
+    assert_eq!(error.error.data, None);
     Ok(())
 }
 

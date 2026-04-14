@@ -9,7 +9,10 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxMode } from "./SandboxMode";
 import type { ThreadStartSource } from "./ThreadStartSource";
 
-export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
+export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, /**
+ * Select a registered app-server execution environment for this thread.
+ */
+environmentId?: string | null, approvalPolicy?: AskForApproval | null, /**
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */

@@ -108,6 +108,7 @@ fn session_configured_produces_thread_started_event() {
         session_id: ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
             .expect("thread id should parse"),
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "codex-mini-latest".to_string(),
         model_provider_id: "test-provider".to_string(),

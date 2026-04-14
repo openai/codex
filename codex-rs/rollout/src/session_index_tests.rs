@@ -27,6 +27,7 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
             meta: SessionMeta {
                 id: thread_id,
                 forked_from_id: None,
+                environment_id: None,
                 timestamp,
                 cwd: ".".into(),
                 originator: "test_originator".into(),

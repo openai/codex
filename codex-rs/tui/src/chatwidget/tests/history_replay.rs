@@ -10,6 +10,7 @@ async fn resumed_initial_messages_render_history() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -123,6 +124,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -184,6 +186,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -252,6 +255,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -295,6 +299,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -348,6 +353,7 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -596,6 +602,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            environment_id: None,
             thread_name: None,
             model: "test-model".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -643,6 +650,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            environment_id: None,
             thread_name: None,
             model: "test-model".to_string(),
             model_provider_id: "test-provider".to_string(),

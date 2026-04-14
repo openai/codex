@@ -157,6 +157,13 @@
         "null"
       ]
     },
+    "environmentId": {
+      "description": "Select a registered app-server execution environment for this thread.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "ephemeral": {
       "type": [
         "boolean",

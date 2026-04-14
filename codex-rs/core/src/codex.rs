@@ -434,6 +434,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
+    pub(crate) environment_id: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
@@ -487,6 +488,7 @@ impl Codex {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            environment_id,
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
@@ -637,6 +639,7 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
+            environment_id,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             personality: config.personality,
@@ -1157,6 +1160,7 @@ pub(crate) struct SessionConfiguration {
     collaboration_mode: CollaborationMode,
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
     service_tier: Option<ServiceTier>,
+    environment_id: Option<String>,
 
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
@@ -1216,6 +1220,7 @@ impl SessionConfiguration {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier,
+            environment_id: self.environment_id.clone(),
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
@@ -1655,6 +1660,7 @@ impl Session {
                     RolloutRecorderParams::new(
                         conversation_id,
                         forked_from_id,
+                        session_configuration.environment_id.clone(),
                         session_source,
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
@@ -2122,6 +2128,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 forked_from_id,
+                environment_id: session_configuration.environment_id.clone(),
                 thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),

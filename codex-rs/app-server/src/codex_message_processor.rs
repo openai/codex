@@ -3,6 +3,7 @@ use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
 use crate::config_api::apply_runtime_feature_enablement;
+use crate::environment_registry::EnvironmentRegistry;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
@@ -46,6 +47,10 @@ use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
+use codex_app_server_protocol::EnvironmentListParams;
+use codex_app_server_protocol::EnvironmentListResponse;
+use codex_app_server_protocol::EnvironmentRegisterParams;
+use codex_app_server_protocol::EnvironmentRegisterResponse;
 use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
@@ -244,6 +249,7 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -446,6 +452,7 @@ pub(crate) struct CodexMessageProcessor {
     command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
+    environment_registry: EnvironmentRegistry,
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
@@ -692,6 +699,7 @@ impl CodexMessageProcessor {
             command_exec_manager: CommandExecManager::default(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
+            environment_registry: EnvironmentRegistry::default(),
             background_tasks: TaskTracker::new(),
             feedback,
             log_db,
@@ -937,6 +945,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::AppsList { request_id, params } => {
                 self.apps_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::EnvironmentList { request_id, params } => {
+                self.environment_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::EnvironmentRegister { request_id, params } => {
+                self.environment_register(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
@@ -2215,6 +2231,22 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn resolve_environment_selection(
+        &self,
+        requested_environment_id: Option<String>,
+        fallback_environment_id: Option<String>,
+    ) -> Result<(Option<String>, Option<Arc<EnvironmentManager>>), JSONRPCErrorError> {
+        let environment_id = requested_environment_id.or(fallback_environment_id);
+        let environment = self
+            .environment_registry
+            .resolve(environment_id.as_deref())
+            .await?;
+        Ok((
+            environment_id,
+            environment.map(|registered| registered.manager()),
+        ))
+    }
+
     async fn thread_start(
         &self,
         request_id: ConnectionRequestId,
@@ -2228,6 +2260,7 @@ impl CodexMessageProcessor {
             model_provider,
             service_tier,
             cwd,
+            environment_id,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2243,6 +2276,16 @@ impl CodexMessageProcessor {
             session_start_source,
             persist_extended_history,
         } = params;
+        let (environment_id, environment_manager_override) = match self
+            .resolve_environment_selection(environment_id, /*fallback_environment_id*/ None)
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2283,6 +2326,8 @@ impl CodexMessageProcessor {
                 config,
                 typesafe_overrides,
                 dynamic_tools,
+                environment_id,
+                environment_manager_override,
                 session_start_source,
                 persist_extended_history,
                 service_name,
@@ -2359,6 +2404,8 @@ impl CodexMessageProcessor {
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        environment_id: Option<String>,
+        environment_manager_override: Option<Arc<EnvironmentManager>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         persist_extended_history: bool,
         service_name: Option<String>,
@@ -2499,7 +2546,7 @@ impl CodexMessageProcessor {
 
         match listener_task_context
             .thread_manager
-            .start_thread_with_tools_and_service_name(
+            .start_thread_with_tools_and_service_name_and_environment(
                 config,
                 match session_start_source
                     .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
@@ -2510,6 +2557,8 @@ impl CodexMessageProcessor {
                 core_dynamic_tools,
                 persist_extended_history,
                 service_name,
+                environment_id.clone(),
+                environment_manager_override,
                 request_trace,
             )
             .instrument(tracing::info_span!(
@@ -2600,6 +2649,7 @@ impl CodexMessageProcessor {
                     model_provider: config_snapshot.model_provider_id,
                     service_tier: config_snapshot.service_tier,
                     cwd: config_snapshot.cwd,
+                    environment_id: config_snapshot.environment_id,
                     instruction_sources,
                     approval_policy: config_snapshot.approval_policy.into(),
                     approvals_reviewer: config_snapshot.approvals_reviewer.into(),
@@ -4078,6 +4128,7 @@ impl CodexMessageProcessor {
             model_provider,
             service_tier,
             cwd,
+            environment_id,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -4104,6 +4155,16 @@ impl CodexMessageProcessor {
                 return;
             };
             thread_history
+        };
+        let (environment_id, environment_manager_override) = match self
+            .resolve_environment_selection(environment_id, thread_history.environment_id())
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
         };
 
         let history_cwd = thread_history.session_cwd();
@@ -4156,11 +4217,13 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(
+            .resume_thread_with_history_and_environment(
                 config,
                 thread_history,
                 self.auth_manager.clone(),
                 persist_extended_history,
+                environment_id,
+                environment_manager_override,
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -4232,6 +4295,7 @@ impl CodexMessageProcessor {
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
                     cwd: session_configured.cwd,
+                    environment_id: session_configured.environment_id,
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
@@ -4600,6 +4664,7 @@ impl CodexMessageProcessor {
             model_provider,
             service_tier,
             cwd,
+            environment_id,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -4648,6 +4713,27 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
+            }
+        };
+        let source_history = match RolloutRecorder::get_rollout_history(&rollout_path).await {
+            Ok(history) => history,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                )
+                .await;
+                return;
+            }
+        };
+        let (environment_id, environment_manager_override) = match self
+            .resolve_environment_selection(environment_id, source_history.environment_id())
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
             }
         };
 
@@ -4724,11 +4810,13 @@ impl CodexMessageProcessor {
             ..
         } = match self
             .thread_manager
-            .fork_thread(
+            .fork_thread_with_environment(
                 ForkSnapshot::Interrupted,
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
+                environment_id,
+                environment_manager_override,
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -4870,6 +4958,7 @@ impl CodexMessageProcessor {
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
             cwd: session_configured.cwd,
+            environment_id: session_configured.environment_id,
             instruction_sources,
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
@@ -6027,6 +6116,40 @@ impl CodexMessageProcessor {
         tokio::spawn(async move {
             Self::apps_list_task(outgoing, request, params, config).await;
         });
+    }
+
+    async fn environment_list(
+        &self,
+        request_id: ConnectionRequestId,
+        _params: EnvironmentListParams,
+    ) {
+        self.outgoing
+            .send_response(
+                request_id,
+                EnvironmentListResponse {
+                    data: self.environment_registry.list().await,
+                },
+            )
+            .await;
+    }
+
+    async fn environment_register(
+        &self,
+        request_id: ConnectionRequestId,
+        params: EnvironmentRegisterParams,
+    ) {
+        let environment = self
+            .environment_registry
+            .register(params.environment_id, params.exec_server_url)
+            .await;
+        self.outgoing
+            .send_response(
+                request_id,
+                EnvironmentRegisterResponse {
+                    environment: environment.info(),
+                },
+            )
+            .await;
     }
 
     async fn apps_list_task(
@@ -8572,6 +8695,7 @@ async fn handle_pending_thread_resume_request(
         model,
         model_provider_id,
         service_tier,
+        environment_id,
         approval_policy,
         approvals_reviewer,
         sandbox_policy,
@@ -8586,6 +8710,7 @@ async fn handle_pending_thread_resume_request(
         model_provider: model_provider_id,
         service_tier,
         cwd,
+        environment_id,
         instruction_sources,
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
@@ -8715,6 +8840,14 @@ fn collect_resume_override_mismatches(
                 config_snapshot.cwd.display()
             ));
         }
+    }
+    if let Some(requested_environment_id) = request.environment_id.as_deref()
+        && Some(requested_environment_id) != config_snapshot.environment_id.as_deref()
+    {
+        mismatch_details.push(format!(
+            "environment_id requested={requested_environment_id} active={:?}",
+            config_snapshot.environment_id
+        ));
     }
     if let Some(requested_approval) = request.approval_policy.as_ref() {
         let active_approval: AskForApproval = config_snapshot.approval_policy.into();
@@ -9798,6 +9931,7 @@ mod tests {
             model_provider: None,
             service_tier: Some(Some(codex_protocol::config_types::ServiceTier::Fast)),
             cwd: None,
+            environment_id: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
@@ -9815,6 +9949,7 @@ mod tests {
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             cwd: PathBuf::from("/tmp"),
+            environment_id: None,
             ephemeral: false,
             reasoning_effort: None,
             personality: None,
@@ -10182,6 +10317,7 @@ mod tests {
         let session_meta = SessionMeta {
             id: conversation_id,
             forked_from_id: Some(forked_from_id),
+            environment_id: None,
             timestamp: timestamp.clone(),
             model_provider: Some("test-provider".to_string()),
             ..SessionMeta::default()

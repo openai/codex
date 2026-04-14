@@ -39,7 +39,7 @@ pub fn create_fake_rollout(
     model_provider: Option<&str>,
     git_info: Option<GitInfo>,
 ) -> Result<String> {
-    create_fake_rollout_with_source(
+    create_fake_rollout_with_source_and_environment(
         codex_home,
         filename_ts,
         meta_rfc3339,
@@ -47,6 +47,7 @@ pub fn create_fake_rollout(
         model_provider,
         git_info,
         SessionSource::Cli,
+        /*environment_id*/ None,
     )
 }
 
@@ -59,6 +60,29 @@ pub fn create_fake_rollout_with_source(
     model_provider: Option<&str>,
     git_info: Option<GitInfo>,
     source: SessionSource,
+) -> Result<String> {
+    create_fake_rollout_with_source_and_environment(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        model_provider,
+        git_info,
+        source,
+        /*environment_id*/ None,
+    )
+}
+
+/// Create a minimal rollout file with an explicit session source and environment id.
+pub fn create_fake_rollout_with_source_and_environment(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
+    source: SessionSource,
+    environment_id: Option<&str>,
 ) -> Result<String> {
     let uuid = Uuid::new_v4();
     let uuid_str = uuid.to_string();
@@ -74,6 +98,7 @@ pub fn create_fake_rollout_with_source(
     let meta = SessionMeta {
         id: conversation_id,
         forked_from_id: None,
+        environment_id: environment_id.map(str::to_string),
         timestamp: meta_rfc3339.to_string(),
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
@@ -157,6 +182,7 @@ pub fn create_fake_rollout_with_text_elements(
     let meta = SessionMeta {
         id: conversation_id,
         forked_from_id: None,
+        environment_id: None,
         timestamp: meta_rfc3339.to_string(),
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
