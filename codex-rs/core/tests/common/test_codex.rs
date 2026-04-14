@@ -622,10 +622,10 @@ impl TestCodexBuilder {
         for setup in workspace_setups {
             setup(config.cwd.clone(), Arc::clone(&file_system)).await?;
         }
-        let cwd_retention = test_env.local_cwd_temp_dir().unwrap_or(fallback_cwd);
+        let cwd = test_env.local_cwd_temp_dir().unwrap_or(fallback_cwd);
         Box::pin(self.build_from_config(
             config,
-            cwd_retention,
+            cwd,
             home,
             resume_from,
             test_env,
@@ -637,7 +637,7 @@ impl TestCodexBuilder {
     async fn build_from_config(
         &mut self,
         config: Config,
-        cwd_retention: Arc<TempDir>,
+        cwd: Arc<TempDir>,
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
@@ -707,7 +707,7 @@ impl TestCodexBuilder {
             config,
             thread_manager,
             home,
-            _cwd_retention: cwd_retention,
+            cwd,
             _test_env: test_env,
         })
     }
@@ -797,7 +797,9 @@ pub struct TestCodex {
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
     pub home: Arc<TempDir>,
-    _cwd_retention: Arc<TempDir>,
+    // Retain the local tempdir backing the workspace for callers that still
+    // need direct filesystem access in local tests.
+    pub cwd: Arc<TempDir>,
     // Drop the execution environment after the thread manager and conversation teardown.
     _test_env: TestEnv,
 }
