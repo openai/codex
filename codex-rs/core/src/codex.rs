@@ -2007,10 +2007,7 @@ impl Session {
                 .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
-        let managed_network_requirements_enabled = config
-            .managed_network_requirements_enabled_for_sandbox_policy(
-                config.permissions.sandbox_policy.get(),
-            );
+        let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
         let network_policy_decider_session = if managed_network_requirements_enabled {

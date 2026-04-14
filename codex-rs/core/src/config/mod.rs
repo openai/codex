@@ -2282,21 +2282,14 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        self.managed_network_requirements_enabled_for_sandbox_policy(
+        !matches!(
             self.permissions.sandbox_policy.get(),
-        )
-    }
-
-    pub fn managed_network_requirements_enabled_for_sandbox_policy(
-        &self,
-        sandbox_policy: &SandboxPolicy,
-    ) -> bool {
-        !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
-            && self
-                .config_layer_stack
-                .requirements_toml()
-                .network
-                .is_some()
+            SandboxPolicy::DangerFullAccess
+        ) && self
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some()
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {
