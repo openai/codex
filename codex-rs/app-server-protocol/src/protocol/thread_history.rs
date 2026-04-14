@@ -519,11 +519,11 @@ impl ThreadHistoryBuilder {
         let duration_ms = i64::try_from(payload.duration.as_millis()).ok();
         let (result, error) = match &payload.result {
             Ok(value) => (
-                Some(McpToolCallResult {
+                Some(Box::new(McpToolCallResult {
                     content: value.content.clone(),
                     structured_content: value.structured_content.clone(),
                     meta: value.meta.clone(),
-                }),
+                })),
                 None,
             ),
             Err(message) => (
@@ -1917,7 +1917,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
-                result: Some(McpToolCallResult {
+                result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({
                         "type": "text",
                         "text": "result"
@@ -1926,7 +1926,7 @@ mod tests {
                     meta: Some(serde_json::json!({
                         "ui/resourceUri": "ui://widget/lookup.html"
                     })),
-                }),
+                })),
                 error: None,
                 duration_ms: Some(8),
             }

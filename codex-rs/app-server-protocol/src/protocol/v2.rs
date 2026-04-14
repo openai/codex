@@ -4560,7 +4560,7 @@ pub enum ThreadItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         mcp_app_resource_uri: Option<String>,
-        result: Option<McpToolCallResult>,
+        result: Option<Box<McpToolCallResult>>,
         error: Option<McpToolCallError>,
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]

@@ -5889,12 +5889,15 @@ impl ChatWidget {
                     duration: Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64),
                     result: match (result, error) {
                         (_, Some(error)) => Err(error.message),
-                        (Some(result), None) => Ok(codex_protocol::mcp::CallToolResult {
-                            content: result.content,
-                            structured_content: result.structured_content,
-                            is_error: Some(false),
-                            meta: None,
-                        }),
+                        (Some(result), None) => {
+                            let result = *result;
+                            Ok(codex_protocol::mcp::CallToolResult {
+                                content: result.content,
+                                structured_content: result.structured_content,
+                                is_error: Some(false),
+                                meta: None,
+                            })
+                        }
                         (None, None) => Err("MCP tool call completed without a result".to_string()),
                     },
                 });

@@ -759,6 +759,7 @@ macro_rules! server_notification_definitions {
             Display,
             ExperimentalApi,
         )]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {
