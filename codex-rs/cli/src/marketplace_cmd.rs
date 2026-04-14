@@ -85,12 +85,12 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
 
     if outcome.already_added {
         println!(
-            "Marketplace '{}' is already added from {}.",
+            "Marketplace `{}` is already added from {}.",
             outcome.marketplace_name, outcome.source_display
         );
     } else {
         println!(
-            "Added marketplace '{}' from {}.",
+            "Added marketplace `{}` from {}.",
             outcome.marketplace_name, outcome.source_display
         );
     }
@@ -111,7 +111,7 @@ async fn run_upgrade(
         .await
         .context("failed to load configuration")?;
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let manager = PluginsManager::new(codex_home);
+    let manager = PluginsManager::new(codex_home.to_path_buf());
     let outcome = manager
         .upgrade_configured_marketplaces_for_config(&config, marketplace_name.as_deref())
         .map_err(anyhow::Error::msg)?;
@@ -124,7 +124,7 @@ fn print_upgrade_outcome(
 ) -> Result<()> {
     for error in &outcome.errors {
         eprintln!(
-            "Failed to upgrade marketplace '{}': {}",
+            "Failed to upgrade marketplace `{}`: {}",
             error.marketplace_name, error.message
         );
     }
@@ -137,13 +137,13 @@ fn print_upgrade_outcome(
         println!("No configured Git marketplaces to upgrade.");
     } else if outcome.upgraded_roots.is_empty() {
         if marketplace_name.is_some() {
-            println!("Marketplace '{}' is already up to date.", selection_label);
+            println!("Marketplace `{}` is already up to date.", selection_label);
         } else {
             println!("All configured Git marketplaces are already up to date.");
         }
     } else if marketplace_name.is_some() {
         println!(
-            "Upgraded marketplace '{}' to the latest configured revision.",
+            "Upgraded marketplace `{}` to the latest configured revision.",
             selection_label
         );
         for root in &outcome.upgraded_roots {
