@@ -1553,8 +1553,8 @@ impl App {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
-            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-                tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
+            if let Err(err) = app_server.thread_close(thread_id).await {
+                tracing::warn!("failed to close thread {thread_id}: {err}");
             }
             self.abort_thread_event_listener(thread_id);
         }
@@ -3347,8 +3347,8 @@ impl App {
         let tracked_thread_ids: Vec<ThreadId> =
             self.thread_event_channels.keys().copied().collect();
         for thread_id in tracked_thread_ids {
-            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-                tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {err}");
+            if let Err(err) = app_server.thread_close(thread_id).await {
+                tracing::warn!("failed to close tracked thread {thread_id}: {err}");
             }
         }
         self.config = config.clone();

@@ -927,6 +927,30 @@
             },
             "method": {
               "enum": [
+                "thread/close"
+              ],
+              "title": "Thread/closeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadCloseParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/closeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unsubscribe"
               ],
               "title": "Thread/unsubscribeRequestMethod",
@@ -10625,6 +10649,24 @@
         "threadId"
       ],
       "title": "ThreadArchivedNotification",
+      "type": "object"
+    },
+    "ThreadCloseParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadCloseParams",
+      "type": "object"
+    },
+    "ThreadCloseResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadCloseResponse",
       "type": "object"
     },
     "ThreadClosedNotification": {

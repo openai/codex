@@ -9,6 +9,8 @@ use app_test_support::to_response;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
@@ -121,6 +123,51 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
     let ThreadLoadedListResponse { data, next_cursor } =
         to_response::<ThreadLoadedListResponse>(list_resp)?;
     assert_eq!(data, vec![thread_id]);
+    assert_eq!(next_cursor, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_close_unloads_thread_immediately() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_id = start_thread(&mut mcp).await?;
+
+    let close_id = mcp
+        .send_thread_close_request(ThreadCloseParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let close_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(close_id)),
+    )
+    .await??;
+    let _: ThreadCloseResponse = to_response::<ThreadCloseResponse>(close_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/closed"),
+    )
+    .await??;
+
+    let list_id = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams::default())
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let ThreadLoadedListResponse { data, next_cursor } =
+        to_response::<ThreadLoadedListResponse>(list_resp)?;
+    assert_eq!(data, Vec::<String>::new());
     assert_eq!(next_cursor, None);
 
     Ok(())
