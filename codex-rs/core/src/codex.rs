@@ -4436,6 +4436,13 @@ impl Session {
         }
     }
 
+    pub(crate) fn interrupt_task_detached(self: &Arc<Self>) {
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            session.interrupt_task().await;
+        });
+    }
+
     pub(crate) fn hooks(&self) -> &Hooks {
         &self.services.hooks
     }
@@ -7533,6 +7540,7 @@ async fn drain_in_flight(
                 sess.record_conversation_items(&turn_context, &[response_input.into()])
                     .await;
             }
+            Err(CodexErr::TurnAborted) => {}
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }

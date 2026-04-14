@@ -64,6 +64,7 @@ impl ToolCallRuntime {
         async move {
             match future.await {
                 Ok(response) => Ok(response.into_response()),
+                Err(FunctionCallError::Interrupted) => Err(CodexErr::TurnAborted),
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
                 Err(other) => Ok(Self::failure_response(error_call, other)),
             }

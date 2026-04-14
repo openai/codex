@@ -48,7 +48,7 @@ pub struct PermissionRequestRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRequestDecision {
     Allow,
-    Deny { message: String },
+    Deny { message: String, interrupt: bool },
 }
 
 #[derive(Debug)]
@@ -155,9 +155,10 @@ fn resolve_permission_request_decision<'a>(
             PermissionRequestDecision::Allow => {
                 resolved_allow = Some(PermissionRequestDecision::Allow);
             }
-            PermissionRequestDecision::Deny { message } => {
+            PermissionRequestDecision::Deny { message, interrupt } => {
                 return Some(PermissionRequestDecision::Deny {
                     message: message.clone(),
+                    interrupt: *interrupt,
                 });
             }
         }
@@ -223,13 +224,17 @@ fn parse_completed(
                             output_parser::PermissionRequestDecision::Allow => {
                                 decision = Some(PermissionRequestDecision::Allow);
                             }
-                            output_parser::PermissionRequestDecision::Deny { message } => {
+                            output_parser::PermissionRequestDecision::Deny {
+                                message,
+                                interrupt,
+                            } => {
                                 status = HookRunStatus::Blocked;
                                 entries.push(HookOutputEntry {
                                     kind: HookOutputEntryKind::Feedback,
                                     text: message.clone(),
                                 });
-                                decision = Some(PermissionRequestDecision::Deny { message });
+                                decision =
+                                    Some(PermissionRequestDecision::Deny { message, interrupt });
                             }
                         }
                     }
@@ -248,7 +253,10 @@ fn parse_completed(
                         kind: HookOutputEntryKind::Feedback,
                         text: message.clone(),
                     });
-                    decision = Some(PermissionRequestDecision::Deny { message });
+                    decision = Some(PermissionRequestDecision::Deny {
+                        message,
+                        interrupt: false,
+                    });
                 } else {
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
@@ -298,6 +306,7 @@ mod tests {
             PermissionRequestDecision::Allow,
             PermissionRequestDecision::Deny {
                 message: "repo deny".to_string(),
+                interrupt: true,
             },
         ];
 
@@ -305,6 +314,7 @@ mod tests {
             resolve_permission_request_decision(decisions.iter()),
             Some(PermissionRequestDecision::Deny {
                 message: "repo deny".to_string(),
+                interrupt: true,
             })
         );
     }

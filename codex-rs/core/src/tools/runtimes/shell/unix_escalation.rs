@@ -77,6 +77,14 @@ const REJECT_SANDBOX_APPROVAL_REASON: &str =
     "approval required by policy, but AskForApproval::Granular.sandbox_approval is false";
 const REJECT_RULES_APPROVAL_REASON: &str =
     "approval required by policy rule, but AskForApproval::Granular.rules is false";
+
+fn preserve_interrupted_tool_error(err: anyhow::Error) -> ToolError {
+    match err.downcast::<ToolError>() {
+        Ok(tool_error) => tool_error,
+        Err(err) => ToolError::Rejected(err.to_string()),
+    }
+}
+
 fn approval_sandbox_permissions(
     sandbox_permissions: SandboxPermissions,
     additional_permissions_preapproved: bool,
@@ -215,7 +223,7 @@ pub(super) async fn try_run_zsh_fork(
     let exec_result = escalate_server
         .exec(exec_params, cancel_token, Arc::new(command_executor))
         .await
-        .map_err(|err| ToolError::Rejected(err.to_string()))?;
+        .map_err(preserve_interrupted_tool_error)?;
 
     map_exec_result(attempt.sandbox, exec_result).map(Some)
 }
@@ -288,7 +296,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     );
     let escalation_session = escalate_server
         .start_session(CancellationToken::new(), Arc::new(command_executor))
-        .map_err(|err| ToolError::Rejected(err.to_string()))?;
+        .map_err(preserve_interrupted_tool_error)?;
     let mut exec_request = exec_request;
     exec_request.env.extend(escalation_session.env().clone());
     Ok(Some(PreparedUnifiedExecZshFork {
@@ -396,7 +404,7 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
-        Ok(stopwatch
+        stopwatch
             .pause_for(async move {
                 // 1) Run PermissionRequest hooks
                 let permission_request = PermissionRequestPayload {
@@ -414,18 +422,22 @@ impl CoreShellActionProvider {
                 .await
                 {
                     Some(PermissionRequestDecision::Allow) => {
-                        return PromptDecision {
+                        return Ok(PromptDecision {
                             decision: ReviewDecision::Approved,
                             guardian_review_id: None,
                             rejection_message: None,
-                        };
+                        });
                     }
-                    Some(PermissionRequestDecision::Deny { message }) => {
-                        return PromptDecision {
+                    Some(PermissionRequestDecision::Deny { message, interrupt }) => {
+                        if interrupt {
+                            session.interrupt_task_detached();
+                            return Err(anyhow::Error::new(ToolError::Interrupted));
+                        }
+                        return Ok(PromptDecision {
                             decision: ReviewDecision::Denied,
                             guardian_review_id: None,
                             rejection_message: Some(message),
-                        };
+                        });
                     }
                     None => {}
                 }
@@ -447,11 +459,11 @@ impl CoreShellActionProvider {
                         /*retry_reason*/ None,
                     )
                     .await;
-                    return PromptDecision {
+                    return Ok(PromptDecision {
                         decision,
                         guardian_review_id,
                         rejection_message: None,
-                    };
+                    });
                 }
 
                 // 3) Fall back to regular user prompt
@@ -469,13 +481,13 @@ impl CoreShellActionProvider {
                         Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
                     )
                     .await;
-                PromptDecision {
+                Ok(PromptDecision {
                     decision,
                     guardian_review_id: None,
                     rejection_message: None,
-                }
+                })
             })
-            .await)
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]

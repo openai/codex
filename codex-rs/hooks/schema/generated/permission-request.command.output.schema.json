@@ -28,7 +28,7 @@
         },
         "interrupt": {
           "default": false,
-          "description": "Reserved for future short-circuiting semantics.\n\nPermissionRequest hooks currently fail closed if this field is `true`.",
+          "description": "When paired with `behavior: \"deny\"`, short-circuit the active turn with the same interrupt path used by Esc.",
           "type": "boolean"
         },
         "message": {

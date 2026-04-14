@@ -321,6 +321,9 @@ pub(crate) async fn handle_output_item_done(
 
             output.needs_follow_up = true;
         }
+        Err(FunctionCallError::Interrupted) => {
+            return Err(CodexErr::TurnAborted);
+        }
         // A fatal error occurred; surface it back into history.
         Err(FunctionCallError::Fatal(message)) => {
             return Err(CodexErr::Fatal(message));

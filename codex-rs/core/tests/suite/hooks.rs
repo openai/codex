@@ -36,6 +36,7 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::sync::Arc;
@@ -294,6 +295,17 @@ elif mode == "deny":
             }}
         }}
     }}))
+elif mode == "deny_interrupt":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PermissionRequest",
+            "decision": {{
+                "behavior": "deny",
+                "message": reason,
+                "interrupt": True
+            }}
+        }}
+    }}))
 elif mode == "exit_2":
     sys.stderr.write(reason + "\n")
     raise SystemExit(2)
@@ -331,6 +343,15 @@ fn install_allow_permission_request_hook(home: &Path) -> Result<()> {
         Some(PERMISSION_REQUEST_HOOK_MATCHER),
         "allow",
         PERMISSION_REQUEST_ALLOW_REASON,
+    )
+}
+
+fn install_interrupting_permission_request_hook(home: &Path, reason: &str) -> Result<()> {
+    write_permission_request_hook(
+        home,
+        Some(PERMISSION_REQUEST_HOOK_MATCHER),
+        "deny_interrupt",
+        reason,
     )
 }
 
@@ -532,6 +553,70 @@ fn assert_single_permission_request_hook_input(
     assert_eq!(hook_inputs.len(), 1);
     assert_permission_request_hook_input(&hook_inputs[0], command, description);
     Ok(hook_inputs)
+}
+
+async fn submit_turn_and_wait_for_interrupt(
+    test: &core_test_support::test_codex::TestCodex,
+    prompt: &str,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+    expected_hook_message: &str,
+) -> Result<String> {
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.config.cwd.to_path_buf(),
+            approval_policy,
+            approvals_reviewer: None,
+            sandbox_policy,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    let hook_event = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::HookCompleted(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(hook_event.turn_id.as_deref(), Some(turn_id.as_str()));
+    assert_eq!(
+        hook_event.run.status,
+        codex_protocol::protocol::HookRunStatus::Blocked
+    );
+    assert_eq!(
+        hook_event.run.entries,
+        vec![codex_protocol::protocol::HookOutputEntry {
+            kind: codex_protocol::protocol::HookOutputEntryKind::Feedback,
+            text: expected_hook_message.to_string(),
+        }]
+    );
+
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnAborted(event) => {
+            event.turn_id.as_deref() == Some(turn_id.as_str())
+                && event.reason == codex_protocol::protocol::TurnAbortReason::Interrupted
+        }
+        _ => false,
+    })
+    .await;
+
+    Ok(turn_id)
 }
 
 fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -1222,6 +1307,78 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_interrupts_shell_command_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-shell-command-interrupt";
+    let marker = std::env::temp_dir().join("permissionrequest-shell-command-interrupt-marker");
+    let command = format!("rm -f {}", marker.display());
+    let reason = "interrupt shell approval";
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = install_interrupting_permission_request_hook(home, reason) {
+                panic!("failed to write interrupting permission request hook fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    fs::write(&marker, "seed").context("create permission request interrupt marker")?;
+
+    let _turn_id = submit_turn_and_wait_for_interrupt(
+        &test,
+        "interrupt the shell command after hook denial",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        reason,
+    )
+    .await?;
+
+    assert_eq!(responses.requests().len(), 1);
+    assert!(
+        marker.exists(),
+        "interrupted command should not remove marker file"
+    );
+    assert!(
+        timeout(
+            Duration::from_secs(2),
+            wait_for_event(&test.codex, |event| matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "expected the interrupting permission request hook to bypass the approval prompt"
+    );
+
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        /*description*/ None,
+    )?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1291,6 +1448,89 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     assert!(
         !marker.exists(),
         "approved exec command should remove marker file"
+    );
+
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        Some(justification),
+    )?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_interrupts_exec_command_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-exec-command-interrupt";
+    let marker = std::env::temp_dir().join("permissionrequest-exec-command-interrupt-marker");
+    let command = format!("rm -f {}", marker.display());
+    let justification = "interrupt the temporary marker removal";
+    let reason = "interrupt exec approval";
+    let args = serde_json::json!({
+        "cmd": command,
+        "login": true,
+        "sandbox_permissions": "require_escalated",
+        "justification": justification,
+    });
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = install_interrupting_permission_request_hook(home, reason) {
+                panic!("failed to write interrupting permission request hook fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    fs::write(&marker, "seed").context("create exec command interrupt marker")?;
+
+    let _turn_id = submit_turn_and_wait_for_interrupt(
+        &test,
+        "interrupt the exec command after hook denial",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+        reason,
+    )
+    .await?;
+
+    assert_eq!(responses.requests().len(), 1);
+    assert!(
+        marker.exists(),
+        "interrupted exec command should not remove marker file"
+    );
+    assert!(
+        timeout(
+            Duration::from_secs(2),
+            wait_for_event(&test.codex, |event| matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "expected the interrupting permission request hook to bypass the approval prompt"
     );
 
     assert_single_permission_request_hook_input(
@@ -1453,6 +1693,130 @@ allow_local_binding = true
         matches!(event, EventMsg::ShutdownComplete)
     })
     .await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_interrupts_network_approval_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
+    )?;
+    let call_id = "permissionrequest-network-approval-interrupt";
+    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=2).read().decode(errors='replace'))""#;
+    let reason = "interrupt network approval";
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let approval_policy = AskForApproval::OnFailure;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: true,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let test = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_pre_build_hook(|home| {
+            if let Err(error) = install_interrupting_permission_request_hook(home, reason) {
+                panic!("failed to write interrupting permission request hook fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            let layers = config
+                .config_layer_stack
+                .get_layers(
+                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ true,
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+            let mut requirements = config.config_layer_stack.requirements().clone();
+            requirements.network = Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allow_local_binding: Some(true),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            ));
+            let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+            requirements_toml.network = Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            });
+            config.config_layer_stack =
+                ConfigLayerStack::new(layers, requirements, requirements_toml)
+                    .expect("rebuild config layer stack with network requirements");
+        })
+        .build(&server)
+        .await?;
+
+    assert!(
+        test.config.managed_network_requirements_enabled(),
+        "expected managed network requirements to be enabled"
+    );
+
+    let _turn_id = submit_turn_and_wait_for_interrupt(
+        &test,
+        "interrupt the network approval after hook denial",
+        approval_policy,
+        sandbox_policy,
+        reason,
+    )
+    .await?;
+
+    assert_eq!(responses.requests().len(), 1);
+    assert!(
+        timeout(
+            Duration::from_secs(2),
+            wait_for_event(&test.codex, |event| matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "expected the interrupting permission request hook to bypass the approval prompt"
+    );
+
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        command,
+        Some("network-access http://codex-network-test.invalid:80"),
+    )?;
 
     Ok(())
 }

@@ -22,7 +22,7 @@ pub(crate) struct PreToolUseOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionRequestDecision {
     Allow,
-    Deny { message: String },
+    Deny { message: String, interrupt: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -302,8 +302,10 @@ fn unsupported_permission_request_hook_specific_output(
         Some("PermissionRequest hook returned unsupported updatedInput".to_string())
     } else if decision.updated_permissions.is_some() {
         Some("PermissionRequest hook returned unsupported updatedPermissions".to_string())
-    } else if decision.interrupt {
-        Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
+    } else if decision.interrupt
+        && !matches!(decision.behavior, PermissionRequestBehaviorWire::Deny)
+    {
+        Some("PermissionRequest hook returned interrupt:true without behavior:deny".to_string())
     } else {
         None
     }
@@ -320,6 +322,7 @@ fn permission_request_decision(
                 .as_deref()
                 .and_then(trimmed_reason)
                 .unwrap_or_else(|| "PermissionRequest hook denied approval".to_string()),
+            interrupt: decision.interrupt,
         },
     }
 }
@@ -470,7 +473,34 @@ mod tests {
     }
 
     #[test]
-    fn permission_request_rejects_reserved_interrupt_field() {
+    fn permission_request_accepts_interrupting_deny() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "message": "stop now",
+                        "interrupt": true
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.decision,
+            Some(super::PermissionRequestDecision::Deny {
+                message: "stop now".to_string(),
+                interrupt: true,
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_interrupting_allow() {
         let parsed = parse_permission_request(
             &json!({
                 "continue": true,
@@ -488,7 +518,9 @@ mod tests {
 
         assert_eq!(
             parsed.invalid_reason,
-            Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
+            Some(
+                "PermissionRequest hook returned interrupt:true without behavior:deny".to_string()
+            )
         );
     }
 }
