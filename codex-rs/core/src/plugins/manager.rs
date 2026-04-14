@@ -374,11 +374,12 @@ impl PluginsManager {
         }
     }
 
-    pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
+    pub async fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
         self.plugins_for_config_with_force_reload(config, /*force_reload*/ false)
+            .await
     }
 
-    pub(crate) fn plugins_for_config_with_force_reload(
+    pub(crate) async fn plugins_for_config_with_force_reload(
         &self,
         config: &Config,
         force_reload: bool,
@@ -395,7 +396,8 @@ impl PluginsManager {
             &config.config_layer_stack,
             &self.store,
             self.restriction_product,
-        );
+        )
+        .await;
         log_plugin_load_errors(&outcome);
         let mut cache = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,
@@ -419,7 +421,7 @@ impl PluginsManager {
     }
 
     /// Resolve plugin skill roots for a config layer stack without touching the plugins cache.
-    pub fn effective_skill_roots_for_layer_stack(
+    pub async fn effective_skill_roots_for_layer_stack(
         &self,
         config_layer_stack: &ConfigLayerStack,
         plugins_feature_enabled: bool,
@@ -428,6 +430,7 @@ impl PluginsManager {
             return Vec::new();
         }
         load_plugins_from_layer_stack(config_layer_stack, &self.store, self.restriction_product)
+            .await
             .effective_skill_roots()
     }
 
@@ -585,10 +588,10 @@ impl PluginsManager {
             Err(err) => err.into_inner().clone(),
         };
         if let Some(analytics_events_client) = analytics_events_client {
-            analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
-                &result.plugin_id,
-                &result.installed_path,
-            ));
+            analytics_events_client.track_plugin_installed(
+                plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path)
+                    .await,
+            );
         }
 
         Ok(PluginInstallOutcome {
@@ -622,10 +625,11 @@ impl PluginsManager {
     }
 
     async fn uninstall_plugin_id(&self, plugin_id: PluginId) -> Result<(), PluginUninstallError> {
-        let plugin_telemetry = self
-            .store
-            .active_plugin_root(&plugin_id)
-            .map(|_| installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id));
+        let plugin_telemetry = if self.store.active_plugin_root(&plugin_id).is_some() {
+            Some(installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id).await)
+        } else {
+            None
+        };
         let store = self.store.clone();
         let plugin_id_for_store = plugin_id.clone();
         tokio::task::spawn_blocking(move || store.uninstall(&plugin_id_for_store))
@@ -931,7 +935,7 @@ impl PluginsManager {
         })
     }
 
-    pub fn read_plugin_for_config(
+    pub async fn read_plugin_for_config(
         &self,
         config: &Config,
         request: &PluginReadRequest,
@@ -959,19 +963,21 @@ impl PluginsManager {
         )?;
         let plugin_key = plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let plugin = self.read_plugin_detail_for_marketplace_plugin(
-            config,
-            &marketplace.name,
-            ConfiguredMarketplacePlugin {
-                id: plugin_key.clone(),
-                name: plugin.name,
-                source: plugin.source,
-                policy: plugin.policy,
-                interface: plugin.interface,
-                installed: installed_plugins.contains(&plugin_key),
-                enabled: enabled_plugins.contains(&plugin_key),
-            },
-        )?;
+        let plugin = self
+            .read_plugin_detail_for_marketplace_plugin(
+                config,
+                &marketplace.name,
+                ConfiguredMarketplacePlugin {
+                    id: plugin_key.clone(),
+                    name: plugin.name,
+                    source: plugin.source,
+                    policy: plugin.policy,
+                    interface: plugin.interface,
+                    installed: installed_plugins.contains(&plugin_key),
+                    enabled: enabled_plugins.contains(&plugin_key),
+                },
+            )
+            .await?;
 
         Ok(PluginReadOutcome {
             marketplace_name: if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -984,7 +990,7 @@ impl PluginsManager {
         })
     }
 
-    pub(crate) fn read_plugin_detail_for_marketplace_plugin(
+    pub(crate) async fn read_plugin_detail_for_marketplace_plugin(
         &self,
         config: &Config,
         marketplace_name: &str,
@@ -1026,12 +1032,17 @@ impl PluginsManager {
             self.restriction_product,
             &skill_config_rules,
         );
-        let apps = load_plugin_apps(source_path.as_path());
+        let apps = load_apps_from_paths(
+            source_path.as_path(),
+            plugin_app_config_paths(source_path.as_path(), manifest_paths),
+        )
+        .await;
         let mcp_config_paths = plugin_mcp_config_paths(source_path.as_path(), manifest_paths);
         let mut mcp_server_names = Vec::new();
         for mcp_config_path in mcp_config_paths {
             mcp_server_names.extend(
                 load_mcp_servers_from_file(source_path.as_path(), &mcp_config_path)
+                    .await
                     .mcp_servers
                     .into_keys(),
             );
@@ -1374,7 +1385,7 @@ struct PluginAppConfig {
     id: String,
 }
 
-pub(crate) fn load_plugins_from_layer_stack(
+pub(crate) async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     store: &PluginStore,
     restriction_product: Option<Product>,
@@ -1394,7 +1405,8 @@ pub(crate) fn load_plugins_from_layer_stack(
             store,
             restriction_product,
             &skill_config_rules,
-        );
+        )
+        .await;
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())
@@ -1663,7 +1675,7 @@ fn non_curated_plugin_ids_from_config_keys(
     configured_non_curated_plugin_ids
 }
 
-fn load_plugin(
+async fn load_plugin(
     config_name: String,
     plugin: &PluginConfig,
     store: &PluginStore,
@@ -1745,7 +1757,7 @@ fn load_plugin(
     loaded_plugin.has_enabled_skills = has_enabled_skills;
     let mut mcp_servers = HashMap::new();
     for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
-        let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path);
+        let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path).await;
         for (name, config) in plugin_mcp.mcp_servers {
             if mcp_servers.insert(name.clone(), config).is_some() {
                 warn!(
@@ -1758,7 +1770,11 @@ fn load_plugin(
         }
     }
     loaded_plugin.mcp_servers = mcp_servers;
-    loaded_plugin.apps = load_plugin_apps(plugin_root.as_path());
+    loaded_plugin.apps = load_apps_from_paths(
+        plugin_root.as_path(),
+        plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
+    )
+    .await;
     loaded_plugin
 }
 
@@ -1853,14 +1869,15 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     paths
 }
 
-pub fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
+pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
     if let Some(manifest) = load_plugin_manifest(plugin_root) {
         return load_apps_from_paths(
             plugin_root,
             plugin_app_config_paths(plugin_root, &manifest.paths),
-        );
+        )
+        .await;
     }
-    load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root))
+    load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root)).await
 }
 
 fn plugin_app_config_paths(
@@ -1886,13 +1903,13 @@ fn default_app_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     paths
 }
 
-fn load_apps_from_paths(
+async fn load_apps_from_paths(
     plugin_root: &Path,
     app_config_paths: Vec<AbsolutePathBuf>,
 ) -> Vec<AppConnectorId> {
     let mut connector_ids = Vec::new();
     for app_config_path in app_config_paths {
-        let Ok(contents) = fs::read_to_string(app_config_path.as_path()) else {
+        let Ok(contents) = tokio::fs::read_to_string(app_config_path.as_path()).await else {
             continue;
         };
         let parsed = match serde_json::from_str::<PluginAppFile>(&contents) {
@@ -1925,7 +1942,7 @@ fn load_apps_from_paths(
     connector_ids
 }
 
-pub fn plugin_telemetry_metadata_from_root(
+pub async fn plugin_telemetry_metadata_from_root(
     plugin_id: &PluginId,
     plugin_root: &AbsolutePathBuf,
 ) -> PluginTelemetryMetadata {
@@ -1939,6 +1956,7 @@ pub fn plugin_telemetry_metadata_from_root(
     for path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         mcp_server_names.extend(
             load_mcp_servers_from_file(plugin_root.as_path(), &path)
+                .await
                 .mcp_servers
                 .into_keys(),
         );
@@ -1954,19 +1972,23 @@ pub fn plugin_telemetry_metadata_from_root(
             description: None,
             has_skills,
             mcp_server_names,
-            app_connector_ids: load_plugin_apps(plugin_root.as_path()),
+            app_connector_ids: load_apps_from_paths(
+                plugin_root.as_path(),
+                plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
+            )
+            .await,
         }),
     }
 }
 
-pub fn load_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerConfig> {
+pub async fn load_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerConfig> {
     let Some(manifest) = load_plugin_manifest(plugin_root) else {
         return HashMap::new();
     };
 
     let mut mcp_servers = HashMap::new();
     for mcp_config_path in plugin_mcp_config_paths(plugin_root, &manifest.paths) {
-        let plugin_mcp = load_mcp_servers_from_file(plugin_root, &mcp_config_path);
+        let plugin_mcp = load_mcp_servers_from_file(plugin_root, &mcp_config_path).await;
         for (name, config) in plugin_mcp.mcp_servers {
             mcp_servers.entry(name).or_insert(config);
         }
@@ -1975,7 +1997,7 @@ pub fn load_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerC
     mcp_servers
 }
 
-pub fn installed_plugin_telemetry_metadata(
+pub async fn installed_plugin_telemetry_metadata(
     codex_home: &Path,
     plugin_id: &PluginId,
 ) -> PluginTelemetryMetadata {
@@ -1984,14 +2006,14 @@ pub fn installed_plugin_telemetry_metadata(
         return PluginTelemetryMetadata::from_plugin_id(plugin_id);
     };
 
-    plugin_telemetry_metadata_from_root(plugin_id, &plugin_root)
+    plugin_telemetry_metadata_from_root(plugin_id, &plugin_root).await
 }
 
-fn load_mcp_servers_from_file(
+async fn load_mcp_servers_from_file(
     plugin_root: &Path,
     mcp_config_path: &AbsolutePathBuf,
 ) -> PluginMcpDiscovery {
-    let Ok(contents) = fs::read_to_string(mcp_config_path.as_path()) else {
+    let Ok(contents) = tokio::fs::read_to_string(mcp_config_path.as_path()).await else {
         return PluginMcpDiscovery::default();
     };
     let parsed = match serde_json::from_str::<PluginMcpFile>(&contents) {
