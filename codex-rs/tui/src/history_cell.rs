@@ -2993,6 +2993,8 @@ mod tests {
     #[test]
     fn image_generation_call_renders_saved_path() {
         let saved_path = test_path_buf("/tmp/generated-image.png").abs();
+        let expected_saved_path =
+            format!("  └ Saved to: file://{}", saved_path.as_path().display());
         let cell = new_image_generation_call(
             "call-image-generation".to_string(),
             Some("A tiny blue square".to_string()),
@@ -3004,7 +3006,7 @@ mod tests {
             vec![
                 "• Generated Image:".to_string(),
                 "  └ A tiny blue square".to_string(),
-                "  └ Saved to: file:///tmp/generated-image.png".to_string(),
+                expected_saved_path,
             ],
         );
     }

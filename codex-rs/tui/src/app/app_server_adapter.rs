@@ -1064,7 +1064,6 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
 
     #[test]
     fn bridges_completed_agent_messages_from_server_notifications() {
@@ -1193,7 +1192,7 @@ mod tests {
             begin.command,
             vec!["printf".to_string(), "hello world\\n".to_string()]
         );
-        assert_eq!(begin.cwd.as_path(), PathBuf::from("/tmp").as_path());
+        assert_eq!(begin.cwd.as_path(), test_path_buf("/tmp").as_path());
         assert_eq!(begin.source, ExecCommandSource::UserShell);
 
         let (_, delta_events) =

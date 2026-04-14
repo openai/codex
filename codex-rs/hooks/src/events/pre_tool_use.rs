@@ -472,7 +472,13 @@ mod tests {
         let runs = preview(&[handler()], &request);
 
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].id, "pre-tool-use:0:/tmp/hooks.json:tool-call-123");
+        assert_eq!(
+            runs[0].id,
+            format!(
+                "pre-tool-use:0:{}:tool-call-123",
+                test_path_buf("/tmp/hooks.json").display()
+            )
+        );
 
         let parsed = parse_completed(
             &handler(),

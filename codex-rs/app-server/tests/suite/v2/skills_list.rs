@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::PathBufExt;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -122,8 +123,8 @@ async fn skills_list_accepts_relative_cwds() -> Result<()> {
     .await??;
     let SkillsListResponse { data } = to_response(response)?;
     assert_eq!(data.len(), 1);
-    let codex_home_path = codex_home.path().canonicalize()?;
-    assert_eq!(data[0].cwd.as_path(), codex_home_path.join(&relative_cwd));
+    let expected_cwd = codex_home.path().canonicalize()?.join(&relative_cwd).abs();
+    assert_eq!(data[0].cwd, expected_cwd);
     assert_eq!(data[0].errors, Vec::new());
     Ok(())
 }

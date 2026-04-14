@@ -4594,7 +4594,7 @@ mod tests {
                 assert_eq!(event.result, "Zm9v");
                 assert_eq!(
                     event.saved_path.as_ref().map(AbsolutePathBuf::as_path),
-                    Some(Path::new("/tmp/ig-1.png"))
+                    Some(test_path_buf("/tmp/ig-1.png").as_path())
                 );
             }
             _ => panic!("expected ImageGenerationEnd event"),
@@ -4955,7 +4955,7 @@ mod tests {
     #[test]
     fn turn_context_item_deserializes_without_network() -> Result<()> {
         let item: TurnContextItem = serde_json::from_value(json!({
-            "cwd": "/tmp",
+            "cwd": test_path_buf("/tmp"),
             "approval_policy": "never",
             "sandbox_policy": { "type": "danger-full-access" },
             "model": "gpt-5",
@@ -4972,7 +4972,7 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             trace_id: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp"),
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
@@ -5044,7 +5044,7 @@ mod tests {
                 "sandbox_policy": {
                     "type": "read-only"
                 },
-                "cwd": "/home/user/project",
+                "cwd": test_path_buf("/home/user/project"),
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
                 "history_entry_count": 0,

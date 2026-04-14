@@ -154,6 +154,20 @@ fn guardian_snapshot_options() -> ContextSnapshotOptions {
         .strip_agents_md_user_context()
 }
 
+fn normalize_guardian_snapshot_paths(text: String) -> String {
+    let platform_path = test_path_buf("/repo/codex-rs/core").display().to_string();
+    if platform_path == "/repo/codex-rs/core" {
+        return text;
+    }
+
+    let escaped_platform_path = serde_json::to_string(&platform_path)
+        .expect("test path should serialize")
+        .trim_matches('"')
+        .to_string();
+    text.replace(&escaped_platform_path, "/repo/codex-rs/core")
+        .replace(&platform_path, "/repo/codex-rs/core")
+}
+
 fn guardian_prompt_text(items: &[codex_protocol::user_input::UserInput]) -> String {
     items
         .iter()
@@ -914,11 +928,11 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     settings.bind(|| {
         assert_snapshot!(
             "codex_core__guardian__tests__guardian_review_request_layout",
-            context_snapshot::format_labeled_requests_snapshot(
+            normalize_guardian_snapshot_paths(context_snapshot::format_labeled_requests_snapshot(
                 "Guardian review request layout",
                 &[("Guardian Review Request", &request)],
                 &guardian_snapshot_options(),
-            )
+            ))
         );
     });
 
@@ -1192,13 +1206,15 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             "codex_core__guardian__tests__guardian_followup_review_request_layout",
             format!(
                 "{}\n\nshared_prompt_cache_key: {}\nfollowup_contains_first_rationale: {}",
-                context_snapshot::format_labeled_requests_snapshot(
-                    "Guardian follow-up review request layout",
-                    &[
-                        ("Initial Guardian Review Request", &requests[0]),
-                        ("Follow-up Guardian Review Request", &requests[1]),
-                    ],
-                    &guardian_snapshot_options(),
+                normalize_guardian_snapshot_paths(
+                    context_snapshot::format_labeled_requests_snapshot(
+                        "Guardian follow-up review request layout",
+                        &[
+                            ("Initial Guardian Review Request", &requests[0]),
+                            ("Follow-up Guardian Review Request", &requests[1]),
+                        ],
+                        &guardian_snapshot_options(),
+                    )
                 ),
                 first_body["prompt_cache_key"] == second_body["prompt_cache_key"],
                 second_body.to_string().contains(first_rationale),

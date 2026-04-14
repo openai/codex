@@ -901,7 +901,8 @@ async fn image_generation_call_adds_history_cell() {
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected a single history cell");
-    let combined = lines_to_single_string(&cells[0]);
+    let combined = lines_to_single_string(&cells[0])
+        .replace(&test_path_display("/tmp/ig-1.png"), "/tmp/ig-1.png");
     assert_chatwidget_snapshot!("image_generation_call_history_snapshot", combined);
 }
 

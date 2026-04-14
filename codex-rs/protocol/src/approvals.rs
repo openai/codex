@@ -380,7 +380,7 @@ mod tests {
             "type": "command",
             "source": "shell",
             "command": "rm -rf /tmp/guardian",
-            "cwd": "/tmp",
+            "cwd": test_path_buf("/tmp"),
         }))
         .expect("guardian action");
 
