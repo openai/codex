@@ -347,6 +347,10 @@ async fn bwrap_dev_nodes_work_and_missing_workspace_dot_codex_stays_blocked() {
         output.stdout.text.split_whitespace().collect::<Vec<_>>(),
         vec!["00", "00", "00", "00", "00", "00", "00", "00"]
     );
+    assert!(
+        !tmpdir.path().join(".codex").exists(),
+        "bwrap-created .codex mountpoint should be cleaned up after command exit"
+    );
 }
 
 #[tokio::test]

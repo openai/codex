@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
+use crate::bwrap_mount_cleanup::cleanup_bwrap_mount_points;
+use crate::bwrap_mount_cleanup::register_bwrap_mount_points;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
@@ -436,7 +438,13 @@ fn run_bwrap_with_proc_fallback(
         options,
     );
     apply_inner_command_argv0(&mut bwrap_args.args);
-    exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    let cleanup_mount_points = register_bwrap_mount_points(&bwrap_args.cleanup_mount_points);
+    if cleanup_mount_points.is_empty() {
+        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    }
+    let exit_code = run_bwrap_in_child_inherit_stdio(bwrap_args);
+    cleanup_bwrap_mount_points(&cleanup_mount_points);
+    std::process::exit(exit_code);
 }
 
 fn bwrap_network_mode(
@@ -473,6 +481,7 @@ fn build_bwrap_argv(
     crate::bwrap::BwrapArgs {
         args: argv,
         preserved_files: bwrap_args.preserved_files,
+        cleanup_mount_points: bwrap_args.cleanup_mount_points,
     }
 }
 
@@ -573,6 +582,7 @@ fn resolve_true_command() -> String {
 ///   command, and reads are bounded to a fixed max size.
 fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> String {
     const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
+    let cleanup_mount_points = register_bwrap_mount_points(&bwrap_args.cleanup_mount_points);
 
     let mut pipe_fds = [0; 2];
     let pipe_res = unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -583,11 +593,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
     let read_fd = pipe_fds[0];
     let write_fd = pipe_fds[1];
 
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        let err = std::io::Error::last_os_error();
-        panic!("failed to fork for bubblewrap: {err}");
-    }
+    let pid = fork_bwrap_or_panic();
 
     if pid == 0 {
         // Child: redirect stderr to the pipe, then run bubblewrap.
@@ -614,14 +620,54 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         panic!("failed to read bubblewrap stderr: {err}");
     }
 
-    let mut status: libc::c_int = 0;
-    let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
-    if wait_res < 0 {
-        let err = std::io::Error::last_os_error();
-        panic!("waitpid failed for bubblewrap child: {err}");
-    }
+    let _ = wait_for_bwrap_child(pid);
+    cleanup_bwrap_mount_points(&cleanup_mount_points);
 
     String::from_utf8_lossy(&stderr_bytes).into_owned()
+}
+
+fn run_bwrap_in_child_inherit_stdio(bwrap_args: crate::bwrap::BwrapArgs) -> i32 {
+    let pid = fork_bwrap_or_panic();
+    if pid == 0 {
+        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    }
+    wait_for_bwrap_child(pid)
+}
+
+fn fork_bwrap_or_panic() -> libc::pid_t {
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("failed to fork for bubblewrap: {err}");
+    }
+    pid
+}
+
+fn wait_for_bwrap_child(pid: libc::pid_t) -> i32 {
+    let mut status: libc::c_int = 0;
+    loop {
+        let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
+        if wait_res == pid {
+            return wait_status_to_exit_code(status);
+        }
+        if wait_res < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            panic!("waitpid failed for bubblewrap child: {err}");
+        }
+    }
+}
+
+fn wait_status_to_exit_code(status: libc::c_int) -> i32 {
+    if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else if libc::WIFSIGNALED(status) {
+        128 + libc::WTERMSIG(status)
+    } else {
+        1
+    }
 }
 
 /// Close an owned file descriptor and panic with context on failure.
