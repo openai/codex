@@ -953,7 +953,7 @@ async fn built_tools_keeps_advertised_mcp_tools_when_live_manager_is_empty() {
     session
         .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
             has_servers: true,
-            tools: numbered_mcp_tools(1),
+            tools: numbered_mcp_tools(/*count*/ 1),
         })
         .await;
 
@@ -1015,7 +1015,7 @@ async fn build_tool_call_routes_advertised_mcp_tool_when_live_manager_is_empty()
     session
         .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
             has_servers: true,
-            tools: numbered_mcp_tools(1),
+            tools: numbered_mcp_tools(/*count*/ 1),
         })
         .await;
 
@@ -1053,7 +1053,7 @@ async fn resumed_history_hydrates_advertised_mcp_tools() {
     let advertised = catalog
         .merge(McpToolCatalogUpdate {
             has_servers: true,
-            tools: numbered_mcp_tools(1),
+            tools: numbered_mcp_tools(/*count*/ 1),
         })
         .snapshot
         .to_advertised()
@@ -1096,7 +1096,7 @@ async fn advertised_mcp_catalog_updates_are_persisted_to_rollout() {
     session
         .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
             has_servers: true,
-            tools: numbered_mcp_tools(1),
+            tools: numbered_mcp_tools(/*count*/ 1),
         })
         .await;
     session.flush_rollout().await.expect("flush rollout");
