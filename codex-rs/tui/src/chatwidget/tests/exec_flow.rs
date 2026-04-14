@@ -901,8 +901,11 @@ async fn image_generation_call_adds_history_cell() {
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected a single history cell");
-    let combined = lines_to_single_string(&cells[0])
-        .replace(&test_path_display("/tmp/ig-1.png"), "/tmp/ig-1.png");
+    let platform_file_url = url::Url::from_file_path(test_path_buf("/tmp/ig-1.png"))
+        .expect("test path should convert to file URL")
+        .to_string();
+    let combined =
+        lines_to_single_string(&cells[0]).replace(&platform_file_url, "file:///tmp/ig-1.png");
     assert_chatwidget_snapshot!("image_generation_call_history_snapshot", combined);
 }
 

@@ -9758,11 +9758,14 @@ pub(crate) fn summary_to_thread(
         branch: info.branch,
         origin_url: info.origin_url,
     });
-    let cwd = if cwd.is_absolute() {
-        AbsolutePathBuf::from_absolute_path(cwd.as_path())
-    } else {
-        let base = path.parent().unwrap_or(path.as_path());
-        AbsolutePathBuf::from_absolute_path(base.join(cwd.as_path()))
+    let cwd = {
+        let cwd = if cwd.is_absolute() {
+            cwd
+        } else {
+            let base = path.parent().unwrap_or(path.as_path());
+            base.join(cwd)
+        };
+        AbsolutePathBuf::from_absolute_path(path_utils::normalize_for_native_workdir(cwd))
     }
     .unwrap_or_else(|err| {
         warn!(

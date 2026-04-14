@@ -63,6 +63,8 @@ use crate::resume_picker::SessionTarget;
 use crate::test_support::PathBufExt;
 #[cfg(test)]
 use crate::test_support::test_path_buf;
+#[cfg(test)]
+use crate::test_support::test_path_display;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -6680,7 +6682,10 @@ mod tests {
             other => panic!("expected info message after same-thread resume, saw {other:?}"),
         };
         let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-        assert!(rendered.contains("Already viewing /tmp/project."));
+        assert!(rendered.contains(&format!(
+            "Already viewing {}.",
+            test_path_display("/tmp/project")
+        )));
     }
 
     #[tokio::test]
@@ -10655,7 +10660,7 @@ guardian_approval = true
             ThreadEventSnapshot {
                 session: Some(test_thread_session(
                     thread_id,
-                    PathBuf::from("/home/user/project"),
+                    test_path_buf("/home/user/project"),
                 )),
                 turns: vec![
                     Turn {

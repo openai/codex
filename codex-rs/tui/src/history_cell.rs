@@ -2993,8 +2993,11 @@ mod tests {
     #[test]
     fn image_generation_call_renders_saved_path() {
         let saved_path = test_path_buf("/tmp/generated-image.png").abs();
-        let expected_saved_path =
-            format!("  └ Saved to: file://{}", saved_path.as_path().display());
+        let expected_saved_path = format!(
+            "  └ Saved to: {}",
+            Url::from_file_path(saved_path.as_path())
+                .expect("test path should convert to file URL")
+        );
         let cell = new_image_generation_call(
             "call-image-generation".to_string(),
             Some("A tiny blue square".to_string()),
