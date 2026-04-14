@@ -341,6 +341,55 @@ model_reasoning_effort = "high"
 }
 
 #[test]
+fn append_sandbox_workspace_write_roots_preserves_existing_keys() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let original = r#"[sandbox_workspace_write]
+network_access = false
+writable_roots = ["/tmp/existing"]
+"#;
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), original).expect("seed config");
+
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[ConfigEdit::AppendSandboxWorkspaceWriteRoots {
+            roots: vec![
+                PathBuf::from("/tmp/existing"),
+                PathBuf::from("/tmp/new-root"),
+            ],
+        }],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[sandbox_workspace_write]
+network_access = false
+writable_roots = ["/tmp/existing", "/tmp/new-root"]"#;
+    assert_eq!(contents.trim_end(), expected);
+}
+
+#[test]
+fn append_sandbox_workspace_write_roots_creates_config_file() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[ConfigEdit::AppendSandboxWorkspaceWriteRoots {
+            roots: vec![PathBuf::from("/tmp/new-root")],
+        }],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[sandbox_workspace_write]
+writable_roots = ["/tmp/new-root"]"#;
+    assert_eq!(contents.trim_end(), expected);
+}
+
+#[test]
 fn blocking_set_model_scopes_to_active_profile() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

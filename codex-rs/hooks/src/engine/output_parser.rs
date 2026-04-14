@@ -23,6 +23,7 @@ pub(crate) struct PreToolUseOutput {
 pub(crate) enum PermissionRequestDecision {
     Allow {
         updated_permissions: Vec<crate::events::permission_request::PermissionSuggestion>,
+        add_directories: Vec<crate::events::permission_request::PermissionDirectoryUpdate>,
     },
     Deny {
         message: String,
@@ -305,9 +306,12 @@ fn unsupported_permission_request_hook_specific_output(
     if decision.updated_input.is_some() {
         Some("PermissionRequest hook returned unsupported updatedInput".to_string())
     } else if matches!(decision.behavior, PermissionRequestBehaviorWire::Deny)
-        && decision.updated_permissions.is_some()
+        && (decision.updated_permissions.is_some() || decision.add_directories.is_some())
     {
-        Some("PermissionRequest hook returned updatedPermissions for deny decision".to_string())
+        Some(
+            "PermissionRequest hook returned updatedPermissions/addDirectories for deny decision"
+                .to_string(),
+        )
     } else if decision.interrupt {
         Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
     } else {
@@ -321,6 +325,7 @@ fn permission_request_decision(
     match decision.behavior {
         PermissionRequestBehaviorWire::Allow => PermissionRequestDecision::Allow {
             updated_permissions: decision.updated_permissions.clone().unwrap_or_default(),
+            add_directories: decision.add_directories.clone().unwrap_or_default(),
         },
         PermissionRequestBehaviorWire::Deny => PermissionRequestDecision::Deny {
             message: decision
@@ -495,6 +500,42 @@ mod tests {
                         crate::events::permission_request::PermissionSuggestionBehavior::Allow,
                     destination: crate::events::permission_request::PermissionSuggestionDestination::UserSettings,
                 }],
+                add_directories: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_accepts_add_directories_for_allow_decision() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                        "addDirectories": [{
+                            "directories": ["./logs", "/tmp/output"],
+                            "destination": "session"
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.decision,
+            Some(PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+                add_directories: vec![
+                    crate::events::permission_request::PermissionDirectoryUpdate {
+                        directories: vec!["./logs".to_string(), "/tmp/output".to_string()],
+                        destination:
+                            crate::events::permission_request::PermissionSuggestionDestination::Session,
+                    },
+                ],
             })
         );
     }
@@ -527,7 +568,37 @@ mod tests {
         assert_eq!(
             parsed.invalid_reason,
             Some(
-                "PermissionRequest hook returned updatedPermissions for deny decision".to_string()
+                "PermissionRequest hook returned updatedPermissions/addDirectories for deny decision"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_add_directories_for_deny_decision() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "addDirectories": [{
+                            "directories": ["./logs"],
+                            "destination": "session"
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.invalid_reason,
+            Some(
+                "PermissionRequest hook returned updatedPermissions/addDirectories for deny decision"
+                    .to_string()
             )
         );
     }

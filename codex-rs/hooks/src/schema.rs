@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::events::permission_request::PermissionDirectoryUpdate;
 use crate::events::permission_request::PermissionSuggestion;
 
 const GENERATED_DIR: &str = "generated";
@@ -147,6 +148,8 @@ pub(crate) struct PermissionRequestDecisionWire {
     pub updated_input: Option<Value>,
     #[serde(default)]
     pub updated_permissions: Option<Vec<PermissionSuggestion>>,
+    #[serde(default)]
+    pub add_directories: Option<Vec<PermissionDirectoryUpdate>>,
     #[serde(default)]
     pub message: Option<String>,
     /// Reserved for future short-circuiting semantics.

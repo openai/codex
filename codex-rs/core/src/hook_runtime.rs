@@ -1,6 +1,8 @@
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 
+use codex_hooks::PermissionDirectoryUpdate;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -18,6 +20,8 @@ use codex_hooks::UserPromptSubmitRequest;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -33,9 +37,13 @@ use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::resolve_project_root;
 use crate::event_mapping::parse_turn_item;
 use crate::tools::sandboxing::PermissionRequestPayload;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -191,9 +199,16 @@ pub(crate) async fn run_permission_request_hooks(
 
     if let Some(PermissionRequestDecision::Allow {
         updated_permissions,
+        add_directories,
     }) = &decision
     {
-        apply_permission_updates_from_hook(sess, turn_context, updated_permissions).await;
+        apply_permission_updates_from_hook(
+            sess,
+            turn_context,
+            updated_permissions,
+            add_directories,
+        )
+        .await;
     }
 
     decision
@@ -203,11 +218,27 @@ async fn apply_permission_updates_from_hook(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     updated_permissions: &[PermissionSuggestion],
+    add_directories: &[PermissionDirectoryUpdate],
 ) {
     for permission in updated_permissions {
         if let Err(err) = apply_permission_update_from_hook(sess, turn_context, permission).await {
             let message =
                 format!("PermissionRequest hook failed to apply updated permission: {err}");
+            warn!("{message}");
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent { message }),
+            })
+            .await;
+        }
+    }
+
+    for directory_update in add_directories {
+        if let Err(err) =
+            apply_directory_update_from_hook(sess, turn_context, directory_update).await
+        {
+            let message =
+                format!("PermissionRequest hook failed to apply updated writable roots: {err}");
             warn!("{message}");
             sess.send_event_raw(Event {
                 id: turn_context.sub_id.clone(),
@@ -284,6 +315,95 @@ async fn apply_execpolicy_amendment_destination(
     }
 }
 
+async fn apply_directory_update_from_hook(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    directory_update: &PermissionDirectoryUpdate,
+) -> Result<(), String> {
+    let writable_roots = resolve_directory_update_paths(&turn_context.cwd, directory_update)?;
+
+    match directory_update.destination {
+        PermissionSuggestionDestination::Session => {}
+        PermissionSuggestionDestination::UserSettings => {
+            let codex_home = sess.codex_home().await;
+            append_writable_roots_to_config(codex_home.as_path(), &writable_roots).await?;
+        }
+        PermissionSuggestionDestination::ProjectSettings => {
+            let config = turn_context.config.as_ref();
+            let project_codex_home = resolve_project_root(&config.config_layer_stack, &config.cwd)
+                .await
+                .map_err(|err| format!("failed to resolve project root for writable roots: {err}"))?
+                .join(".codex")
+                .to_path_buf();
+            tokio::fs::create_dir_all(&project_codex_home)
+                .await
+                .map_err(|err| format!("failed to create project config directory: {err}"))?;
+            append_writable_roots_to_config(&project_codex_home, &writable_roots).await?;
+        }
+    }
+
+    sess.record_granted_session_permissions(permission_profile_for_writable_roots(&writable_roots))
+        .await;
+    Ok(())
+}
+
+fn resolve_directory_update_paths(
+    cwd: &AbsolutePathBuf,
+    directory_update: &PermissionDirectoryUpdate,
+) -> Result<Vec<AbsolutePathBuf>, String> {
+    let writable_roots = directory_update
+        .directories
+        .iter()
+        .map(|directory| {
+            let trimmed = directory.trim();
+            if trimmed.is_empty() {
+                return Err("writable root update contained an empty directory".to_string());
+            }
+
+            let resolved = if Path::new(trimmed).is_absolute() {
+                Path::new(trimmed).to_path_buf()
+            } else {
+                cwd.join(trimmed).to_path_buf()
+            };
+
+            AbsolutePathBuf::from_absolute_path(resolved.as_path())
+                .map_err(|err| format!("invalid writable root `{trimmed}`: {err}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    normalize_additional_permissions(permission_profile_for_writable_roots(&writable_roots))
+        .map_err(|err| format!("failed to normalize writable roots: {err}"))?
+        .file_system
+        .and_then(|file_system| file_system.write)
+        .filter(|write_paths| !write_paths.is_empty())
+        .ok_or_else(|| "writable root update did not include any directories".to_string())
+}
+
+fn permission_profile_for_writable_roots(writable_roots: &[AbsolutePathBuf]) -> PermissionProfile {
+    PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: None,
+            write: Some(writable_roots.to_vec()),
+        }),
+        ..Default::default()
+    }
+}
+
+async fn append_writable_roots_to_config(
+    codex_home: &Path,
+    writable_roots: &[AbsolutePathBuf],
+) -> Result<(), String> {
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits([ConfigEdit::AppendSandboxWorkspaceWriteRoots {
+            roots: writable_roots
+                .iter()
+                .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
+                .collect(),
+        }])
+        .apply()
+        .await
+        .map_err(|err| format!("failed to persist writable roots: {err}"))
+}
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,

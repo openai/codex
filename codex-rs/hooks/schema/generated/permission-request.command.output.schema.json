@@ -13,6 +13,24 @@
       ],
       "type": "string"
     },
+    "PermissionDirectoryUpdate": {
+      "properties": {
+        "destination": {
+          "$ref": "#/definitions/PermissionSuggestionDestination"
+        },
+        "directories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "destination",
+        "directories"
+      ],
+      "type": "object"
+    },
     "PermissionRequestBehaviorWire": {
       "enum": [
         "allow",
@@ -23,6 +41,13 @@
     "PermissionRequestDecisionWire": {
       "additionalProperties": false,
       "properties": {
+        "addDirectories": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/PermissionDirectoryUpdate"
+          },
+          "type": "array"
+        },
         "behavior": {
           "$ref": "#/definitions/PermissionRequestBehaviorWire"
         },
