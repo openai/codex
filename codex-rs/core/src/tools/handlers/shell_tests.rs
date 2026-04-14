@@ -276,6 +276,7 @@ fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     assert_eq!(
         handler.post_tool_use_payload("call-42", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
+            tool_use_id: "call-42".to_string(),
             command: "printf shell command".to_string(),
             tool_response: json!("shell output"),
         })

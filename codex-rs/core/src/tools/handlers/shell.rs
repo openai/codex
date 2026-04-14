@@ -211,10 +211,11 @@ impl ToolHandler for ShellHandler {
         &self,
         call_id: &str,
         payload: &ToolPayload,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         let tool_response = result.post_tool_use_response(call_id, payload)?;
         Some(PostToolUsePayload {
+            tool_use_id: call_id.to_string(),
             command: shell_payload_command(payload)?,
             tool_response,
         })
@@ -318,10 +319,11 @@ impl ToolHandler for ShellCommandHandler {
         &self,
         call_id: &str,
         payload: &ToolPayload,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         let tool_response = result.post_tool_use_response(call_id, payload)?;
         Some(PostToolUsePayload {
+            tool_use_id: call_id.to_string(),
             command: shell_command_payload_command(payload)?,
             tool_response,
         })

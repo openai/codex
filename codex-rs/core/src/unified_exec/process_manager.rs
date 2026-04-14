@@ -166,6 +166,7 @@ struct PreparedProcessHandles {
     cancellation_token: CancellationToken,
     pause_state: Option<watch::Receiver<bool>>,
     command: Vec<String>,
+    raw_command: String,
     process_id: i32,
     tty: bool,
 }
@@ -275,6 +276,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&process),
                 context,
                 &request.command,
+                request.raw_command.clone(),
                 cwd.clone(),
                 start,
                 request.process_id,
@@ -395,6 +397,7 @@ impl UnifiedExecProcessManager {
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
+            raw_command: Some(request.raw_command.clone()),
         };
 
         Ok(response)
@@ -415,6 +418,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             pause_state,
             command: session_command,
+            raw_command,
             process_id,
             tty,
             ..
@@ -514,6 +518,7 @@ impl UnifiedExecProcessManager {
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
+            raw_command: Some(raw_command),
         };
 
         Ok(response)
@@ -582,6 +587,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             pause_state,
             command: entry.command.clone(),
+            raw_command: entry.raw_command.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
         })
@@ -593,6 +599,7 @@ impl UnifiedExecProcessManager {
         process: Arc<UnifiedExecProcess>,
         context: &UnifiedExecContext,
         command: &[String],
+        raw_command: String,
         cwd: AbsolutePathBuf,
         started_at: Instant,
         process_id: i32,
@@ -605,6 +612,7 @@ impl UnifiedExecProcessManager {
             call_id: context.call_id.clone(),
             process_id,
             command: command.to_vec(),
+            raw_command,
             tty,
             network_approval_id,
             session: Arc::downgrade(&context.session),

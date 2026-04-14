@@ -140,20 +140,22 @@ impl ToolHandler for UnifiedExecHandler {
         &self,
         call_id: &str,
         payload: &ToolPayload,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Function { arguments } = payload else {
+        let ToolPayload::Function { .. } = payload else {
             return None;
         };
 
-        let args = parse_arguments::<ExecCommandArgs>(arguments).ok()?;
-        if args.tty {
-            return None;
-        }
-
-        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        let command = result.raw_command.clone()?;
+        let tool_use_id = if result.event_call_id.is_empty() {
+            call_id.to_string()
+        } else {
+            result.event_call_id.clone()
+        };
+        let tool_response = result.post_tool_use_response(&tool_use_id, payload)?;
         Some(PostToolUsePayload {
-            command: args.cmd,
+            tool_use_id,
+            command,
             tool_response,
         })
     }
@@ -192,11 +194,12 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+                let raw_command = args.cmd.clone();
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     context.turn.as_ref(),
-                    &args.cmd,
+                    &raw_command,
                     &workdir,
                 )
                 .await;
@@ -306,6 +309,7 @@ impl ToolHandler for UnifiedExecHandler {
                         exit_code: None,
                         original_token_count: None,
                         session_command: None,
+                        raw_command: None,
                     });
                 }
 
@@ -314,6 +318,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
+                            raw_command,
                             process_id,
                             yield_time_ms,
                             max_output_tokens,
