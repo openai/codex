@@ -639,12 +639,12 @@ impl TestCodexBuilder {
         };
 
         Ok(TestCodex {
-            home,
-            cwd,
-            config,
             codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
+            config,
             thread_manager,
+            home,
+            cwd,
             _test_env: test_env,
         })
     }
@@ -729,12 +729,12 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
 }
 
 pub struct TestCodex {
-    pub home: Arc<TempDir>,
-    pub cwd: Arc<TempDir>,
     pub codex: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
+    pub home: Arc<TempDir>,
+    pub cwd: Arc<TempDir>,
     // Drop the execution environment after the thread manager and conversation teardown.
     _test_env: TestEnv,
 }
