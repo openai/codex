@@ -3427,13 +3427,13 @@ pub struct SkillToolDependency {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SkillErrorInfo {
-    pub path: AbsolutePathBuf,
+    pub path: PathBuf,
     pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SkillsListEntry {
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathBuf,
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillErrorInfo>,
 }

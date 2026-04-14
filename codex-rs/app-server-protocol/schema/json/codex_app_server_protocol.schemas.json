@@ -12132,7 +12132,7 @@
             "type": "string"
           },
           "path": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "type": "string"
           }
         },
         "required": [
@@ -12384,7 +12384,7 @@
       "SkillsListEntry": {
         "properties": {
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "type": "string"
           },
           "errors": {
             "items": {

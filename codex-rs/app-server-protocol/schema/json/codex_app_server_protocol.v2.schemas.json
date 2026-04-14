@@ -9976,7 +9976,7 @@
           "type": "string"
         },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "type": "string"
         }
       },
       "required": [
@@ -10228,7 +10228,7 @@
     "SkillsListEntry": {
       "properties": {
         "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "type": "string"
         },
         "errors": {
           "items": {

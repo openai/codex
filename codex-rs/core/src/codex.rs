@@ -5386,12 +5386,12 @@ mod handlers {
         cwds: Vec<PathBuf>,
         force_reload: bool,
     ) {
-        let session_cwd = {
+        let default_cwd = {
             let state = sess.state.lock().await;
-            state.session_configuration.cwd.clone()
+            state.session_configuration.cwd.to_path_buf()
         };
         let cwds = if cwds.is_empty() {
-            vec![session_cwd.to_path_buf()]
+            vec![default_cwd]
         } else {
             cwds
         };
@@ -5406,14 +5406,13 @@ mod handlers {
             let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
                 Ok(path) => path,
                 Err(err) => {
-                    let message = err.to_string();
-                    let cwd_for_entry = session_cwd.join(cwd.as_path());
+                    let error_path = cwd.clone();
                     skills.push(SkillsListEntry {
-                        cwd: cwd_for_entry.clone(),
+                        cwd,
                         skills: Vec::new(),
                         errors: vec![SkillErrorInfo {
-                            path: cwd_for_entry,
-                            message,
+                            path: error_path,
+                            message: err.to_string(),
                         }],
                     });
                     continue;
@@ -5430,14 +5429,13 @@ mod handlers {
             {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
-                    let message = err.to_string();
-                    let cwd_for_entry = cwd_abs.clone();
+                    let error_path = cwd.clone();
                     skills.push(SkillsListEntry {
-                        cwd: cwd_for_entry.clone(),
+                        cwd,
                         skills: Vec::new(),
                         errors: vec![SkillErrorInfo {
-                            path: cwd_for_entry,
-                            message,
+                            path: error_path,
+                            message: err.to_string(),
                         }],
                     });
                     continue;
@@ -5461,7 +5459,7 @@ mod handlers {
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
             skills.push(SkillsListEntry {
-                cwd: cwd_abs,
+                cwd,
                 skills: skills_metadata,
                 errors,
             });
@@ -6099,7 +6097,7 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
     errors
         .iter()
         .map(|err| SkillErrorInfo {
-            path: err.path.clone(),
+            path: err.path.to_path_buf(),
             message: err.message.clone(),
         })
         .collect()

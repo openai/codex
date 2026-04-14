@@ -3481,7 +3481,7 @@ pub struct SkillToolDependency {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillErrorInfo {
-    pub path: AbsolutePathBuf,
+    pub path: PathBuf,
     pub message: String,
 }
 
@@ -3489,7 +3489,7 @@ pub struct SkillErrorInfo {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListEntry {
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathBuf,
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillErrorInfo>,
 }

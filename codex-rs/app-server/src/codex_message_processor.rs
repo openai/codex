@@ -6301,14 +6301,13 @@ impl CodexMessageProcessor {
             let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
                 Ok(path) => path,
                 Err(err) => {
-                    let message = err.to_string();
-                    let cwd_for_entry = self.config.cwd.join(cwd.as_path());
+                    let error_path = cwd.clone();
                     data.push(codex_app_server_protocol::SkillsListEntry {
-                        cwd: cwd_for_entry.clone(),
+                        cwd,
                         skills: Vec::new(),
                         errors: vec![codex_app_server_protocol::SkillErrorInfo {
-                            path: cwd_for_entry,
-                            message,
+                            path: error_path,
+                            message: err.to_string(),
                         }],
                     });
                     continue;
@@ -6325,9 +6324,9 @@ impl CodexMessageProcessor {
             {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
-                    let error_path = cwd_abs.clone();
+                    let error_path = cwd.clone();
                     data.push(codex_app_server_protocol::SkillsListEntry {
-                        cwd: cwd_abs,
+                        cwd,
                         skills: Vec::new(),
                         errors: vec![codex_app_server_protocol::SkillErrorInfo {
                             path: error_path,
@@ -6355,7 +6354,7 @@ impl CodexMessageProcessor {
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {
-                cwd: cwd_abs,
+                cwd,
                 skills,
                 errors,
             });
@@ -9028,7 +9027,7 @@ fn errors_to_info(
     errors
         .iter()
         .map(|err| codex_app_server_protocol::SkillErrorInfo {
-            path: err.path.clone(),
+            path: err.path.to_path_buf(),
             message: err.message.clone(),
         })
         .collect()
@@ -9758,22 +9757,15 @@ pub(crate) fn summary_to_thread(
         branch: info.branch,
         origin_url: info.origin_url,
     });
-    let cwd = {
-        let cwd = if cwd.is_absolute() {
-            cwd
-        } else {
-            let base = path.parent().unwrap_or(path.as_path());
-            base.join(cwd)
-        };
-        AbsolutePathBuf::from_absolute_path(path_utils::normalize_for_native_workdir(cwd))
-    }
-    .unwrap_or_else(|err| {
-        warn!(
-            path = %path.display(),
-            "failed to normalize thread cwd while summarizing thread: {err}"
-        );
-        fallback_cwd.clone()
-    });
+    let cwd =
+        AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
+            .unwrap_or_else(|err| {
+                warn!(
+                    path = %path.display(),
+                    "failed to normalize thread cwd while summarizing thread: {err}"
+                );
+                fallback_cwd.clone()
+            });
 
     Thread {
         id: conversation_id.to_string(),
