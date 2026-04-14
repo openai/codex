@@ -87,6 +87,7 @@ members = [
     "state",
     "terminal-detection",
     "test-binary-support",
+    "thread-store",
     "codex-experimental-api-macros",
     "plugin",
 ]

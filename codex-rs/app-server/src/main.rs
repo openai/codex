@@ -44,10 +44,9 @@ fn main() -> anyhow::Result<()> {
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
         } else {
-            LoaderOverrides {
-                managed_config_path: managed_config_path_from_debug_env(),
-                ..Default::default()
-            }
+            managed_config_path_from_debug_env()
+                .map(LoaderOverrides::with_managed_config_path_for_tests)
+                .unwrap_or_default()
         };
         let transport = args.listen;
         let session_source = args.session_source;
