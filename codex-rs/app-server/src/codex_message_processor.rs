@@ -85,6 +85,8 @@ use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceInterface;
+use codex_app_server_protocol::MarketplaceRemoveParams;
+use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
@@ -243,12 +245,15 @@ use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
 use codex_core::plugins::MarketplaceAddError;
+use codex_core::plugins::MarketplaceRemoveError;
+use codex_core::plugins::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::add_marketplace as add_marketplace_to_codex_home;
+use codex_core::plugins::remove_marketplace;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
@@ -978,6 +983,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::MarketplaceAdd { request_id, params } => {
                 self.marketplace_add(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::MarketplaceRemove { request_id, params } => {
+                self.marketplace_remove(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginList { request_id, params } => {
@@ -6535,6 +6544,40 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
+    }
+
+    async fn marketplace_remove(
+        &self,
+        request_id: ConnectionRequestId,
+        params: MarketplaceRemoveParams,
+    ) {
+        let result = remove_marketplace(
+            self.config.codex_home.to_path_buf(),
+            CoreMarketplaceRemoveRequest {
+                marketplace_name: params.marketplace_name,
+            },
+        )
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        MarketplaceRemoveResponse {
+                            marketplace_name: outcome.marketplace_name,
+                            installed_root: outcome.removed_installed_root,
+                        },
+                    )
+                    .await;
+            }
+            Err(MarketplaceRemoveError::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(MarketplaceRemoveError::Internal(message)) => {
+                self.send_internal_error(request_id, message).await;
+            }
+        }
     }
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
