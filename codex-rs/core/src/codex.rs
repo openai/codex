@@ -1332,47 +1332,6 @@ impl Session {
         }
     }
 
-    async fn current_sandbox_state(&self) -> SandboxState {
-        let state = self.state.lock().await;
-        let session_configuration = &state.session_configuration;
-        SandboxState {
-            sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-            codex_linux_sandbox_exe: session_configuration
-                .original_config_do_not_use
-                .codex_linux_sandbox_exe
-                .clone(),
-            sandbox_cwd: session_configuration.cwd.to_path_buf(),
-            use_legacy_landlock: session_configuration
-                .original_config_do_not_use
-                .features
-                .use_legacy_landlock(),
-        }
-    }
-
-    async fn augment_mcp_tool_request_meta_with_current_sandbox_state(
-        &self,
-        server: &str,
-        meta: Option<Value>,
-    ) -> anyhow::Result<Option<Value>> {
-        let supports_sandbox_state_meta = self
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .server_supports_sandbox_state_meta_capability(server)
-            .await
-            .unwrap_or(false);
-        if !supports_sandbox_state_meta {
-            return Ok(meta);
-        }
-
-        let sandbox_state = self.current_sandbox_state().await;
-        Ok(codex_mcp::augment_request_meta_with_sandbox_state(
-            meta,
-            sandbox_state,
-        )?)
-    }
-
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -4485,9 +4444,6 @@ impl Session {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
-        let meta = self
-            .augment_mcp_tool_request_meta_with_current_sandbox_state(server, meta)
-            .await?;
         self.services
             .mcp_connection_manager
             .read()

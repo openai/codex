@@ -13,17 +13,14 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::Content;
-use rmcp::model::ExperimentalCapabilities;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::Meta;
@@ -39,7 +36,6 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -134,101 +130,6 @@ url = "{mcp_server_url}/mcp"
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_server_tool_call_sends_sandbox_state_meta_to_opted_in_server() -> Result<()> {
-    let responses_server = responses::start_mock_server().await;
-    let (mcp_server_url, mcp_server_handle, server_state) =
-        start_mcp_server_with_sandbox_state_meta_capability().await?;
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &responses_server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-
-    let config_path = codex_home.path().join("config.toml");
-    let mut config_toml = std::fs::read_to_string(&config_path)?;
-    config_toml.push_str(&format!(
-        r#"
-[mcp_servers.{TEST_SERVER_NAME}]
-url = "{mcp_server_url}/mcp"
-"#
-    ));
-    std::fs::write(config_path, config_toml)?;
-
-    let thread_cwd = TempDir::new()?;
-    let thread_cwd_string = thread_cwd.path().to_string_lossy().to_string();
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("mock-model".to_string()),
-            cwd: Some(thread_cwd_string.clone()),
-            sandbox: Some(SandboxMode::ReadOnly),
-            ..Default::default()
-        })
-        .await?;
-    let thread_start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
-
-    let tool_call_request_id = mcp
-        .send_mcp_server_tool_call_request(McpServerToolCallParams {
-            thread_id: thread.id,
-            server: TEST_SERVER_NAME.to_string(),
-            tool: TEST_TOOL_NAME.to_string(),
-            arguments: Some(json!({
-                "message": "hello from app",
-            })),
-            meta: Some(json!({
-                "source": "mcp-app",
-            })),
-        })
-        .await?;
-    let tool_call_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
-    )
-    .await??;
-    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
-    assert_eq!(response.is_error, Some(false));
-
-    let calls = server_state.calls.lock().await;
-    assert_eq!(calls.len(), 1);
-    let request_meta = calls[0]
-        .meta
-        .as_ref()
-        .expect("tool call should include request metadata");
-    assert_eq!(request_meta.get("source"), Some(&json!("mcp-app")));
-
-    let sandbox_state = request_meta
-        .get(MCP_SANDBOX_STATE_META_CAPABILITY)
-        .expect("tool call metadata should include sandbox state");
-    assert_eq!(
-        sandbox_state.pointer("/sandboxPolicy/type"),
-        Some(&json!("read-only"))
-    );
-    assert_eq!(
-        sandbox_state.get("sandboxCwd"),
-        Some(&json!(thread_cwd_string))
-    );
-    assert_eq!(sandbox_state.get("useLegacyLandlock"), Some(&json!(false)));
-
-    mcp_server_handle.abort();
-    let _ = mcp_server_handle.await;
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -259,35 +160,12 @@ async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
 }
 
 #[derive(Clone, Default)]
-struct ToolAppsMcpServer {
-    advertise_sandbox_state_meta_capability: bool,
-    state: ToolAppsMcpServerState,
-}
-
-#[derive(Clone, Debug, Default)]
-struct ToolAppsMcpServerState {
-    calls: Arc<Mutex<Vec<ToolCallRecord>>>,
-}
-
-#[derive(Debug)]
-struct ToolCallRecord {
-    meta: Option<JsonObject>,
-}
+struct ToolAppsMcpServer;
 
 impl ServerHandler for ToolAppsMcpServer {
     fn get_info(&self) -> ServerInfo {
-        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
-        if self.advertise_sandbox_state_meta_capability {
-            let mut experimental = ExperimentalCapabilities::new();
-            experimental.insert(
-                MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
-                JsonObject::new(),
-            );
-            capabilities.experimental = Some(experimental);
-        }
-
         ServerInfo {
-            capabilities,
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..ServerInfo::default()
         }
     }
@@ -325,12 +203,9 @@ impl ServerHandler for ToolAppsMcpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        context: RequestContext<RoleServer>,
+        _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         assert_eq!(request.name.as_ref(), TEST_TOOL_NAME);
-        self.state.calls.lock().await.push(ToolCallRecord {
-            meta: Some(context.meta.0),
-        });
         let message = request
             .arguments
             .as_ref()
@@ -351,29 +226,10 @@ impl ServerHandler for ToolAppsMcpServer {
 }
 
 async fn start_mcp_server() -> Result<(String, JoinHandle<()>)> {
-    let (url, handle, _) = start_mcp_server_with_config(false).await?;
-    Ok((url, handle))
-}
-
-async fn start_mcp_server_with_sandbox_state_meta_capability()
--> Result<(String, JoinHandle<()>, ToolAppsMcpServerState)> {
-    start_mcp_server_with_config(true).await
-}
-
-async fn start_mcp_server_with_config(
-    advertise_sandbox_state_meta_capability: bool,
-) -> Result<(String, JoinHandle<()>, ToolAppsMcpServerState)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let state = ToolAppsMcpServerState::default();
-    let service_state = state.clone();
     let mcp_service = StreamableHttpService::new(
-        move || {
-            Ok(ToolAppsMcpServer {
-                advertise_sandbox_state_meta_capability,
-                state: service_state.clone(),
-            })
-        },
+        || Ok(ToolAppsMcpServer),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
@@ -383,5 +239,5 @@ async fn start_mcp_server_with_config(
         let _ = axum::serve(listener, router).await;
     });
 
-    Ok((format!("http://{addr}"), handle, state))
+    Ok((format!("http://{addr}"), handle))
 }
