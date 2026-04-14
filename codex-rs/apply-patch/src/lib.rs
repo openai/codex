@@ -274,20 +274,7 @@ async fn apply_hunks_to_files(
         let path_abs = hunk.resolve_path(cwd);
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                if let Some(parent_abs) = path_abs.parent() {
-                    fs.create_directory(
-                        &parent_abs,
-                        CreateDirectoryOptions { recursive: true },
-                        sandbox,
-                    )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to create parent directories for {}",
-                            path_abs.display()
-                        )
-                    })?;
-                }
+                ensure_parent_directory_exists_if_missing(fs, &path_abs, sandbox).await?;
                 fs.write_file(&path_abs, contents.clone().into_bytes(), sandbox)
                     .await
                     .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
@@ -323,20 +310,7 @@ async fn apply_hunks_to_files(
                     derive_new_contents_from_chunks(&path_abs, chunks, fs, sandbox).await?;
                 if let Some(dest) = move_path {
                     let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
-                    if let Some(parent_abs) = dest_abs.parent() {
-                        fs.create_directory(
-                            &parent_abs,
-                            CreateDirectoryOptions { recursive: true },
-                            sandbox,
-                        )
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to create parent directories for {}",
-                                dest_abs.display()
-                            )
-                        })?;
-                    }
+                    ensure_parent_directory_exists_if_missing(fs, &dest_abs, sandbox).await?;
                     fs.write_file(&dest_abs, new_contents.into_bytes(), sandbox)
                         .await
                         .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
@@ -377,6 +351,45 @@ async fn apply_hunks_to_files(
         modified,
         deleted,
     })
+}
+
+async fn ensure_parent_directory_exists_if_missing(
+    fs: &dyn ExecutorFileSystem,
+    path_abs: &AbsolutePathBuf,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> anyhow::Result<()> {
+    let Some(parent_abs) = path_abs.parent() else {
+        return Ok(());
+    };
+
+    match fs.get_metadata(&parent_abs, sandbox).await {
+        Ok(metadata) => {
+            if metadata.is_directory {
+                Ok(())
+            } else {
+                anyhow::bail!("Parent path is not a directory for {}", path_abs.display());
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => fs
+            .create_directory(
+                &parent_abs,
+                CreateDirectoryOptions { recursive: true },
+                sandbox,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to create parent directories for {}",
+                    path_abs.display()
+                )
+            }),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to inspect parent directory for {}",
+                path_abs.display()
+            )
+        }),
+    }
 }
 
 struct AppliedPatch {
