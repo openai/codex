@@ -322,9 +322,18 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    /// Append raw Responses API items to the thread history without starting a user turn.
+    ThreadInjectItems => "thread/inject_items" {
+        params: v2::ThreadInjectItemsParams,
+        response: v2::ThreadInjectItemsResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
+    },
+    MarketplaceAdd => "marketplace/add" {
+        params: v2::MarketplaceAddParams,
+        response: v2::MarketplaceAddResponse,
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,

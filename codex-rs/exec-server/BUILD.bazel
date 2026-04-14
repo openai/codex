@@ -3,9 +3,5 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "exec-server",
     crate_name = "codex_exec_server",
-    extra_binaries = [
-        "//codex-rs/cli:codex",
-        "//codex-rs/linux-sandbox:codex-linux-sandbox",
-    ],
     test_tags = ["no-sandbox"],
 )

@@ -1161,6 +1161,31 @@
           "type": "object"
         },
         {
+          "description": "Append raw Responses API items to the thread history without starting a user turn.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/inject_items"
+              ],
+              "title": "Thread/injectItemsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadInjectItemsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/injectItemsRequest",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1182,6 +1207,30 @@
             "params"
           ],
           "title": "Skills/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "marketplace/add"
+              ],
+              "title": "Marketplace/addRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceAddParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/addRequest",
           "type": "object"
         },
         {
@@ -4329,11 +4378,15 @@
           "type": "integer"
         },
         "isDirectory": {
-          "description": "Whether the path currently resolves to a directory.",
+          "description": "Whether the path resolves to a directory.",
           "type": "boolean"
         },
         "isFile": {
-          "description": "Whether the path currently resolves to a regular file.",
+          "description": "Whether the path resolves to a regular file.",
+          "type": "boolean"
+        },
+        "isSymlink": {
+          "description": "Whether the path itself is a symbolic link.",
           "type": "boolean"
         },
         "modifiedAtMs": {
@@ -4346,6 +4399,7 @@
         "createdAtMs",
         "isDirectory",
         "isFile",
+        "isSymlink",
         "modifiedAtMs"
       ],
       "title": "FsGetMetadataResponse",
@@ -5824,6 +5878,55 @@
     "LogoutAccountResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "LogoutAccountResponse",
+      "type": "object"
+    },
+    "MarketplaceAddParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "refName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "sparsePaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "title": "MarketplaceAddParams",
+      "type": "object"
+    },
+    "MarketplaceAddResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "alreadyAdded": {
+          "type": "boolean"
+        },
+        "installedRoot": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "marketplaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "alreadyAdded",
+        "installedRoot",
+        "marketplaceName"
+      ],
+      "title": "MarketplaceAddResponse",
       "type": "object"
     },
     "MarketplaceInterface": {
@@ -10703,6 +10806,30 @@
     },
     "ThreadId": {
       "type": "string"
+    },
+    "ThreadInjectItemsParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "items": {
+          "description": "Raw Responses API items to append to the thread's model-visible history.",
+          "items": true,
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "threadId"
+      ],
+      "title": "ThreadInjectItemsParams",
+      "type": "object"
+    },
+    "ThreadInjectItemsResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadInjectItemsResponse",
+      "type": "object"
     },
     "ThreadItem": {
       "oneOf": [

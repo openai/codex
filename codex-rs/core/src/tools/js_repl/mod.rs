@@ -1561,12 +1561,14 @@ impl JsReplManager {
             .await
             .list_all_tools()
             .await;
-
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
                 deferred_mcp_tools: None,
                 mcp_tools: Some(mcp_tools),
+                // JS REPL dispatches nested tool calls directly, not through
+                // `ToolCallRuntime`'s parallel scheduling lock.
+                parallel_mcp_server_names: std::collections::HashSet::new(),
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             },
