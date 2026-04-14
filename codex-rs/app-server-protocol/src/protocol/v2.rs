@@ -899,7 +899,6 @@ pub struct NetworkRequirements {
     /// Legacy compatibility view derived from `unix_sockets`.
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
-    pub danger_full_access_denylist_only: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -8103,7 +8102,6 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
-                danger_full_access_denylist_only: None,
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["blocked.example.com".to_string()]),
                 unix_sockets: None,
@@ -8130,7 +8128,6 @@ mod tests {
                 ),
             ])),
             managed_allowed_domains_only: Some(true),
-            danger_full_access_denylist_only: Some(true),
             allowed_domains: Some(vec!["api.openai.com".to_string()]),
             denied_domains: Some(vec!["blocked.example.com".to_string()]),
             unix_sockets: Some(BTreeMap::from([
@@ -8161,7 +8158,6 @@ mod tests {
                     "blocked.example.com": "deny"
                 },
                 "managedAllowedDomainsOnly": true,
-                "dangerFullAccessDenylistOnly": true,
                 "allowedDomains": ["api.openai.com"],
                 "deniedDomains": ["blocked.example.com"],
                 "unixSockets": {
