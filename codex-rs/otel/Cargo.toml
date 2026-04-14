@@ -20,14 +20,24 @@ workspace = true
 disable-default-metrics-exporter = []
 
 [dependencies]
-chrono = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
-codex-utils-string = { workspace = true }
-codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-string = { workspace = true }
 eventsource-stream = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { workspace = true, features = ["time"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { workspace = true }
+codex-api = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 gethostname = { workspace = true }
+http = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry-otlp = { workspace = true, features = [
@@ -41,7 +51,7 @@ opentelemetry-otlp = { workspace = true, features = [
     "reqwest-rustls",
     "tls",
     "tls-roots",
-]}
+] }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "experimental_trace_batch_span_processor_with_async_runtime",
@@ -52,18 +62,13 @@ opentelemetry_sdk = { workspace = true, features = [
     "testing",
     "trace",
 ] }
-http = { workspace = true }
 os_info = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
-serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum_macros = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
-tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = [
