@@ -14,7 +14,7 @@ use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
 use codex_login::login_with_api_key;
-use codex_login::logout;
+use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -347,12 +347,15 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
-        Ok(true) => {
+    match logout_with_revoke(&config.codex_home, config.cli_auth_credentials_store_mode).await {
+        Ok(result) if result.removed => {
+            if let Some(err) = result.revoke_error {
+                eprintln!("Warning: {err}");
+            }
             eprintln!("Successfully logged out");
             std::process::exit(0);
         }
-        Ok(false) => {
+        Ok(_) => {
             eprintln!("Not logged in");
             std::process::exit(0);
         }
