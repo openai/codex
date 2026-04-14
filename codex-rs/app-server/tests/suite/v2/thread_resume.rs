@@ -244,7 +244,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
     assert!(thread.path.as_ref().expect("thread path").is_absolute());
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd.as_path(), Path::new("/"));
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
@@ -1613,7 +1613,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: "not-a-valid-thread-id".to_string(),
-            path: Some(thread_path),
+            path: Some(thread_path.to_path_buf()),
             ..Default::default()
         })
         .await?;
@@ -1742,7 +1742,7 @@ async fn start_materialized_thread_and_restart(
     Ok(RestartedThreadFixture {
         mcp: second_mcp,
         thread_id,
-        rollout_file_path,
+        rollout_file_path: rollout_file_path.to_path_buf(),
     })
 }
 

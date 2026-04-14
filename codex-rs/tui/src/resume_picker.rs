@@ -27,6 +27,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_protocol::ThreadId;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -1104,7 +1105,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
     };
     let preview = thread.preview.trim();
     Some(Row {
-        path: thread.path,
+        path: thread.path.map(AbsolutePathBuf::into_path_buf),
         preview: if preview.is_empty() {
             String::from("(no message yet)")
         } else {
@@ -1116,7 +1117,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
             .map(|dt| dt.with_timezone(&Utc)),
-        cwd: Some(thread.cwd),
+        cwd: Some(thread.cwd.to_path_buf()),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
     })
 }
@@ -1640,6 +1641,7 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use codex_protocol::ThreadId;
+    use codex_utils_absolute_path::test_support::PathBufExt;
 
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
@@ -2676,7 +2678,7 @@ mod tests {
             updated_at: 2,
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: PathBuf::from("/tmp").abs(),
             cli_version: String::from("0.0.0"),
             source: codex_app_server_protocol::SessionSource::Cli,
             agent_nickname: None,

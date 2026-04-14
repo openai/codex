@@ -123,7 +123,7 @@ impl ToolHandler for ViewImageHandler {
                     abs_path.display()
                 ))
             })?;
-        let event_path = abs_path.to_path_buf();
+        let event_path = abs_path.clone();
 
         let can_request_original_detail =
             can_request_original_image_detail(turn.features.get(), &turn.model_info);

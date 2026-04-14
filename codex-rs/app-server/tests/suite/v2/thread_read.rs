@@ -32,7 +32,6 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -83,7 +82,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.model_provider, "mock_provider");
     assert!(!thread.ephemeral, "stored rollouts should not be ephemeral");
     assert!(thread.path.as_ref().expect("thread path").is_absolute());
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd.as_path(), Path::new("/"));
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);

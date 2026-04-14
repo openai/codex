@@ -1,5 +1,6 @@
 use super::*;
 use codex_models_manager::model_info::model_info_from_slug;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use tokio::fs as tokio_fs;
@@ -56,7 +57,7 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
 #[tokio::test]
 async fn build_memory_tool_developer_instructions_renders_embedded_template() {
     let temp = tempdir().unwrap();
-    let codex_home = temp.path();
+    let codex_home = temp.path().abs();
     let memories_dir = codex_home.join("memories");
     tokio_fs::create_dir_all(&memories_dir).await.unwrap();
     tokio_fs::write(
@@ -66,7 +67,7 @@ async fn build_memory_tool_developer_instructions_renders_embedded_template() {
     .await
     .unwrap();
 
-    let instructions = build_memory_tool_developer_instructions(codex_home)
+    let instructions = build_memory_tool_developer_instructions(&codex_home)
         .await
         .unwrap();
 

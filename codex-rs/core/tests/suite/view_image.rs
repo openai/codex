@@ -308,7 +308,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         _ => unreachable!("stored event must be ViewImageToolCall"),
     };
     assert_eq!(tool_event.call_id, call_id);
-    assert_eq!(tool_event.path, abs_path.to_path_buf());
+    assert_eq!(tool_event.path, abs_path);
 
     let req = mock.single_request();
     let body = req.body_json();

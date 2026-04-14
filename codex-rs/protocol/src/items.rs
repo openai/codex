@@ -14,6 +14,7 @@ use crate::protocol::WebSearchEndEvent;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use quick_xml::de::from_str as from_xml_str;
 use quick_xml::se::to_string as to_xml_string;
 use schemars::JsonSchema;
@@ -123,7 +124,7 @@ pub struct ImageGenerationItem {
     pub result: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub saved_path: Option<String>,
+    pub saved_path: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]

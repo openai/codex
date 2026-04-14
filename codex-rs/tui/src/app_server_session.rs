@@ -87,6 +87,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -131,8 +132,8 @@ pub(crate) struct ThreadSessionState {
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     pub(crate) sandbox_policy: SandboxPolicy,
-    pub(crate) cwd: PathBuf,
-    pub(crate) instruction_source_paths: Vec<PathBuf>,
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) instruction_source_paths: Vec<AbsolutePathBuf>,
     pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     pub(crate) history_log_id: u64,
     pub(crate) history_entry_count: u64,
@@ -976,7 +977,11 @@ async fn thread_session_state_from_thread_start_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
-        response.thread.path.clone(),
+        response
+            .thread
+            .path
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -999,7 +1004,11 @@ async fn thread_session_state_from_thread_resume_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
-        response.thread.path.clone(),
+        response
+            .thread
+            .path
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1022,7 +1031,11 @@ async fn thread_session_state_from_thread_fork_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
-        response.thread.path.clone(),
+        response
+            .thread
+            .path
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1071,8 +1084,8 @@ async fn thread_session_state_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
-    cwd: PathBuf,
-    instruction_source_paths: Vec<PathBuf>,
+    cwd: AbsolutePathBuf,
+    instruction_source_paths: Vec<AbsolutePathBuf>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
@@ -1161,6 +1174,7 @@ mod tests {
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -1287,7 +1301,7 @@ mod tests {
                 updated_at: 2,
                 status: ThreadStatus::Idle,
                 path: None,
-                cwd: PathBuf::from("/tmp/project"),
+                cwd: PathBuf::from("/tmp/project").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_protocol::protocol::SessionSource::Cli.into(),
                 agent_nickname: None,
@@ -1321,8 +1335,8 @@ mod tests {
             model: "gpt-5.4".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
-            cwd: PathBuf::from("/tmp/project"),
-            instruction_sources: vec![PathBuf::from("/tmp/project/AGENTS.md")],
+            cwd: PathBuf::from("/tmp/project").abs(),
+            instruction_sources: vec![PathBuf::from("/tmp/project/AGENTS.md").abs()],
             approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: codex_protocol::protocol::SandboxPolicy::new_read_only_policy().into(),
@@ -1365,7 +1379,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
-            PathBuf::from("/tmp/project"),
+            PathBuf::from("/tmp/project").abs(),
             Vec::new(),
             /*reasoning_effort*/ None,
             &config,
@@ -1395,7 +1409,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
-            PathBuf::from("/tmp/project"),
+            PathBuf::from("/tmp/project").abs(),
             Vec::new(),
             /*reasoning_effort*/ None,
             &config,

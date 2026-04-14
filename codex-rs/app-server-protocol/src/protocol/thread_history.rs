@@ -552,7 +552,7 @@ impl ThreadHistoryBuilder {
     fn handle_view_image_tool_call(&mut self, payload: &ViewImageToolCallEvent) {
         let item = ThreadItem::ImageView {
             id: payload.call_id.clone(),
-            path: payload.path.to_string_lossy().into_owned(),
+            path: payload.path.clone(),
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1193,6 +1193,7 @@ mod tests {
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::protocol::WebSearchEndEvent;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -1397,7 +1398,7 @@ mod tests {
                 status: "completed".into(),
                 revised_prompt: Some("final prompt".into()),
                 result: "Zm9v".into(),
-                saved_path: Some("/tmp/ig_123.png".into()),
+                saved_path: Some(PathBuf::from("/tmp/ig_123.png").abs()),
             })),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-image".into(),
@@ -1431,7 +1432,7 @@ mod tests {
                         status: "completed".into(),
                         revised_prompt: Some("final prompt".into()),
                         result: "Zm9v".into(),
-                        saved_path: Some("/tmp/ig_123.png".into()),
+                        saved_path: Some(PathBuf::from("/tmp/ig_123.png").abs()),
                     },
                 ],
             }
@@ -1786,7 +1787,7 @@ mod tests {
                 process_id: Some("pid-1".into()),
                 turn_id: "turn-1".into(),
                 command: vec!["echo".into(), "hello world".into()],
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown {
                     cmd: "echo hello world".into(),
                 }],
@@ -1835,7 +1836,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-1".into(),
                 command: "echo 'hello world'".into(),
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 process_id: Some("pid-1".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
@@ -2005,7 +2006,7 @@ mod tests {
                 process_id: Some("pid-2".into()),
                 turn_id: "turn-1".into(),
                 command: vec!["ls".into()],
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown { cmd: "ls".into() }],
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
@@ -2047,7 +2048,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-declined".into(),
                 command: "ls".into(),
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 process_id: Some("pid-2".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
@@ -2138,7 +2139,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "guardian-exec".into(),
                 command: "rm -rf /tmp/guardian".into(),
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
@@ -2199,7 +2200,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "guardian-execve".into(),
                 command: "/bin/rm -f /tmp/file.sqlite".into(),
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::InProgress,
@@ -2251,7 +2252,7 @@ mod tests {
                 process_id: Some("pid-42".into()),
                 turn_id: "turn-a".into(),
                 command: vec!["echo".into(), "done".into()],
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown {
                     cmd: "echo done".into(),
                 }],
@@ -2288,7 +2289,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-late".into(),
                 command: "echo done".into(),
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 process_id: Some("pid-42".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
@@ -2340,7 +2341,7 @@ mod tests {
                 process_id: Some("pid-42".into()),
                 turn_id: "turn-missing".into(),
                 command: vec!["echo".into(), "done".into()],
-                cwd: PathBuf::from("/tmp"),
+                cwd: PathBuf::from("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown {
                     cmd: "echo done".into(),
                 }],

@@ -481,7 +481,7 @@ fn session_target_from_app_server_thread(
 ) -> Option<resume_picker::SessionTarget> {
     match ThreadId::from_string(&thread.id) {
         Ok(thread_id) => Some(resume_picker::SessionTarget {
-            path: thread.path,
+            path: thread.path.map(AbsolutePathBuf::into_path_buf),
             thread_id,
         }),
         Err(err) => {

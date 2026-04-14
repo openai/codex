@@ -968,7 +968,11 @@ fn session_configured_from_thread_start_response(
     session_configured_from_thread_response(
         &response.thread.id,
         response.thread.name.clone(),
-        response.thread.path.clone(),
+        response
+            .thread
+            .path
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -986,7 +990,11 @@ fn session_configured_from_thread_resume_response(
     session_configured_from_thread_response(
         &response.thread.id,
         response.thread.name.clone(),
-        response.thread.path.clone(),
+        response
+            .thread
+            .path
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1021,7 +1029,7 @@ fn session_configured_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
     let session_id = codex_protocol::ThreadId::from_string(thread_id)
@@ -1185,8 +1193,8 @@ fn all_thread_source_kinds() -> Vec<ThreadSourceKind> {
     ]
 }
 
-async fn latest_thread_cwd(thread: &AppServerThread) -> PathBuf {
-    if let Some(path) = thread.path.as_deref()
+async fn latest_thread_cwd(thread: &AppServerThread) -> AbsolutePathBuf {
+    if let Some(path) = thread.path.as_ref()
         && let Some(cwd) = parse_latest_turn_context_cwd(path).await
     {
         return cwd;
@@ -1194,8 +1202,8 @@ async fn latest_thread_cwd(thread: &AppServerThread) -> PathBuf {
     thread.cwd.clone()
 }
 
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
-    let text = tokio::fs::read_to_string(path).await.ok()?;
+async fn parse_latest_turn_context_cwd(path: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
+    let text = tokio::fs::read_to_string(path.as_path()).await.ok()?;
     for line in text.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -1205,7 +1213,11 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
             continue;
         };
         if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
+            return Some(
+                path.parent()
+                    .unwrap_or_else(|| path.clone())
+                    .join(&item.cwd),
+            );
         }
     }
     None
@@ -1245,7 +1257,8 @@ async fn resolve_resume_thread_id(
             .await
             .map_err(anyhow::Error::msg)?;
             for thread in response.data {
-                if args.all || cwds_match(config.cwd.as_path(), &latest_thread_cwd(&thread).await) {
+                let latest_cwd = latest_thread_cwd(&thread).await;
+                if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
                     return Ok(Some(thread.id));
                 }
             }
@@ -1309,7 +1322,8 @@ async fn resolve_resume_thread_id(
             if thread.name.as_deref() != Some(session_id) {
                 continue;
             }
-            if args.all || cwds_match(config.cwd.as_path(), &latest_thread_cwd(&thread).await) {
+            let latest_cwd = latest_thread_cwd(&thread).await;
+            if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
                 return Ok(Some(thread.id));
             }
         }

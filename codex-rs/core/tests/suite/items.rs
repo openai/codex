@@ -14,6 +14,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_image_generation_call;
@@ -348,8 +349,8 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
     assert_eq!(end.result, "Zm9v");
     assert_eq!(
-        end.saved_path,
-        Some(expected_saved_path.to_string_lossy().into_owned())
+        end.saved_path.as_ref().map(AbsolutePathBuf::as_path),
+        Some(expected_saved_path.as_path())
     );
     assert_eq!(std::fs::read(&expected_saved_path)?, b"foo");
     let _ = std::fs::remove_file(&expected_saved_path);

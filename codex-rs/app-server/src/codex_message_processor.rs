@@ -608,15 +608,12 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
-    async fn instruction_sources_from_config(config: &Config) -> Vec<PathBuf> {
-        let mut paths: Vec<PathBuf> = config.user_instructions_path.iter().cloned().collect();
+    async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
+        let mut paths: Vec<AbsolutePathBuf> =
+            config.user_instructions_path.iter().cloned().collect();
         match codex_core::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await {
             Ok(project_doc_paths) => {
-                paths.extend(
-                    project_doc_paths
-                        .into_iter()
-                        .map(|path| path.as_path().to_path_buf()),
-                );
+                paths.extend(project_doc_paths);
             }
             Err(err) => {
                 tracing::warn!(error = %err, "failed to discover project docs for thread response");
@@ -2143,7 +2140,7 @@ impl CodexMessageProcessor {
             &effective_policy,
             &effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-            sandbox_cwd.as_path(),
+            &sandbox_cwd,
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
         ) {
@@ -3265,7 +3262,7 @@ impl CodexMessageProcessor {
                 config_snapshot.session_source.clone(),
             );
             builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.clone();
+            builder.cwd = config_snapshot.cwd.to_path_buf();
             builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
             builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
             builder.approval_mode = config_snapshot.approval_policy;
@@ -3706,7 +3703,7 @@ impl CodexMessageProcessor {
             cwd,
             search_term,
         } = params;
-        let cwd = match normalize_thread_list_cwd_filter(cwd) {
+        let cwd = match normalize_thread_list_cwd_filter(cwd, &self.config.cwd) {
             Ok(cwd) => cwd,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4405,9 +4402,7 @@ impl CodexMessageProcessor {
                 );
             }
             let mut config_for_instruction_sources = self.config.as_ref().clone();
-            if let Ok(cwd) = AbsolutePathBuf::try_from(config_snapshot.cwd.clone()) {
-                config_for_instruction_sources.cwd = cwd;
-            }
+            config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
             let instruction_sources =
                 Self::instruction_sources_from_config(&config_for_instruction_sources).await;
             let thread_summary = match load_thread_summary_for_rollout(
@@ -4582,7 +4577,14 @@ impl CodexMessageProcessor {
         };
         let mut thread = thread?;
         thread.id = thread_id.to_string();
-        thread.path = Some(rollout_path.to_path_buf());
+        thread.path = Some(
+            AbsolutePathBuf::from_absolute_path_checked(rollout_path).map_err(|err| {
+                format!(
+                    "rollout path `{}` is not absolute for thread {thread_id}: {err}",
+                    rollout_path.display()
+                )
+            })?,
+        );
         let history_items = thread_history.get_rollout_items();
         populate_thread_turns(
             &mut thread,
@@ -6284,21 +6286,7 @@ impl CodexMessageProcessor {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
-            let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
-                Ok(path) => path,
-                Err(err) => {
-                    let error_path = cwd.clone();
-                    data.push(codex_app_server_protocol::SkillsListEntry {
-                        cwd,
-                        skills: Vec::new(),
-                        errors: vec![codex_app_server_protocol::SkillErrorInfo {
-                            path: error_path,
-                            message: err.to_string(),
-                        }],
-                    });
-                    continue;
-                }
-            };
+            let cwd_abs = self.config.cwd.join(cwd.as_path());
             let config_layer_stack = match load_config_layers_state(
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
@@ -6310,9 +6298,9 @@ impl CodexMessageProcessor {
             {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
-                    let error_path = cwd.clone();
+                    let error_path = cwd_abs.clone();
                     data.push(codex_app_server_protocol::SkillsListEntry {
-                        cwd,
+                        cwd: cwd_abs,
                         skills: Vec::new(),
                         errors: vec![codex_app_server_protocol::SkillErrorInfo {
                             path: error_path,
@@ -6329,7 +6317,7 @@ impl CodexMessageProcessor {
                 )
                 .await;
             let skills_input = codex_core::skills::SkillsLoadInput::new(
-                cwd_abs,
+                cwd_abs.clone(),
                 effective_skill_roots,
                 config_layer_stack,
                 config.bundled_skills_enabled(),
@@ -6340,7 +6328,7 @@ impl CodexMessageProcessor {
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {
-                cwd,
+                cwd: cwd_abs,
                 skills,
                 errors,
             });
@@ -8423,24 +8411,18 @@ impl CodexMessageProcessor {
 
 fn normalize_thread_list_cwd_filter(
     cwd: Option<String>,
+    base_cwd: &AbsolutePathBuf,
 ) -> Result<Option<PathBuf>, JSONRPCErrorError> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
-    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
-        .map(AbsolutePathBuf::into_path_buf)
-        .map(Some)
-        .map_err(|err| JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
-            data: None,
-        })
+    Ok(Some(base_cwd.join(cwd.as_str()).into_path_buf()))
 }
 
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
     use super::normalize_thread_list_cwd_filter;
-    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -8453,7 +8435,8 @@ mod thread_list_cwd_filter_tests {
         };
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
+            normalize_thread_list_cwd_filter(Some(cwd.clone()), &PathBuf::from("/").abs())
+                .expect("cwd filter should parse"),
             Some(PathBuf::from(cwd))
         );
     }
@@ -8461,10 +8444,15 @@ mod thread_list_cwd_filter_tests {
     #[test]
     fn normalize_thread_list_cwd_filter_resolves_relative_paths_against_server_cwd()
     -> std::io::Result<()> {
-        let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
+        let base_cwd = if cfg!(windows) {
+            PathBuf::from(r"C:\srv").abs()
+        } else {
+            PathBuf::from("/srv").abs()
+        };
+        let expected = base_cwd.join("repo-b").to_path_buf();
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
+            normalize_thread_list_cwd_filter(Some(String::from("repo-b")), &base_cwd)
                 .expect("cwd filter should parse"),
             Some(expected)
         );
@@ -8749,7 +8737,7 @@ fn collect_resume_override_mismatches(
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
-        if requested_cwd_path != config_snapshot.cwd {
+        if requested_cwd_path != config_snapshot.cwd.as_path() {
             mismatch_details.push(format!(
                 "cwd requested={} active={}",
                 requested_cwd_path.display(),
@@ -8964,7 +8952,7 @@ fn errors_to_info(
     errors
         .iter()
         .map(|err| codex_app_server_protocol::SkillErrorInfo {
-            path: err.path.to_path_buf(),
+            path: err.path.clone(),
             message: err.message.clone(),
         })
         .collect()
@@ -9646,6 +9634,10 @@ fn build_thread_from_snapshot(
     path: Option<PathBuf>,
 ) -> Thread {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let path = path.map(|path| {
+        AbsolutePathBuf::from_absolute_path_checked(path)
+            .expect("thread rollout path from snapshot must be absolute")
+    });
     Thread {
         id: thread_id.to_string(),
         forked_from_id: None,
@@ -9689,6 +9681,16 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         origin_url: info.origin_url,
     });
 
+    let path =
+        AbsolutePathBuf::from_absolute_path_checked(&path).expect("thread path must be absolute");
+    let cwd = if cwd.is_absolute() {
+        AbsolutePathBuf::from_absolute_path_checked(&cwd).expect("thread cwd must be absolute")
+    } else {
+        path.parent()
+            .unwrap_or_else(|| path.clone())
+            .join(cwd.as_path())
+    };
+
     Thread {
         id: conversation_id.to_string(),
         forked_from_id: None,
@@ -9721,6 +9723,7 @@ mod tests {
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -9855,7 +9858,7 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            cwd: PathBuf::from("/tmp"),
+            cwd: PathBuf::from("/tmp").abs(),
             ephemeral: false,
             reasoning_effort: None,
             personality: None,

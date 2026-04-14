@@ -1025,7 +1025,7 @@ struct WindowsSandboxState {
 
 fn normalize_harness_overrides_for_cwd(
     mut overrides: ConfigOverrides,
-    base_cwd: &Path,
+    base_cwd: &AbsolutePathBuf,
 ) -> Result<ConfigOverrides> {
     if overrides.additional_writable_roots.is_empty() {
         return Ok(overrides);
@@ -1033,7 +1033,7 @@ fn normalize_harness_overrides_for_cwd(
 
     let mut normalized = Vec::with_capacity(overrides.additional_writable_roots.len());
     for root in overrides.additional_writable_roots.drain(..) {
-        let absolute = AbsolutePathBuf::resolve_path_against_base(root, base_cwd);
+        let absolute = base_cwd.join(root);
         normalized.push(absolute.into_path_buf());
     }
     overrides.additional_writable_roots = normalized;
@@ -1729,7 +1729,7 @@ impl App {
         self.chat_widget.set_active_agent_label(label);
     }
 
-    async fn thread_cwd(&self, thread_id: ThreadId) -> Option<PathBuf> {
+    async fn thread_cwd(&self, thread_id: ThreadId) -> Option<AbsolutePathBuf> {
         let channel = self.thread_event_channels.get(&thread_id)?;
         let store = channel.store.lock().await;
         store.session.as_ref().map(|session| session.cwd.clone())
@@ -1804,7 +1804,7 @@ impl App {
                     cwd: self
                         .thread_cwd(thread_id)
                         .await
-                        .unwrap_or_else(|| self.config.cwd.to_path_buf()),
+                        .unwrap_or_else(|| self.config.cwd.clone()),
                     changes: HashMap::new(),
                 }),
             ),
@@ -2641,7 +2641,11 @@ impl App {
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
-        let rollout_path = notification.thread.path.clone();
+        let rollout_path = notification
+            .thread
+            .path
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf);
         if let Some(model) =
             read_session_model(&self.config, thread_id, rollout_path.as_deref()).await
         {
@@ -3090,16 +3094,20 @@ impl App {
                 history_log_id: 0,
                 history_entry_count: 0,
                 network_proxy: None,
-                rollout_path: thread.path.clone(),
+                rollout_path: thread.path.as_ref().map(AbsolutePathBuf::to_path_buf),
             });
         session.thread_id = thread_id;
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
         session.cwd = thread.cwd.clone();
         session.instruction_source_paths = Vec::new();
-        session.rollout_path = thread.path.clone();
-        if let Some(model) =
-            read_session_model(&self.config, thread_id, thread.path.as_deref()).await
+        session.rollout_path = thread.path.as_ref().map(AbsolutePathBuf::to_path_buf);
+        if let Some(model) = read_session_model(
+            &self.config,
+            thread_id,
+            thread.path.as_ref().map(AbsolutePathBuf::as_path),
+        )
+        .await
         {
             session.model = model;
         } else if thread.path.is_some() {
@@ -6470,8 +6478,8 @@ mod tests {
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
         let temp_dir = tempdir()?;
-        let base_cwd = temp_dir.path().join("base");
-        std::fs::create_dir_all(&base_cwd)?;
+        let base_cwd = temp_dir.path().join("base").abs();
+        std::fs::create_dir_all(base_cwd.as_path())?;
 
         let overrides = ConfigOverrides {
             additional_writable_roots: vec![PathBuf::from("rel")],
@@ -6481,7 +6489,7 @@ mod tests {
 
         assert_eq!(
             normalized.additional_writable_roots,
-            vec![base_cwd.join("rel")]
+            vec![base_cwd.join("rel").into_path_buf()]
         );
         Ok(())
     }
@@ -8864,8 +8872,8 @@ guardian_approval = true
                     created_at: 1,
                     updated_at: 2,
                     status: codex_app_server_protocol::ThreadStatus::Idle,
-                    path: Some(rollout_path.clone()),
-                    cwd: PathBuf::from("/tmp/agent"),
+                    path: Some(rollout_path.clone().abs()),
+                    cwd: PathBuf::from("/tmp/agent").abs(),
                     cli_version: "0.0.0".to_string(),
                     source: codex_app_server_protocol::SessionSource::Unknown,
                     agent_nickname: Some("Robie".to_string()),
@@ -8893,7 +8901,7 @@ guardian_approval = true
         assert_eq!(session.model, "gpt-agent");
         assert_eq!(session.model_provider_id, "agent-provider");
         assert_eq!(session.approval_policy, primary_session.approval_policy);
-        assert_eq!(session.cwd, PathBuf::from("/tmp/agent"));
+        assert_eq!(session.cwd.as_path(), PathBuf::from("/tmp/agent").as_path());
         assert_eq!(session.rollout_path, Some(rollout_path));
         assert_eq!(
             app.agent_navigation.get(&agent_thread_id),
@@ -8946,7 +8954,7 @@ guardian_approval = true
                     updated_at: 2,
                     status: codex_app_server_protocol::ThreadStatus::Idle,
                     path: None,
-                    cwd: PathBuf::from("/tmp/agent"),
+                    cwd: PathBuf::from("/tmp/agent").abs(),
                     cli_version: "0.0.0".to_string(),
                     source: codex_app_server_protocol::SessionSource::Unknown,
                     agent_nickname: Some("Robie".to_string()),
@@ -9163,7 +9171,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: test_path_buf("/tmp/project"),
+                cwd: test_path_buf("/tmp/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -9393,7 +9401,7 @@ guardian_approval = true
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd,
+            cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -9484,7 +9492,7 @@ guardian_approval = true
                 handler_type: AppServerHookHandlerType::Command,
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: test_path_buf("/tmp/hooks.json").abs(),
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("checking go-workflow input policy".to_string()),
@@ -9506,7 +9514,7 @@ guardian_approval = true
                 handler_type: AppServerHookHandlerType::Command,
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: test_path_buf("/tmp/hooks.json").abs(),
                 display_order: 0,
                 status: AppServerHookRunStatus::Stopped,
                 status_message: Some("checking go-workflow input policy".to_string()),
@@ -9557,7 +9565,7 @@ guardian_approval = true
                 reason: Some("needs approval".to_string()),
                 network_approval_context: None,
                 command: Some("echo hello".to_string()),
-                cwd: Some(PathBuf::from("/tmp/project")),
+                cwd: Some(PathBuf::from("/tmp/project").abs()),
                 command_actions: None,
                 additional_permissions: None,
                 proposed_execpolicy_amendment: None,
@@ -10326,7 +10334,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: next_cwd.clone(),
+                cwd: next_cwd.clone().abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -10442,7 +10450,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
+                cwd: PathBuf::from("/home/user/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -10505,7 +10513,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
+                cwd: PathBuf::from("/home/user/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -10598,7 +10606,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
+                cwd: PathBuf::from("/home/user/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -10823,7 +10831,7 @@ guardian_approval = true
             }],
         )];
         let resumed_session = ThreadSessionState {
-            cwd: PathBuf::from("/tmp/refreshed"),
+            cwd: PathBuf::from("/tmp/refreshed").abs(),
             ..initial_session.clone()
         };
         let mut snapshot = ThreadEventSnapshot {
@@ -10943,7 +10951,7 @@ guardian_approval = true
                     updated_at: 0,
                     status: codex_app_server_protocol::ThreadStatus::Idle,
                     path: None,
-                    cwd: PathBuf::from("/tmp/project"),
+                    cwd: PathBuf::from("/tmp/project").abs(),
                     cli_version: "0.0.0".to_string(),
                     source: SessionSource::Cli.into(),
                     agent_nickname: None,
@@ -10978,7 +10986,7 @@ guardian_approval = true
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/home/user/project"),
+            cwd: PathBuf::from("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -11087,7 +11095,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
+                cwd: PathBuf::from("/tmp/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,

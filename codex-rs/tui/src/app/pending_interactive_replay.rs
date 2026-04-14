@@ -592,6 +592,7 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
     use std::collections::HashMap;
@@ -624,7 +625,7 @@ mod tests {
                 reason: None,
                 network_approval_context: None,
                 command: Some("echo hi".to_string()),
-                cwd: Some(PathBuf::from("/tmp")),
+                cwd: Some(PathBuf::from("/tmp").abs()),
                 command_actions: None,
                 additional_permissions: None,
                 proposed_execpolicy_amendment: None,

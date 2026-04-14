@@ -10,6 +10,7 @@ use chrono::Utc;
 use codex_config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION;
 use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -17,8 +18,7 @@ use tempfile::tempdir;
 
 #[test]
 fn memory_root_uses_shared_global_path() {
-    let dir = tempdir().expect("tempdir");
-    let codex_home = dir.path().join("codex");
+    let codex_home = AbsolutePathBuf::current_dir().expect("cwd").join("codex");
     assert_eq!(memory_root(&codex_home), codex_home.join("memories"));
 }
 
@@ -678,7 +678,10 @@ mod phase2 {
             .expect("get consolidation thread");
         let config_snapshot = subagent.config_snapshot().await;
         pretty_assertions::assert_eq!(config_snapshot.approval_policy, AskForApproval::Never);
-        pretty_assertions::assert_eq!(config_snapshot.cwd, memory_root(&harness.config.codex_home));
+        pretty_assertions::assert_eq!(
+            config_snapshot.cwd.as_path(),
+            memory_root(&harness.config.codex_home).as_path()
+        );
         match config_snapshot.sandbox_policy {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 assert!(

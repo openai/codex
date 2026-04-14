@@ -455,6 +455,7 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -895,7 +896,7 @@ mod tests {
             updated_at: 0,
             status: ThreadStatus::NotLoaded,
             path: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: PathBuf::from("/tmp").abs(),
             cli_version: "test".to_string(),
             agent_nickname: None,
             agent_role: None,

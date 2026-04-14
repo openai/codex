@@ -138,9 +138,9 @@ use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUse
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
@@ -157,7 +157,7 @@ enum CommandExecutionApprovalPresentation {
 #[derive(Debug, PartialEq)]
 struct CommandExecutionCompletionItem {
     command: String,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     command_actions: Vec<V2ParsedCommand>,
 }
 
@@ -612,7 +612,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         call_id: call_id.clone(),
                         approval_id,
                         command,
-                        cwd,
+                        cwd: cwd.to_path_buf(),
                         reason,
                         parsed_cmd,
                     };
@@ -634,7 +634,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     let command_actions = parsed_cmd
                         .iter()
                         .cloned()
-                        .map(V2ParsedCommand::from)
+                        .map(|parsed| V2ParsedCommand::from_core_with_cwd(parsed, &cwd))
                         .collect::<Vec<_>>();
                     let presentation = if let Some(network_approval_context) =
                         network_approval_context.map(V2NetworkApprovalContext::from)
@@ -1431,7 +1431,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ViewImageToolCall(view_image_event) => {
             let item = ThreadItem::ImageView {
                 id: view_image_event.call_id.clone(),
-                path: view_image_event.path.to_string_lossy().into_owned(),
+                path: view_image_event.path.clone(),
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1616,13 +1616,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 return;
             }
             let item_id = exec_command_begin_event.call_id.clone();
+            let cwd = exec_command_begin_event.cwd.clone();
             let command_actions = exec_command_begin_event
                 .parsed_cmd
                 .into_iter()
-                .map(V2ParsedCommand::from)
+                .map(|parsed| V2ParsedCommand::from_core_with_cwd(parsed, &cwd))
                 .collect::<Vec<_>>();
             let command = shlex_join(&exec_command_begin_event.command);
-            let cwd = exec_command_begin_event.cwd;
             let process_id = exec_command_begin_event.process_id;
             let first_start = {
                 let mut state = thread_state.lock().await;
@@ -1997,7 +1997,7 @@ async fn start_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     command_actions: Vec<V2ParsedCommand>,
     source: CommandExecutionSource,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -2040,7 +2040,7 @@ async fn complete_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: Option<String>,
     source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
@@ -2959,6 +2959,7 @@ mod tests {
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use core_test_support::load_default_config_for_test;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
@@ -3011,7 +3012,7 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: PathBuf::from("/tmp").abs(),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],
@@ -3101,7 +3102,7 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: "/tmp".into(),
+            cwd: PathBuf::from("/tmp").abs(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
@@ -3144,7 +3145,7 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: "/tmp".into(),
+            cwd: PathBuf::from("/tmp").abs(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,

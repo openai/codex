@@ -211,14 +211,15 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
 }
 
 #[cfg(windows)]
-fn normalize_path_for_comparison(path: PathBuf) -> PathBuf {
+fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
     let path = path.display().to_string();
     PathBuf::from(path.strip_prefix(r"\\?\").unwrap_or(&path))
 }
 
 #[cfg(not(windows))]
-fn normalize_path_for_comparison(path: PathBuf) -> PathBuf {
-    path
+fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
+    path.as_ref().to_path_buf()
 }
 
 #[tokio::test]

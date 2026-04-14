@@ -36,7 +36,7 @@ fn guardian_review_request_includes_patch_context() {
         .join("guardian-apply-patch-test.txt")
         .abs();
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let expected_cwd = action.cwd.to_path_buf();
+    let expected_cwd = action.cwd.clone();
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
         action,

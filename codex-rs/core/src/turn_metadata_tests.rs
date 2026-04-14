@@ -1,5 +1,7 @@
 use super::*;
 
+use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -8,7 +10,7 @@ use tokio::process::Command;
 #[tokio::test]
 async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
     let temp_dir = TempDir::new().expect("temp dir");
-    let repo_path = temp_dir.path().join("repo");
+    let repo_path = temp_dir.path().join("repo").abs();
     std::fs::create_dir_all(&repo_path).expect("create repo");
 
     Command::new("git")
@@ -64,7 +66,7 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
 #[test]
 fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().to_path_buf();
+    let cwd = temp_dir.path().abs();
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let state = TurnMetadataState::new(
@@ -88,7 +90,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
 #[test]
 fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields() {
     let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().to_path_buf();
+    let cwd = temp_dir.path().abs();
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let state = TurnMetadataState::new(

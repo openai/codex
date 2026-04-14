@@ -1841,11 +1841,15 @@
           ]
         },
         "cwd": {
-          "description": "The command's working directory.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command's working directory."
         },
         "itemId": {
           "type": "string"
@@ -5930,7 +5934,7 @@
                 "type": "string"
               },
               "path": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "type": {
                 "enum": [
@@ -8223,7 +8227,7 @@
                 "type": "string"
               },
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "source": {
                 "$ref": "#/definitions/v2/GuardianCommandSource"
@@ -8254,7 +8258,7 @@
                 "type": "array"
               },
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "program": {
                 "type": "string"
@@ -8283,11 +8287,11 @@
           {
             "properties": {
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "files": {
                 "items": {
-                  "type": "string"
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
                 },
                 "type": "array"
               },
@@ -8563,7 +8567,7 @@
             "$ref": "#/definitions/v2/HookScope"
           },
           "sourcePath": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "startedAt": {
             "format": "int64",
@@ -12107,7 +12111,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           }
         },
         "required": [
@@ -12137,15 +12141,23 @@
             ]
           },
           "iconLarge": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "iconSmall": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "shortDescription": {
@@ -12351,7 +12363,7 @@
       "SkillsListEntry": {
         "properties": {
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "errors": {
             "items": {
@@ -12626,8 +12638,12 @@
             "type": "integer"
           },
           "cwd": {
-            "description": "Working directory captured for the thread.",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Working directory captured for the thread."
           },
           "ephemeral": {
             "description": "Whether the thread is ephemeral and should not be materialized on disk.",
@@ -12666,11 +12682,15 @@
             ]
           },
           "path": {
-            "description": "[UNSTABLE] Path to the thread on disk.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "[UNSTABLE] Path to the thread on disk."
           },
           "preview": {
             "description": "Usually the first user message in the thread, if available.",
@@ -12907,13 +12927,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },
@@ -13171,8 +13191,12 @@
                 "type": "array"
               },
               "cwd": {
-                "description": "The command's working directory.",
-                "type": "string"
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  }
+                ],
+                "description": "The command's working directory."
               },
               "durationMs": {
                 "description": "The duration of the command execution in milliseconds.",
@@ -13501,7 +13525,7 @@
                 "type": "string"
               },
               "path": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "type": {
                 "enum": [
@@ -13534,9 +13558,13 @@
                 ]
               },
               "savedPath": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "status": {
@@ -14235,13 +14263,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },
@@ -14534,13 +14562,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },

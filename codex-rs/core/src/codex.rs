@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -649,7 +648,7 @@ impl Codex {
             network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            codex_home: config.codex_home.to_path_buf(),
+            codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
@@ -1131,7 +1130,7 @@ fn local_time_context() -> (String, String) {
 
 async fn thread_title_from_state_db(
     state_db: Option<&state_db::StateDbHandle>,
-    codex_home: &Path,
+    codex_home: &AbsolutePathBuf,
     conversation_id: ThreadId,
 ) -> Option<String> {
     if let Some(metadata) = state_db
@@ -1188,7 +1187,7 @@ pub(crate) struct SessionConfiguration {
     /// the process-wide current working directory.
     cwd: AbsolutePathBuf,
     /// Directory containing all Codex state for this session.
-    codex_home: PathBuf,
+    codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     thread_name: Option<String>,
 
@@ -1207,7 +1206,7 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
-    pub(crate) fn codex_home(&self) -> &PathBuf {
+    pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
         &self.codex_home
     }
 
@@ -1219,7 +1218,7 @@ impl SessionConfiguration {
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
-            cwd: self.cwd.to_path_buf(),
+            cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
@@ -1266,15 +1265,7 @@ impl SessionConfiguration {
         let absolute_cwd = updates
             .cwd
             .as_ref()
-            .map(|cwd| {
-                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
-                    cwd.as_path(),
-                ))
-                .unwrap_or_else(|e| {
-                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
-                    self.cwd.clone()
-                })
-            })
+            .map(|cwd| self.cwd.join(normalize_for_native_workdir(cwd.as_path())))
             .unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
@@ -1470,7 +1461,7 @@ impl Session {
         per_turn_config
     }
 
-    pub(crate) async fn codex_home(&self) -> PathBuf {
+    pub(crate) async fn codex_home(&self) -> AbsolutePathBuf {
         let state = self.state.lock().await;
         state.session_configuration.codex_home().clone()
     }
@@ -1570,7 +1561,7 @@ impl Session {
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             conversation_id.to_string(),
             sub_id.clone(),
-            cwd.to_path_buf(),
+            cwd.clone(),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
         ));
@@ -1925,9 +1916,9 @@ impl Session {
                 tx
             } else {
                 ShellSnapshot::start_snapshotting(
-                    config.codex_home.to_path_buf(),
+                    config.codex_home.clone(),
                     conversation_id,
-                    session_configuration.cwd.to_path_buf(),
+                    session_configuration.cwd.clone(),
                     &mut default_shell,
                     session_telemetry.clone(),
                 )
@@ -2131,7 +2122,7 @@ impl Session {
                 approval_policy: session_configuration.approval_policy.value(),
                 approvals_reviewer: session_configuration.approvals_reviewer,
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-                cwd: session_configuration.cwd.to_path_buf(),
+                cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                 history_log_id,
                 history_entry_count,
@@ -2485,9 +2476,9 @@ impl Session {
 
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
-        previous_cwd: &Path,
-        next_cwd: &Path,
-        codex_home: &Path,
+        previous_cwd: &AbsolutePathBuf,
+        next_cwd: &AbsolutePathBuf,
+        codex_home: &AbsolutePathBuf,
         session_source: &SessionSource,
     ) {
         if previous_cwd == next_cwd {
@@ -2506,9 +2497,9 @@ impl Session {
         }
 
         ShellSnapshot::refresh_snapshot(
-            codex_home.to_path_buf(),
+            codex_home.clone(),
             self.conversation_id,
-            next_cwd.to_path_buf(),
+            next_cwd.clone(),
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
             self.services.session_telemetry.clone(),
@@ -2768,14 +2759,6 @@ impl Session {
             }
             Err(err) => {
                 warn!("failed to read user config while reloading layer: {err}");
-                return;
-            }
-        };
-
-        let config_toml_path = match AbsolutePathBuf::try_from(config_toml_path) {
-            Ok(path) => path,
-            Err(err) => {
-                warn!("failed to resolve user config path while reloading layer: {err}");
                 return;
             }
         };
@@ -3177,7 +3160,7 @@ impl Session {
         call_id: String,
         approval_id: Option<String>,
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
@@ -4914,7 +4897,6 @@ mod handlers {
     use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
     use crate::realtime_context::truncate_realtime_text_to_token_budget;
     use codex_features::Feature;
-    use codex_utils_absolute_path::AbsolutePathBuf;
 
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::RolloutRecorder;
@@ -5388,9 +5370,12 @@ mod handlers {
         cwds: Vec<PathBuf>,
         force_reload: bool,
     ) {
-        let cwds = if cwds.is_empty() {
+        let session_cwd = {
             let state = sess.state.lock().await;
-            vec![state.session_configuration.cwd.to_path_buf()]
+            state.session_configuration.cwd.clone()
+        };
+        let cwds = if cwds.is_empty() {
+            vec![session_cwd.to_path_buf()]
         } else {
             cwds
         };
@@ -5402,22 +5387,7 @@ mod handlers {
         let mut skills = Vec::new();
         let empty_cli_overrides: &[(String, toml::Value)] = &[];
         for cwd in cwds {
-            let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
-                Ok(path) => path,
-                Err(err) => {
-                    let message = err.to_string();
-                    let cwd_for_entry = cwd.clone();
-                    skills.push(SkillsListEntry {
-                        cwd: cwd_for_entry.clone(),
-                        skills: Vec::new(),
-                        errors: vec![SkillErrorInfo {
-                            path: cwd_for_entry,
-                            message,
-                        }],
-                    });
-                    continue;
-                }
-            };
+            let cwd_abs = session_cwd.join(cwd.as_path());
             let config_layer_stack = match load_config_layers_state(
                 &codex_home,
                 Some(cwd_abs.clone()),
@@ -5430,7 +5400,7 @@ mod handlers {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
                     let message = err.to_string();
-                    let cwd_for_entry = cwd.clone();
+                    let cwd_for_entry = cwd_abs.clone();
                     skills.push(SkillsListEntry {
                         cwd: cwd_for_entry.clone(),
                         skills: Vec::new(),
@@ -5449,7 +5419,7 @@ mod handlers {
                 )
                 .await;
             let skills_input = crate::SkillsLoadInput::new(
-                cwd_abs,
+                cwd_abs.clone(),
                 effective_skill_roots,
                 config_layer_stack,
                 config.bundled_skills_enabled(),
@@ -5460,7 +5430,7 @@ mod handlers {
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
             skills.push(SkillsListEntry {
-                cwd,
+                cwd: cwd_abs,
                 skills: skills_metadata,
                 errors,
             });
@@ -5863,7 +5833,7 @@ mod handlers {
         sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
         sess.refresh_mcp_servers_if_requested(&turn_context).await;
-        match resolve_review_request(review_request, turn_context.cwd.as_path()) {
+        match resolve_review_request(review_request, &turn_context.cwd) {
             Ok(resolved) => {
                 spawn_review_thread(
                     Arc::clone(sess),
@@ -5978,7 +5948,7 @@ async fn spawn_review_thread(
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.conversation_id.to_string(),
         review_turn_id.clone(),
-        parent_turn_context.cwd.to_path_buf(),
+        parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
     ));
@@ -6097,7 +6067,7 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
     errors
         .iter()
         .map(|err| SkillErrorInfo {
-            path: err.path.to_path_buf(),
+            path: err.path.clone(),
             message: err.message.clone(),
         })
         .collect()
@@ -6491,7 +6461,7 @@ pub(crate) async fn run_turn(
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
-                        cwd: turn_context.cwd.to_path_buf(),
+                        cwd: turn_context.cwd.clone(),
                         transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
                         permission_mode: stop_hook_permission_mode,
@@ -6541,7 +6511,7 @@ pub(crate) async fn run_turn(
                         .hooks()
                         .dispatch(HookPayload {
                             session_id: sess.conversation_id,
-                            cwd: turn_context.cwd.to_path_buf(),
+                            cwd: turn_context.cwd.clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
                             hook_event: HookEvent::AfterAgent {

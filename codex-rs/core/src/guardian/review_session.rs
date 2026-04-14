@@ -35,6 +35,7 @@ use crate::rollout::recorder::RolloutRecorder;
 use codex_config::types::McpServerConfig;
 use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
@@ -129,7 +130,7 @@ struct GuardianReviewSessionReuseKey {
     base_instructions: Option<String>,
     user_instructions: Option<String>,
     compact_prompt: Option<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     main_execve_wrapper_exe: Option<PathBuf>,
@@ -156,7 +157,7 @@ impl GuardianReviewSessionReuseKey {
             base_instructions: spawn_config.base_instructions.clone(),
             user_instructions: spawn_config.user_instructions.clone(),
             compact_prompt: spawn_config.compact_prompt.clone(),
-            cwd: spawn_config.cwd.to_path_buf(),
+            cwd: spawn_config.cwd.clone(),
             mcp_servers: spawn_config.mcp_servers.clone(),
             codex_linux_sandbox_exe: spawn_config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),

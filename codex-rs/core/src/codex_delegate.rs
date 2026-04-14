@@ -571,7 +571,7 @@ async fn handle_patch_approval(
             new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
-                cwd: parent_ctx.cwd.to_path_buf(),
+                cwd: parent_ctx.cwd.clone(),
                 files,
                 patch,
             },
