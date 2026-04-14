@@ -25,6 +25,7 @@ use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
+use crate::mcp_tool_exposure::collect_unavailable_called_mcp_tools;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -7200,13 +7201,16 @@ pub(crate) async fn built_tools(
         Vec::new()
     };
     let mcp_tool_exposure = build_mcp_tool_exposure(
+        has_mcp_servers,
         &all_mcp_tools,
         connectors.as_deref(),
         explicitly_enabled.as_slice(),
         &turn_context.config,
         &turn_context.tools_config,
     );
-    let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let mut mcp_tool_exposure = mcp_tool_exposure;
+    mcp_tool_exposure.unavailable_called_tools =
+        collect_unavailable_called_mcp_tools(input, &all_mcp_tools);
 
     let parallel_mcp_server_names = turn_context
         .config
@@ -7223,8 +7227,7 @@ pub(crate) async fn built_tools(
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: direct_mcp_tools,
-            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            mcp_tool_exposure,
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

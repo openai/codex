@@ -1,4 +1,6 @@
 use crate::config::test_config;
+use crate::mcp_tool_exposure::McpToolExposure;
+use crate::mcp_tool_exposure::UnavailableMcpTool;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::test_support::construct_model_info_offline;
@@ -16,6 +18,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_tools::AdditionalProperties;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
@@ -226,10 +229,29 @@ fn build_specs(
     deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_tools(
+    build_specs_with_unavailable_mcp_tools(
         config,
         mcp_tools,
         deferred_mcp_tools,
+        Vec::new(),
+        dynamic_tools,
+    )
+}
+
+fn build_specs_with_unavailable_mcp_tools(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    unavailable_called_tools: Vec<UnavailableMcpTool>,
+    dynamic_tools: &[DynamicToolSpec],
+) -> ToolRegistryBuilder {
+    build_specs_with_discoverable_tools(
+        config,
+        McpToolExposure {
+            direct_tools: mcp_tools,
+            deferred_tools: deferred_mcp_tools,
+            unavailable_called_tools,
+        },
         /*discoverable_tools*/ None,
         dynamic_tools,
     )
@@ -312,8 +334,7 @@ fn assert_model_tools(
     let router = ToolRouter::from_config(
         &tools_config,
         ToolRouterParams {
-            mcp_tools: None,
-            deferred_mcp_tools: None,
+            mcp_tool_exposure: McpToolExposure::default(),
             parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: &[],
@@ -726,8 +747,7 @@ fn tool_suggest_requires_apps_and_plugins_features() {
         });
         let (tools, _) = build_specs_with_discoverable_tools(
             &tools_config,
-            /*mcp_tools*/ None,
-            /*deferred_mcp_tools*/ None,
+            McpToolExposure::default(),
             discoverable_tools.clone(),
             &[],
         )
@@ -912,6 +932,59 @@ fn search_tool_registers_namespaced_mcp_tool_aliases() {
     assert!(registry.has_handler(&mcp_alias));
     assert!(registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
     assert!(registry.has_handler(&ToolName::plain("mcp__rmcp__echo")));
+}
+
+#[test]
+fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
+    let config = test_config();
+    let model_info = construct_model_info_offline("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let unavailable_tool = UnavailableMcpTool {
+        qualified_name: "mcp__codex_apps__calendar_create_event".to_string(),
+        namespace: Some("mcp__codex_apps__calendar".to_string()),
+        name: "_create_event".to_string(),
+    };
+    let (tools, registry) = build_specs_with_unavailable_mcp_tools(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        vec![unavailable_tool],
+        &[],
+    )
+    .build();
+
+    let tool = find_tool(&tools, "mcp__codex_apps__calendar_create_event");
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        ..
+    }) = &tool.spec
+    else {
+        panic!("unavailable MCP tool should be exposed as a function tool");
+    };
+    assert!(description.contains("not currently available"));
+    assert_eq!(
+        parameters.additional_properties,
+        Some(AdditionalProperties::Boolean(true))
+    );
+    assert!(registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
+    assert!(registry.has_handler(&ToolName::namespaced(
+        "mcp__codex_apps__calendar",
+        "_create_event"
+    )));
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::mcp_tool_exposure::McpToolExposure;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
@@ -7,16 +8,22 @@ use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolHandlerKind;
+use codex_tools::ToolName;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanDeferredTool;
 use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
 use codex_tools::WaitAgentTimeoutOptions;
+use codex_tools::augment_tool_spec_for_code_mode;
 use codex_tools::build_tool_registry_plan;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
@@ -57,8 +64,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, ToolInfo>>,
-    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tool_exposure: McpToolExposure,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -79,6 +85,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::ToolSearchHandler;
     use crate::tools::handlers::ToolSuggestHandler;
+    use crate::tools::handlers::UnavailableMcpHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
@@ -94,6 +101,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 
     let mut builder = ToolRegistryBuilder::new();
+    let McpToolExposure {
+        direct_tools: mcp_tools,
+        deferred_tools: deferred_mcp_tools,
+        unavailable_called_tools,
+    } = mcp_tool_exposure;
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
@@ -148,6 +160,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
+    let unavailable_mcp_handler = Arc::new(UnavailableMcpHandler);
+    let mut existing_spec_names = plan
+        .specs
+        .iter()
+        .map(|configured_tool| configured_tool.name().to_string())
+        .collect::<HashSet<_>>();
 
     for spec in plan.specs {
         if spec.supports_parallel_tool_calls {
@@ -270,6 +288,42 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 .is_some_and(|tools| tools.contains_key(*name))
         }) {
             builder.register_handler(name.clone(), mcp_handler.clone());
+        }
+    }
+
+    for unavailable_tool in unavailable_called_tools {
+        if existing_spec_names.insert(unavailable_tool.qualified_name.clone()) {
+            let spec = codex_tools::ToolSpec::Function(ResponsesApiTool {
+                name: unavailable_tool.qualified_name.clone(),
+                description: format!(
+                    "This MCP tool was called earlier in the conversation, but it is not currently available. Calling `{}` returns an error explaining that the MCP server or tool is unavailable.",
+                    unavailable_tool.qualified_name
+                ),
+                strict: false,
+                parameters: JsonSchema::object(
+                    Default::default(),
+                    /*required*/ None,
+                    Some(AdditionalProperties::Boolean(true)),
+                ),
+                output_schema: None,
+                defer_loading: None,
+            });
+            let spec = if config.code_mode_enabled {
+                augment_tool_spec_for_code_mode(spec)
+            } else {
+                spec
+            };
+            builder.push_spec(spec);
+        }
+        builder.register_handler(
+            ToolName::plain(unavailable_tool.qualified_name.clone()),
+            unavailable_mcp_handler.clone(),
+        );
+        if let Some(namespace) = unavailable_tool.namespace {
+            builder.register_handler(
+                ToolName::namespaced(namespace, unavailable_tool.name),
+                unavailable_mcp_handler.clone(),
+            );
         }
     }
     builder

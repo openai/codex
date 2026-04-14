@@ -11,6 +11,7 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_exposure::DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD;
+use crate::mcp_tool_exposure::McpToolExposure;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
@@ -310,8 +311,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            mcp_tools: None,
-            deferred_mcp_tools: None,
+            mcp_tool_exposure: McpToolExposure::default(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -862,6 +862,7 @@ fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
 
     let exposure = build_mcp_tool_exposure(
+        /*has_mcp_servers*/ true,
         &mcp_tools,
         /*connectors*/ None,
         &[],
@@ -869,7 +870,11 @@ fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
         &tools_config,
     );
 
-    let mut direct_tool_names: Vec<_> = exposure.direct_tools.keys().cloned().collect();
+    let direct_tools = exposure
+        .direct_tools
+        .as_ref()
+        .expect("small tool sets should be exposed directly");
+    let mut direct_tool_names: Vec<_> = direct_tools.keys().cloned().collect();
     direct_tool_names.sort();
     let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
     expected_tool_names.sort();
@@ -884,6 +889,7 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
 
     let exposure = build_mcp_tool_exposure(
+        /*has_mcp_servers*/ true,
         &mcp_tools,
         /*connectors*/ None,
         &[],
@@ -891,7 +897,13 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
         &tools_config,
     );
 
-    assert!(exposure.direct_tools.is_empty());
+    assert!(
+        exposure
+            .direct_tools
+            .as_ref()
+            .expect("MCP servers should expose a direct tool set")
+            .is_empty()
+    );
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
@@ -920,6 +932,7 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
     let connectors = vec![make_connector("calendar", "Calendar")];
 
     let exposure = build_mcp_tool_exposure(
+        /*has_mcp_servers*/ true,
         &mcp_tools,
         Some(connectors.as_slice()),
         connectors.as_slice(),
@@ -927,7 +940,11 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
         &tools_config,
     );
 
-    let mut tool_names: Vec<String> = exposure.direct_tools.into_keys().collect();
+    let mut tool_names: Vec<String> = exposure
+        .direct_tools
+        .expect("explicit apps should be exposed directly")
+        .into_keys()
+        .collect();
     tool_names.sort();
     assert_eq!(
         tool_names,
@@ -5307,8 +5324,11 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            deferred_mcp_tools,
-            mcp_tools: Some(tools),
+            mcp_tool_exposure: McpToolExposure {
+                direct_tools: Some(tools),
+                deferred_tools: deferred_mcp_tools,
+                unavailable_called_tools: Vec::new(),
+            },
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
