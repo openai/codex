@@ -277,6 +277,8 @@ use crate::injection::tool_kind_for_path;
 use crate::instructions::UserInstructions;
 use crate::mcp::McpManager;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+use crate::mcp_tool_catalog::McpToolCatalogSnapshot;
+use crate::mcp_tool_catalog::McpToolCatalogUpdate;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -2354,6 +2356,39 @@ impl Session {
         state.get_connector_selection()
     }
 
+    async fn merge_advertised_mcp_catalog_for_model(
+        &self,
+        update: McpToolCatalogUpdate,
+    ) -> McpToolCatalogSnapshot {
+        let mut state = self.state.lock().await;
+        state.merge_advertised_mcp_tools(update)
+    }
+
+    async fn list_model_visible_mcp_catalog_for_turn(
+        &self,
+        cancellation_token: &CancellationToken,
+    ) -> CodexResult<McpToolCatalogSnapshot> {
+        let manager = self.services.mcp_connection_manager.read().await;
+        let has_servers = manager.has_servers();
+        let tools = manager
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await?;
+        drop(manager);
+        Ok(self
+            .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate { has_servers, tools })
+            .await)
+    }
+
+    async fn list_model_visible_mcp_catalog(&self) -> McpToolCatalogSnapshot {
+        let manager = self.services.mcp_connection_manager.read().await;
+        let has_servers = manager.has_servers();
+        let tools = manager.list_all_tools().await;
+        drop(manager);
+        self.merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate { has_servers, tools })
+            .await
+    }
+
     // Clears connector IDs that were accumulated for explicit selection.
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
@@ -3831,13 +3866,14 @@ impl Session {
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
-            let accessible_and_enabled_connectors =
-                connectors::list_accessible_and_enabled_connectors_from_manager(
-                    &mcp_connection_manager,
-                    &turn_context.config,
-                )
-                .await;
+            let mcp_catalog = self.list_model_visible_mcp_catalog().await;
+            let accessible_and_enabled_connectors = connectors::with_app_enabled_state(
+                connectors::accessible_connectors_from_mcp_tools(&mcp_catalog.tools),
+                &turn_context.config,
+            )
+            .into_iter()
+            .filter(|connector| connector.is_accessible && connector.is_enabled)
+            .collect::<Vec<_>>();
             if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
                 developer_sections.push(apps_section);
             }
@@ -4447,12 +4483,19 @@ impl Session {
         name: &str,
         namespace: Option<&str>,
     ) -> Option<ToolInfo> {
-        self.services
+        if let Some(tool) = self
+            .services
             .mcp_connection_manager
             .read()
             .await
             .resolve_tool_info(name, namespace)
             .await
+        {
+            return Some(tool);
+        }
+
+        let state = self.state.lock().await;
+        state.resolve_advertised_mcp_tool(name, namespace)
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
@@ -4514,6 +4557,15 @@ impl Session {
             sandbox_cwd: turn_context.cwd.to_path_buf(),
             use_legacy_landlock: turn_context.features.use_legacy_landlock(),
         };
+        let manager = self.services.mcp_connection_manager.read().await;
+        let existing_has_servers = manager.has_servers();
+        let existing_tools = manager.list_all_tools().await;
+        drop(manager);
+        self.merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
+            has_servers: existing_has_servers,
+            tools: existing_tools,
+        })
+        .await;
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -6148,15 +6200,10 @@ pub(crate) async fn run_turn(
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
         match sess
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .or_cancel(&cancellation_token)
+            .list_model_visible_mcp_catalog_for_turn(&cancellation_token)
             .await
         {
-            Ok(mcp_tools) => mcp_tools,
+            Ok(mcp_catalog) => mcp_catalog.tools,
             Err(_) if turn_context.apps_enabled() => return None,
             Err(_) => HashMap::new(),
         }
@@ -7041,13 +7088,11 @@ pub(crate) async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-    let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
-        .or_cancel(cancellation_token)
+    let mcp_catalog = sess
+        .list_model_visible_mcp_catalog_for_turn(cancellation_token)
         .await?;
-    drop(mcp_connection_manager);
+    let has_mcp_servers = mcp_catalog.has_servers;
+    let all_mcp_tools = mcp_catalog.tools;
     let loaded_plugins = sess
         .services
         .plugins_manager

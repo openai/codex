@@ -9,7 +9,11 @@ use std::collections::HashSet;
 use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::mcp_tool_catalog::McpToolCatalog;
+use crate::mcp_tool_catalog::McpToolCatalogSnapshot;
+use crate::mcp_tool_catalog::McpToolCatalogUpdate;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
+use codex_mcp::ToolInfo;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -28,6 +32,7 @@ pub(crate) struct SessionState {
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
     previous_turn_settings: Option<PreviousTurnSettings>,
+    advertised_mcp_tools: McpToolCatalog,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
@@ -47,6 +52,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
+            advertised_mcp_tools: McpToolCatalog::default(),
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
@@ -71,6 +77,21 @@ impl SessionState {
         previous_turn_settings: Option<PreviousTurnSettings>,
     ) {
         self.previous_turn_settings = previous_turn_settings;
+    }
+
+    pub(crate) fn merge_advertised_mcp_tools(
+        &mut self,
+        update: McpToolCatalogUpdate,
+    ) -> McpToolCatalogSnapshot {
+        self.advertised_mcp_tools.merge(update)
+    }
+
+    pub(crate) fn resolve_advertised_mcp_tool(
+        &self,
+        name: &str,
+        namespace: Option<&str>,
+    ) -> Option<ToolInfo> {
+        self.advertised_mcp_tools.resolve(name, namespace)
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

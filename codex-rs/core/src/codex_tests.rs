@@ -10,6 +10,7 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
+use crate::mcp_tool_catalog::McpToolCatalogUpdate;
 use crate::mcp_tool_exposure::DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::shell::default_user_shell;
@@ -1008,6 +1009,106 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
         .expect("large tool sets should be discoverable through tool_search");
     assert!(deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
     assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
+}
+
+#[tokio::test]
+async fn built_tools_keeps_advertised_mcp_tools_when_live_manager_is_empty() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
+            has_servers: true,
+            tools: numbered_mcp_tools(1),
+        })
+        .await;
+
+    let router = built_tools(
+        session.as_ref(),
+        turn_context.as_ref(),
+        &[],
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("build tools");
+
+    assert!(
+        router
+            .model_visible_specs()
+            .iter()
+            .any(|spec| spec.name() == "mcp__rmcp__tool_0"),
+        "previously advertised MCP tool should remain model-visible"
+    );
+}
+
+#[tokio::test]
+async fn built_tools_keeps_mcp_resource_tools_when_server_catalog_was_advertised() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
+            has_servers: true,
+            tools: HashMap::new(),
+        })
+        .await;
+
+    let router = built_tools(
+        session.as_ref(),
+        turn_context.as_ref(),
+        &[],
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("build tools");
+
+    let specs = router.model_visible_specs();
+
+    assert!(specs.iter().any(|spec| spec.name() == "list_mcp_resources"));
+    assert!(
+        specs
+            .iter()
+            .any(|spec| spec.name() == "list_mcp_resource_templates")
+    );
+    assert!(specs.iter().any(|spec| spec.name() == "read_mcp_resource"));
+}
+
+#[tokio::test]
+async fn build_tool_call_routes_advertised_mcp_tool_when_live_manager_is_empty() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
+            has_servers: true,
+            tools: numbered_mcp_tools(1),
+        })
+        .await;
+
+    let call = ToolRouter::build_tool_call(
+        session.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "mcp__rmcp__tool_0".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+    )
+    .await
+    .expect("build tool call")
+    .expect("function call should produce a tool call");
+
+    match call.payload {
+        ToolPayload::Mcp {
+            server,
+            tool,
+            raw_arguments,
+        } => {
+            assert_eq!(server, "rmcp");
+            assert_eq!(tool, "tool_0");
+            assert_eq!(raw_arguments, "{}");
+        }
+        other => panic!("expected MCP payload, got {other:?}"),
+    }
 }
 
 #[tokio::test]

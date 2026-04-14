@@ -46,6 +46,7 @@ pub use landlock::spawn_command_under_linux_sandbox;
 pub(crate) mod mcp;
 mod mcp_skill_dependencies;
 mod mcp_tool_approval_templates;
+mod mcp_tool_catalog;
 mod mcp_tool_exposure;
 mod network_policy_decision;
 pub(crate) mod network_proxy_loader;
