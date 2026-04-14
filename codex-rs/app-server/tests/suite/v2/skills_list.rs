@@ -54,7 +54,7 @@ async fn skills_list_includes_skills_from_per_cwd_extra_user_roots() -> Result<(
     .await??;
     let SkillsListResponse { data } = to_response(response)?;
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0].cwd, cwd.path().to_path_buf());
+    assert_eq!(data[0].cwd.as_path(), cwd.path());
     assert!(
         data[0]
             .skills
@@ -99,6 +99,35 @@ async fn skills_list_rejects_relative_extra_user_roots() -> Result<()> {
 }
 
 #[tokio::test]
+async fn skills_list_accepts_relative_cwds() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let relative_cwd = std::path::PathBuf::from("relative-cwd");
+    std::fs::create_dir_all(codex_home.path().join(&relative_cwd))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![relative_cwd.clone()],
+            force_reload: true,
+            per_cwd_extra_user_roots: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].cwd, relative_cwd);
+    assert_eq!(data[0].errors, Vec::new());
+    Ok(())
+}
+
+#[tokio::test]
 async fn skills_list_ignores_per_cwd_extra_roots_for_unknown_cwd() -> Result<()> {
     let codex_home = TempDir::new()?;
     let requested_cwd = TempDir::new()?;
@@ -127,7 +156,7 @@ async fn skills_list_ignores_per_cwd_extra_roots_for_unknown_cwd() -> Result<()>
     .await??;
     let SkillsListResponse { data } = to_response(response)?;
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0].cwd, requested_cwd.path().to_path_buf());
+    assert_eq!(data[0].cwd.as_path(), requested_cwd.path());
     assert!(
         data[0]
             .skills

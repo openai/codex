@@ -17,10 +17,10 @@ is_sourced() {
 
 setup_remote_env() {
   local container_name
-  local codex_exec_server_binary_path
+  local codex_binary_path
 
   container_name="${CODEX_TEST_REMOTE_ENV_CONTAINER_NAME:-codex-remote-test-env-local-$(date +%s)-${RANDOM}}"
-  codex_exec_server_binary_path="${REPO_ROOT}/codex-rs/target/debug/codex-exec-server"
+  codex_binary_path="${REPO_ROOT}/codex-rs/target/debug/codex"
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "docker is required (Colima or Docker Desktop)" >&2
@@ -33,22 +33,27 @@ setup_remote_env() {
   fi
 
   if ! command -v cargo >/dev/null 2>&1; then
-    echo "cargo is required to build codex-exec-server" >&2
+    echo "cargo is required to build codex" >&2
     return 1
   fi
 
   (
     cd "${REPO_ROOT}/codex-rs"
-    cargo build -p codex-exec-server --bin codex-exec-server
+    cargo build -p codex-cli --bin codex
   )
 
-  if [[ ! -f "${codex_exec_server_binary_path}" ]]; then
-    echo "codex-exec-server binary not found at ${codex_exec_server_binary_path}" >&2
+  if [[ ! -f "${codex_binary_path}" ]]; then
+    echo "codex binary not found at ${codex_binary_path}" >&2
     return 1
   fi
 
   docker rm -f "${container_name}" >/dev/null 2>&1 || true
-  docker run -d --name "${container_name}" ubuntu:24.04 sleep infinity >/dev/null
+  # bubblewrap needs mount propagation inside the remote test container.
+  docker run -d \
+    --name "${container_name}" \
+    --privileged \
+    --security-opt seccomp=unconfined \
+    ubuntu:24.04 sleep infinity >/dev/null
   if ! docker exec "${container_name}" sh -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 zsh"; then
     docker rm -f "${container_name}" >/dev/null 2>&1 || true
     return 1

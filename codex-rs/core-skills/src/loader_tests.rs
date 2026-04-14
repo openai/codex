@@ -7,15 +7,18 @@ use codex_config::ConfigRequirementsToml;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::PathBufExt;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 
 struct TestConfig {
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     config_layer_stack: ConfigLayerStack,
 }
 
@@ -24,7 +27,7 @@ async fn make_config(codex_home: &TempDir) -> TestConfig {
 }
 
 fn config_file(path: PathBuf) -> AbsolutePathBuf {
-    AbsolutePathBuf::from_absolute_path(path).expect("config file path should be absolute")
+    path.abs()
 }
 
 fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
@@ -63,8 +66,7 @@ fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
             dot_codex.is_dir().then(|| {
                 ConfigLayerEntry::new(
                     ConfigLayerSource::Project {
-                        dot_codex_folder: AbsolutePathBuf::from_absolute_path(dot_codex)
-                            .expect("project .codex path should be absolute"),
+                        dot_codex_folder: dot_codex.abs(),
                     },
                     TomlValue::Table(toml::map::Map::new()),
                 )
@@ -99,8 +101,9 @@ async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
     ];
     layers.extend(project_layers_for_cwd(&cwd));
 
+    let cwd_abs = cwd.abs();
     TestConfig {
-        cwd,
+        cwd: cwd_abs,
         config_layer_stack: ConfigLayerStack::new(
             layers,
             ConfigRequirements::default(),
@@ -126,8 +129,10 @@ fn mark_as_git_repo(dir: &Path) {
     fs::write(dir.join(".git"), "gitdir: fake\n").unwrap();
 }
 
-fn normalized(path: &Path) -> PathBuf {
-    canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf())
+fn normalized(path: &Path) -> AbsolutePathBuf {
+    canonicalize_path(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .abs()
 }
 
 #[test]
@@ -142,8 +147,8 @@ fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to
     fs::create_dir_all(&user_folder)?;
 
     // The file path doesn't need to exist; it's only used to derive the config folder.
-    let system_file = AbsolutePathBuf::from_absolute_path(system_folder.join("config.toml"))?;
-    let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
+    let system_file = system_folder.join("config.toml").abs();
+    let user_file = user_folder.join("config.toml").abs();
 
     let layers = vec![
         ConfigLayerEntry::new(
@@ -161,9 +166,10 @@ fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to
         ConfigRequirementsToml::default(),
     )?;
 
-    let got = skill_roots_from_layer_stack(&stack, Some(&home_folder))
+    let home_folder_abs = home_folder.abs();
+    let got = skill_roots_from_layer_stack(&stack, &home_folder_abs, Some(&home_folder_abs))
         .into_iter()
-        .map(|root| (root.scope, root.path))
+        .map(|root| (root.scope, root.path.to_path_buf()))
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -197,8 +203,8 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
     let dot_codex = project_root.join(".codex");
     fs::create_dir_all(&dot_codex)?;
 
-    let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
-    let project_dot_codex = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+    let user_file = user_folder.join("config.toml").abs();
+    let project_dot_codex = dot_codex.abs();
 
     let layers = vec![
         ConfigLayerEntry::new(
@@ -219,9 +225,11 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
         ConfigRequirementsToml::default(),
     )?;
 
-    let got = skill_roots_from_layer_stack(&stack, Some(&home_folder))
+    let home_folder_abs = home_folder.abs();
+    let project_root_abs = project_root.abs();
+    let got = skill_roots_from_layer_stack(&stack, &project_root_abs, Some(&home_folder_abs))
         .into_iter()
-        .map(|root| (root.scope, root.path))
+        .map(|root| (root.scope, root.path.to_path_buf()))
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -251,7 +259,7 @@ fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()> {
     let user_folder = home_folder.join("codex");
     fs::create_dir_all(&user_folder)?;
 
-    let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
+    let user_file = user_folder.join("config.toml").abs();
     let layers = vec![ConfigLayerEntry::new(
         ConfigLayerSource::User { file: user_file },
         TomlValue::Table(toml::map::Map::new()),
@@ -269,7 +277,12 @@ fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()> {
         "from home agents",
     );
 
-    let outcome = load_skills_from_roots(skill_roots_from_layer_stack(&stack, Some(&home_folder)));
+    let home_folder_abs = home_folder.abs();
+    let outcome = load_skills_from_roots(skill_roots_from_layer_stack(
+        &stack,
+        &home_folder_abs,
+        Some(&home_folder_abs),
+    ));
     assert!(
         outcome.errors.is_empty(),
         "unexpected errors: {:?}",
@@ -897,7 +910,7 @@ fn loads_skills_via_symlinked_subdir_for_admin_scope() {
     symlink_dir(shared.path(), &admin_root.path().join("shared"));
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: admin_root.path().to_path_buf(),
+        path: admin_root.path().abs(),
         scope: SkillScope::Admin,
     }]);
 
@@ -973,7 +986,7 @@ async fn system_scope_ignores_symlinked_subdir() {
     symlink_dir(shared.path(), &system_root.join("shared"));
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: system_root,
+        path: system_root.abs(),
         scope: SkillScope::System,
     }]);
     assert!(
@@ -1003,7 +1016,7 @@ async fn respects_max_scan_depth_for_user_scope() {
 
     let skills_root = codex_home.path().join("skills");
     let outcome = load_skills_from_roots([SkillRoot {
-        path: skills_root,
+        path: skills_root.abs(),
         scope: SkillScope::User,
     }]);
 
@@ -1103,7 +1116,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     .unwrap();
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills"),
+        path: plugin_root.join("skills").abs(),
         scope: SkillScope::User,
     }]);
 
@@ -1415,11 +1428,11 @@ async fn deduplicates_by_path_preferring_first_root() {
 
     let outcome = load_skills_from_roots([
         SkillRoot {
-            path: root.path().to_path_buf(),
+            path: root.path().abs(),
             scope: SkillScope::Repo,
         },
         SkillRoot {
-            path: root.path().to_path_buf(),
+            path: root.path().abs(),
             scope: SkillScope::User,
         },
     ]);
@@ -1533,9 +1546,8 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
         "unexpected errors: {:?}",
         outcome.errors
     );
-    let root_path = canonicalize_path(&root_skill_path).unwrap_or_else(|_| root_skill_path.clone());
-    let nested_path =
-        canonicalize_path(&nested_skill_path).unwrap_or_else(|_| nested_skill_path.clone());
+    let root_path = normalized(&root_skill_path);
+    let nested_path = normalized(&nested_skill_path);
     let (first_path, second_path, first_description, second_description) =
         if root_path <= nested_path {
             (root_path, nested_path, "from root", "from nested")

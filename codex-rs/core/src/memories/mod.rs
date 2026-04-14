@@ -65,7 +65,7 @@ mod phase_one {
 /// Phase 2 (aka `Consolidation`).
 mod phase_two {
     /// Default model used for phase 2.
-    pub(super) const MODEL: &str = "gpt-5.3-codex";
+    pub(super) const MODEL: &str = "gpt-5.4";
     /// Default reasoning effort used for phase 2.
     pub(super) const REASONING_EFFORT: super::ReasoningEffort = super::ReasoningEffort::Medium;
     /// Lease duration (seconds) for phase-2 consolidation job ownership.
@@ -96,10 +96,11 @@ mod metrics {
     pub(super) const MEMORY_PHASE_TWO_TOKEN_USAGE: &str = "codex.memory.phase2.token_usage";
 }
 
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub fn memory_root(codex_home: &Path) -> PathBuf {
+pub fn memory_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home.join("memories")
 }
 

@@ -277,6 +277,66 @@ fn transform_linux_seccomp_request(
 
 #[cfg(target_os = "linux")]
 #[test]
+fn wsl1_rejects_linux_bubblewrap_path() {
+    let restricted_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+
+    assert!(matches!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &restricted_policy,
+            /*use_legacy_landlock*/ false,
+            /*allow_network_for_proxy*/ false,
+            /*is_wsl1*/ true,
+        ),
+        Err(super::SandboxTransformError::Wsl1UnsupportedForBubblewrap)
+    ));
+    assert!(matches!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &FileSystemSandboxPolicy::unrestricted(),
+            /*use_legacy_landlock*/ false,
+            /*allow_network_for_proxy*/ true,
+            /*is_wsl1*/ true,
+        ),
+        Err(super::SandboxTransformError::Wsl1UnsupportedForBubblewrap)
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wsl1_allows_non_bubblewrap_linux_paths() {
+    assert!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &FileSystemSandboxPolicy::unrestricted(),
+            /*use_legacy_landlock*/ false,
+            /*allow_network_for_proxy*/ false,
+            /*is_wsl1*/ true,
+        )
+        .is_ok()
+    );
+
+    let restricted_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+    assert!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &restricted_policy,
+            /*use_legacy_landlock*/ true,
+            /*allow_network_for_proxy*/ false,
+            /*is_wsl1*/ true,
+        )
+        .is_ok()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn transform_linux_seccomp_preserves_helper_path_in_arg0_when_available() {
     let codex_linux_sandbox_exe = std::path::PathBuf::from("/tmp/codex-linux-sandbox");
     let exec_request = transform_linux_seccomp_request(&codex_linux_sandbox_exe);

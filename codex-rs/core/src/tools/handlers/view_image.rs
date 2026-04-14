@@ -92,10 +92,13 @@ impl ToolHandler for ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
+        let sandbox = environment
+            .is_remote()
+            .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
 
         let metadata = environment
             .get_filesystem()
-            .get_metadata(&abs_path)
+            .get_metadata(&abs_path, sandbox.as_ref())
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -112,7 +115,7 @@ impl ToolHandler for ViewImageHandler {
         }
         let file_bytes = environment
             .get_filesystem()
-            .read_file(&abs_path)
+            .read_file(&abs_path, sandbox.as_ref())
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -120,10 +123,9 @@ impl ToolHandler for ViewImageHandler {
                     abs_path.display()
                 ))
             })?;
-        let event_path = abs_path.to_path_buf();
+        let event_path = abs_path.clone();
 
-        let can_request_original_detail =
-            can_request_original_image_detail(turn.features.get(), &turn.model_info);
+        let can_request_original_detail = can_request_original_image_detail(&turn.model_info);
         let use_original_detail =
             can_request_original_detail && matches!(detail, Some(ViewImageDetail::Original));
         let image_mode = if use_original_detail {

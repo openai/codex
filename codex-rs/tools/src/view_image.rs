@@ -53,7 +53,3 @@ fn view_image_output_schema() -> Value {
         "additionalProperties": false
     })
 }
-
-#[cfg(test)]
-#[path = "view_image_tests.rs"]
-mod tests;

@@ -119,9 +119,9 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::protocol::HookEventName;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
 
     use super::ConfiguredHandler;
     use super::select_handlers;
@@ -138,7 +138,7 @@ mod tests {
             command: command.to_string(),
             timeout_sec: 5,
             status_message: None,
-            source_path: PathBuf::from("/tmp/hooks.json"),
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
             display_order,
         }
     }

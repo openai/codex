@@ -129,6 +129,7 @@ pub(super) async fn try_run_zsh_fork(
         command,
         cwd: sandbox_cwd,
         env: sandbox_env,
+        exec_server_env_config: _,
         network: sandbox_network,
         expiration: _sandbox_expiration,
         capture_policy: _capture_policy,
@@ -160,7 +161,7 @@ pub(super) async fn try_run_zsh_fork(
         network: sandbox_network,
         windows_sandbox_level,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
+        sandbox_policy_cwd: ctx.turn.cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -258,7 +259,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
+        sandbox_policy_cwd: ctx.turn.cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -389,7 +390,7 @@ impl CoreShellActionProvider {
         additional_permissions: Option<PermissionProfile>,
     ) -> anyhow::Result<PromptDecision> {
         let command = join_program_and_argv(program, argv);
-        let workdir = workdir.to_path_buf();
+        let workdir = workdir.clone();
         let session = self.session.clone();
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
@@ -441,7 +442,7 @@ impl CoreShellActionProvider {
                             source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
-                            cwd: workdir,
+                            cwd: workdir.clone(),
                             additional_permissions,
                         },
                         /*retry_reason*/ None,
@@ -461,7 +462,7 @@ impl CoreShellActionProvider {
                         call_id,
                         approval_id,
                         command,
-                        workdir,
+                        workdir.clone(),
                         /*reason*/ None,
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
@@ -740,7 +741,7 @@ struct CoreShellCommandExecutor {
     network: Option<codex_network_proxy::NetworkProxy>,
     windows_sandbox_level: WindowsSandboxLevel,
     arg0: Option<String>,
-    sandbox_policy_cwd: PathBuf,
+    sandbox_policy_cwd: AbsolutePathBuf,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }
@@ -779,6 +780,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 command: self.command.clone(),
                 cwd: self.cwd.clone(),
                 env: exec_env,
+                exec_server_env_config: None,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 capture_policy: ExecCapturePolicy::ShellTool,

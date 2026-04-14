@@ -42,7 +42,11 @@ switches to a no-`--argv0` compatibility path for the inner re-exec. If
 `bwrap` is missing, it falls back to the vendored bubblewrap path compiled into
 the binary and Codex surfaces a startup warning through its normal notification
 path instead of printing directly from the sandbox helper. Codex also surfaces
-a startup warning when bubblewrap cannot create user namespaces.
+a startup warning when bubblewrap cannot create user namespaces. WSL2 uses the
+normal Linux bubblewrap path. WSL1 is not supported for bubblewrap sandboxing
+because it cannot create the required user namespaces, so Codex rejects
+sandboxed shell commands that would enter the bubblewrap path before invoking
+`bwrap`.
 
 ### Windows
 
@@ -80,4 +84,6 @@ instead of running with weaker enforcement.
 
 ### All Platforms
 
-Expects the binary containing `codex-core` to simulate the virtual `apply_patch` CLI when `arg1` is `--codex-run-as-apply-patch`. See the `codex-arg0` crate for details.
+Expects the binary containing `codex-core` to simulate the virtual
+`apply_patch` CLI when `arg1` is `--codex-run-as-apply-patch`. See the
+`codex-arg0` crate for details.

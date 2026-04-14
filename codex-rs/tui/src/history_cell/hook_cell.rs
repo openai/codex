@@ -712,9 +712,10 @@ fn hook_event_label(event_name: HookEventName) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
-    use std::path::PathBuf;
 
     #[test]
     fn completed_hook_with_warning_uses_default_bold_bullet() {
@@ -767,7 +768,7 @@ mod tests {
             handler_type: codex_protocol::protocol::HookHandlerType::Command,
             execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             scope: codex_protocol::protocol::HookScope::Turn,
-            source_path: PathBuf::from("/tmp/hooks.json"),
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
             display_order: 0,
             status: HookRunStatus::Running,
             status_message: Some("checking output policy".to_string()),

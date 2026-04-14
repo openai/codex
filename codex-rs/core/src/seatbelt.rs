@@ -10,16 +10,16 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use codex_sandboxing::seatbelt::create_seatbelt_command_args_for_policies;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
 
 pub async fn spawn_command_under_seatbelt(
     command: Vec<String>,
-    command_cwd: PathBuf,
+    command_cwd: AbsolutePathBuf,
     sandbox_policy: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
+    sandbox_policy_cwd: &AbsolutePathBuf,
     stdio_policy: StdioPolicy,
     network: Option<&NetworkProxy>,
     mut env: HashMap<String, String>,

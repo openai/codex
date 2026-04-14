@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillMetadata {
@@ -15,7 +15,7 @@ pub struct SkillMetadata {
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
     /// Path to the SKILLS.md file that declares this skill.
-    pub path_to_skills_md: PathBuf,
+    pub path_to_skills_md: AbsolutePathBuf,
     pub scope: SkillScope,
 }
 
@@ -55,8 +55,8 @@ pub struct SkillPolicy {
 pub struct SkillInterface {
     pub display_name: Option<String>,
     pub short_description: Option<String>,
-    pub icon_small: Option<PathBuf>,
-    pub icon_large: Option<PathBuf>,
+    pub icon_small: Option<AbsolutePathBuf>,
+    pub icon_large: Option<AbsolutePathBuf>,
     pub brand_color: Option<String>,
     pub default_prompt: Option<String>,
 }
@@ -78,7 +78,7 @@ pub struct SkillToolDependency {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillError {
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub message: String,
 }
 
@@ -86,9 +86,9 @@ pub struct SkillError {
 pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
-    pub disabled_paths: HashSet<PathBuf>,
-    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<PathBuf, SkillMetadata>>,
-    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<PathBuf, SkillMetadata>>,
+    pub disabled_paths: HashSet<AbsolutePathBuf>,
+    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
+    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
 }
 
 impl SkillLoadOutcome {

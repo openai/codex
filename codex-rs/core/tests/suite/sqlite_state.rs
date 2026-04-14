@@ -83,7 +83,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let metadata = metadata.expect("thread should exist in state db");
     assert_eq!(metadata.id, thread_id);
-    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(metadata.rollout_path, rollout_path.to_path_buf());
     assert!(
         rollout_path.exists(),
         "rollout should be materialized after first user message"
@@ -208,7 +208,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let metadata = metadata.expect("backfilled thread should exist in state db");
     assert_eq!(metadata.id, thread_id);
-    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(metadata.rollout_path, rollout_path.to_path_buf());
     assert_eq!(metadata.model_provider, default_provider);
     assert!(metadata.first_user_message.is_some());
 
@@ -368,6 +368,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,

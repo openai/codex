@@ -16,7 +16,10 @@ the helper falls back to the vendored bubblewrap path compiled into this
 binary.
 Codex also surfaces a startup warning when `bwrap` is missing so users know it
 is falling back to the vendored helper. Codex surfaces the same startup warning
-path when bubblewrap cannot create user namespaces.
+path when bubblewrap cannot create user namespaces. WSL2 follows the normal
+Linux bubblewrap path. WSL1 is not supported for bubblewrap sandboxing because
+it cannot create the required user namespaces, so Codex rejects sandboxed shell
+commands that would enter the bubblewrap path.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
@@ -31,6 +34,9 @@ path when bubblewrap cannot create user namespaces.
   printing directly from the sandbox helper.
 - If bubblewrap cannot create user namespaces, Codex surfaces a startup warning
   instead of waiting for a runtime sandbox failure.
+- WSL2 uses the normal Linux bubblewrap path.
+- WSL1 is not supported for bubblewrap sandboxing; Codex rejects sandboxed
+  shell commands that would require the bubblewrap path before invoking `bwrap`.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)

@@ -78,7 +78,6 @@ pub(crate) async fn run_codex_thread_interactive(
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
-        analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::from_environment(
             parent_ctx.environment.as_deref(),
@@ -97,6 +96,7 @@ pub(crate) async fn run_codex_thread_interactive(
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_trace: None,
+        analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
     })
     .await?;
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
@@ -571,7 +571,7 @@ async fn handle_patch_approval(
             new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
-                cwd: parent_ctx.cwd.to_path_buf(),
+                cwd: parent_ctx.cwd.clone(),
                 files,
                 patch,
             },

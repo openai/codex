@@ -2,6 +2,7 @@ mod execute_handler;
 mod response_adapter;
 mod wait_handler;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -251,7 +252,7 @@ pub(super) async fn build_enabled_tools(
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let mcp_tools = exec
+    let listed_mcp_tools = exec
         .session
         .services
         .mcp_connection_manager
@@ -259,12 +260,25 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         .await
         .list_all_tools()
         .await;
+    let parallel_mcp_server_names = exec
+        .turn
+        .config
+        .mcp_servers
+        .get()
+        .iter()
+        .filter_map(|(server_name, server_config)| {
+            server_config
+                .supports_parallel_tool_calls
+                .then_some(server_name.clone())
+        })
+        .collect::<HashSet<_>>();
 
     ToolRouter::from_config(
         &nested_tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
-            mcp_tools: Some(mcp_tools),
+            mcp_tools: Some(listed_mcp_tools),
+            parallel_mcp_server_names,
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
         },

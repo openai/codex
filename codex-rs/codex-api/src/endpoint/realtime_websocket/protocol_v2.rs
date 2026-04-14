@@ -2,6 +2,7 @@ use crate::endpoint::realtime_websocket::protocol_common::parse_error_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_realtime_payload;
 use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta_event;
+use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_done_event;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -9,6 +10,7 @@ use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseCreated;
 use codex_protocol::protocol::RealtimeResponseDone;
+use codex_protocol::protocol::RealtimeTranscriptDone;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
@@ -30,8 +32,8 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::InputTranscriptDelta)
         }
         "conversation.item.input_audio_transcription.completed" => {
-            parse_transcript_delta_event(&parsed, "transcript")
-                .map(RealtimeEvent::InputTranscriptDelta)
+            parse_transcript_done_event(&parsed, "transcript")
+                .map(RealtimeEvent::InputTranscriptDone)
         }
         "response.output_text.delta" | "response.output_audio_transcript.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
@@ -120,10 +122,41 @@ fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
         return Some(handoff);
     }
 
+    if let Some(transcript_done) = parse_item_done_transcript(item) {
+        return Some(transcript_done);
+    }
+
     item.get("id")
         .and_then(Value::as_str)
         .map(str::to_string)
         .map(|item_id| RealtimeEvent::ConversationItemDone { item_id })
+}
+
+fn parse_item_done_transcript(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
+    let role = item.get("role").and_then(Value::as_str)?;
+    let text = item
+        .get("content")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(item_content_text)
+        .collect::<String>();
+    if text.is_empty() {
+        return None;
+    }
+
+    let done = RealtimeTranscriptDone { text };
+    match role {
+        "user" => Some(RealtimeEvent::InputTranscriptDone(done)),
+        "assistant" => Some(RealtimeEvent::OutputTranscriptDone(done)),
+        _ => None,
+    }
+}
+
+fn item_content_text(content: &Value) -> Option<&str> {
+    content
+        .get("text")
+        .or_else(|| content.get("transcript"))
+        .and_then(Value::as_str)
 }
 
 fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {

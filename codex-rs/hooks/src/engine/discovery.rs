@@ -1,8 +1,7 @@
-use std::fs;
-use std::path::Path;
-
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::fs;
 
 use super::ConfiguredHandler;
 use super::config::HookHandlerConfig;
@@ -98,7 +97,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut handlers,
                 &mut warnings,
                 &mut display_order,
-                source_path.as_path(),
+                &source_path,
                 event_name,
                 groups,
             );
@@ -112,7 +111,7 @@ fn append_group_handlers(
     handlers: &mut Vec<ConfiguredHandler>,
     warnings: &mut Vec<String>,
     display_order: &mut i64,
-    source_path: &Path,
+    source_path: &AbsolutePathBuf,
     event_name: codex_protocol::protocol::HookEventName,
     matcher: Option<&str>,
     group_handlers: Vec<HookHandlerConfig>,
@@ -156,7 +155,7 @@ fn append_group_handlers(
                     command,
                     timeout_sec,
                     status_message,
-                    source_path: source_path.to_path_buf(),
+                    source_path: source_path.clone(),
                     display_order: *display_order,
                 });
                 *display_order += 1;
@@ -177,7 +176,7 @@ fn append_matcher_groups(
     handlers: &mut Vec<ConfiguredHandler>,
     warnings: &mut Vec<String>,
     display_order: &mut i64,
-    source_path: &Path,
+    source_path: &AbsolutePathBuf,
     event_name: codex_protocol::protocol::HookEventName,
     groups: Vec<MatcherGroup>,
 ) {
@@ -196,16 +195,20 @@ fn append_matcher_groups(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-    use std::path::PathBuf;
-
     use codex_protocol::protocol::HookEventName;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     use super::ConfiguredHandler;
     use super::HookHandlerConfig;
     use super::append_group_handlers;
     use crate::events::common::matcher_pattern_for_event;
+
+    fn source_path() -> AbsolutePathBuf {
+        test_path_buf("/tmp/hooks.json").abs()
+    }
 
     #[test]
     fn user_prompt_submit_ignores_invalid_matcher_during_discovery() {
@@ -217,7 +220,7 @@ mod tests {
             &mut handlers,
             &mut warnings,
             &mut display_order,
-            Path::new("/tmp/hooks.json"),
+            &source_path(),
             HookEventName::UserPromptSubmit,
             matcher_pattern_for_event(HookEventName::UserPromptSubmit, Some("[")),
             vec![HookHandlerConfig::Command {
@@ -237,7 +240,7 @@ mod tests {
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
                 status_message: None,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: source_path(),
                 display_order: 0,
             }]
         );
@@ -253,7 +256,7 @@ mod tests {
             &mut handlers,
             &mut warnings,
             &mut display_order,
-            Path::new("/tmp/hooks.json"),
+            &source_path(),
             HookEventName::PreToolUse,
             matcher_pattern_for_event(HookEventName::PreToolUse, Some("^Bash$")),
             vec![HookHandlerConfig::Command {
@@ -273,7 +276,7 @@ mod tests {
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
                 status_message: None,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: source_path(),
                 display_order: 0,
             }]
         );
@@ -289,7 +292,7 @@ mod tests {
             &mut handlers,
             &mut warnings,
             &mut display_order,
-            Path::new("/tmp/hooks.json"),
+            &source_path(),
             HookEventName::PreToolUse,
             matcher_pattern_for_event(HookEventName::PreToolUse, Some("*")),
             vec![HookHandlerConfig::Command {
@@ -315,7 +318,7 @@ mod tests {
             &mut handlers,
             &mut warnings,
             &mut display_order,
-            Path::new("/tmp/hooks.json"),
+            &source_path(),
             HookEventName::PostToolUse,
             matcher_pattern_for_event(HookEventName::PostToolUse, Some("Edit|Write")),
             vec![HookHandlerConfig::Command {
