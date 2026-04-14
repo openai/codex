@@ -732,8 +732,13 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             "delta": "world"
         }),
         json!({
-            "type": "response.output_text.done",
-            "text": "hello world"
+            "type": "conversation.item.done",
+            "item": {
+                "id": "item_output_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello world"}]
+            }
         }),
     ]]])
     .await;

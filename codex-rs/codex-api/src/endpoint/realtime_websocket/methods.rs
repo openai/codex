@@ -1137,6 +1137,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_realtime_v2_item_done_output_text_event() {
+        let payload = json!({
+            "type": "conversation.item.done",
+            "item": {
+                "id": "item_output_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "hello"},
+                    {"type": "output_text", "text": " world"}
+                ]
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
+            Some(RealtimeEvent::OutputTranscriptDone(
+                RealtimeTranscriptDone {
+                    text: "hello world".to_string(),
+                    item_id: Some("item_output_1".to_string()),
+                    output_index: None,
+                    content_index: None,
+                }
+            ))
+        );
+    }
+
+    #[test]
     fn complete_transcript_entry_replaces_current_part_only() {
         let mut state = ActiveTranscriptState::default();
         let first_part_delta = RealtimeTranscriptDelta {
