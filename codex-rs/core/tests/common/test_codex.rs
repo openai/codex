@@ -85,7 +85,25 @@ impl Drop for RemoteExecServerProcess {
             format!("rm -rf {cleanup_paths}; ")
         };
         let script = format!(
-            "if kill -0 {pid} 2>/dev/null; then kill {pid}; fi; {cleanup_paths_script}rm -f {remote_exec_server_path} {stdout_path}",
+            "if kill -0 {pid} 2>/dev/null; then \
+                kill {pid} 2>/dev/null || true; \
+                for _ in $(seq 1 50); do \
+                    if ! kill -0 {pid} 2>/dev/null; then \
+                        break; \
+                    fi; \
+                    sleep 0.1; \
+                done; \
+                if kill -0 {pid} 2>/dev/null; then \
+                    kill -9 {pid} 2>/dev/null || true; \
+                    for _ in $(seq 1 10); do \
+                        if ! kill -0 {pid} 2>/dev/null; then \
+                            break; \
+                        fi; \
+                        sleep 0.1; \
+                    done; \
+                fi; \
+            fi; \
+            {cleanup_paths_script}rm -f {remote_exec_server_path} {stdout_path}",
             pid = self.pid,
             cleanup_paths_script = cleanup_paths_script,
             remote_exec_server_path = self.remote_exec_server_path,
