@@ -13,6 +13,8 @@ use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::exec::is_likely_sandbox_denied;
+use crate::macos_denials::SeatbeltDenialLogger;
+use crate::macos_denials::format_sandbox_denials;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ReadResponse as ExecReadResponse;
 use codex_exec_server::StartedExecProcess;
@@ -61,6 +63,26 @@ pub(crate) struct OutputHandles {
     pub(crate) output_closed: Arc<AtomicBool>,
     pub(crate) output_closed_notify: Arc<Notify>,
     pub(crate) cancellation_token: CancellationToken,
+}
+
+async fn append_macos_denials(
+    logger: Option<SeatbeltDenialLogger>,
+    buffer: &OutputBuffer,
+    output_notify: &Arc<Notify>,
+    output_tx: &broadcast::Sender<Vec<u8>>,
+) {
+    let Some(logger) = logger else {
+        return;
+    };
+    let Some(bytes) = format_sandbox_denials(&logger.finish().await) else {
+        return;
+    };
+
+    let mut guard = buffer.lock().await;
+    guard.push_chunk(bytes.clone());
+    drop(guard);
+    let _ = output_tx.send(bytes);
+    output_notify.notify_waiters();
 }
 
 /// Transport-specific process handle used by unified exec.
@@ -276,12 +298,14 @@ impl UnifiedExecProcess {
         spawned: SpawnedPty,
         sandbox_type: SandboxType,
         spawn_lifecycle: SpawnLifecycleHandle,
+        mut denial_logger: Option<SeatbeltDenialLogger>,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session: process_handle,
             stdout_rx,
             stderr_rx,
             mut exit_rx,
+            child_pid: _,
         } = spawned;
         let output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
         let mut managed = Self::new(
@@ -300,11 +324,17 @@ impl UnifiedExecProcess {
 
         match exit_rx.try_recv() {
             Ok(exit_code) => {
+                managed
+                    .append_macos_denials_to_output(denial_logger.take())
+                    .await;
                 managed.signal_exit(Some(exit_code));
                 managed.check_for_sandbox_denial().await?;
                 return Ok(managed);
             }
             Err(TryRecvError::Closed) => {
+                managed
+                    .append_macos_denials_to_output(denial_logger.take())
+                    .await;
                 managed.signal_exit(/*exit_code*/ None);
                 managed.check_for_sandbox_denial().await?;
                 return Ok(managed);
@@ -313,6 +343,9 @@ impl UnifiedExecProcess {
         }
 
         if let Ok(exit_result) = tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, &mut exit_rx).await {
+            managed
+                .append_macos_denials_to_output(denial_logger.take())
+                .await;
             managed.signal_exit(exit_result.ok());
             managed.check_for_sandbox_denial().await?;
             return Ok(managed);
@@ -321,8 +354,13 @@ impl UnifiedExecProcess {
         tokio::spawn({
             let state_tx = managed.state_tx.clone();
             let cancellation_token = managed.cancellation_token.clone();
+            let output_buffer = Arc::clone(&managed.output_buffer);
+            let output_notify = Arc::clone(&managed.output_notify);
+            let output_tx = managed.output_tx.clone();
             async move {
                 let exit_code = exit_rx.await.ok();
+                append_macos_denials(denial_logger, &output_buffer, &output_notify, &output_tx)
+                    .await;
                 let state = state_tx.borrow().clone();
                 let _ = state_tx.send_replace(state.exited(exit_code));
                 cancellation_token.cancel();
@@ -330,6 +368,16 @@ impl UnifiedExecProcess {
         });
 
         Ok(managed)
+    }
+
+    async fn append_macos_denials_to_output(&self, logger: Option<SeatbeltDenialLogger>) {
+        append_macos_denials(
+            logger,
+            &self.output_buffer,
+            &self.output_notify,
+            &self.output_tx,
+        )
+        .await;
     }
 
     pub(super) async fn from_exec_server_started(

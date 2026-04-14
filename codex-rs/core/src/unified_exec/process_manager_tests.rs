@@ -103,6 +103,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         ),
         network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
         windows_sandbox_filesystem_overrides: None,
+        log_macos_seatbelt_denials: false,
         arg0: None,
     };
 

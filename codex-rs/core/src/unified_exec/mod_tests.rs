@@ -73,6 +73,7 @@ fn test_exec_request(
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        /*log_macos_seatbelt_denials*/ false,
         arg0,
     )
 }

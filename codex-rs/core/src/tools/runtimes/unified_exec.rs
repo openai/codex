@@ -238,6 +238,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let options = ExecOptions {
                 expiration: ExecExpiration::DefaultTimeout,
                 capture_policy: ExecCapturePolicy::ShellTool,
+                log_macos_seatbelt_denials: ctx.turn.config.unified_exec.log_macos_seatbelt_denials,
             };
             let mut exec_env = attempt
                 .env_for(command, options, req.network.as_ref())
@@ -296,6 +297,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
+            log_macos_seatbelt_denials: ctx.turn.config.unified_exec.log_macos_seatbelt_denials,
         };
         let mut exec_env = attempt
             .env_for(command, options, req.network.as_ref())

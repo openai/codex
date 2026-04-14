@@ -255,6 +255,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
+            log_macos_seatbelt_denials: matches!(
+                self.backend,
+                ShellRuntimeBackend::ShellCommandClassic | ShellRuntimeBackend::ShellCommandZshFork
+            ) && ctx
+                .turn
+                .config
+                .shell_command
+                .log_macos_seatbelt_denials,
         };
         let env = attempt
             .env_for(command, options, req.network.as_ref())
