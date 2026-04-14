@@ -113,7 +113,7 @@ async fn run_upgrade(
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let manager = PluginsManager::new(codex_home.to_path_buf());
     let outcome = manager
-        .upgrade_configured_marketplaces_for_config(&config, marketplace_name.as_deref())
+        .upgrade_marketplaces_from_config(&config, marketplace_name.as_deref())
         .map_err(anyhow::Error::msg)?;
     print_upgrade_outcome(&outcome, marketplace_name.as_deref())
 }

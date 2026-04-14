@@ -1151,7 +1151,7 @@ impl PluginsManager {
         if let Err(err) = std::thread::Builder::new()
             .name("plugins-marketplace-auto-upgrade".to_string())
             .spawn(move || {
-                let outcome = manager.upgrade_configured_marketplaces_for_config(&config, None);
+                let outcome = manager.upgrade_marketplaces_from_config(&config, None);
                 match outcome {
                     Ok(outcome) => {
                         for error in outcome.errors {
@@ -1183,7 +1183,7 @@ impl PluginsManager {
         }
     }
 
-    pub fn upgrade_configured_marketplaces_for_config(
+    pub fn upgrade_marketplaces_from_config(
         &self,
         config: &Config,
         marketplace_name: Option<&str>,
@@ -1203,7 +1203,7 @@ impl PluginsManager {
             config,
             marketplace_name,
         );
-        if let Err(err) = self.refresh_non_curated_plugin_cache_for_roots(
+        if let Err(err) = self.refresh_non_curated_plugin_cache(
             &outcome.upgraded_roots,
             NonCuratedCacheRefreshMode::ForceReinstall,
         ) {
@@ -1293,7 +1293,7 @@ impl PluginsManager {
         }
     }
 
-    fn refresh_non_curated_plugin_cache_for_roots(
+    fn refresh_non_curated_plugin_cache(
         &self,
         roots: &[AbsolutePathBuf],
         mode: NonCuratedCacheRefreshMode,
@@ -1382,15 +1382,14 @@ impl PluginsManager {
                 return;
             };
 
-            let refreshed = match self
-                .refresh_non_curated_plugin_cache_for_roots(&request.roots, request.mode)
-            {
-                Ok(_) => true,
-                Err(err) => {
-                    warn!("failed to refresh non-curated plugin cache: {err}");
-                    false
-                }
-            };
+            let refreshed =
+                match self.refresh_non_curated_plugin_cache(&request.roots, request.mode) {
+                    Ok(_) => true,
+                    Err(err) => {
+                        warn!("failed to refresh non-curated plugin cache: {err}");
+                        false
+                    }
+                };
 
             let mut state = match self.non_curated_cache_refresh_state.write() {
                 Ok(state) => state,
