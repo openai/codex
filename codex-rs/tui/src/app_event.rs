@@ -30,6 +30,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
+use crate::legacy_core::plugins::PluginCapabilitySummary;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -270,6 +271,14 @@ pub(crate) enum AppEvent {
         result: Result<PluginUninstallResponse, String>,
     },
 
+    /// Refresh plugin mention bindings from the current config.
+    RefreshPluginMentions,
+
+    /// Result of refreshing plugin mention bindings.
+    PluginMentionsLoaded {
+        plugins: Option<Vec<PluginCapabilitySummary>>,
+    },
+
     /// Advance the post-install plugin app-auth flow.
     PluginInstallAuthAdvance {
         refresh_connectors: bool,
@@ -502,7 +511,7 @@ pub(crate) enum AppEvent {
 
     /// Enable or disable a skill by path.
     SetSkillEnabled {
-        path: PathBuf,
+        path: AbsolutePathBuf,
         enabled: bool,
     },
 

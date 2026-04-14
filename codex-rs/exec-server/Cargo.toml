@@ -41,7 +41,8 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-codex-utils-cargo-bin = { workspace = true }
+codex-test-binary-support = { workspace = true }
+ctor = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

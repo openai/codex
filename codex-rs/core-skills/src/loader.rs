@@ -14,6 +14,7 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
@@ -145,7 +146,7 @@ impl fmt::Display for SkillParseError {
 impl Error for SkillParseError {}
 
 pub struct SkillRoot {
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub scope: SkillScope,
 }
 
@@ -158,7 +159,7 @@ where
         discover_skills_under_root(&root.path, root.scope, &mut outcome);
     }
 
-    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
     outcome
         .skills
         .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
@@ -185,22 +186,24 @@ where
 
 pub(crate) fn skill_roots(
     config_layer_stack: &ConfigLayerStack,
-    cwd: &Path,
-    plugin_skill_roots: Vec<PathBuf>,
+    cwd: &AbsolutePathBuf,
+    plugin_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
+    let home_dir =
+        home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     skill_roots_with_home_dir(
         config_layer_stack,
         cwd,
-        home_dir().as_deref(),
+        home_dir.as_ref(),
         plugin_skill_roots,
     )
 }
 
 fn skill_roots_with_home_dir(
     config_layer_stack: &ConfigLayerStack,
-    cwd: &Path,
-    home_dir: Option<&Path>,
-    plugin_skill_roots: Vec<PathBuf>,
+    cwd: &AbsolutePathBuf,
+    home_dir: Option<&AbsolutePathBuf>,
+    plugin_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
     let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir);
     roots.extend(plugin_skill_roots.into_iter().map(|path| SkillRoot {
@@ -214,7 +217,7 @@ fn skill_roots_with_home_dir(
 
 fn skill_roots_from_layer_stack_inner(
     config_layer_stack: &ConfigLayerStack,
-    home_dir: Option<&Path>,
+    home_dir: Option<&AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
@@ -229,7 +232,7 @@ fn skill_roots_from_layer_stack_inner(
         match &layer.name {
             ConfigLayerSource::Project { .. } => {
                 roots.push(SkillRoot {
-                    path: config_folder.as_path().join(SKILLS_DIR_NAME),
+                    path: config_folder.join(SKILLS_DIR_NAME),
                     scope: SkillScope::Repo,
                 });
             }
@@ -237,7 +240,7 @@ fn skill_roots_from_layer_stack_inner(
                 // Deprecated user skills location (`$CODEX_HOME/skills`), kept for backward
                 // compatibility.
                 roots.push(SkillRoot {
-                    path: config_folder.as_path().join(SKILLS_DIR_NAME),
+                    path: config_folder.join(SKILLS_DIR_NAME),
                     scope: SkillScope::User,
                 });
 
@@ -252,7 +255,7 @@ fn skill_roots_from_layer_stack_inner(
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
                 // special case (not a config layer).
                 roots.push(SkillRoot {
-                    path: system_cache_root_dir(config_folder.as_path()),
+                    path: system_cache_root_dir(&config_folder),
                     scope: SkillScope::System,
                 });
             }
@@ -260,7 +263,7 @@ fn skill_roots_from_layer_stack_inner(
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
-                    path: config_folder.as_path().join(SKILLS_DIR_NAME),
+                    path: config_folder.join(SKILLS_DIR_NAME),
                     scope: SkillScope::Admin,
                 });
             }
@@ -274,7 +277,10 @@ fn skill_roots_from_layer_stack_inner(
     roots
 }
 
-fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) -> Vec<SkillRoot> {
+fn repo_agents_skill_roots(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &AbsolutePathBuf,
+) -> Vec<SkillRoot> {
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
     let project_root = find_project_root(cwd, &project_root_markers);
     let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
@@ -313,34 +319,37 @@ fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec
     }
 }
 
-fn find_project_root(cwd: &Path, project_root_markers: &[String]) -> PathBuf {
+fn find_project_root(cwd: &AbsolutePathBuf, project_root_markers: &[String]) -> AbsolutePathBuf {
     if project_root_markers.is_empty() {
-        return cwd.to_path_buf();
+        return cwd.clone();
     }
 
-    for ancestor in cwd.ancestors() {
+    for path in cwd.ancestors() {
         for marker in project_root_markers {
-            let marker_path = ancestor.join(marker);
+            let marker_path = path.join(marker);
             if marker_path.exists() {
-                return ancestor.to_path_buf();
+                return path;
             }
         }
     }
 
-    cwd.to_path_buf()
+    cwd.clone()
 }
 
-fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<PathBuf> {
+fn dirs_between_project_root_and_cwd(
+    cwd: &AbsolutePathBuf,
+    project_root: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
     let mut dirs = cwd
         .ancestors()
-        .scan(false, |done, a| {
+        .scan(false, |done, dir| {
             if *done {
                 None
             } else {
-                if a == project_root {
+                if &dir == project_root {
                     *done = true;
                 }
-                Some(a.to_path_buf())
+                Some(dir)
             }
         })
         .collect::<Vec<_>>();
@@ -349,12 +358,16 @@ fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<Pat
 }
 
 fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
-    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
     roots.retain(|root| seen.insert(root.path.clone()));
 }
 
-fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
-    let Ok(root) = canonicalize_path(root) else {
+fn discover_skills_under_root(
+    root: &AbsolutePathBuf,
+    scope: SkillScope,
+    outcome: &mut SkillLoadOutcome,
+) {
+    let Ok(root) = canonicalize_path(root.as_path()) else {
         return;
     };
 
@@ -403,7 +416,13 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         };
 
         for entry in entries.flatten() {
-            let path = entry.path();
+            let path = match AbsolutePathBuf::from_absolute_path_checked(entry.path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    error!("failed to normalize skills entry path: {err:#}");
+                    continue;
+                }
+            };
             let file_name = match path.file_name().and_then(|f| f.to_str()) {
                 Some(name) => name,
                 None => continue,
@@ -534,7 +553,9 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         )?;
     }
 
-    let resolved_path = canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf());
+    let resolved_path = AbsolutePathBuf::from_absolute_path_checked(path)
+        .and_then(|path| path.canonicalize())
+        .map_err(SkillParseError::Read)?;
 
     Ok(SkillMetadata {
         name,
@@ -840,9 +861,10 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 #[cfg(test)]
 pub(crate) fn skill_roots_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
-    home_dir: Option<&Path>,
+    cwd: &AbsolutePathBuf,
+    home_dir: Option<&AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
-    skill_roots_with_home_dir(config_layer_stack, Path::new("."), home_dir, Vec::new())
+    skill_roots_with_home_dir(config_layer_stack, cwd, home_dir, Vec::new())
 }
 
 #[cfg(test)]

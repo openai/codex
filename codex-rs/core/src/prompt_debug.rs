@@ -107,7 +107,8 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create codex home");
         let cwd = tempfile::tempdir().expect("create cwd");
         let mut config = test_config();
-        config.codex_home = codex_home.path().to_path_buf();
+        config.codex_home =
+            AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("codex home is absolute");
         config.cwd = AbsolutePathBuf::try_from(cwd.path().to_path_buf()).expect("absolute cwd");
         config.user_instructions = Some("Project-specific test instructions".to_string());
 
