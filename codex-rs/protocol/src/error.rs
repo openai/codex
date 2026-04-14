@@ -76,6 +76,8 @@ pub enum CodexErr {
     /// Optionally includes the requested delay before retrying the turn.
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
+    #[error("agent task no longer matches the current agent identity")]
+    AgentTaskStale,
     #[error(
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
     )]
@@ -183,6 +185,7 @@ impl CodexErr {
             | CodexErr::ContextWindowExceeded
             | CodexErr::ThreadNotFound(_)
             | CodexErr::AgentLimitReached { .. }
+            | CodexErr::AgentTaskStale
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_)

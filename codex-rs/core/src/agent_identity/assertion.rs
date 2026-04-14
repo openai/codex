@@ -7,9 +7,20 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
 use serde::Deserialize;
 use serde::Serialize;
+use thiserror::Error;
 use tracing::debug;
 
 use super::*;
+
+#[derive(Debug, Error)]
+#[error(
+    "agent task runtime {agent_runtime_id} does not match stored agent identity {stored_agent_runtime_id}"
+)]
+pub(crate) struct AgentTaskRuntimeMismatch {
+    pub(crate) agent_runtime_id: String,
+    pub(crate) task_id: String,
+    pub(crate) stored_agent_runtime_id: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AgentAssertionEnvelope {
@@ -31,12 +42,14 @@ impl AgentIdentityManager {
         let Some(stored_identity) = self.ensure_registered_identity().await? else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            stored_identity.agent_runtime_id == agent_task.agent_runtime_id,
-            "agent task runtime {} does not match stored agent identity {}",
-            agent_task.agent_runtime_id,
-            stored_identity.agent_runtime_id
-        );
+        if stored_identity.agent_runtime_id != agent_task.agent_runtime_id {
+            return Err(AgentTaskRuntimeMismatch {
+                agent_runtime_id: agent_task.agent_runtime_id.clone(),
+                task_id: agent_task.task_id.clone(),
+                stored_agent_runtime_id: stored_identity.agent_runtime_id,
+            }
+            .into());
+        }
 
         let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let envelope = AgentAssertionEnvelope {
@@ -174,6 +187,39 @@ mod tests {
                 &signature,
             )
             .expect("signature should verify");
+    }
+
+    #[tokio::test]
+    async fn authorization_header_for_task_reports_runtime_mismatch() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let auth = make_chatgpt_auth(codex_home.path(), "account-123", Some("user-123"));
+        let auth_manager = AuthManager::from_auth_for_testing(auth);
+        let manager = AgentIdentityManager::new_for_tests(
+            auth_manager,
+            /*feature_enabled*/ true,
+            "https://chatgpt.com/backend-api/".to_string(),
+            SessionSource::Cli,
+        );
+        manager
+            .seed_generated_identity_for_tests("agent-current")
+            .await
+            .expect("seed test identity");
+        let agent_task = RegisteredAgentTask {
+            agent_runtime_id: "agent-stale".to_string(),
+            task_id: "task-123".to_string(),
+            registered_at: "2026-03-23T12:00:00Z".to_string(),
+        };
+
+        let error = manager
+            .authorization_header_for_task(&agent_task)
+            .await
+            .expect_err("stale task should be reported");
+        let mismatch = error
+            .downcast_ref::<AgentTaskRuntimeMismatch>()
+            .expect("runtime mismatch error");
+        assert_eq!(mismatch.agent_runtime_id, "agent-stale");
+        assert_eq!(mismatch.task_id, "task-123");
+        assert_eq!(mismatch.stored_agent_runtime_id, "agent-current");
     }
 
     fn make_chatgpt_auth(

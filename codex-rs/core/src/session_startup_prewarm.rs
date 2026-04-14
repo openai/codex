@@ -13,6 +13,7 @@ use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex::Session;
 use crate::codex::build_prompt;
 use crate::codex::built_tools;
+use codex_app_server_protocol::AuthMode;
 use codex_otel::STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC;
 use codex_otel::STARTUP_PREWARM_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
@@ -157,6 +158,15 @@ impl SessionStartupPrewarmHandle {
 
 impl Session {
     pub(crate) async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
+        if self.services.agent_identity_manager.is_enabled()
+            && self.services.auth_manager.auth_mode() != Some(AuthMode::ApiKey)
+        {
+            info!(
+                "skipping startup websocket prewarm because agent identity requires task-scoped auth"
+            );
+            return;
+        }
+
         let session_telemetry = self.services.session_telemetry.clone();
         let websocket_connect_timeout = self.provider().await.websocket_connect_timeout();
         let started_at = Instant::now();

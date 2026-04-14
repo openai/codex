@@ -32,6 +32,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use crate::agent_identity::AgentIdentityManager;
+use crate::agent_identity::AgentTaskRuntimeMismatch;
 use crate::agent_identity::RegisteredAgentTask;
 use codex_api::ApiError;
 use codex_api::CompactClient as ApiCompactClient;
@@ -159,7 +160,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
-    cached_websocket_session: StdMutex<WebsocketSession>,
+    cached_websocket_session: StdMutex<CachedWebsocketSession>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -242,6 +243,12 @@ struct WebsocketSession {
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     connection_reused: StdMutex<bool>,
+}
+
+#[derive(Debug, Default)]
+struct CachedWebsocketSession {
+    agent_task: Option<RegisteredAgentTask>,
+    websocket_session: WebsocketSession,
 }
 
 impl WebsocketSession {
@@ -360,7 +367,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
-                cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                cached_websocket_session: StdMutex::new(CachedWebsocketSession::default()),
             }),
         }
     }
@@ -377,18 +384,15 @@ impl ModelClient {
         &self,
         agent_task: Option<RegisteredAgentTask>,
     ) -> ModelClientSession {
-        let cache_websocket_session_on_drop = agent_task.is_none();
-        let websocket_session = if agent_task.is_some() {
-            drop(self.take_cached_websocket_session());
-            WebsocketSession::default()
-        } else {
-            self.take_cached_websocket_session()
-        };
+        // WebSocket auth is bound to the task that opened the connection. Reuse only when the
+        // cached connection was created for the same task, and drop mismatched taskless/task-scoped
+        // sessions rather than mixing auth contexts.
+        let websocket_session = self.take_cached_websocket_session(agent_task.as_ref());
         ModelClientSession {
             client: self.clone(),
             websocket_session,
             agent_task,
-            cache_websocket_session_on_drop,
+            cache_websocket_session_on_drop: true,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -401,12 +405,12 @@ impl ModelClient {
         self.state
             .window_generation
             .store(window_generation, Ordering::Relaxed);
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.clear_cached_websocket_session();
     }
 
     pub(crate) fn advance_window_generation(&self) {
         self.state.window_generation.fetch_add(1, Ordering::Relaxed);
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.clear_cached_websocket_session();
     }
 
     fn current_window_id(&self) -> String {
@@ -415,21 +419,44 @@ impl ModelClient {
         format!("{conversation_id}:{window_generation}")
     }
 
-    fn take_cached_websocket_session(&self) -> WebsocketSession {
+    fn take_cached_websocket_session(
+        &self,
+        agent_task: Option<&RegisteredAgentTask>,
+    ) -> WebsocketSession {
         let mut cached_websocket_session = self
             .state
             .cached_websocket_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::mem::take(&mut *cached_websocket_session)
+        if cached_websocket_session.agent_task.as_ref() == agent_task {
+            return std::mem::take(&mut *cached_websocket_session).websocket_session;
+        }
+
+        *cached_websocket_session = CachedWebsocketSession::default();
+        WebsocketSession::default()
     }
 
-    fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
+    fn store_cached_websocket_session(
+        &self,
+        agent_task: Option<RegisteredAgentTask>,
+        websocket_session: WebsocketSession,
+    ) {
         *self
             .state
             .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = CachedWebsocketSession {
+            agent_task,
+            websocket_session,
+        };
+    }
+
+    fn clear_cached_websocket_session(&self) {
+        *self
+            .state
+            .cached_websocket_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = CachedWebsocketSession::default();
     }
 
     pub(crate) fn force_http_fallback(
@@ -449,7 +476,7 @@ impl ModelClient {
             );
         }
 
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.clear_cached_websocket_session();
         activated
     }
 
@@ -727,6 +754,15 @@ impl ModelClient {
                     .authorization_header_for_task(agent_task)
                     .await
                     .map_err(|err| {
+                        if let Some(mismatch) = err.downcast_ref::<AgentTaskRuntimeMismatch>() {
+                            debug!(
+                                agent_runtime_id = %mismatch.agent_runtime_id,
+                                task_id = %mismatch.task_id,
+                                stored_agent_runtime_id = %mismatch.stored_agent_runtime_id,
+                                "agent task no longer matches stored identity"
+                            );
+                            return CodexErr::AgentTaskStale;
+                        }
                         CodexErr::Stream(
                             format!("failed to build agent assertion authorization: {err}"),
                             None,
@@ -883,12 +919,16 @@ impl Drop for ModelClientSession {
         let websocket_session = std::mem::take(&mut self.websocket_session);
         if self.cache_websocket_session_on_drop {
             self.client
-                .store_cached_websocket_session(websocket_session);
+                .store_cached_websocket_session(self.agent_task.clone(), websocket_session);
         }
     }
 }
 
 impl ModelClientSession {
+    pub(crate) fn agent_task(&self) -> Option<&RegisteredAgentTask> {
+        self.agent_task.as_ref()
+    }
+
     pub(crate) fn disable_cached_websocket_session_on_drop(&mut self) {
         self.cache_websocket_session_on_drop = false;
     }

@@ -34,6 +34,7 @@ mod task_registration;
 
 #[cfg(test)]
 pub(crate) use assertion::AgentAssertionEnvelope;
+pub(crate) use assertion::AgentTaskRuntimeMismatch;
 pub(crate) use task_registration::RegisteredAgentTask;
 
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -451,6 +452,9 @@ impl AgentIdentityBinding {
     }
 
     fn from_auth(auth: &CodexAuth, forced_workspace_id: Option<String>) -> Option<Self> {
+        // AgentAssertion is currently supported only for ChatGPT-backed Codex sessions. API-key
+        // sessions keep using their API key until the registration service supports API-key
+        // identity binding.
         if !auth.is_chatgpt_auth() {
             return None;
         }

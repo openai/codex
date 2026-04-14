@@ -33,6 +33,7 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -393,6 +394,35 @@ async fn responses_http_uses_agent_assertion_when_agent_task_is_present() {
     assert_eq!(request.header("chatgpt-account-id"), None);
 }
 
+#[tokio::test]
+async fn responses_http_reports_stale_agent_task_when_identity_changed() {
+    let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
+    let (_codex_home, client, mut agent_task, _stored_identity) =
+        model_client_with_agent_task(provider).await;
+    agent_task.agent_runtime_id = "agent-stale".to_string();
+    let model_info = test_model_info();
+    let session_telemetry = test_session_telemetry();
+    let mut client_session = client.new_session_with_agent_task(Some(agent_task));
+
+    let error = match client_session
+        .stream(
+            &test_prompt("hello"),
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None,
+            ReasoningSummary::Auto,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
+        )
+        .await
+    {
+        Ok(_) => panic!("stale task should be reported before sending a request"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, CodexErr::AgentTaskStale));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_agent_task_bypasses_cached_bearer_prewarm() {
     core_test_support::skip_if_no_network!();
@@ -466,6 +496,83 @@ async fn websocket_agent_task_bypasses_cached_bearer_prewarm() {
         &agent_task.task_id,
     );
     assert_eq!(handshakes[1].header("chatgpt-account-id"), None);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_agent_task_reuses_cached_connection_for_same_task() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_websocket_server(vec![vec![
+        vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ],
+        vec![
+            responses::ev_response_created("resp-2"),
+            responses::ev_completed("resp-2"),
+        ],
+    ]])
+    .await;
+    let mut provider =
+        create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses);
+    provider.supports_websockets = true;
+    provider.websocket_connect_timeout_ms = Some(5_000);
+    let (_codex_home, client, agent_task, stored_identity) =
+        model_client_with_agent_task(provider).await;
+    let model_info = test_model_info();
+    let session_telemetry = test_session_telemetry();
+    let prompt = test_prompt("hello");
+
+    {
+        let mut first_session = client.new_session_with_agent_task(Some(agent_task.clone()));
+        let mut stream = first_session
+            .stream(
+                &prompt,
+                &model_info,
+                &session_telemetry,
+                /*effort*/ None,
+                ReasoningSummary::Auto,
+                /*service_tier*/ None,
+                /*turn_metadata_header*/ None,
+            )
+            .await
+            .expect("first agent task stream should succeed");
+        drain_stream_to_completion(&mut stream)
+            .await
+            .expect("first agent task websocket stream should complete");
+    }
+
+    let mut second_session = client.new_session_with_agent_task(Some(agent_task.clone()));
+    let mut stream = second_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None,
+            ReasoningSummary::Auto,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
+        )
+        .await
+        .expect("second agent task stream should succeed");
+    drain_stream_to_completion(&mut stream)
+        .await
+        .expect("second agent task websocket stream should complete");
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 1);
+    let agent_authorization = handshakes[0]
+        .header("authorization")
+        .expect("agent handshake should include authorization");
+    assert_agent_assertion_header(
+        &agent_authorization,
+        &stored_identity,
+        &agent_task.agent_runtime_id,
+        &agent_task.task_id,
+    );
+    assert_eq!(server.single_connection().len(), 2);
 
     server.shutdown().await;
 }

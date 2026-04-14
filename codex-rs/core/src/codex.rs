@@ -6354,6 +6354,14 @@ pub(crate) async fn run_turn(
             .await;
         user_prompt_submit_outcome.additional_contexts
     };
+    let agent_task_registration = if sess.services.agent_identity_manager.is_enabled() {
+        let sess = Arc::clone(&sess);
+        Some(tokio::spawn(async move {
+            sess.ensure_agent_task_registered().await
+        }))
+    } else {
+        None
+    };
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -6375,7 +6383,15 @@ pub(crate) async fn run_turn(
         }))
         .await;
     }
-    let agent_task = match sess.ensure_agent_task_registered().await {
+    let agent_task_result = match agent_task_registration {
+        Some(registration) => registration.await.unwrap_or_else(|error| {
+            Err(anyhow::anyhow!(
+                "agent task registration task failed: {error}"
+            ))
+        }),
+        None => sess.ensure_agent_task_registered().await,
+    };
+    let agent_task = match agent_task_result {
         Ok(agent_task) => agent_task,
         Err(error) => {
             warn!(error = %error, "agent task registration failed");
@@ -7031,6 +7047,7 @@ async fn run_sampling_request(
         )
         .await;
     let mut retries = 0;
+    let mut stale_agent_task_refreshed = false;
     loop {
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
@@ -7051,6 +7068,40 @@ async fn run_sampling_request(
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
+            }
+            Err(CodexErr::AgentTaskStale) => {
+                if stale_agent_task_refreshed {
+                    return Err(CodexErr::AgentTaskStale);
+                }
+                stale_agent_task_refreshed = true;
+                let stale_agent_task = client_session.agent_task().cloned();
+                client_session.disable_cached_websocket_session_on_drop();
+                if let Some(stale_agent_task) = stale_agent_task.as_ref() {
+                    sess.clear_cached_agent_task(stale_agent_task).await;
+                }
+                match sess.ensure_agent_task_registered().await {
+                    Ok(Some(agent_task)) => {
+                        *client_session = sess
+                            .services
+                            .model_client
+                            .new_session_with_agent_task(Some(agent_task));
+                        retries = 0;
+                        continue;
+                    }
+                    Ok(None) => {
+                        return Err(CodexErr::Stream(
+                            "agent assertion task became unavailable after identity changed"
+                                .to_string(),
+                            None,
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(CodexErr::Stream(
+                            format!("failed to refresh stale agent task: {error}"),
+                            None,
+                        ));
+                    }
+                }
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
