@@ -6826,25 +6826,25 @@ async fn apply_prefix_compact_candidate(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
 
-    let mut new_history = candidate.replacement_prefix;
     let retained_suffix = compact::strip_injected_context_from_retained_suffix(
         current_items[candidate.base_history.len()..]
             .iter()
             .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
             .cloned(),
     );
-    new_history.extend(retained_suffix);
-
-    if matches!(
+    let initial_context = if matches!(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-        new_history = compact::insert_initial_context_before_last_real_user_or_summary(
-            new_history,
-            initial_context,
-        );
-    }
+        sess.build_initial_context(turn_context.as_ref()).await
+    } else {
+        Vec::new()
+    };
+    let mut new_history = compact::build_prefix_compacted_history(
+        candidate.replacement_prefix,
+        retained_suffix,
+        initial_context,
+    );
 
     new_history.extend(
         current_items

@@ -38,6 +38,18 @@ fn input_message(role: &str, text: &str) -> ResponseItem {
     }
 }
 
+fn output_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 #[test]
 fn remote_compact_task_supports_openai_provider() {
     let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
@@ -728,4 +740,57 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last
         },
     ];
     assert_eq!(refreshed, expected);
+}
+
+#[test]
+fn build_prefix_compacted_history_injects_before_last_suffix_user() {
+    let prefix_user = input_message("user", "older user in compacted prefix");
+    let suffix_assistant = output_message("working through suffix");
+    let suffix_user = input_message("user", "latest user in retained suffix");
+    let suffix_after_user = output_message("assistant after suffix user");
+    let initial_context = input_message("developer", "fresh current context");
+
+    let refreshed = build_prefix_compacted_history(
+        vec![prefix_user.clone()],
+        vec![
+            suffix_assistant.clone(),
+            suffix_user.clone(),
+            suffix_after_user.clone(),
+        ],
+        vec![initial_context.clone()],
+    );
+
+    assert_eq!(
+        refreshed,
+        vec![
+            prefix_user,
+            suffix_assistant,
+            initial_context,
+            suffix_user,
+            suffix_after_user,
+        ]
+    );
+}
+
+#[test]
+fn build_prefix_compacted_history_injects_after_prefix_when_suffix_has_no_user() {
+    let prefix_user = input_message("user", "older user in compacted prefix");
+    let suffix_assistant = output_message("continuing without user");
+    let hook_prompt = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+        "Retry with tests.",
+        "hook-run-1",
+    )])
+    .expect("hook prompt message");
+    let initial_context = input_message("developer", "fresh current context");
+
+    let refreshed = build_prefix_compacted_history(
+        vec![prefix_user.clone()],
+        vec![suffix_assistant.clone(), hook_prompt.clone()],
+        vec![initial_context.clone()],
+    );
+
+    assert_eq!(
+        refreshed,
+        vec![prefix_user, initial_context, suffix_assistant, hook_prompt]
+    );
 }
