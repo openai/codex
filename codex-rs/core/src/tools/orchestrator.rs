@@ -25,7 +25,6 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
-use codex_hooks::PermissionRequestApprovalAttempt;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::SessionTelemetry;
 use codex_otel::ToolDecisionSource;
@@ -157,7 +156,7 @@ impl ToolOrchestrator {
                 let decision = Self::request_approval(
                     tool,
                     req,
-                    PermissionRequestApprovalAttempt::Initial,
+                    tool_ctx.call_id.as_str(),
                     approval_ctx,
                     turn_ctx,
                     ApprovalTelemetry {
@@ -302,7 +301,7 @@ impl ToolOrchestrator {
                     let decision = Self::request_approval(
                         tool,
                         req,
-                        PermissionRequestApprovalAttempt::Retry,
+                        &format!("{}:retry", tool_ctx.call_id),
                         approval_ctx,
                         turn_ctx,
                         ApprovalTelemetry {
@@ -361,7 +360,7 @@ impl ToolOrchestrator {
     async fn request_approval<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,
-        approval_attempt: PermissionRequestApprovalAttempt,
+        permission_request_run_id: &str,
         approval_ctx: ApprovalCtx<'_>,
         turn_ctx: &crate::codex::TurnContext,
         telemetry: ApprovalTelemetry<'_>,
@@ -373,9 +372,8 @@ impl ToolOrchestrator {
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
-                approval_ctx.call_id,
+                permission_request_run_id,
                 permission_request,
-                approval_attempt,
             )
             .await
             {

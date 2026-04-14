@@ -15,17 +15,6 @@
 //!    allow wins, otherwise there is no hook verdict.
 use std::path::PathBuf;
 
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::HookCompletedEvent;
-use codex_protocol::protocol::HookEventName;
-use codex_protocol::protocol::HookOutputEntry;
-use codex_protocol::protocol::HookOutputEntryKind;
-use codex_protocol::protocol::HookRunStatus;
-use codex_protocol::protocol::HookRunSummary;
-use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
-
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
@@ -34,6 +23,13 @@ use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PermissionRequestCommandInput;
 use crate::schema::PermissionRequestToolInput;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookOutputEntry;
+use codex_protocol::protocol::HookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookRunSummary;
 
 #[derive(Debug, Clone)]
 pub struct PermissionRequestRequest {
@@ -47,22 +43,6 @@ pub struct PermissionRequestRequest {
     pub run_id_suffix: String,
     pub command: String,
     pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionRequestApprovalAttempt {
-    Initial,
-    Retry,
-}
-
-impl PermissionRequestApprovalAttempt {
-    pub const fn as_wire_value(self) -> &'static str {
-        match self {
-            Self::Initial => "initial",
-            Self::Retry => "retry",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

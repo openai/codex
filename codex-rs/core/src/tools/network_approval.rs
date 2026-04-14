@@ -9,7 +9,6 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
-use codex_hooks::PermissionRequestApprovalAttempt;
 use codex_hooks::PermissionRequestDecision;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
@@ -391,7 +390,6 @@ impl NetworkApprovalService {
                 command,
                 description: Some(format!("network-access {target}")),
             },
-            PermissionRequestApprovalAttempt::Initial,
         )
         .await
         {

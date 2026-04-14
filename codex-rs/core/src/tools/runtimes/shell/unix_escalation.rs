@@ -24,7 +24,6 @@ use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
-use codex_hooks::PermissionRequestApprovalAttempt;
 use codex_hooks::PermissionRequestDecision;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
@@ -411,7 +410,6 @@ impl CoreShellActionProvider {
                     &turn,
                     &effective_approval_id,
                     permission_request,
-                    PermissionRequestApprovalAttempt::Initial,
                 )
                 .await
                 {
