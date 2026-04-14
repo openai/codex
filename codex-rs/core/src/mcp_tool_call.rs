@@ -750,6 +750,9 @@ async fn maybe_request_mcp_tool_approval(
         {
             ArcMonitorOutcome::Ok => return None,
             ArcMonitorOutcome::AskUser(reason) => {
+                if !routes_approval_to_guardian(turn_context) {
+                    return None;
+                }
                 monitor_reason = Some(reason);
             }
             ArcMonitorOutcome::SteerModel(reason) => {
