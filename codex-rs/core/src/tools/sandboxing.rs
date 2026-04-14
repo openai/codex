@@ -19,10 +19,12 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ReviewDecision;
 #[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
@@ -164,6 +166,29 @@ pub(crate) fn exec_policy_permission_suggestions(
                 })
         })
         .collect()
+}
+
+pub(crate) fn approval_permission_suggestions(
+    network_approval_context: Option<&NetworkApprovalContext>,
+    proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
+    additional_permissions: Option<&PermissionProfile>,
+    destinations: &[PermissionSuggestionDestination],
+) -> Vec<PermissionSuggestion> {
+    let available_decisions = ExecApprovalRequestEvent::default_available_decisions(
+        network_approval_context,
+        proposed_execpolicy_amendment,
+        /*proposed_network_policy_amendments*/ None,
+        additional_permissions,
+    );
+    let allows_execpolicy_amendment = available_decisions
+        .iter()
+        .any(|decision| matches!(decision, ReviewDecision::ApprovedExecpolicyAmendment { .. }));
+
+    if allows_execpolicy_amendment {
+        exec_policy_permission_suggestions(proposed_execpolicy_amendment, destinations)
+    } else {
+        Vec::new()
+    }
 }
 
 // Specifies what tool orchestrator should do with a given tool call.
