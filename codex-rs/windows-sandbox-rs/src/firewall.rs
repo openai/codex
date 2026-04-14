@@ -258,7 +258,7 @@ fn ensure_block_rule(rules: &INetFwRules, spec: &BlockRuleSpec<'_>, log: &mut Fi
     configure_rule(&rule, spec)?;
 
     let remote_addresses_log = spec.remote_addresses.unwrap_or("*");
-    let remote_ports_log = spec.remote_ports.unwrap_or("*");
+    let remote_ports_log = remote_ports_value(spec).unwrap_or("<unset>");
 
     log_line(
         log,
@@ -317,14 +317,15 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                     format!("SetRemoteAddresses failed: {err:?}"),
                 ))
             })?;
-        let remote_ports = spec.remote_ports.unwrap_or("*");
-        rule.SetRemotePorts(&BSTR::from(remote_ports))
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetRemotePorts failed: {err:?}"),
-                ))
-            })?;
+        if let Some(remote_ports) = remote_ports_value(spec) {
+            rule.SetRemotePorts(&BSTR::from(remote_ports))
+                .map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                        format!("SetRemotePorts failed: {err:?}"),
+                    ))
+                })?;
+        }
         rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_spec))
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
@@ -352,6 +353,14 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn remote_ports_value<'a>(spec: &'a BlockRuleSpec<'_>) -> Option<&'a str> {
+    match (spec.protocol, spec.remote_ports) {
+        (protocol, None) if protocol == NET_FW_IP_PROTOCOL_ANY.0 => None,
+        (_, Some(remote_ports)) => Some(remote_ports),
+        (_, None) => Some("*"),
+    }
 }
 
 fn blocked_loopback_tcp_remote_ports(proxy_ports: &[u16]) -> Option<String> {
@@ -399,4 +408,49 @@ fn log_line(log: &mut File, msg: &str) -> Result<()> {
     let ts = chrono::Utc::now().to_rfc3339();
     writeln!(log, "[{ts}] {msg}")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(protocol: i32, remote_ports: Option<&'static str>) -> BlockRuleSpec<'static> {
+        BlockRuleSpec {
+            internal_name: "rule",
+            friendly_desc: "rule",
+            protocol,
+            local_user_spec: "user-spec",
+            offline_sid: "sid",
+            remote_addresses: None,
+            remote_ports,
+        }
+    }
+
+    #[test]
+    fn skips_remote_ports_for_any_protocol_when_unset() {
+        assert_eq!(
+            remote_ports_value(&spec(NET_FW_IP_PROTOCOL_ANY.0, None)),
+            None
+        );
+    }
+
+    #[test]
+    fn keeps_wildcard_remote_ports_for_protocol_specific_rules() {
+        assert_eq!(
+            remote_ports_value(&spec(NET_FW_IP_PROTOCOL_TCP.0, None)),
+            Some("*")
+        );
+        assert_eq!(
+            remote_ports_value(&spec(NET_FW_IP_PROTOCOL_UDP.0, None)),
+            Some("*")
+        );
+    }
+
+    #[test]
+    fn keeps_explicit_remote_ports() {
+        assert_eq!(
+            remote_ports_value(&spec(NET_FW_IP_PROTOCOL_ANY.0, Some("1-65535"))),
+            Some("1-65535")
+        );
+    }
 }
