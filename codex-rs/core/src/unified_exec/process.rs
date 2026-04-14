@@ -66,10 +66,11 @@ pub(crate) struct OutputHandles {
 /// Transport-specific process handle used by unified exec.
 enum ProcessHandle {
     Local(Box<ExecCommandSession>),
-    Remote(Arc<dyn ExecProcess>),
+    ExecServer(Arc<dyn ExecProcess>),
 }
 
-/// Unified wrapper over local PTY sessions and exec-server-backed processes.
+/// Unified wrapper over directly spawned PTY sessions and exec-server-backed
+/// processes.
 pub(crate) struct UnifiedExecProcess {
     process_handle: ProcessHandle,
     output_tx: broadcast::Sender<Vec<u8>>,
@@ -135,7 +136,7 @@ impl UnifiedExecProcess {
                 .send(data.to_vec())
                 .await
                 .map_err(|_| UnifiedExecError::WriteToStdin),
-            ProcessHandle::Remote(process_handle) => {
+            ProcessHandle::ExecServer(process_handle) => {
                 match process_handle.write(data.to_vec()).await {
                     Ok(response) => match response.status {
                         WriteStatus::Accepted => Ok(()),
@@ -179,7 +180,7 @@ impl UnifiedExecProcess {
         let state = self.state_rx.borrow().clone();
         match &self.process_handle {
             ProcessHandle::Local(process_handle) => state.has_exited || process_handle.has_exited(),
-            ProcessHandle::Remote(_) => state.has_exited,
+            ProcessHandle::ExecServer(_) => state.has_exited,
         }
     }
 
@@ -189,7 +190,7 @@ impl UnifiedExecProcess {
             ProcessHandle::Local(process_handle) => {
                 state.exit_code.or_else(|| process_handle.exit_code())
             }
-            ProcessHandle::Remote(_) => state.exit_code,
+            ProcessHandle::ExecServer(_) => state.exit_code,
         }
     }
 
@@ -198,7 +199,7 @@ impl UnifiedExecProcess {
         self.output_closed_notify.notify_waiters();
         match &self.process_handle {
             ProcessHandle::Local(process_handle) => process_handle.terminate(),
-            ProcessHandle::Remote(process_handle) => {
+            ProcessHandle::ExecServer(process_handle) => {
                 let process_handle = Arc::clone(process_handle);
                 tokio::spawn(async move {
                     let _ = process_handle.terminate().await;
@@ -331,14 +332,14 @@ impl UnifiedExecProcess {
         Ok(managed)
     }
 
-    pub(super) async fn from_remote_started(
+    pub(super) async fn from_exec_server_started(
         started: StartedExecProcess,
         sandbox_type: SandboxType,
     ) -> Result<Self, UnifiedExecError> {
-        let process_handle = ProcessHandle::Remote(Arc::clone(&started.process));
+        let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
         let output_handles = managed.output_handles();
-        managed.output_task = Some(Self::spawn_remote_output_task(
+        managed.output_task = Some(Self::spawn_exec_server_output_task(
             started,
             output_handles,
             managed.output_tx.clone(),
@@ -366,7 +367,7 @@ impl UnifiedExecProcess {
         Ok(managed)
     }
 
-    fn spawn_remote_output_task(
+    fn spawn_exec_server_output_task(
         started: StartedExecProcess,
         output_handles: OutputHandles,
         output_tx: broadcast::Sender<Vec<u8>>,

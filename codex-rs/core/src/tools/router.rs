@@ -16,9 +16,11 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -26,8 +28,7 @@ pub use crate::tools::context::ToolCallSource;
 
 #[derive(Clone, Debug)]
 pub struct ToolCall {
-    pub tool_name: String,
-    pub tool_namespace: Option<String>,
+    pub tool_name: ToolName,
     pub call_id: String,
     pub payload: ToolPayload,
 }
@@ -36,11 +37,13 @@ pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
+    parallel_mcp_server_names: HashSet<String>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
@@ -50,6 +53,7 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
+            parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools,
         } = params;
@@ -83,6 +87,7 @@ impl ToolRouter {
             registry,
             specs,
             model_visible_specs,
+            parallel_mcp_server_names,
         }
     }
 
@@ -104,11 +109,23 @@ impl ToolRouter {
             .map(|config| config.spec.clone())
     }
 
-    pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {
-        self.specs
-            .iter()
-            .filter(|config| config.supports_parallel_tool_calls)
-            .any(|config| config.name() == tool_name)
+    fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
+        tool_name.namespace.is_none()
+            && self
+                .specs
+                .iter()
+                .filter(|config| config.supports_parallel_tool_calls)
+                .any(|config| config.name() == tool_name.name.as_str())
+    }
+
+    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
+        match &call.payload {
+            // MCP parallel support is configured per server, including for deferred
+            // tools that may not have a matching spec entry. Use the parsed payload
+            // server so similarly named servers/tools cannot collide.
+            ToolPayload::Mcp { server, .. } => self.parallel_mcp_server_names.contains(server),
+            _ => self.configured_tool_supports_parallel(&call.tool_name),
+        }
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -124,21 +141,26 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                if let Some((server, tool)) = session.parse_mcp_tool_name(&name, &namespace).await {
+                let mcp_tool = session
+                    .resolve_mcp_tool_info(&name, namespace.as_deref())
+                    .await;
+                let tool_name = match namespace {
+                    Some(namespace) => ToolName::namespaced(namespace, name),
+                    None => ToolName::plain(name),
+                };
+                if let Some(tool_info) = mcp_tool {
                     Ok(Some(ToolCall {
-                        tool_name: name,
-                        tool_namespace: namespace,
+                        tool_name,
                         call_id,
                         payload: ToolPayload::Mcp {
-                            server,
-                            tool,
+                            server: tool_info.server_name,
+                            tool: tool_info.tool.name.to_string(),
                             raw_arguments: arguments,
                         },
                     }))
                 } else {
                     Ok(Some(ToolCall {
-                        tool_name: name,
-                        tool_namespace: namespace,
+                        tool_name,
                         call_id,
                         payload: ToolPayload::Function { arguments },
                     }))
@@ -157,8 +179,7 @@ impl ToolRouter {
                         ))
                     })?;
                 Ok(Some(ToolCall {
-                    tool_name: "tool_search".to_string(),
-                    tool_namespace: None,
+                    tool_name: ToolName::plain("tool_search"),
                     call_id,
                     payload: ToolPayload::ToolSearch { arguments },
                 }))
@@ -170,8 +191,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => Ok(Some(ToolCall {
-                tool_name: name,
-                tool_namespace: None,
+                tool_name: ToolName::plain(name),
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
@@ -197,8 +217,7 @@ impl ToolRouter {
                             justification: None,
                         };
                         Ok(Some(ToolCall {
-                            tool_name: "local_shell".to_string(),
-                            tool_namespace: None,
+                            tool_name: ToolName::plain("local_shell"),
                             call_id,
                             payload: ToolPayload::LocalShell { params },
                         }))
@@ -220,14 +239,15 @@ impl ToolRouter {
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
-            tool_namespace,
             call_id,
             payload,
         } = call;
 
+        let direct_js_repl_call = tool_name.namespace.is_none()
+            && matches!(tool_name.name.as_str(), "js_repl" | "js_repl_reset");
         if source == ToolCallSource::Direct
             && turn.tools_config.js_repl_tools_only
-            && !matches!(tool_name.as_str(), "js_repl" | "js_repl_reset")
+            && !direct_js_repl_call
         {
             return Err(FunctionCallError::RespondToModel(
                 "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
@@ -241,7 +261,6 @@ impl ToolRouter {
             tracker,
             call_id,
             tool_name,
-            tool_namespace,
             payload,
         };
 

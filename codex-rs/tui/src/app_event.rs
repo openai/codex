@@ -502,7 +502,7 @@ pub(crate) enum AppEvent {
 
     /// Enable or disable a skill by path.
     SetSkillEnabled {
-        path: PathBuf,
+        path: AbsolutePathBuf,
         enabled: bool,
     },
 
@@ -559,6 +559,7 @@ pub(crate) enum AppEvent {
     SubmitFeedback {
         category: FeedbackCategory,
         reason: Option<String>,
+        turn_id: Option<String>,
         include_logs: bool,
     },
 

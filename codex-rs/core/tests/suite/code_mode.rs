@@ -200,6 +200,7 @@ async fn run_code_mode_turn_with_rmcp(
                     },
                     enabled: true,
                     required: false,
+                    supports_parallel_tool_calls: false,
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,

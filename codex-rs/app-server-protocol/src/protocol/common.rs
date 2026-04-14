@@ -284,6 +284,11 @@ client_request_definitions! {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,
     },
+    #[experimental("thread/memoryMode/set")]
+    ThreadMemoryModeSet => "thread/memoryMode/set" {
+        params: v2::ThreadMemoryModeSetParams,
+        response: v2::ThreadMemoryModeSetResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
@@ -316,6 +321,11 @@ client_request_definitions! {
     ThreadRead => "thread/read" {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
+    },
+    /// Append raw Responses API items to the thread history without starting a user turn.
+    ThreadInjectItems => "thread/inject_items" {
+        params: v2::ThreadInjectItemsParams,
+        response: v2::ThreadInjectItemsResponse,
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
@@ -1405,6 +1415,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd: PathBuf::from("/tmp"),
+                instruction_sources: vec![PathBuf::from("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
@@ -1444,6 +1455,7 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": "/tmp",
+                    "instructionSources": ["/tmp/AGENTS.md"],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {

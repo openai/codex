@@ -579,6 +579,31 @@
           "type": "object"
         },
         {
+          "description": "Append raw Responses API items to the thread history without starting a user turn.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/inject_items"
+              ],
+              "title": "Thread/injectItemsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadInjectItemsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/injectItemsRequest",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "$ref": "#/definitions/v2/RequestId"
@@ -7479,6 +7504,15 @@
               "null"
             ]
           },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "threadId": {
             "type": [
               "string",
@@ -9915,6 +9949,7 @@
           "go",
           "plus",
           "pro",
+          "prolite",
           "team",
           "self_serve_business_usage_based",
           "business",
@@ -12076,7 +12111,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "scope": {
             "$ref": "#/definitions/v2/SkillScope"
@@ -12129,7 +12164,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "shortDescription": {
             "type": [
@@ -12796,6 +12831,14 @@
           "cwd": {
             "type": "string"
           },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "model": {
             "type": "string"
           },
@@ -12843,6 +12886,30 @@
       },
       "ThreadId": {
         "type": "string"
+      },
+      "ThreadInjectItemsParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "items": {
+            "description": "Raw Responses API items to append to the thread's model-visible history.",
+            "items": true,
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "threadId"
+        ],
+        "title": "ThreadInjectItemsParams",
+        "type": "object"
+      },
+      "ThreadInjectItemsResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadInjectItemsResponse",
+        "type": "object"
       },
       "ThreadItem": {
         "oneOf": [
@@ -13629,6 +13696,13 @@
         "title": "ThreadLoadedListResponse",
         "type": "object"
       },
+      "ThreadMemoryMode": {
+        "enum": [
+          "enabled",
+          "disabled"
+        ],
+        "type": "string"
+      },
       "ThreadMetadataGitInfoUpdateParams": {
         "properties": {
           "branch": {
@@ -14085,6 +14159,14 @@
           "cwd": {
             "type": "string"
           },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "model": {
             "type": "string"
           },
@@ -14375,6 +14457,14 @@
           },
           "cwd": {
             "type": "string"
+          },
+          "instructionSources": {
+            "default": [],
+            "description": "Instruction source files currently loaded for this thread.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "model": {
             "type": "string"

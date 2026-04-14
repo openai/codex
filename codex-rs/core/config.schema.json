@@ -503,6 +503,9 @@
             "unified_exec": {
               "type": "boolean"
             },
+            "use_agent_identity": {
+              "type": "boolean"
+            },
             "use_legacy_landlock": {
               "type": "boolean"
             },
@@ -1519,6 +1522,10 @@
           "format": "double",
           "type": "number"
         },
+        "supports_parallel_tool_calls": {
+          "default": null,
+          "type": "boolean"
+        },
         "tool_timeout_sec": {
           "default": null,
           "format": "double",
@@ -2347,6 +2354,9 @@
           "type": "boolean"
         },
         "unified_exec": {
+          "type": "boolean"
+        },
+        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {
