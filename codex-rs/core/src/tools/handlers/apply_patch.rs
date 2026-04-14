@@ -166,6 +166,12 @@ impl ToolHandler for ApplyPatchHandler {
             }
         };
 
+        let effective_permissions = session.effective_permission_settings(turn.as_ref()).await;
+        let turn = Arc::new(
+            turn.with_effective_permission_settings(effective_permissions)
+                .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?,
+        );
+
         // Re-parse and verify the patch so we can compute changes and approval.
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();

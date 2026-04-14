@@ -405,12 +405,13 @@ impl DeveloperInstructions {
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
     ) -> DeveloperInstructions {
-        let with_request_permissions_tool = |text: &str| {
+        let append_permission_tool_sections = |text: &str| {
+            let mut sections = vec![text.to_string()];
             if request_permissions_tool_enabled {
-                format!("{text}\n\n{}", request_permissions_tool_prompt_section())
-            } else {
-                text.to_string()
+                sections.push(request_permissions_tool_prompt_section().to_string());
+                sections.push(request_permission_preset_tool_prompt_section().to_string());
             }
+            sections.join("\n\n")
         };
         let on_request_instructions = || {
             let on_request_rule = if exec_permission_approvals_enabled {
@@ -421,6 +422,7 @@ impl DeveloperInstructions {
             let mut sections = vec![on_request_rule];
             if request_permissions_tool_enabled {
                 sections.push(request_permissions_tool_prompt_section().to_string());
+                sections.push(request_permission_preset_tool_prompt_section().to_string());
             }
             if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
                 sections.push(format!(
@@ -432,9 +434,11 @@ impl DeveloperInstructions {
         let text = match approval_policy {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
             AskForApproval::UnlessTrusted => {
-                with_request_permissions_tool(APPROVAL_POLICY_UNLESS_TRUSTED)
+                append_permission_tool_sections(APPROVAL_POLICY_UNLESS_TRUSTED)
             }
-            AskForApproval::OnFailure => with_request_permissions_tool(APPROVAL_POLICY_ON_FAILURE),
+            AskForApproval::OnFailure => {
+                append_permission_tool_sections(APPROVAL_POLICY_ON_FAILURE)
+            }
             AskForApproval::OnRequest => on_request_instructions(),
             AskForApproval::Granular(granular_config) => granular_instructions(
                 granular_config,
@@ -498,6 +502,7 @@ impl DeveloperInstructions {
         DeveloperInstructions::new(message)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
@@ -621,7 +626,11 @@ fn granular_prompt_intro_text() -> &'static str {
 }
 
 fn request_permissions_tool_prompt_section() -> &'static str {
-    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."
+    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it immediately when the user asks conversationally to allow specific filesystem or network access, for example \"allow writing to ~/Downloads in this session\" or \"grant access to /tmp/output\". Request only the specific permissions required. Set `scope` to `session` when the user explicitly asks for session-long access; otherwise use `turn`. After this tool returns, the user has already approved or denied the request in the UI. If permissions were granted, treat them as active now; do not say \"once you approve\" or ask the user to approve the same request again. If no permissions were granted, say the request was not approved."
+}
+
+fn request_permission_preset_tool_prompt_section() -> &'static str {
+    "# request_permission_preset Tool\n\nThe built-in `request_permission_preset` tool is available in this session. Invoke it immediately when the user asks conversationally to change the broad sandboxing, approval, or permission mode, for example \"make this session full access\", \"switch to full access\", \"make the session read-only\", or \"use guardian approvals\". The tool opens the permission-mode picker with the requested preset preselected; the session only changes if the user selects a mode there. Do not claim the mode changed until the tool returns an accepted decision. Use `request_permissions` instead for named paths or narrow filesystem/network grants; never use the preset picker for requests like \"allow writing to ~/Downloads\"."
 }
 
 fn granular_instructions(
@@ -645,6 +654,10 @@ fn granular_instructions(
         request_permissions_tool_enabled.then_some((
             granular_config.allows_request_permissions(),
             "`request_permissions`",
+        )),
+        request_permissions_tool_enabled.then_some((
+            granular_config.allows_request_permissions(),
+            "`request_permission_preset`",
         )),
         Some((
             granular_config.allows_mcp_elicitations(),
@@ -685,6 +698,7 @@ fn granular_instructions(
 
     if request_permissions_tool_prompts_allowed {
         sections.push(request_permissions_tool_prompt_section().to_string());
+        sections.push(request_permission_preset_tool_prompt_section().to_string());
     }
 
     if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
@@ -1778,6 +1792,9 @@ mod tests {
         let text = instructions.into_text();
         assert!(text.contains("`approval_policy` is `unless-trusted`"));
         assert!(text.contains("# request_permissions Tool"));
+        assert!(text.contains("# request_permission_preset Tool"));
+        assert!(text.contains("After this tool returns, the user has already approved or denied"));
+        assert!(text.contains("do not say \"once you approve\""));
     }
 
     #[test]
@@ -1798,6 +1815,7 @@ mod tests {
         let text = instructions.into_text();
         assert!(text.contains("`approval_policy` is `on-failure`"));
         assert!(text.contains("# request_permissions Tool"));
+        assert!(text.contains("# request_permission_preset Tool"));
     }
 
     #[test]
@@ -1840,6 +1858,34 @@ mod tests {
         assert!(
             text.contains("The built-in `request_permissions` tool is available in this session.")
         );
+        assert!(text.contains("allow writing to ~/Downloads in this session"));
+        assert!(text.contains("Set `scope` to `session`"));
+        assert!(text.contains("# request_permission_preset Tool"));
+        assert!(text.contains(
+            "asks conversationally to change the broad sandboxing, approval, or permission mode"
+        ));
+        assert!(text.contains("Use `request_permissions` instead for named paths"));
+        assert!(text.contains("never use the preset picker"));
+    }
+
+    #[test]
+    fn omits_permission_tool_instructions_when_disabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: false,
+            },
+            /*writable_roots*/ None,
+        );
+
+        let text = instructions.into_text();
+        assert!(!text.contains("# request_permissions Tool"));
+        assert!(!text.contains("# request_permission_preset Tool"));
     }
 
     #[test]
@@ -1860,6 +1906,7 @@ mod tests {
         let text = instructions.into_text();
         assert!(text.contains("with_additional_permissions"));
         assert!(text.contains("# request_permissions Tool"));
+        assert!(text.contains("# request_permission_preset Tool"));
     }
 
     #[test]
@@ -1919,6 +1966,7 @@ mod tests {
         }
         if include_request_permissions_tool_section {
             sections.push(request_permissions_tool_prompt_section().to_string());
+            sections.push(request_permission_preset_tool_prompt_section().to_string());
         }
         sections.join("\n\n")
     }
@@ -2040,6 +2088,7 @@ mod tests {
         )
         .into_text();
         assert!(allowed.contains("# request_permissions Tool"));
+        assert!(allowed.contains("# request_permission_preset Tool"));
 
         let rejected = DeveloperInstructions::from(
             AskForApproval::Granular(GranularApprovalConfig {
@@ -2056,6 +2105,8 @@ mod tests {
         )
         .into_text();
         assert!(!rejected.contains("# request_permissions Tool"));
+        assert!(!rejected.contains("# request_permission_preset Tool"));
+        assert!(rejected.contains("- `request_permission_preset`"));
     }
 
     #[test]

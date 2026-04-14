@@ -103,6 +103,7 @@ impl AppServerClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
+                    permission_confirmations: false,
                     opt_out_notification_methods: None,
                 }),
             },

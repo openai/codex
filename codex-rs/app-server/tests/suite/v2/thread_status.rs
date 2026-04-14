@@ -145,6 +145,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
             },
             Some(InitializeCapabilities {
                 experimental_api: true,
+                permission_confirmations: false,
                 opt_out_notification_methods: Some(vec!["thread/status/changed".to_string()]),
             }),
         ),

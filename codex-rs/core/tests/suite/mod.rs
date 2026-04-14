@@ -72,6 +72,7 @@ mod realtime_conversation;
 mod remote_env;
 mod remote_models;
 mod request_compression;
+mod request_permission_preset_tool;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions;
 #[cfg(not(target_os = "windows"))]

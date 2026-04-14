@@ -275,6 +275,16 @@ pub fn create_request_permissions_tool(description: String) -> ToolSpec {
             )),
         ),
         ("permissions".to_string(), permission_profile_schema()),
+        (
+            "scope".to_string(),
+            JsonSchema::string_enum(
+                vec![json!("turn"), json!("session")],
+                Some(
+                    "How long the granted permissions should apply. Use \"session\" when the user explicitly asks for access in this session; defaults to \"turn\"."
+                        .to_string(),
+                ),
+            ),
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -292,7 +302,46 @@ pub fn create_request_permissions_tool(description: String) -> ToolSpec {
 }
 
 pub fn request_permissions_tool_description() -> String {
-    "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope."
+    "Open a permissions request for specific filesystem or network access, such as writing to a named path like ~/Downloads. Use this immediately when the user conversationally asks to allow access to a specific path or network permission. The returned result means the user has already approved or denied the request in the UI. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session when scope is \"session\" and the client approves them at session scope. After the tool returns, do not ask the user to approve the same request again."
+        .to_string()
+}
+
+pub fn create_request_permission_preset_tool(available_preset_ids: Vec<&'static str>) -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "preset".to_string(),
+            JsonSchema::string_enum(
+                available_preset_ids
+                    .into_iter()
+                    .map(|id| json!(id))
+                    .collect(),
+                Some("Built-in permission preset to request from the user.".to_string()),
+            ),
+        ),
+        (
+            "reason".to_string(),
+            JsonSchema::string(Some(
+                "Optional short explanation for why the permission mode should change.".to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "request_permission_preset".to_string(),
+        description: request_permission_preset_tool_description(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["preset".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn request_permission_preset_tool_description() -> String {
+    "Open the permission-mode picker with a built-in preset such as Default or Full Access preselected. Use this immediately when the user says things like \"make this session full access\", \"switch to read-only\", or otherwise conversationally asks to change sandboxing, approval, or permission mode. The session only changes if the user selects a permission mode in the picker."
         .to_string()
 }
 

@@ -215,6 +215,10 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
+use codex_protocol::request_permission_preset::PermissionPresetId;
+use codex_protocol::request_permission_preset::RequestPermissionPresetDecision;
+use codex_protocol::request_permission_preset::RequestPermissionPresetEvent;
+use codex_protocol::request_permission_preset::RequestPermissionPresetResponse;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
@@ -297,6 +301,7 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
+use crate::app_event::PermissionPresetSelectionContext;
 use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -1571,6 +1576,18 @@ fn request_permissions_from_params(
         call_id: params.item_id,
         reason: params.reason,
         permissions: params.permissions.into(),
+        suggested_scope: params.suggested_scope.to_core(),
+    }
+}
+
+fn request_permission_preset_from_params(
+    params: codex_app_server_protocol::PermissionPresetRequestApprovalParams,
+) -> RequestPermissionPresetEvent {
+    RequestPermissionPresetEvent {
+        turn_id: params.turn_id,
+        call_id: params.item_id,
+        reason: params.reason,
+        preset: params.preset.to_core(),
     }
 }
 
@@ -3519,6 +3536,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_request_permission_preset(&mut self, ev: RequestPermissionPresetEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_request_permission_preset(ev),
+            |s| s.handle_request_permission_preset_now(ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
@@ -4611,9 +4636,23 @@ impl ChatWidget {
             call_id: ev.call_id,
             reason: ev.reason,
             permissions: ev.permissions,
+            suggested_scope: ev.suggested_scope,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_request_permission_preset_now(
+        &mut self,
+        ev: RequestPermissionPresetEvent,
+    ) {
+        self.flush_answer_stream_with_separator();
+        let response_context = PermissionPresetSelectionContext {
+            thread_id: self.thread_id.unwrap_or_default(),
+            call_id: ev.call_id,
+        };
+        self.open_permissions_popup_for_request(ev.preset, response_context);
         self.request_redraw();
     }
 
@@ -6009,6 +6048,9 @@ impl ChatWidget {
             ServerRequest::PermissionsRequestApproval { params, .. } => {
                 self.on_request_permissions(request_permissions_from_params(params));
             }
+            ServerRequest::PermissionPresetRequestApproval { params, .. } => {
+                self.on_request_permission_preset(request_permission_preset_from_params(params));
+            }
             ServerRequest::ToolRequestUserInput { params, .. } => {
                 self.on_request_user_input(request_user_input_from_params(params));
             }
@@ -6713,6 +6755,9 @@ impl ChatWidget {
             }
             EventMsg::RequestPermissions(ev) => {
                 self.on_request_permissions(ev);
+            }
+            EventMsg::RequestPermissionPreset(ev) => {
+                self.on_request_permission_preset(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
@@ -8285,13 +8330,30 @@ impl ChatWidget {
 
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
+        self.open_permissions_popup_with_request(/*request*/ None);
+    }
+
+    pub(crate) fn open_permissions_popup_for_request(
+        &mut self,
+        preset: PermissionPresetId,
+        response_context: PermissionPresetSelectionContext,
+    ) {
+        self.open_permissions_popup_with_request(Some((preset, response_context)));
+    }
+
+    fn open_permissions_popup_with_request(
+        &mut self,
+        request: Option<(PermissionPresetId, PermissionPresetSelectionContext)>,
+    ) {
         let include_read_only = cfg!(target_os = "windows");
         let current_approval = self.config.permissions.approval_policy.value();
         let current_sandbox = self.config.permissions.sandbox_policy.get();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
         let current_review_policy = self.config.approvals_reviewer;
         let mut items: Vec<SelectionItem> = Vec::new();
+        let mut initial_selected_idx = None;
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        let requested_preset = request.as_ref().map(|(preset, _)| *preset);
 
         #[cfg(target_os = "windows")]
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
@@ -8316,10 +8378,19 @@ impl ChatWidget {
                 .map(|err| err.to_string())
         };
 
+        let mut record_initial_selection = |item_id: PermissionPresetId, idx: usize| {
+            if requested_preset == Some(item_id) {
+                initial_selected_idx = Some(idx);
+            }
+        };
+
         for preset in presets.into_iter() {
             if !include_read_only && preset.id == "read-only" {
                 continue;
             }
+            let Some(preset_id) = PermissionPresetId::from_id(preset.id) else {
+                continue;
+            };
             let base_name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
                 "Default (non-admin sandbox)".to_string()
             } else {
@@ -8345,12 +8416,15 @@ impl ChatWidget {
                     .notices
                     .hide_full_access_warning
                     .unwrap_or(false);
+            let response_context = request.as_ref().map(|(_, context)| context.clone());
             let default_actions: Vec<SelectionAction> = if requires_confirmation {
                 let preset_clone = preset.clone();
+                let permission_preset_context = response_context.clone();
                 vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenFullAccessConfirmation {
                         preset: preset_clone.clone(),
                         return_to_permissions: !include_read_only,
+                        permission_preset_context: permission_preset_context.clone(),
                     });
                 })]
             } else if preset.id == "auto" {
@@ -8391,32 +8465,37 @@ impl ChatWidget {
                             });
                         })]
                     } else {
-                        Self::approval_preset_actions(
+                        Self::permission_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
                             base_name.clone(),
                             ApprovalsReviewer::User,
+                            response_context.clone().map(|context| (context, preset_id)),
                         )
                     }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    Self::approval_preset_actions(
+                    Self::permission_preset_actions(
                         preset.approval,
                         preset.sandbox.clone(),
                         base_name.clone(),
                         ApprovalsReviewer::User,
+                        response_context.clone().map(|context| (context, preset_id)),
                     )
                 }
             } else {
-                Self::approval_preset_actions(
+                Self::permission_preset_actions(
                     preset.approval,
                     preset.sandbox.clone(),
                     base_name.clone(),
                     ApprovalsReviewer::User,
+                    response_context.clone().map(|context| (context, preset_id)),
                 )
             };
             if preset.id == "auto" {
+                let idx = items.len();
+                record_initial_selection(PermissionPresetId::Auto, idx);
                 items.push(SelectionItem {
                     name: base_name.clone(),
                     description: base_description.clone(),
@@ -8429,6 +8508,8 @@ impl ChatWidget {
                 });
 
                 if guardian_approval_enabled {
+                    let idx = items.len();
+                    record_initial_selection(PermissionPresetId::GuardianApprovals, idx);
                     items.push(SelectionItem {
                         name: "Guardian Approvals".to_string(),
                         description: Some(
@@ -8440,12 +8521,15 @@ impl ChatWidget {
                                 current_approval,
                                 current_sandbox,
                                 &preset,
-                            ),
-                        actions: Self::approval_preset_actions(
+                        ),
+                        actions: Self::permission_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
                             "Guardian Approvals".to_string(),
                             ApprovalsReviewer::GuardianSubagent,
+                            response_context
+                                .clone()
+                                .map(|context| (context, PermissionPresetId::GuardianApprovals)),
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason
@@ -8454,6 +8538,8 @@ impl ChatWidget {
                     });
                 }
             } else {
+                let idx = items.len();
+                record_initial_selection(preset_id, idx);
                 items.push(SelectionItem {
                     name: base_name,
                     description: base_description,
@@ -8485,6 +8571,21 @@ impl ChatWidget {
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(()),
+            initial_selected_idx,
+            on_cancel: request.map(|(_, context)| {
+                Box::new(move |tx: &AppEventSender| {
+                    let message = "permission preset picker was dismissed".to_string();
+                    tx.request_permission_preset_response(
+                        context.thread_id,
+                        context.call_id.clone(),
+                        RequestPermissionPresetResponse {
+                            decision: RequestPermissionPresetDecision::Declined,
+                            preset: requested_preset.unwrap_or(PermissionPresetId::Auto),
+                            message,
+                        },
+                    );
+                }) as Box<dyn Fn(&AppEventSender) + Send + Sync>
+            }),
             ..Default::default()
         });
     }
@@ -8508,39 +8609,67 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
         label: String,
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
+        Self::permission_preset_actions(
+            approval,
+            sandbox,
+            label,
+            approvals_reviewer,
+            /*response*/ None,
+        )
+    }
+
+    fn permission_preset_actions(
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+        label: String,
+        approvals_reviewer: ApprovalsReviewer,
+        response: Option<(PermissionPresetSelectionContext, PermissionPresetId)>,
+    ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let sandbox_clone = sandbox.clone();
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    Some(approval),
-                    Some(approvals_reviewer),
-                    Some(sandbox_clone.clone()),
-                    /*windows_sandbox_level*/ None,
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )
-                .into_core(),
-            ));
+            let message = format!("Permissions updated to {label}");
+            if response.is_none() {
+                tx.send(AppEvent::CodexOp(
+                    AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        Some(approval),
+                        Some(approvals_reviewer),
+                        Some(sandbox_clone.clone()),
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
+                    )
+                    .into_core(),
+                ));
+            }
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(
-                    format!("Permissions updated to {label}"),
-                    /*hint*/ None,
-                ),
+                history_cell::new_info_event(message.clone(), /*hint*/ None),
             )));
+            if let Some((context, preset)) = &response {
+                tx.request_permission_preset_response(
+                    context.thread_id,
+                    context.call_id.clone(),
+                    RequestPermissionPresetResponse {
+                        decision: RequestPermissionPresetDecision::Accepted,
+                        preset: *preset,
+                        message,
+                    },
+                );
+            }
         })]
     }
 
@@ -8613,6 +8742,7 @@ impl ChatWidget {
         &mut self,
         preset: ApprovalPreset,
         return_to_permissions: bool,
+        permission_preset_context: Option<PermissionPresetSelectionContext>,
     ) {
         let selected_name = preset.label.to_string();
         let approval = preset.approval;
@@ -8631,21 +8761,26 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = Self::approval_preset_actions(
+        let response_context = permission_preset_context
+            .clone()
+            .map(|context| (context, PermissionPresetId::FullAccess));
+        let mut accept_actions = Self::permission_preset_actions(
             approval,
             sandbox.clone(),
             selected_name.clone(),
             ApprovalsReviewer::User,
+            response_context.clone(),
         );
         accept_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
         }));
 
-        let mut accept_and_remember_actions = Self::approval_preset_actions(
+        let mut accept_and_remember_actions = Self::permission_preset_actions(
             approval,
             sandbox,
             selected_name,
             ApprovalsReviewer::User,
+            response_context,
         );
         accept_and_remember_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
@@ -8654,8 +8789,26 @@ impl ChatWidget {
 
         let deny_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             if return_to_permissions {
-                tx.send(AppEvent::OpenPermissionsPopup);
+                if let Some(context) = permission_preset_context.clone() {
+                    tx.send(AppEvent::OpenPermissionsPopupForRequest {
+                        preset: PermissionPresetId::FullAccess,
+                        response_context: context,
+                    });
+                } else {
+                    tx.send(AppEvent::OpenPermissionsPopup);
+                }
             } else {
+                if let Some(context) = permission_preset_context.clone() {
+                    tx.request_permission_preset_response(
+                        context.thread_id,
+                        context.call_id,
+                        RequestPermissionPresetResponse {
+                            decision: RequestPermissionPresetDecision::Declined,
+                            preset: PermissionPresetId::FullAccess,
+                            message: "permission preset picker was dismissed".to_string(),
+                        },
+                    );
+                }
                 tx.send(AppEvent::OpenApprovalsPopup);
             }
         })];

@@ -88,6 +88,8 @@ use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::request_permission_preset::PermissionPresetId as CorePermissionPresetId;
+use codex_protocol::request_permission_preset::RequestPermissionPresetDecision as CoreRequestPermissionPresetDecision;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -6300,6 +6302,11 @@ pub struct DynamicToolCallParams {
     pub arguments: JsonValue,
 }
 
+/// Request sent to app clients when a model asks for a narrow permission grant.
+///
+/// The client owns the confirmation UI and may return fewer permissions than
+/// requested. Treat `suggested_scope` as the model's requested lifetime, not as
+/// an already-approved scope.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6309,6 +6316,8 @@ pub struct PermissionsRequestApprovalParams {
     pub item_id: String,
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default)]
+    pub suggested_scope: PermissionGrantScope,
 }
 
 v2_enum_from_core!(
@@ -6320,6 +6329,11 @@ v2_enum_from_core!(
     }
 );
 
+/// Response from an app client after the narrow permission grant UI resolves.
+///
+/// Returning an empty permission profile is a denial. Returning a non-empty
+/// profile grants only those permissions, and core applies them for the
+/// specified scope.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6327,6 +6341,71 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+}
+
+/// A built-in permission-mode preset that app clients can confirm.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum PermissionPresetId {
+    Auto,
+    FullAccess,
+    ReadOnly,
+    GuardianApprovals,
+}
+
+impl PermissionPresetId {
+    /// Converts the app-server preset identifier into the core protocol type.
+    pub fn to_core(self) -> CorePermissionPresetId {
+        match self {
+            Self::Auto => CorePermissionPresetId::Auto,
+            Self::FullAccess => CorePermissionPresetId::FullAccess,
+            Self::ReadOnly => CorePermissionPresetId::ReadOnly,
+            Self::GuardianApprovals => CorePermissionPresetId::GuardianApprovals,
+        }
+    }
+}
+
+impl From<CorePermissionPresetId> for PermissionPresetId {
+    fn from(value: CorePermissionPresetId) -> Self {
+        match value {
+            CorePermissionPresetId::Auto => Self::Auto,
+            CorePermissionPresetId::FullAccess => Self::FullAccess,
+            CorePermissionPresetId::ReadOnly => Self::ReadOnly,
+            CorePermissionPresetId::GuardianApprovals => Self::GuardianApprovals,
+        }
+    }
+}
+
+/// Request sent to app clients when a model asks to switch permission modes.
+///
+/// Clients should open their local permission picker with the requested preset
+/// preselected, allowing the user to accept it or choose a different preset.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub preset: PermissionPresetId,
+    pub reason: Option<String>,
+}
+
+v2_enum_from_core!(
+    pub enum PermissionPresetApprovalDecision from CoreRequestPermissionPresetDecision {
+        Accepted,
+        Declined
+    }
+);
+
+/// Response from an app client after the permission preset picker resolves.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPresetRequestApprovalResponse {
+    pub decision: PermissionPresetApprovalDecision,
+    pub preset: PermissionPresetId,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6675,6 +6754,7 @@ mod tests {
                 }),
             }
         );
+        assert_eq!(params.suggested_scope, PermissionGrantScope::Turn);
 
         assert_eq!(
             CoreRequestPermissionProfile::from(params.permissions),
@@ -6694,6 +6774,24 @@ mod tests {
                 }),
             }
         );
+    }
+
+    #[test]
+    fn permissions_request_approval_preserves_suggested_scope() {
+        let params = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "reason": "Select a workspace root",
+            "permissions": {
+                "network": null,
+                "fileSystem": null,
+            },
+            "suggestedScope": "session",
+        }))
+        .expect("permissions request should deserialize");
+
+        assert_eq!(params.suggested_scope, PermissionGrantScope::Session);
     }
 
     #[test]

@@ -803,7 +803,14 @@ pub async fn run_main_with_transport(
                                                     connection_id,
                                                 )
                                                 .await;
-                                            processor.connection_initialized(connection_id).await;
+                                            processor
+                                                .connection_initialized(
+                                                    connection_id,
+                                                    connection_state
+                                                        .session
+                                                        .permission_confirmations,
+                                                )
+                                                .await;
                                             connection_state
                                                 .outbound_initialized
                                                 .store(true, std::sync::atomic::Ordering::Release);

@@ -9,8 +9,11 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::request_permission_preset::RequestPermissionPresetResponse;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -21,6 +24,7 @@ use crate::codex::TurnContext;
 use crate::tasks::AnySessionTask;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 
 /// Metadata about the currently running turn.
@@ -97,6 +101,8 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_request_permission_presets:
+        HashMap<String, oneshot::Sender<RequestPermissionPresetResponse>>,
     pending_request_permissions: HashMap<String, oneshot::Sender<RequestPermissionsResponse>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
@@ -104,8 +110,16 @@ pub(crate) struct TurnState {
     pending_input: Vec<ResponseInputItem>,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<PermissionProfile>,
+    permission_preset_override: Option<TurnPermissionPresetOverride>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TurnPermissionPresetOverride {
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) approvals_reviewer: ApprovalsReviewer,
+    pub(crate) sandbox_policy: SandboxPolicy,
 }
 
 impl TurnState {
@@ -126,11 +140,27 @@ impl TurnState {
 
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
+        self.pending_request_permission_presets.clear();
         self.pending_request_permissions.clear();
         self.pending_user_input.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+    }
+
+    pub(crate) fn insert_pending_request_permission_preset(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<RequestPermissionPresetResponse>,
+    ) -> Option<oneshot::Sender<RequestPermissionPresetResponse>> {
+        self.pending_request_permission_presets.insert(key, tx)
+    }
+
+    pub(crate) fn remove_pending_request_permission_preset(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<RequestPermissionPresetResponse>> {
+        self.pending_request_permission_presets.remove(key)
     }
 
     pub(crate) fn insert_pending_request_permissions(
@@ -243,6 +273,17 @@ impl TurnState {
 
     pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
         self.granted_permissions.clone()
+    }
+
+    pub(crate) fn record_permission_preset_override(
+        &mut self,
+        preset_override: TurnPermissionPresetOverride,
+    ) {
+        self.permission_preset_override = Some(preset_override);
+    }
+
+    pub(crate) fn permission_preset_override(&self) -> Option<TurnPermissionPresetOverride> {
+        self.permission_preset_override.clone()
     }
 }
 

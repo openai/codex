@@ -7,6 +7,7 @@ use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::request_permission_preset::RequestPermissionPresetResponse;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::mpsc::UnboundedSender;
@@ -92,6 +93,18 @@ impl AppEventSender {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
             op: AppCommand::request_permissions_response(id, response).into_core(),
+        });
+    }
+
+    pub(crate) fn request_permission_preset_response(
+        &self,
+        thread_id: ThreadId,
+        id: String,
+        response: RequestPermissionPresetResponse,
+    ) {
+        self.send(AppEvent::SubmitThreadOp {
+            thread_id,
+            op: AppCommand::request_permission_preset_response(id, response).into_core(),
         });
     }
 

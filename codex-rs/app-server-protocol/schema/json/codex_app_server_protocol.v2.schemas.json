@@ -5401,6 +5401,11 @@
             "array",
             "null"
           ]
+        },
+        "permissionConfirmations": {
+          "default": false,
+          "description": "Opt into model-initiated permission confirmation requests.",
+          "type": "boolean"
         }
       },
       "type": "object"

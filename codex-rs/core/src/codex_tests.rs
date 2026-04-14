@@ -3024,6 +3024,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
                             }),
                             ..RequestPermissionProfile::default()
                         },
+                        scope: PermissionGrantScope::Session,
                     },
                 )
                 .await
@@ -3038,6 +3039,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         panic!("expected request_permissions event");
     };
     assert_eq!(request.call_id, call_id);
+    assert_eq!(request.suggested_scope, PermissionGrantScope::Session);
 
     session
         .notify_request_permissions_response(&request.call_id, expected_response.clone())
@@ -3082,6 +3084,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
                     }),
                     ..RequestPermissionProfile::default()
                 },
+                scope: PermissionGrantScope::Turn,
             },
         )
         .await;

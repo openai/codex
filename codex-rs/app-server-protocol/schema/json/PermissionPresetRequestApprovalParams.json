@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PermissionPresetId": {
+      "description": "A built-in permission-mode preset that app clients can confirm.",
+      "enum": [
+        "auto",
+        "full-access",
+        "read-only",
+        "guardian-approvals"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Request sent to app clients when a model asks to switch permission modes.\n\nClients should open their local permission picker with the requested preset preselected, allowing the user to accept it or choose a different preset.",
+  "properties": {
+    "itemId": {
+      "type": "string"
+    },
+    "preset": {
+      "$ref": "#/definitions/PermissionPresetId"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "itemId",
+    "preset",
+    "threadId",
+    "turnId"
+  ],
+  "title": "PermissionPresetRequestApprovalParams",
+  "type": "object"
+}

@@ -103,3 +103,16 @@ pub fn create_request_permissions_sse_response(call_id: &str) -> anyhow::Result<
         responses::ev_completed("resp-1"),
     ]))
 }
+
+pub fn create_request_permission_preset_sse_response(call_id: &str) -> anyhow::Result<String> {
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "preset": "full-access",
+        "reason": "User asked for full access"
+    }))?;
+
+    Ok(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(call_id, "request_permission_preset", &tool_call_arguments),
+        responses::ev_completed("resp-1"),
+    ]))
+}

@@ -22,20 +22,19 @@ impl ElicitationRequestKey {
     }
 }
 
+/// Tracks which interactive prompts are still unresolved in the thread-event buffer.
+///
+/// Thread snapshots are replayed when switching threads or agents. Most events
+/// should replay verbatim, but interactive prompts such as approvals,
+/// `request_user_input`, MCP elicitations, permission grants, and permission
+/// preset pickers must only replay while they are still pending.
+///
+/// The state is updated from inbound events, outbound ops that resolve a prompt,
+/// and buffer eviction. It keeps both fast lookup sets for snapshot filtering
+/// and turn-indexed queues so `TurnComplete` and `TurnAborted` can clear stale
+/// prompts tied to a turn. `request_user_input` removal is FIFO because the
+/// overlay answers queued prompts in FIFO order for a shared `turn_id`.
 #[derive(Debug, Default)]
-// Tracks which interactive prompts are still unresolved in the thread-event buffer.
-//
-// Thread snapshots are replayed when switching threads/agents. Most events should replay
-// verbatim, but interactive prompts (approvals, request_user_input, MCP elicitations) must
-// only replay if they are still pending. This state is updated from:
-// - inbound events (`note_event`)
-// - outbound ops that resolve a prompt (`note_outbound_op`)
-// - buffer eviction (`note_evicted_event`)
-//
-// We keep both fast lookup sets (for snapshot filtering by call_id/request key) and
-// turn-indexed queues/vectors so `TurnComplete`/`TurnAborted` can clear stale prompts tied
-// to a turn. `request_user_input` removal is FIFO because the overlay answers queued prompts
-// in FIFO order for a shared `turn_id`.
 pub(super) struct PendingInteractiveReplayState {
     exec_approval_call_ids: HashSet<String>,
     exec_approval_call_ids_by_turn_id: HashMap<String, Vec<String>>,
@@ -44,6 +43,8 @@ pub(super) struct PendingInteractiveReplayState {
     elicitation_requests: HashSet<ElicitationRequestKey>,
     request_permissions_call_ids: HashSet<String>,
     request_permissions_call_ids_by_turn_id: HashMap<String, Vec<String>>,
+    request_permission_preset_call_ids: HashSet<String>,
+    request_permission_preset_call_ids_by_turn_id: HashMap<String, Vec<String>>,
     request_user_input_call_ids: HashSet<String>,
     request_user_input_call_ids_by_turn_id: HashMap<String, Vec<String>>,
     pending_requests_by_request_id: HashMap<AppServerRequestId, PendingInteractiveRequest>,
@@ -61,6 +62,10 @@ enum PendingInteractiveRequest {
     },
     Elicitation(ElicitationRequestKey),
     RequestPermissions {
+        turn_id: String,
+        item_id: String,
+    },
+    RequestPermissionPreset {
         turn_id: String,
         item_id: String,
     },
@@ -82,6 +87,7 @@ impl PendingInteractiveReplayState {
                 | AppCommandView::PatchApproval { .. }
                 | AppCommandView::ResolveElicitation { .. }
                 | AppCommandView::RequestPermissionsResponse { .. }
+                | AppCommandView::RequestPermissionPresetResponse { .. }
                 | AppCommandView::UserInputAnswer { .. }
                 | AppCommandView::Shutdown
         )
@@ -139,6 +145,18 @@ impl PendingInteractiveReplayState {
                 self.pending_requests_by_request_id.retain(
                     |_, pending| {
                         !matches!(pending, PendingInteractiveRequest::RequestPermissions { item_id, .. } if item_id == id)
+                    },
+                );
+            }
+            AppCommandView::RequestPermissionPresetResponse { id, .. } => {
+                self.request_permission_preset_call_ids.remove(id);
+                Self::remove_call_id_from_turn_map(
+                    &mut self.request_permission_preset_call_ids_by_turn_id,
+                    id,
+                );
+                self.pending_requests_by_request_id.retain(
+                    |_, pending| {
+                        !matches!(pending, PendingInteractiveRequest::RequestPermissionPreset { item_id, .. } if item_id == id)
                     },
                 );
             }
@@ -248,6 +266,21 @@ impl PendingInteractiveReplayState {
                     },
                 );
             }
+            ServerRequest::PermissionPresetRequestApproval { request_id, params } => {
+                self.request_permission_preset_call_ids
+                    .insert(params.item_id.clone());
+                self.request_permission_preset_call_ids_by_turn_id
+                    .entry(params.turn_id.clone())
+                    .or_default()
+                    .push(params.item_id.clone());
+                self.pending_requests_by_request_id.insert(
+                    request_id.clone(),
+                    PendingInteractiveRequest::RequestPermissionPreset {
+                        turn_id: params.turn_id.clone(),
+                        item_id: params.item_id.clone(),
+                    },
+                );
+            }
             _ => {}
         }
     }
@@ -275,6 +308,7 @@ impl PendingInteractiveReplayState {
                 self.clear_exec_approval_turn(&notification.turn.id);
                 self.clear_patch_approval_turn(&notification.turn.id);
                 self.clear_request_permissions_turn(&notification.turn.id);
+                self.clear_request_permission_preset_turn(&notification.turn.id);
                 self.clear_request_user_input_turn(&notification.turn.id);
             }
             ServerNotification::ServerRequestResolved(notification) => {
@@ -348,6 +382,24 @@ impl PendingInteractiveReplayState {
                         .remove(&params.turn_id);
                 }
             }
+            ServerRequest::PermissionPresetRequestApproval { params, .. } => {
+                self.request_permission_preset_call_ids
+                    .remove(&params.item_id);
+                let mut remove_turn_entry = false;
+                if let Some(call_ids) = self
+                    .request_permission_preset_call_ids_by_turn_id
+                    .get_mut(&params.turn_id)
+                {
+                    call_ids.retain(|call_id| call_id != &params.item_id);
+                    if call_ids.is_empty() {
+                        remove_turn_entry = true;
+                    }
+                }
+                if remove_turn_entry {
+                    self.request_permission_preset_call_ids_by_turn_id
+                        .remove(&params.turn_id);
+                }
+            }
             _ => {}
         }
         self.pending_requests_by_request_id
@@ -374,6 +426,9 @@ impl PendingInteractiveReplayState {
             ServerRequest::PermissionsRequestApproval { params, .. } => {
                 self.request_permissions_call_ids.contains(&params.item_id)
             }
+            ServerRequest::PermissionPresetRequestApproval { params, .. } => self
+                .request_permission_preset_call_ids
+                .contains(&params.item_id),
             _ => true,
         }
     }
@@ -383,6 +438,7 @@ impl PendingInteractiveReplayState {
             || !self.patch_approval_call_ids.is_empty()
             || !self.elicitation_requests.is_empty()
             || !self.request_permissions_call_ids.is_empty()
+            || !self.request_permission_preset_call_ids.is_empty()
     }
 
     fn clear_request_user_input_turn(&mut self, turn_id: &str) {
@@ -407,6 +463,22 @@ impl PendingInteractiveReplayState {
         self.pending_requests_by_request_id.retain(
             |_, pending| {
                 !matches!(pending, PendingInteractiveRequest::RequestPermissions { turn_id: pending_turn_id, .. } if pending_turn_id == turn_id)
+            },
+        );
+    }
+
+    fn clear_request_permission_preset_turn(&mut self, turn_id: &str) {
+        if let Some(call_ids) = self
+            .request_permission_preset_call_ids_by_turn_id
+            .remove(turn_id)
+        {
+            for call_id in call_ids {
+                self.request_permission_preset_call_ids.remove(&call_id);
+            }
+        }
+        self.pending_requests_by_request_id.retain(
+            |_, pending| {
+                !matches!(pending, PendingInteractiveRequest::RequestPermissionPreset { turn_id: pending_turn_id, .. } if pending_turn_id == turn_id)
             },
         );
     }
@@ -472,6 +544,8 @@ impl PendingInteractiveReplayState {
         self.elicitation_requests.clear();
         self.request_permissions_call_ids.clear();
         self.request_permissions_call_ids_by_turn_id.clear();
+        self.request_permission_preset_call_ids.clear();
+        self.request_permission_preset_call_ids_by_turn_id.clear();
         self.request_user_input_call_ids.clear();
         self.request_user_input_call_ids_by_turn_id.clear();
         self.pending_requests_by_request_id.clear();
@@ -508,6 +582,14 @@ impl PendingInteractiveReplayState {
                 self.request_permissions_call_ids.remove(&item_id);
                 Self::remove_call_id_from_turn_map_entry(
                     &mut self.request_permissions_call_ids_by_turn_id,
+                    &turn_id,
+                    &item_id,
+                );
+            }
+            PendingInteractiveRequest::RequestPermissionPreset { turn_id, item_id } => {
+                self.request_permission_preset_call_ids.remove(&item_id);
+                Self::remove_call_id_from_turn_map_entry(
+                    &mut self.request_permission_preset_call_ids_by_turn_id,
                     &turn_id,
                     &item_id,
                 );
@@ -552,6 +634,10 @@ impl PendingInteractiveReplayState {
             (
                 PendingInteractiveRequest::RequestPermissions { turn_id, item_id },
                 ServerRequest::PermissionsRequestApproval { params, .. },
+            ) => turn_id == &params.turn_id && item_id == &params.item_id,
+            (
+                PendingInteractiveRequest::RequestPermissionPreset { turn_id, item_id },
+                ServerRequest::PermissionPresetRequestApproval { params, .. },
             ) => turn_id == &params.turn_id && item_id == &params.item_id,
             (
                 PendingInteractiveRequest::RequestUserInput { turn_id, item_id },

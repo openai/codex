@@ -2344,6 +2344,11 @@
             "array",
             "null"
           ]
+        },
+        "permissionConfirmations": {
+          "default": false,
+          "description": "Opt into model-initiated permission confirmation requests.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3309,8 +3314,76 @@
       ],
       "type": "string"
     },
+    "PermissionPresetApprovalDecision": {
+      "enum": [
+        "accepted",
+        "declined"
+      ],
+      "type": "string"
+    },
+    "PermissionPresetId": {
+      "description": "A built-in permission-mode preset that app clients can confirm.",
+      "enum": [
+        "auto",
+        "full-access",
+        "read-only",
+        "guardian-approvals"
+      ],
+      "type": "string"
+    },
+    "PermissionPresetRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Request sent to app clients when a model asks to switch permission modes.\n\nClients should open their local permission picker with the requested preset preselected, allowing the user to accept it or choose a different preset.",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "preset": {
+          "$ref": "#/definitions/PermissionPresetId"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "preset",
+        "threadId",
+        "turnId"
+      ],
+      "title": "PermissionPresetRequestApprovalParams",
+      "type": "object"
+    },
+    "PermissionPresetRequestApprovalResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Response from an app client after the permission preset picker resolves.",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/PermissionPresetApprovalDecision"
+        },
+        "preset": {
+          "$ref": "#/definitions/PermissionPresetId"
+        }
+      },
+      "required": [
+        "decision",
+        "preset"
+      ],
+      "title": "PermissionPresetRequestApprovalResponse",
+      "type": "object"
+    },
     "PermissionsRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Request sent to app clients when a model asks for a narrow permission grant.\n\nThe client owns the confirmation UI and may return fewer permissions than requested. Treat `suggested_scope` as the model's requested lifetime, not as an already-approved scope.",
       "properties": {
         "itemId": {
           "type": "string"
@@ -3323,6 +3396,14 @@
             "string",
             "null"
           ]
+        },
+        "suggestedScope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionGrantScope"
+            }
+          ],
+          "default": "turn"
         },
         "threadId": {
           "type": "string"
@@ -3342,6 +3423,7 @@
     },
     "PermissionsRequestApprovalResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Response from an app client after the narrow permission grant UI resolves.\n\nReturning an empty permission profile is a denial. Returning a non-empty profile grants only those permissions, and core applies them for the specified scope.",
       "properties": {
         "permissions": {
           "$ref": "#/definitions/GrantedPermissionProfile"
@@ -4686,6 +4768,31 @@
             "params"
           ],
           "title": "Item/permissions/requestApprovalRequest",
+          "type": "object"
+        },
+        {
+          "description": "Request the client to open its permission preset picker.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "item/permissionPreset/requestApproval"
+              ],
+              "title": "Item/permissionPreset/requestApprovalRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PermissionPresetRequestApprovalParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/permissionPreset/requestApprovalRequest",
           "type": "object"
         },
         {

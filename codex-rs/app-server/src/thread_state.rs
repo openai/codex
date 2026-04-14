@@ -186,6 +186,7 @@ impl ThreadEntry {
 #[derive(Default)]
 struct ThreadStateManagerInner {
     live_connections: HashSet<ConnectionId>,
+    permission_confirmations_by_connection: HashSet<ConnectionId>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
@@ -200,21 +201,71 @@ impl ThreadStateManager {
         Self::default()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
-        self.state
-            .lock()
-            .await
-            .live_connections
-            .insert(connection_id);
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        permission_confirmations: bool,
+    ) {
+        let mut state = self.state.lock().await;
+        state.live_connections.insert(connection_id);
+        if permission_confirmations {
+            state
+                .permission_confirmations_by_connection
+                .insert(connection_id);
+        } else {
+            state
+                .permission_confirmations_by_connection
+                .remove(&connection_id);
+        }
+    }
+
+    pub(crate) async fn permission_confirmations_for_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) -> bool {
+        let state = self.state.lock().await;
+        state
+            .permission_confirmations_by_connection
+            .contains(&connection_id)
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
         let state = self.state.lock().await;
-        state
+        let mut connection_ids = state
             .threads
             .get(&thread_id)
-            .map(|thread_entry| thread_entry.connection_ids.iter().copied().collect())
-            .unwrap_or_default()
+            .map(|thread_entry| {
+                thread_entry
+                    .connection_ids
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        sort_connection_ids(&mut connection_ids);
+        connection_ids
+    }
+
+    pub(crate) async fn subscribed_connection_ids_with_permission_confirmations(
+        &self,
+        thread_id: ThreadId,
+    ) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        let Some(thread_entry) = state.threads.get(&thread_id) else {
+            return Vec::new();
+        };
+        let mut connection_ids = thread_entry
+            .connection_ids
+            .iter()
+            .filter(|connection_id| {
+                state
+                    .permission_confirmations_by_connection
+                    .contains(connection_id)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        sort_connection_ids(&mut connection_ids);
+        connection_ids
     }
 
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
@@ -370,6 +421,9 @@ impl ThreadStateManager {
         {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
+            state
+                .permission_confirmations_by_connection
+                .remove(&connection_id);
             let thread_ids = state
                 .thread_ids_by_connection
                 .remove(&connection_id)
@@ -402,4 +456,8 @@ impl ThreadStateManager {
             .get(&thread_id)
             .map(|thread_entry| thread_entry.has_connections_watcher.subscribe())
     }
+}
+
+fn sort_connection_ids(connection_ids: &mut [ConnectionId]) {
+    connection_ids.sort_by_key(|connection_id| connection_id.0);
 }

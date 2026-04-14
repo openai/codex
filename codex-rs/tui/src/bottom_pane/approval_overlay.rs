@@ -60,6 +60,7 @@ pub(crate) enum ApprovalRequest {
         call_id: String,
         reason: Option<String>,
         permissions: RequestPermissionProfile,
+        suggested_scope: PermissionGrantScope,
     },
     ApplyPatch {
         thread_id: ThreadId,
@@ -144,7 +145,7 @@ impl ApprovalOverlay {
         header: Box<dyn Renderable>,
         _features: &Features,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
-        let (options, title) = match request {
+        let (options, title, initial_selected_idx) = match request {
             ApprovalRequest::Exec {
                 available_decisions,
                 network_approval_context,
@@ -165,18 +166,24 @@ impl ApprovalOverlay {
                         )
                     },
                 ),
+                None,
             ),
-            ApprovalRequest::Permissions { .. } => (
+            ApprovalRequest::Permissions {
+                suggested_scope, ..
+            } => (
                 permissions_options(),
                 "Would you like to grant these permissions?".to_string(),
+                matches!(suggested_scope, PermissionGrantScope::Session).then_some(1),
             ),
             ApprovalRequest::ApplyPatch { .. } => (
                 patch_options(),
                 "Would you like to make the following edits?".to_string(),
+                None,
             ),
             ApprovalRequest::McpElicitation { server_name, .. } => (
                 elicitation_options(),
                 format!("{server_name} needs your approval."),
+                None,
             ),
         };
 
@@ -202,6 +209,7 @@ impl ApprovalOverlay {
             footer_hint: Some(approval_footer_hint(request)),
             items,
             header,
+            initial_selected_idx,
             ..Default::default()
         };
 
@@ -918,6 +926,7 @@ mod tests {
                     write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
             },
+            suggested_scope: PermissionGrantScope::Turn,
         }
     }
 
@@ -1255,6 +1264,40 @@ mod tests {
         assert!(
             saw_op,
             "expected permission approval decision to emit a session-scoped response"
+        );
+    }
+
+    #[test]
+    fn permissions_session_suggestion_preselects_session_scope() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut request = make_permissions_request();
+        let ApprovalRequest::Permissions {
+            suggested_scope, ..
+        } = &mut request
+        else {
+            panic!("expected permissions request");
+        };
+        *suggested_scope = PermissionGrantScope::Session;
+        let mut view = ApprovalOverlay::new(request, tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::RequestPermissionsResponse { response, .. },
+                ..
+            } = ev
+            {
+                assert_eq!(response.scope, PermissionGrantScope::Session);
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(
+            saw_op,
+            "expected preselected session approval to submit a session-scoped response"
         );
     }
 

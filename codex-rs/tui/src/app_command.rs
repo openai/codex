@@ -17,6 +17,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::request_permission_preset::RequestPermissionPresetResponse;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -88,6 +89,10 @@ pub(crate) enum AppCommandView<'a> {
     RequestPermissionsResponse {
         id: &'a str,
         response: &'a RequestPermissionsResponse,
+    },
+    RequestPermissionPresetResponse {
+        id: &'a str,
+        response: &'a RequestPermissionPresetResponse,
     },
     ReloadUserConfig,
     ListSkills {
@@ -236,6 +241,13 @@ impl AppCommand {
         Self(Op::RequestPermissionsResponse { id, response })
     }
 
+    pub(crate) fn request_permission_preset_response(
+        id: String,
+        response: RequestPermissionPresetResponse,
+    ) -> Self {
+        Self(Op::RequestPermissionPresetResponse { id, response })
+    }
+
     pub(crate) fn reload_user_config() -> Self {
         Self(Op::ReloadUserConfig)
     }
@@ -363,6 +375,9 @@ impl AppCommand {
             }
             Op::RequestPermissionsResponse { id, response } => {
                 AppCommandView::RequestPermissionsResponse { id, response }
+            }
+            Op::RequestPermissionPresetResponse { id, response } => {
+                AppCommandView::RequestPermissionPresetResponse { id, response }
             }
             Op::ReloadUserConfig => AppCommandView::ReloadUserConfig,
             Op::ListSkills { cwds, force_reload } => AppCommandView::ListSkills {

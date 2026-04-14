@@ -865,6 +865,12 @@ server_request_definitions! {
         response: v2::PermissionsRequestApprovalResponse,
     },
 
+    /// Request the client to open its permission preset picker.
+    PermissionPresetRequestApproval => "item/permissionPreset/requestApproval" {
+        params: v2::PermissionPresetRequestApprovalParams,
+        response: v2::PermissionPresetRequestApprovalResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -1115,6 +1121,7 @@ mod tests {
                 },
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
+                    permission_confirmations: true,
                     opt_out_notification_methods: Some(vec![
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
@@ -1135,6 +1142,7 @@ mod tests {
                     },
                     "capabilities": {
                         "experimentalApi": true,
+                        "permissionConfirmations": true,
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
@@ -1160,6 +1168,7 @@ mod tests {
                 },
                 "capabilities": {
                     "experimentalApi": true,
+                    "permissionConfirmations": true,
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
@@ -1180,6 +1189,7 @@ mod tests {
                     },
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
+                        permission_confirmations: true,
                         opt_out_notification_methods: Some(vec![
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
@@ -1188,6 +1198,31 @@ mod tests {
                 },
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_initialize_without_permission_confirmations() -> Result<()> {
+        let request: ClientRequest = serde_json::from_value(json!({
+            "method": "initialize",
+            "id": 42,
+            "params": {
+                "clientInfo": {
+                    "name": "codex_vscode",
+                    "title": "Codex VS Code Extension",
+                    "version": "0.1.0"
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }
+        }))?;
+
+        let ClientRequest::Initialize { params, .. } = request else {
+            panic!("expected initialize request");
+        };
+        let capabilities = params.capabilities.expect("capabilities");
+        assert!(!capabilities.permission_confirmations);
         Ok(())
     }
 

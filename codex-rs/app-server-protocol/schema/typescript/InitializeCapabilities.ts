@@ -11,6 +11,10 @@ export type InitializeCapabilities = {
  */
 experimentalApi: boolean,
 /**
+ * Opt into model-initiated permission confirmation requests.
+ */
+permissionConfirmations: boolean,
+/**
  * Exact notification method names that should be suppressed for this
  * connection (for example `thread/started`).
  */

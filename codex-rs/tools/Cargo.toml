@@ -13,6 +13,7 @@ codex-code-mode = { workspace = true }
 codex-features = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-approval-presets = { workspace = true }
 codex-utils-pty = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "base64",
