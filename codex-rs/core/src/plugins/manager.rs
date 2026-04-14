@@ -1203,12 +1203,17 @@ impl PluginsManager {
             config,
             marketplace_name,
         );
-        if let Err(err) = self.refresh_upgraded_marketplace_plugin_cache(&outcome.upgraded_roots) {
+        if let Err(err) = self.refresh_non_curated_plugin_cache_for_roots(
+            &outcome.upgraded_roots,
+            NonCuratedCacheRefreshMode::ForceReinstall,
+        ) {
             outcome.errors.push(ConfiguredMarketplaceUpgradeError {
                 marketplace_name: marketplace_name
                     .unwrap_or("all configured marketplaces")
                     .to_string(),
-                message: err,
+                message: format!(
+                    "failed to refresh installed plugin cache after marketplace upgrade: {err}"
+                ),
             });
         }
         Ok(outcome)
@@ -1288,30 +1293,25 @@ impl PluginsManager {
         }
     }
 
-    fn refresh_upgraded_marketplace_plugin_cache(
+    fn refresh_non_curated_plugin_cache_for_roots(
         &self,
         roots: &[AbsolutePathBuf],
-    ) -> Result<(), String> {
+        mode: NonCuratedCacheRefreshMode,
+    ) -> Result<bool, String> {
         if roots.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
 
-        match refresh_non_curated_plugin_cache(
-            self.codex_home.as_path(),
-            roots,
-            NonCuratedCacheRefreshMode::ForceReinstall,
-        ) {
+        match refresh_non_curated_plugin_cache(self.codex_home.as_path(), roots, mode) {
             Ok(cache_refreshed) => {
                 if cache_refreshed {
                     self.clear_cache();
                 }
-                Ok(())
+                Ok(cache_refreshed)
             }
             Err(err) => {
                 self.clear_cache();
-                Err(format!(
-                    "failed to refresh installed plugin cache after marketplace upgrade: {err}"
-                ))
+                Err(err)
             }
         }
     }
@@ -1382,19 +1382,11 @@ impl PluginsManager {
                 return;
             };
 
-            let refreshed = match refresh_non_curated_plugin_cache(
-                self.codex_home.as_path(),
-                &request.roots,
-                request.mode,
-            ) {
-                Ok(cache_refreshed) => {
-                    if cache_refreshed {
-                        self.clear_cache();
-                    }
-                    true
-                }
+            let refreshed = match self
+                .refresh_non_curated_plugin_cache_for_roots(&request.roots, request.mode)
+            {
+                Ok(_) => true,
                 Err(err) => {
-                    self.clear_cache();
                     warn!("failed to refresh non-curated plugin cache: {err}");
                     false
                 }
