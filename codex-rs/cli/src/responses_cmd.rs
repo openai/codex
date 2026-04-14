@@ -50,7 +50,7 @@ pub(crate) async fn run_responses_command(
             payload,
             Default::default(),
             codex_api::Compression::None,
-            None,
+            /*turn_state*/ None,
         )
         .await?;
     while let Some(event) = stream.rx_event.recv().await {
@@ -63,7 +63,9 @@ pub(crate) async fn run_responses_command(
 
 fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value {
     match event {
-        codex_api::ResponseEvent::Created => json!({ "type": "response.created" }),
+        codex_api::ResponseEvent::Created => {
+            json!({ "type": "response.created", "response": {} })
+        }
         codex_api::ResponseEvent::OutputItemDone(item) => {
             json!({ "type": "response.output_item.done", "item": item })
         }
@@ -79,11 +81,26 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
         codex_api::ResponseEvent::Completed {
             response_id,
             token_usage,
-        } => json!({
-            "type": "response.completed",
-            "response_id": response_id,
-            "token_usage": token_usage,
-        }),
+        } => {
+            let response = match token_usage {
+                Some(token_usage) => json!({
+                    "id": response_id,
+                    "usage": {
+                        "input_tokens": token_usage.input_tokens,
+                        "input_tokens_details": {
+                            "cached_tokens": token_usage.cached_input_tokens,
+                        },
+                        "output_tokens": token_usage.output_tokens,
+                        "output_tokens_details": {
+                            "reasoning_tokens": token_usage.reasoning_output_tokens,
+                        },
+                        "total_tokens": token_usage.total_tokens,
+                    },
+                }),
+                None => json!({ "id": response_id }),
+            };
+            json!({ "type": "response.completed", "response": response })
+        }
         codex_api::ResponseEvent::OutputTextDelta(delta) => {
             json!({ "type": "response.output_text.delta", "delta": delta })
         }
@@ -91,7 +108,7 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
             delta,
             summary_index,
         } => json!({
-            "type": "response.reasoning_summary.delta",
+            "type": "response.reasoning_summary_text.delta",
             "delta": delta,
             "summary_index": summary_index,
         }),
@@ -99,7 +116,7 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
             delta,
             content_index,
         } => json!({
-            "type": "response.reasoning_content.delta",
+            "type": "response.reasoning_text.delta",
             "delta": delta,
             "content_index": content_index,
         }),
@@ -115,5 +132,88 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
         codex_api::ResponseEvent::ModelsEtag(etag) => {
             json!({ "type": "response.models_etag", "etag": etag })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::response_event_to_json;
+    use codex_protocol::protocol::TokenUsage;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn response_events_keep_replayable_response_envelopes() {
+        let created = response_event_to_json(codex_api::ResponseEvent::Created);
+        assert_eq!(created, json!({"type": "response.created", "response": {}}));
+
+        let completed = response_event_to_json(codex_api::ResponseEvent::Completed {
+            response_id: "resp-1".to_string(),
+            token_usage: Some(TokenUsage {
+                input_tokens: 10,
+                cached_input_tokens: 4,
+                output_tokens: 7,
+                reasoning_output_tokens: 3,
+                total_tokens: 17,
+            }),
+        });
+        assert_eq!(
+            completed,
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1",
+                    "usage": {
+                        "input_tokens": 10,
+                        "input_tokens_details": {
+                            "cached_tokens": 4,
+                        },
+                        "output_tokens": 7,
+                        "output_tokens_details": {
+                            "reasoning_tokens": 3,
+                        },
+                        "total_tokens": 17,
+                    },
+                },
+            })
+        );
+
+        let completed_without_usage = response_event_to_json(codex_api::ResponseEvent::Completed {
+            response_id: "resp-2".to_string(),
+            token_usage: None,
+        });
+        assert_eq!(
+            completed_without_usage,
+            json!({"type": "response.completed", "response": {"id": "resp-2"}})
+        );
+    }
+
+    #[test]
+    fn reasoning_deltas_use_responses_event_names() {
+        let summary = response_event_to_json(codex_api::ResponseEvent::ReasoningSummaryDelta {
+            delta: "plan".to_string(),
+            summary_index: 1,
+        });
+        assert_eq!(
+            summary,
+            json!({
+                "type": "response.reasoning_summary_text.delta",
+                "delta": "plan",
+                "summary_index": 1,
+            })
+        );
+
+        let content = response_event_to_json(codex_api::ResponseEvent::ReasoningContentDelta {
+            delta: "detail".to_string(),
+            content_index: 2,
+        });
+        assert_eq!(
+            content,
+            json!({
+                "type": "response.reasoning_text.delta",
+                "delta": "detail",
+                "content_index": 2,
+            })
+        );
     }
 }
