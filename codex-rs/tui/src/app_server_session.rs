@@ -1164,6 +1164,7 @@ mod tests {
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
     use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -1290,7 +1291,7 @@ mod tests {
                 updated_at: 2,
                 status: ThreadStatus::Idle,
                 path: None,
-                cwd: PathBuf::from("/tmp/project").abs(),
+                cwd: test_path_buf("/tmp/project").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_protocol::protocol::SessionSource::Cli.into(),
                 agent_nickname: None,
@@ -1324,8 +1325,8 @@ mod tests {
             model: "gpt-5.4".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
-            cwd: PathBuf::from("/tmp/project").abs(),
-            instruction_sources: vec![PathBuf::from("/tmp/project/AGENTS.md").abs()],
+            cwd: test_path_buf("/tmp/project").abs(),
+            instruction_sources: vec![test_path_buf("/tmp/project/AGENTS.md").abs()],
             approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: codex_protocol::protocol::SandboxPolicy::new_read_only_policy().into(),
@@ -1368,7 +1369,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
-            PathBuf::from("/tmp/project").abs(),
+            test_path_buf("/tmp/project").abs(),
             Vec::new(),
             /*reasoning_effort*/ None,
             &config,
@@ -1398,7 +1399,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
-            PathBuf::from("/tmp/project").abs(),
+            test_path_buf("/tmp/project").abs(),
             Vec::new(),
             /*reasoning_effort*/ None,
             &config,

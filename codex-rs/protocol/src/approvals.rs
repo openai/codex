@@ -371,6 +371,7 @@ pub struct ApplyPatchApprovalRequestEvent {
 mod tests {
     use super::*;
     use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -388,7 +389,7 @@ mod tests {
             GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
                 command: "rm -rf /tmp/guardian".to_string(),
-                cwd: PathBuf::from("/tmp").abs(),
+                cwd: test_path_buf("/tmp").abs(),
             }
         );
     }
@@ -421,7 +422,7 @@ mod tests {
                     "-f".to_string(),
                     "/tmp/file.sqlite".to_string(),
                 ],
-                cwd: PathBuf::from("/tmp").abs(),
+                cwd: test_path_buf("/tmp").abs(),
             }
         );
     }

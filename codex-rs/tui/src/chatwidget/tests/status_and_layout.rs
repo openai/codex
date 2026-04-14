@@ -694,7 +694,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         approval_id: Some("call-approve-exec".into()),
         turn_id: "turn-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
-        cwd: PathBuf::from("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs(),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),

@@ -3004,6 +3004,7 @@ mod tests {
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use core_test_support::load_default_config_for_test;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
@@ -3056,7 +3057,7 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: PathBuf::from("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs(),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],
@@ -3148,7 +3149,7 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: PathBuf::from("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
@@ -3191,7 +3192,7 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: PathBuf::from("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,

@@ -65,14 +65,14 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
                 shlex::try_join(["/bin/zsh", "-lc", script])
                     .expect("round-trippable shell wrapper"),
             ),
-            cwd: Some(PathBuf::from("/tmp").abs()),
+            cwd: Some(test_path_buf("/tmp").abs()),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             available_decisions: None,
         },
-        &PathBuf::from("/tmp").abs(),
+        &test_path_buf("/tmp").abs(),
     );
 
     assert_eq!(
@@ -895,7 +895,7 @@ async fn image_generation_call_adds_history_cell() {
             status: "completed".into(),
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
-            saved_path: Some(PathBuf::from("/tmp/ig-1.png").abs()),
+            saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
         }),
     });
 
@@ -997,7 +997,7 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
