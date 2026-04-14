@@ -155,7 +155,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             argv: vec![
                 "/usr/bin/python3".to_string(),
                 "-c".to_string(),
-                "import sys; line = sys.stdin.readline(); sys.stdout.write(f'from-stdin:{line}'); sys.stdout.flush()".to_string(),
+                "import sys; sys.stdout.write('ready\\n'); sys.stdout.flush(); line = sys.stdin.readline(); sys.stdout.write(f'from-stdin:{line}'); sys.stdout.flush()".to_string(),
             ],
             cwd: std::env::current_dir()?,
             env_policy: /*env_policy*/ None,
@@ -166,11 +166,67 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    session.process.write(b"hello\n".to_vec()).await?;
     let StartedExecProcess { process } = session;
-    let wake_rx = process.subscribe_wake();
-    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+    let mut output = String::new();
+    let mut after_seq = None;
+    let ready_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < ready_deadline {
+        let response = process
+            .read(
+                after_seq,
+                /*max_bytes*/ None,
+                /*wait_ms*/ Some(250),
+            )
+            .await?;
+        if let Some(message) = response.failure {
+            anyhow::bail!("process failed before ready state: {message}");
+        }
+        for chunk in response.chunks {
+            output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+            after_seq = Some(chunk.seq);
+        }
+        assert!(
+            !response.closed,
+            "process closed before signaling readiness: {output:?}"
+        );
+        if output.contains("ready") {
+            break;
+        }
+        after_seq = response.next_seq.checked_sub(1).or(after_seq);
+    }
+    assert!(
+        output.contains("ready"),
+        "process did not signal readiness: {output:?}"
+    );
+
+    process.write(b"hello\n".to_vec()).await?;
+    let mut exit_code = None;
+    let mut closed = false;
+    let result_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < result_deadline {
+        let response = process
+            .read(
+                after_seq,
+                /*max_bytes*/ None,
+                /*wait_ms*/ Some(250),
+            )
+            .await?;
+        if let Some(message) = response.failure {
+            anyhow::bail!("process failed after stdin write: {message}");
+        }
+        for chunk in response.chunks {
+            output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+            after_seq = Some(chunk.seq);
+        }
+        if response.exited {
+            exit_code = response.exit_code;
+        }
+        if response.closed {
+            closed = true;
+            break;
+        }
+        after_seq = response.next_seq.checked_sub(1).or(after_seq);
+    }
 
     assert!(
         output.contains("from-stdin:hello"),
