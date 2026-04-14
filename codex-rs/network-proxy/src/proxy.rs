@@ -366,7 +366,7 @@ pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const PROXY_ACTIVE_ENV_KEY: &str = "CODEX_NETWORK_PROXY_ACTIVE";
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
 pub const PROXY_ENV_KEYS: &[&str] = &[
     PROXY_ACTIVE_ENV_KEY,
