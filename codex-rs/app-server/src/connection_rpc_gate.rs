@@ -140,6 +140,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_drops_late_runs_while_waiting_for_inflight_work() {
+        let gate = Arc::new(ConnectionRpcGate::new());
+        let (started_tx, started_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let gate_for_run = Arc::clone(&gate);
+        let run_task = tokio::spawn(async move {
+            gate_for_run
+                .run(async move {
+                    started_tx.send(()).expect("receiver should be open");
+                    let _ = finish_rx.await;
+                })
+                .await;
+        });
+
+        started_rx.await.expect("run should start");
+        let gate_for_shutdown = Arc::clone(&gate);
+        let shutdown_task = tokio::spawn(async move {
+            gate_for_shutdown.shutdown().await;
+        });
+
+        timeout(Duration::from_millis(50), shutdown_task)
+            .await
+            .expect_err("shutdown should wait for the running future");
+
+        let late_polled = Arc::new(AtomicBool::new(false));
+        let late_polled_clone = Arc::clone(&late_polled);
+        gate.run(async move {
+            late_polled_clone.store(true, Ordering::Release);
+        })
+        .await;
+
+        assert!(!late_polled.load(Ordering::Acquire));
+
+        finish_tx
+            .send(())
+            .expect("running future should still be waiting");
+        run_task.await.expect("run task should complete");
+        gate.shutdown().await;
+        assert_eq!(gate.inflight_count(), 0);
+    }
+
+    #[tokio::test]
     async fn run_is_counted_before_handler_body_continues() {
         let gate = Arc::new(ConnectionRpcGate::new());
         let (entered_tx, entered_rx) = oneshot::channel();
