@@ -61,10 +61,19 @@ enum WsCommand {
     },
 }
 
+type RealtimeWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+async fn send_ws_message(inner: &mut RealtimeWsStream, message: Message) -> Result<(), WsError> {
+    trace!(
+        target: REALTIME_WIRE_LOG_TARGET,
+        message = ?message,
+        "realtime websocket request frame"
+    );
+    inner.send(message).await
+}
+
 impl WsStream {
-    fn new(
-        inner: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    ) -> (Self, mpsc::UnboundedReceiver<Result<Message, WsError>>) {
+    fn new(inner: RealtimeWsStream) -> (Self, mpsc::UnboundedReceiver<Result<Message, WsError>>) {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
 
@@ -78,13 +87,8 @@ impl WsStream {
                         };
                         match command {
                             WsCommand::Send { message, tx_result } => {
-                                trace!(
-                                    target: REALTIME_WIRE_LOG_TARGET,
-                                    message = ?message,
-                                    "realtime websocket request frame"
-                                );
                                 debug!("realtime websocket sending message");
-                                let result = inner.send(message).await;
+                                let result = send_ws_message(&mut inner, message).await;
                                 let should_break = result.is_err();
                                 if let Err(err) = &result {
                                     error!("realtime websocket send failed: {err}");
@@ -128,13 +132,9 @@ impl WsStream {
                         );
                         match message {
                             Message::Ping(payload) => {
-                                let pong = Message::Pong(payload);
-                                trace!(
-                                    target: REALTIME_WIRE_LOG_TARGET,
-                                    message = ?pong,
-                                    "realtime websocket request frame"
-                                );
-                                if let Err(err) = inner.send(pong).await {
+                                if let Err(err) =
+                                    send_ws_message(&mut inner, Message::Pong(payload)).await
+                                {
                                     error!("realtime websocket failed to send pong: {err}");
                                     let _ = tx_message.send(Err(err));
                                     break;
