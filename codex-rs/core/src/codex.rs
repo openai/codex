@@ -7350,12 +7350,10 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
         EventMsg::ItemCompleted(event) => match &event.item {
-            TurnItem::AgentMessage(item)
-                if item.phase.as_ref() != Some(&MessagePhase::FinalAnswer) =>
-            {
-                Some(agent_message_text(item))
-            }
-            TurnItem::AgentMessage(_) => None,
+            TurnItem::AgentMessage(item) => match item.phase.as_ref() {
+                Some(MessagePhase::FinalAnswer) => None,
+                Some(MessagePhase::Commentary) | None => Some(agent_message_text(item)),
+            },
             _ => None,
         },
         EventMsg::Error(_)
