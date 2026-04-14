@@ -1,8 +1,8 @@
 use super::*;
 use crate::memories::extensions::RemovedExtensionResource;
 use codex_models_manager::model_info::model_info_from_slug;
-use core_test_support::PathExt;
 use codex_state::Phase2InputSelection;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use tokio::fs as tokio_fs;

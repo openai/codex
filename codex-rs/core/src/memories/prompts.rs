@@ -1,4 +1,5 @@
-use crate::memories::extensions::{RemovedExtensionResource, EXTENSION_RESOURCE_RETENTION_DAYS};
+use crate::memories::extensions::EXTENSION_RESOURCE_RETENTION_DAYS;
+use crate::memories::extensions::RemovedExtensionResource;
 use crate::memories::memory_extensions_root;
 use crate::memories::memory_root;
 use crate::memories::phase_one;
