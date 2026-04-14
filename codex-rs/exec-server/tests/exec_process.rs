@@ -153,9 +153,9 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
         .start(ExecParams {
             process_id: process_id.clone().into(),
             argv: vec![
-                "/usr/bin/python3".to_string(),
+                "/bin/sh".to_string(),
                 "-c".to_string(),
-                "import sys; line = sys.stdin.readline(); sys.stdout.write(f'from-stdin:{line}'); sys.stdout.flush()".to_string(),
+                "IFS= read line; printf 'from-stdin:%s\\n' \"$line\"".to_string(),
             ],
             cwd: std::env::current_dir()?,
             env_policy: /*env_policy*/ None,

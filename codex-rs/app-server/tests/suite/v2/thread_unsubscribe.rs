@@ -31,13 +31,17 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+// Windows CI can spend most of the default read timeout launching PowerShell
+// before the command finishes and the follow-up model request is sent.
+const TURN_COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 async fn wait_for_responses_request_count_to_stabilize(
     server: &wiremock::MockServer,
     expected_count: usize,
     settle_duration: std::time::Duration,
+    timeout_duration: std::time::Duration,
 ) -> Result<()> {
-    timeout(DEFAULT_READ_TIMEOUT, async {
+    timeout(timeout_duration, async {
         let mut stable_since: Option<tokio::time::Instant> = None;
         loop {
             let requests = server
@@ -210,6 +214,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
         &server,
         /*expected_count*/ 2,
         std::time::Duration::from_millis(200),
+        TURN_COMPLETION_TIMEOUT,
     )
     .await?;
 
