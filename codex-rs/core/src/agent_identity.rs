@@ -153,14 +153,16 @@ impl AgentIdentityManager {
         Ok(stored_identity)
     }
 
-    pub(crate) async fn task_matches_current_binding(&self, task: &RegisteredAgentTask) -> bool {
+    pub(crate) async fn task_matches_current_identity(&self, task: &RegisteredAgentTask) -> bool {
         if !self.feature_enabled {
             return false;
         }
 
-        self.current_auth_binding()
+        self.current_stored_identity()
             .await
-            .is_some_and(|(_, binding)| task.matches_binding(&binding))
+            .is_some_and(|stored_identity| {
+                stored_identity.agent_runtime_id == task.agent_runtime_id
+            })
     }
 
     async fn current_auth_binding(&self) -> Option<(CodexAuth, AgentIdentityBinding)> {
@@ -175,6 +177,11 @@ impl AgentIdentityManager {
             debug!("skipping agent identity flow because ChatGPT auth is unavailable");
         }
         binding.map(|binding| (auth, binding))
+    }
+
+    async fn current_stored_identity(&self) -> Option<StoredAgentIdentity> {
+        let (auth, binding) = self.current_auth_binding().await?;
+        self.load_stored_identity(&auth, &binding).ok().flatten()
     }
 
     async fn register_agent_identity(

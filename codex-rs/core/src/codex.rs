@@ -121,6 +121,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SessionStateUpdate;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
@@ -845,6 +846,7 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    agent_task_registration_lock: Mutex<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -1529,7 +1531,68 @@ impl Session {
         handlers::shutdown(self, self.next_internal_sub_id()).await;
     }
 
-    async fn cached_agent_task_for_current_binding(&self) -> Option<RegisteredAgentTask> {
+    fn latest_persisted_agent_task(
+        rollout_items: &[RolloutItem],
+    ) -> Option<Option<RegisteredAgentTask>> {
+        rollout_items.iter().rev().find_map(|item| match item {
+            RolloutItem::SessionState(update) => Some(
+                update
+                    .agent_task
+                    .clone()
+                    .map(RegisteredAgentTask::from_session_agent_task),
+            ),
+            _ => None,
+        })
+    }
+
+    async fn restore_persisted_agent_task(&self, rollout_items: &[RolloutItem]) {
+        let Some(agent_task) = Self::latest_persisted_agent_task(rollout_items).flatten() else {
+            return;
+        };
+
+        let mut state = self.state.lock().await;
+        state.set_agent_task(agent_task);
+    }
+
+    async fn persist_agent_task_update(&self, agent_task: Option<&RegisteredAgentTask>) {
+        self.persist_rollout_items(&[RolloutItem::SessionState(SessionStateUpdate {
+            agent_task: agent_task.map(RegisteredAgentTask::to_session_agent_task),
+        })])
+        .await;
+    }
+
+    async fn clear_cached_agent_task(&self, agent_task: &RegisteredAgentTask) {
+        let cleared = {
+            let mut state = self.state.lock().await;
+            if state.agent_task().as_ref() == Some(agent_task) {
+                state.clear_agent_task();
+                true
+            } else {
+                false
+            }
+        };
+        if cleared {
+            self.persist_agent_task_update(/*agent_task*/ None).await;
+        }
+    }
+
+    async fn cache_agent_task(&self, agent_task: RegisteredAgentTask) -> RegisteredAgentTask {
+        let changed = {
+            let mut state = self.state.lock().await;
+            if state.agent_task().as_ref() == Some(&agent_task) {
+                false
+            } else {
+                state.set_agent_task(agent_task.clone());
+                true
+            }
+        };
+        if changed {
+            self.persist_agent_task_update(Some(&agent_task)).await;
+        }
+        agent_task
+    }
+
+    async fn cached_agent_task_for_current_identity(&self) -> Option<RegisteredAgentTask> {
         let agent_task = {
             let state = self.state.lock().await;
             state.agent_task()
@@ -1538,7 +1601,7 @@ impl Session {
         if self
             .services
             .agent_identity_manager
-            .task_matches_current_binding(&agent_task)
+            .task_matches_current_identity(&agent_task)
             .await
         {
             debug!(
@@ -1552,17 +1615,19 @@ impl Session {
         debug!(
             agent_runtime_id = %agent_task.agent_runtime_id,
             task_id = %agent_task.task_id,
-            "discarding cached agent task because auth binding changed"
+            "discarding cached agent task because the registered agent identity changed"
         );
-        let mut state = self.state.lock().await;
-        if state.agent_task().as_ref() == Some(&agent_task) {
-            state.clear_agent_task();
-        }
+        self.clear_cached_agent_task(&agent_task).await;
         None
     }
 
     async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
-        if let Some(agent_task) = self.cached_agent_task_for_current_binding().await {
+        if let Some(agent_task) = self.cached_agent_task_for_current_identity().await {
+            return Ok(Some(agent_task));
+        }
+
+        let _guard = self.agent_task_registration_lock.lock().await;
+        if let Some(agent_task) = self.cached_agent_task_for_current_identity().await {
             return Ok(Some(agent_task));
         }
 
@@ -1575,31 +1640,18 @@ impl Session {
             if !self
                 .services
                 .agent_identity_manager
-                .task_matches_current_binding(&agent_task)
+                .task_matches_current_identity(&agent_task)
                 .await
             {
                 debug!(
                     agent_runtime_id = %agent_task.agent_runtime_id,
                     task_id = %agent_task.task_id,
-                    "discarding newly registered agent task because auth binding changed"
+                    "discarding newly registered agent task because the registered agent identity changed"
                 );
                 continue;
             }
 
-            {
-                let mut state = self.state.lock().await;
-                if let Some(existing_agent_task) = state.agent_task() {
-                    if existing_agent_task.has_same_binding(&agent_task) {
-                        return Ok(Some(existing_agent_task));
-                    }
-                    debug!(
-                        agent_runtime_id = %existing_agent_task.agent_runtime_id,
-                        task_id = %existing_agent_task.task_id,
-                        "replacing cached agent task because auth binding changed"
-                    );
-                }
-                state.set_agent_task(agent_task.clone());
-            }
+            let agent_task = self.cache_agent_task(agent_task).await;
 
             info!(
                 thread_id = %self.conversation_id,
@@ -2221,6 +2273,7 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            agent_task_registration_lock: Mutex::new(()),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -2490,6 +2543,7 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                self.restore_persisted_agent_task(&rollout_items).await;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;

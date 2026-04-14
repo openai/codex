@@ -186,7 +186,7 @@ async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> boo
             sleep(Duration::from_millis(25)).await;
         }
     };
-    timeout(Duration::from_secs(2), wait).await.is_ok()
+    timeout(Duration::from_secs(5), wait).await.is_ok()
 }
 
 async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str) {

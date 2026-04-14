@@ -1078,6 +1078,67 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 }
 
 #[tokio::test]
+async fn record_initial_history_restores_latest_persisted_agent_task() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let expected = RegisteredAgentTask {
+        agent_runtime_id: "agent-123".to_string(),
+        task_id: "task-123".to_string(),
+        registered_at: "2026-03-23T12:00:00Z".to_string(),
+    };
+    let rollout_items = vec![
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(expected.to_session_agent_task()),
+        }),
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: None,
+        }),
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(expected.to_session_agent_task()),
+        }),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(session.state.lock().await.agent_task(), Some(expected));
+}
+
+#[tokio::test]
+async fn record_initial_history_honors_cleared_persisted_agent_task() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let rollout_items = vec![
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(
+                RegisteredAgentTask {
+                    agent_runtime_id: "agent-123".to_string(),
+                    task_id: "task-123".to_string(),
+                    registered_at: "2026-03-23T12:00:00Z".to_string(),
+                }
+                .to_session_agent_task(),
+            ),
+        }),
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: None,
+        }),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(session.state.lock().await.agent_task(), None);
+}
+
+#[tokio::test]
 async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let (session, _turn_context) = make_session_and_context().await;
 
@@ -2954,6 +3015,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        agent_task_registration_lock: Mutex::new(()),
     };
 
     (session, turn_context)
@@ -3804,6 +3866,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        agent_task_registration_lock: Mutex::new(()),
     });
 
     (session, turn_context, rx_event)
