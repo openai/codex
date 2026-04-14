@@ -106,6 +106,7 @@ struct StatusHistoryCell {
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
+    max_content_width: Arc<RwLock<usize>>,
 }
 
 #[cfg(test)]
@@ -336,6 +337,7 @@ impl StatusHistoryCell {
             refreshing_rate_limits,
         }));
         let agents_summary = Arc::new(RwLock::new(agents_summary));
+        let max_content_width = Arc::new(RwLock::new(0));
 
         (
             Self {
@@ -352,6 +354,7 @@ impl StatusHistoryCell {
                 token_usage,
                 agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
+                max_content_width,
             },
             StatusHistoryHandle { rate_limit_state },
         )
@@ -687,7 +690,13 @@ impl HistoryCell for StatusHistoryCell {
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_inner_width, &formatter));
 
         let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
-        let inner_width = content_width.min(available_inner_width);
+        #[expect(clippy::expect_used)]
+        let mut max_content_width = self
+            .max_content_width
+            .write()
+            .expect("status history max-content-width state poisoned");
+        *max_content_width = (*max_content_width).max(content_width);
+        let inner_width = (*max_content_width).min(available_inner_width);
         let truncated_lines: Vec<Line<'static>> = lines
             .into_iter()
             .map(|line| truncate_line_to_width(line, inner_width))

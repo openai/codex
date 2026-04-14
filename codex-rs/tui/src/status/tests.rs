@@ -1,5 +1,6 @@
 use super::new_status_output;
 use super::new_status_output_with_rate_limits;
+use super::new_status_output_with_rate_limits_handle;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
 use crate::legacy_core::config::Config;
@@ -168,6 +169,82 @@ async fn status_snapshot_includes_reasoning_details() {
     }
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_card_width_does_not_shrink_after_rate_limit_refresh() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.cwd = test_path_buf("/workspace/tests").abs();
+
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+
+    let wide_snapshot = crate::status::RateLimitSnapshotDisplay {
+        limit_name: "a-very-long-non-codex-limit-name".to_string(),
+        captured_at,
+        primary: Some(crate::status::RateLimitWindowDisplay {
+            used_percent: 63.0,
+            resets_at: Some("10:30 on 20 Sep".to_string()),
+            window_minutes: Some(300),
+        }),
+        secondary: None,
+        credits: None,
+    };
+    let narrow_snapshot = crate::status::RateLimitSnapshotDisplay {
+        limit_name: "codex".to_string(),
+        captured_at,
+        primary: Some(crate::status::RateLimitWindowDisplay {
+            used_percent: 63.0,
+            resets_at: Some("10:30".to_string()),
+            window_minutes: Some(300),
+        }),
+        secondary: None,
+        credits: None,
+    };
+
+    let (composite, handle) = new_status_output_with_rate_limits_handle(
+        &config,
+        /*account_display*/ None,
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        &[wide_snapshot],
+        /*_plan_type*/ None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+
+    let before = render_lines(&composite.display_lines(/*width*/ 120));
+    let before_width = before
+        .first()
+        .map(|line| line.chars().count())
+        .expect("status output should include a top border");
+
+    handle.finish_rate_limit_refresh(&[narrow_snapshot], captured_at);
+
+    let after = render_lines(&composite.display_lines(/*width*/ 120));
+    let after_width = after
+        .first()
+        .map(|line| line.chars().count())
+        .expect("status output should include a top border");
+
+    assert_eq!(
+        after_width, before_width,
+        "status card width should remain stable after rate-limit refresh"
+    );
 }
 
 #[tokio::test]
