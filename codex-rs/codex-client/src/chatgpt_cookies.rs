@@ -5,6 +5,8 @@ use reqwest::cookie::CookieStore;
 use reqwest::cookie::Jar;
 use reqwest::header::HeaderValue;
 
+use crate::chatgpt_hosts::is_allowed_chatgpt_host;
+
 static SHARED_CHATGPT_COOKIE_STORE: LazyLock<Arc<ChatGptCookieStore>> =
     LazyLock::new(|| Arc::new(ChatGptCookieStore::default()));
 
@@ -52,11 +54,7 @@ fn is_chatgpt_cookie_url(url: &reqwest::Url) -> bool {
         return false;
     };
 
-    host == "chatgpt.com"
-        || host.ends_with(".chatgpt.com")
-        || host == "chat.openai.com"
-        || host == "chatgpt-staging.com"
-        || host.ends_with(".chatgpt-staging.com")
+    is_allowed_chatgpt_host(host)
 }
 
 #[cfg(test)]
@@ -106,24 +104,9 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_chatgpt_hosts_without_suffix_tricks() {
-        for url in [
-            "https://chatgpt.com/backend-api/codex/responses",
-            "https://foo.chatgpt.com/backend-api/codex/responses",
-            "https://chat.openai.com/backend-api/codex/responses",
-            "https://api.chatgpt-staging.com/backend-api/codex/responses",
-        ] {
-            let url = reqwest::Url::parse(url).unwrap();
-            assert!(is_chatgpt_cookie_url(&url));
-        }
+    fn only_allows_http_and_https_urls() {
+        let url = reqwest::Url::parse("wss://chatgpt.com/backend-api/codex/responses").unwrap();
 
-        for url in [
-            "https://evilchatgpt.com/backend-api/codex/responses",
-            "https://chatgpt.com.evil.example/backend-api/codex/responses",
-            "https://api.openai.com/v1/responses",
-        ] {
-            let url = reqwest::Url::parse(url).unwrap();
-            assert!(!is_chatgpt_cookie_url(&url));
-        }
+        assert!(!is_chatgpt_cookie_url(&url));
     }
 }
