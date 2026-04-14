@@ -312,6 +312,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
@@ -588,77 +589,11 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 }
 
 #[tokio::test]
-async fn managed_network_proxy_refreshes_when_sandbox_policy_changes() -> anyhow::Result<()> {
-    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
-        NetworkProxyConfig::default(),
-        Some(NetworkConstraints {
-            domains: Some(NetworkDomainPermissionsToml {
-                entries: std::collections::BTreeMap::from([(
-                    "blocked.example.com".to_string(),
-                    NetworkDomainPermissionToml::Deny,
-                )]),
-            }),
-            danger_full_access_denylist_only: Some(true),
-            allow_local_binding: Some(false),
-            ..Default::default()
-        }),
-        &SandboxPolicy::new_workspace_write_policy(),
-    )?;
-    let exec_policy = Policy::empty();
-
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        &exec_policy,
-        &SandboxPolicy::new_workspace_write_policy(),
-        /*network_policy_decider*/ None,
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ false,
-        crate::config::NetworkProxyAuditMetadata::default(),
-    )
-    .await?;
-
-    assert!(!started_proxy.proxy().allow_local_binding());
-    let current_cfg = started_proxy.proxy().current_cfg().await?;
-    assert_eq!(current_cfg.network.allowed_domains(), None);
-    assert_eq!(
-        current_cfg.network.denied_domains(),
-        Some(vec!["blocked.example.com".to_string()])
-    );
-
-    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::DangerFullAccess)?;
-    spec.apply_to_started_proxy(&started_proxy).await?;
-
-    assert!(started_proxy.proxy().allow_local_binding());
-    let current_cfg = started_proxy.proxy().current_cfg().await?;
-    assert_eq!(
-        current_cfg.network.allowed_domains(),
-        Some(vec!["*".to_string()])
-    );
-    assert_eq!(
-        current_cfg.network.denied_domains(),
-        Some(vec!["blocked.example.com".to_string()])
-    );
-
-    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())?;
-    spec.apply_to_started_proxy(&started_proxy).await?;
-
-    assert!(!started_proxy.proxy().allow_local_binding());
-    let current_cfg = started_proxy.proxy().current_cfg().await?;
-    assert_eq!(current_cfg.network.allowed_domains(), None);
-    assert_eq!(
-        current_cfg.network.denied_domains(),
-        Some(vec!["blocked.example.com".to_string()])
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::Result<()> {
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
         Some(NetworkConstraints {
             enabled: Some(true),
-            danger_full_access_denylist_only: Some(true),
             ..Default::default()
         }),
         &SandboxPolicy::DangerFullAccess,
@@ -2905,7 +2840,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config);
+        .plugins_for_config(&per_turn_config)
+        .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
@@ -3750,7 +3686,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config);
+        .plugins_for_config(&per_turn_config)
+        .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
@@ -5353,6 +5290,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

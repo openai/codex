@@ -1,4 +1,5 @@
 #![allow(clippy::expect_used)]
+use std::fs::File;
 use std::io;
 use std::io::IsTerminal;
 use std::io::Write;
@@ -24,17 +25,39 @@ pub struct Output {
     lock: Arc<Mutex<()>>,
     prompt: Arc<Mutex<PromptState>>,
     color: bool,
+    jsonl_file: Option<Arc<Mutex<File>>>,
 }
 
 impl Output {
-    pub fn new() -> Self {
+    pub fn new(jsonl_file: Option<File>) -> Self {
         let no_color = std::env::var_os("NO_COLOR").is_some();
         let color = !no_color && io::stdout().is_terminal() && io::stderr().is_terminal();
         Self {
             lock: Arc::new(Mutex::new(())),
             prompt: Arc::new(Mutex::new(PromptState::default())),
             color,
+            jsonl_file: jsonl_file.map(|file| Arc::new(Mutex::new(file))),
         }
+    }
+
+    pub fn server_json_line(&self, line: &str, filtered_output: bool) -> io::Result<()> {
+        let _guard = self.lock.lock().expect("output lock poisoned");
+
+        if let Some(file) = self.jsonl_file.as_ref() {
+            let mut file = file.lock().expect("jsonl file lock poisoned");
+            writeln!(file, "{line}")?;
+            file.flush()?;
+        }
+
+        if self.jsonl_file.is_none() && !filtered_output {
+            self.clear_prompt_line_locked()?;
+            let mut stdout = io::stdout();
+            writeln!(stdout, "{line}")?;
+            stdout.flush()?;
+            self.redraw_prompt_locked()?;
+        }
+
+        Ok(())
     }
 
     pub fn server_line(&self, line: &str) -> io::Result<()> {
@@ -118,5 +141,35 @@ impl Output {
         stderr.flush()?;
         prompt.visible = true;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn server_json_line_writes_to_configured_file() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-debug-client-output-{}.jsonl",
+            std::process::id()
+        ));
+        let file = File::create(&path).expect("create output file");
+        let output = Output::new(Some(file));
+
+        output
+            .server_json_line(r#"{"id":1}"#, false)
+            .expect("write unfiltered line");
+        output
+            .server_json_line(r#"{"id":2}"#, true)
+            .expect("write filtered line");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("read output file"),
+            "{\"id\":1}\n{\"id\":2}\n"
+        );
+        let _ = fs::remove_file(path);
     }
 }

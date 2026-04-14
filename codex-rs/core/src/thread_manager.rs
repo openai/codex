@@ -903,11 +903,14 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
-        let watch_registration = self.skills_watcher.register_config(
-            &config,
-            self.skills_manager.as_ref(),
-            self.plugins_manager.as_ref(),
-        );
+        let watch_registration = self
+            .skills_watcher
+            .register_config(
+                &config,
+                self.skills_manager.as_ref(),
+                self.plugins_manager.as_ref(),
+            )
+            .await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {

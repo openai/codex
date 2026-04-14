@@ -6,4 +6,8 @@
  * EXPERIMENTAL - flat transcript delta emitted whenever realtime
  * transcript text changes.
  */
-export type ThreadRealtimeTranscriptUpdatedNotification = { threadId: string, role: string, text: string, };
+export type ThreadRealtimeTranscriptDeltaNotification = { threadId: string, role: string,
+/**
+ * Live transcript delta from the realtime event.
+ */
+delta: string, };

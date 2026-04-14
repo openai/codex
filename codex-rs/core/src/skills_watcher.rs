@@ -54,13 +54,13 @@ impl SkillsWatcher {
         self.tx.subscribe()
     }
 
-    pub(crate) fn register_config(
+    pub(crate) async fn register_config(
         &self,
         config: &Config,
         skills_manager: &SkillsManager,
         plugins_manager: &PluginsManager,
     ) -> WatchRegistration {
-        let plugin_outcome = plugins_manager.plugins_for_config(config);
+        let plugin_outcome = plugins_manager.plugins_for_config(config).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(config, effective_skill_roots);
         let roots = skills_manager

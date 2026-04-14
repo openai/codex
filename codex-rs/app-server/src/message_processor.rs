@@ -764,6 +764,17 @@ impl MessageProcessor {
         let client_version = session.client_version().map(str::to_string);
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let connection_id = connection_request_id.connection_id;
+        if self.config.features.enabled(Feature::GeneralAnalytics)
+            && let ClientRequest::TurnStart { request_id, .. }
+            | ClientRequest::TurnSteer { request_id, .. } = &codex_request
+        {
+            self.analytics_events_client.track_request(
+                connection_id.0,
+                request_id.clone(),
+                codex_request.clone(),
+            );
+        }
+
         let processor = Arc::clone(self);
         let span = request_context.span();
         let request = QueuedInitializedRequest::new(

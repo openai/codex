@@ -125,8 +125,7 @@ impl ToolHandler for ViewImageHandler {
             })?;
         let event_path = abs_path.to_path_buf();
 
-        let can_request_original_detail =
-            can_request_original_image_detail(turn.features.get(), &turn.model_info);
+        let can_request_original_detail = can_request_original_image_detail(&turn.model_info);
         let use_original_detail =
             can_request_original_detail && matches!(detail, Some(ViewImageDetail::Original));
         let image_mode = if use_original_detail {

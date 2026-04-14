@@ -83,6 +83,7 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
         },
         enabled: true,
         required: false,
+        supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -104,6 +105,7 @@ fn http_mcp(url: &str) -> McpServerConfig {
         },
         enabled: true,
         required: false,
+        supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -2011,6 +2013,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(3)),
             tool_timeout_sec: Some(Duration::from_secs(5)),
@@ -2189,8 +2192,8 @@ approval_mode = "approve"
     );
 }
 
-#[test]
-fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
+#[tokio::test]
+async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -2199,15 +2202,15 @@ fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
     )?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
-    let mcp_config = config.to_mcp_config(&plugins_manager);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
 
     let _ = config.features.disable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(!mcp_config.apps_enabled);
 
     let _ = config.features.enable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
 
     Ok(())
@@ -2257,6 +2260,7 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2330,6 +2334,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2383,6 +2388,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2434,6 +2440,7 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -2501,6 +2508,7 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -2580,6 +2588,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -2612,6 +2621,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2679,6 +2689,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
@@ -2701,6 +2712,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -2786,6 +2798,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
             },
             enabled: false,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2833,6 +2846,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
             },
             enabled: true,
             required: true,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2880,6 +2894,7 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2931,6 +2946,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

@@ -48,7 +48,12 @@ setup_remote_env() {
   fi
 
   docker rm -f "${container_name}" >/dev/null 2>&1 || true
-  docker run -d --name "${container_name}" ubuntu:24.04 sleep infinity >/dev/null
+  # bubblewrap needs mount propagation inside the remote test container.
+  docker run -d \
+    --name "${container_name}" \
+    --privileged \
+    --security-opt seccomp=unconfined \
+    ubuntu:24.04 sleep infinity >/dev/null
   if ! docker exec "${container_name}" sh -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 zsh"; then
     docker rm -f "${container_name}" >/dev/null 2>&1 || true
     return 1
