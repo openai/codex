@@ -1114,6 +1114,43 @@ async fn persist_custom_mcp_tool_approval_writes_tool_override() {
 }
 
 #[tokio::test]
+async fn custom_mcp_tool_approval_mode_uses_server_default_with_tool_override() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.docs]
+command = "docs-server"
+default_tools_approval_mode = "approve"
+
+[mcp_servers.docs.tools.search]
+approval_mode = "prompt"
+"#,
+    )
+    .expect("seed config");
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
+    let (_session, mut turn_context) = make_session_and_context().await;
+    turn_context.config = Arc::new(config);
+
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&turn_context, "docs", "read"),
+        AppToolApproval::Approve
+    );
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&turn_context, "docs", "search"),
+        AppToolApproval::Prompt
+    );
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&turn_context, "unknown", "search"),
+        AppToolApproval::Auto
+    );
+}
+
+#[tokio::test]
 async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
     let (session, turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;

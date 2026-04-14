@@ -581,6 +581,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: Some(vec!["one".to_string(), "two".to_string()]),
             disabled_tools: None,
             scopes: None,
@@ -608,6 +609,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             disabled_reason: None,
             startup_timeout_sec: Some(std::time::Duration::from_secs(5)),
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: Some(vec!["forbidden".to_string()]),
             scopes: None,
@@ -672,6 +674,7 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: Some(AppToolApproval::Prompt),
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -696,6 +699,7 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
     let expected = "\
 [mcp_servers.docs]
 command = \"docs-server\"
+default_tools_approval_mode = \"prompt\"
 
 [mcp_servers.docs.tools.search]
 approval_mode = \"approve\"
@@ -733,6 +737,7 @@ foo = { command = "cmd" }
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -785,6 +790,7 @@ foo = { command = "cmd" } # keep me
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -836,6 +842,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -888,6 +895,7 @@ foo = { command = "cmd" }
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,

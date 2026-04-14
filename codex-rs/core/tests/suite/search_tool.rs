@@ -645,6 +645,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
                     enabled_tools: Some(vec!["echo".to_string(), "image".to_string()]),
                     disabled_tools: Some(vec!["image".to_string()]),
                     scopes: None,
