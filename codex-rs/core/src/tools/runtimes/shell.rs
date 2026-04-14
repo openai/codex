@@ -30,7 +30,7 @@ use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::exec_policy_permission_suggestions;
+use crate::tools::sandboxing::approval_permission_suggestions;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_hooks::PermissionSuggestionDestination;
@@ -204,11 +204,13 @@ impl Approvable<ShellRequest> for ShellRuntime {
     fn permission_request_payload(
         &self,
         req: &ShellRequest,
-        _approval_ctx: &ApprovalCtx<'_>,
+        approval_ctx: &ApprovalCtx<'_>,
     ) -> Option<PermissionRequestPayload> {
-        let permission_suggestions = exec_policy_permission_suggestions(
+        let permission_suggestions = approval_permission_suggestions(
+            approval_ctx.network_approval_context.as_ref(),
             req.exec_approval_requirement
                 .proposed_execpolicy_amendment(),
+            req.additional_permissions.as_ref(),
             &[PermissionSuggestionDestination::UserSettings],
         );
         Some(PermissionRequestPayload {

@@ -5,8 +5,13 @@ use codex_hooks::PermissionSuggestionDestination;
 use codex_hooks::PermissionSuggestionRule;
 use codex_hooks::PermissionSuggestionType;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -116,12 +121,14 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
 
 #[test]
 fn command_approval_execpolicy_amendment_maps_to_user_settings_suggestion() {
-    let suggestions = exec_policy_permission_suggestions(
+    let suggestions = approval_permission_suggestions(
+        /*network_approval_context*/ None,
         Some(&ExecPolicyAmendment::new(vec![
             "rm".to_string(),
             "-rf".to_string(),
             "node_modules".to_string(),
         ])),
+        /*additional_permissions*/ None,
         &[PermissionSuggestionDestination::UserSettings],
     );
 
@@ -140,4 +147,46 @@ fn command_approval_execpolicy_amendment_maps_to_user_settings_suggestion() {
             destination: PermissionSuggestionDestination::UserSettings,
         }]
     );
+}
+
+#[test]
+fn command_approval_with_additional_permissions_has_no_persistent_suggestions() {
+    let suggestions = approval_permission_suggestions(
+        /*network_approval_context*/ None,
+        Some(&ExecPolicyAmendment::new(vec![
+            "cat".to_string(),
+            "/tmp/secret".to_string(),
+        ])),
+        Some(&PermissionProfile {
+            network: None,
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![
+                    AbsolutePathBuf::from_absolute_path("/tmp/secret")
+                        .expect("/tmp/secret should be an absolute path"),
+                ]),
+                write: None,
+            }),
+        }),
+        &[PermissionSuggestionDestination::UserSettings],
+    );
+
+    assert_eq!(suggestions, Vec::<PermissionSuggestion>::new());
+}
+
+#[test]
+fn network_approval_with_execpolicy_amendment_has_no_persistent_suggestions() {
+    let suggestions = approval_permission_suggestions(
+        Some(&NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        }),
+        Some(&ExecPolicyAmendment::new(vec![
+            "curl".to_string(),
+            "https://example.com".to_string(),
+        ])),
+        /*additional_permissions*/ None,
+        &[PermissionSuggestionDestination::UserSettings],
+    );
+
+    assert_eq!(suggestions, Vec::<PermissionSuggestion>::new());
 }
