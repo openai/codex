@@ -101,6 +101,38 @@ fn build_sandbox_command_prefers_configured_codex_self_exe_for_apply_patch() {
     assert_eq!(command.program, codex_self_exe.into_os_string());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn build_sandbox_command_uses_proc_self_exe_when_configured_exe_was_deleted() {
+    let path = std::env::temp_dir()
+        .join("apply-patch-deleted-exe-test.txt")
+        .abs();
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+    let request = ApplyPatchRequest {
+        action,
+        file_paths: vec![path.clone()],
+        changes: HashMap::from([(
+            path.to_path_buf(),
+            FileChange::Add {
+                content: "hello".to_string(),
+            },
+        )]),
+        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+        timeout_ms: None,
+    };
+    let deleted_codex_self_exe = PathBuf::from("/root/.cache/codex/codex (deleted)");
+
+    let command = ApplyPatchRuntime::build_sandbox_command(&request, Some(&deleted_codex_self_exe))
+        .expect("build sandbox command");
+
+    assert_eq!(command.program, std::ffi::OsString::from("/proc/self/exe"));
+}
+
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {

@@ -89,11 +89,28 @@ impl ApplyPatchRuntime {
     #[cfg(not(target_os = "windows"))]
     fn resolve_apply_patch_program(codex_self_exe: Option<&PathBuf>) -> Result<PathBuf, ToolError> {
         if let Some(path) = codex_self_exe {
-            return Ok(path.clone());
+            return Ok(Self::normalize_apply_patch_program(path.clone()));
         }
 
         std::env::current_exe()
+            .map(Self::normalize_apply_patch_program)
             .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn normalize_apply_patch_program(path: PathBuf) -> PathBuf {
+        use std::os::unix::ffi::OsStrExt;
+
+        if path.as_os_str().as_bytes().ends_with(b" (deleted)") {
+            PathBuf::from("/proc/self/exe")
+        } else {
+            path
+        }
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+    fn normalize_apply_patch_program(path: PathBuf) -> PathBuf {
+        path
     }
 
     fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
