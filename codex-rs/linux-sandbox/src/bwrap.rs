@@ -543,6 +543,17 @@ fn append_read_only_subpath_args(
     }
 
     if is_within_allowed_write_paths(subpath, allowed_write_paths) {
+        if subpath.file_name().is_some_and(|name| name == ".codex") && subpath.is_dir() {
+            let subpath = path_to_string(subpath);
+            args.push("--dir".to_string());
+            args.push(subpath.clone());
+            args.push("--ro-bind-try".to_string());
+            args.push(subpath.clone());
+            args.push(subpath.clone());
+            args.push("--remount-ro".to_string());
+            args.push(subpath);
+            return;
+        }
         if fs::canonicalize(subpath).is_err() {
             append_bwrap_mount_point_read_only_bind_args(args, cleanup_mount_points, subpath);
             return;
@@ -1183,6 +1194,39 @@ mod tests {
                 .any(|window| window == ["--ro-bind", "/dev/null", protected_path.as_str()]),
             "mask should target the first missing component, not the unreachable leaf: {:#?}",
             args.args
+        );
+    }
+
+    #[test]
+    fn existing_dot_codex_uses_try_bind_fallback_without_cleanup() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let dot_codex = temp_dir.path().join(".codex");
+        std::fs::create_dir(&dot_codex).expect("create .codex");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(temp_dir.path()).expect("absolute temp dir"),
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+
+        assert!(!args.cleanup_mount_points.contains(&dot_codex));
+        let dot_codex = path_to_string(&dot_codex);
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| window == ["--dir", dot_codex.as_str()])
+        );
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| window == ["--ro-bind-try", dot_codex.as_str(), dot_codex.as_str()])
+        );
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| window == ["--remount-ro", dot_codex.as_str()])
         );
     }
 
