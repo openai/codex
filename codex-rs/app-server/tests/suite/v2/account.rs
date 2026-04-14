@@ -662,7 +662,14 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
             .chatgpt_account_id("org-other"),
     )?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            ("CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG", Some("1")),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
@@ -1417,7 +1424,7 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
         },
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
