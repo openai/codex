@@ -2788,18 +2788,24 @@ impl CodexMessageProcessor {
             }
         };
 
-        let did_close = self.close_thread_common(thread_id).await;
-        self.outgoing
-            .send_response(request_id, ThreadCloseResponse {})
-            .await;
+        match self.close_thread_common(thread_id).await {
+            Ok(did_close) => {
+                self.outgoing
+                    .send_response(request_id, ThreadCloseResponse {})
+                    .await;
 
-        if did_close {
-            let notification = ThreadClosedNotification {
-                thread_id: thread_id.to_string(),
-            };
-            self.outgoing
-                .send_server_notification(ServerNotification::ThreadClosed(notification))
-                .await;
+                if did_close {
+                    let notification = ThreadClosedNotification {
+                        thread_id: thread_id.to_string(),
+                    };
+                    self.outgoing
+                        .send_server_notification(ServerNotification::ThreadClosed(notification))
+                        .await;
+                }
+            }
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
         }
     }
 
@@ -5840,40 +5846,51 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn close_thread_common(&self, thread_id: ThreadId) -> bool {
+    async fn close_thread_common(&self, thread_id: ThreadId) -> Result<bool, JSONRPCErrorError> {
         {
             let mut pending_thread_unloads = self.pending_thread_unloads.lock().await;
             if !pending_thread_unloads.insert(thread_id) {
-                return false;
+                return Ok(false);
             }
         }
 
-        self.outgoing
-            .cancel_requests_for_thread(thread_id, /*error*/ None)
-            .await;
-        self.thread_state_manager
-            .remove_thread_state(thread_id)
-            .await;
+        let thread = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(_) => {
+                self.finalize_thread_teardown(thread_id).await;
+                return Ok(false);
+            }
+        };
 
-        let removed_thread = self.thread_manager.remove_thread(&thread_id).await;
-        let did_close = removed_thread.is_some();
-        if let Some(thread) = removed_thread {
-            match Self::wait_for_thread_shutdown(&thread).await {
-                ThreadShutdownResult::Complete => {}
-                ThreadShutdownResult::SubmitFailed => {
-                    warn!("failed to submit Shutdown while closing thread {thread_id}");
-                }
-                ThreadShutdownResult::TimedOut => {
-                    warn!("thread {thread_id} shutdown timed out while closing");
-                }
+        match Self::wait_for_thread_shutdown(&thread).await {
+            ThreadShutdownResult::Complete => {
+                let did_close = self
+                    .thread_manager
+                    .remove_thread(&thread_id)
+                    .await
+                    .is_some();
+                self.finalize_thread_teardown(thread_id).await;
+                Ok(did_close)
+            }
+            ThreadShutdownResult::SubmitFailed => {
+                self.pending_thread_unloads.lock().await.remove(&thread_id);
+                Err(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to close thread {thread_id}: failed to submit shutdown"
+                    ),
+                    data: None,
+                })
+            }
+            ThreadShutdownResult::TimedOut => {
+                self.pending_thread_unloads.lock().await.remove(&thread_id);
+                Err(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to close thread {thread_id}: shutdown timed out"),
+                    data: None,
+                })
             }
         }
-
-        self.thread_watch_manager
-            .remove_thread(&thread_id.to_string())
-            .await;
-        self.pending_thread_unloads.lock().await.remove(&thread_id);
-        did_close
     }
 
     async fn unload_thread_without_subscribers(
