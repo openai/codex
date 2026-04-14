@@ -6263,7 +6263,7 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let skill_fs = match self.thread_manager.environment_manager().current().await {
+        let fs = match self.thread_manager.environment_manager().current().await {
             Ok(Some(environment)) => Some(environment.get_filesystem()),
             Ok(None) => None,
             Err(err) => {
@@ -6339,7 +6339,7 @@ impl CodexMessageProcessor {
                     &skills_input,
                     force_reload,
                     extra_roots,
-                    skill_fs.clone(),
+                    fs.clone(),
                 )
                 .await;
             let errors = errors_to_info(&outcome.errors);

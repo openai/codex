@@ -428,7 +428,7 @@ async fn skills_for_cwd_without_fs_skips_repo_and_extra_roots() {
             &skills_input,
             /*force_reload*/ true,
             &[extra_root.path().abs()],
-            None,
+            /*fs*/ None,
         )
         .await;
 

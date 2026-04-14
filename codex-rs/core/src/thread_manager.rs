@@ -912,18 +912,19 @@ impl ThreadManagerState {
             .current()
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
-        let skill_fs = environment
-            .as_ref()
-            .map(|environment| environment.get_filesystem());
-        let watch_registration = self
-            .skills_watcher
-            .register_config(
-                &config,
-                self.skills_manager.as_ref(),
-                self.plugins_manager.as_ref(),
-                skill_fs,
-            )
-            .await;
+        let watch_registration = match environment.as_ref() {
+            Some(environment) if !environment.is_remote() => {
+                self.skills_watcher
+                    .register_config(
+                        &config,
+                        self.skills_manager.as_ref(),
+                        self.plugins_manager.as_ref(),
+                        Some(environment.get_filesystem()),
+                    )
+                    .await
+            }
+            Some(_) | None => crate::file_watcher::WatchRegistration::default(),
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {

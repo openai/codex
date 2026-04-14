@@ -280,23 +280,12 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_workspace_setup(|cwd, fs| async move {
-        let skill_dir = cwd.join(".agents").join("skills").join("broken");
-        fs.create_directory(
-            &skill_dir,
-            CreateDirectoryOptions { recursive: true },
-            /*sandbox*/ None,
-        )
-        .await?;
-        fs.write_file(
-            &skill_dir.join("SKILL.md"),
-            b"not yaml".to_vec(),
-            /*sandbox*/ None,
-        )
-        .await?;
-        Ok(())
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let skill_dir = home.join("skills").join("broken");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "not yaml").unwrap();
     });
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build(&server).await?;
 
     test.codex
         .submit(Op::ListSkills {
@@ -313,7 +302,7 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         })
         .await;
 
-    let cwd = test.config.cwd.as_path();
+    let cwd = test.cwd_path();
     let (skills, errors) = response
         .skills
         .iter()
@@ -326,14 +315,14 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
             !skill
                 .path
                 .to_string_lossy()
-                .ends_with(".agents/skills/broken/SKILL.md")
+                .ends_with("skills/broken/SKILL.md")
         }),
         "expected broken skill not loaded, got {skills:?}"
     );
     assert_eq!(errors.len(), 1, "expected one load error");
     let error_path = errors[0].path.to_string_lossy();
     assert!(
-        error_path.ends_with(".agents/skills/broken/SKILL.md"),
+        error_path.ends_with("skills/broken/SKILL.md"),
         "unexpected error path: {error_path}"
     );
 
