@@ -92,7 +92,7 @@ print_bazel_test_log_tails() {
 
   for target in "${failed_targets[@]}"; do
     local rel_path="${target#//}"
-    rel_path="${rel_path/:/\/}"
+    rel_path="${rel_path/://}"
     local test_log="${testlogs_dir}/${rel_path}/test.log"
 
     echo "::group::Bazel test log tail for ${target}"

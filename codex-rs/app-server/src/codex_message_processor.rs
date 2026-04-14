@@ -22,6 +22,9 @@ use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::AnalyticsJsonRpcError;
+use codex_analytics::InputError;
+use codex_analytics::TurnSteerRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
@@ -36,7 +39,7 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
-use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
+use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
@@ -639,6 +642,22 @@ impl CodexMessageProcessor {
         AccountUpdatedNotification {
             auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+        }
+    }
+
+    fn track_error_response(
+        &self,
+        request_id: &ConnectionRequestId,
+        error: &JSONRPCErrorError,
+        error_type: Option<AnalyticsJsonRpcError>,
+    ) {
+        if self.config.features.enabled(Feature::GeneralAnalytics) {
+            self.analytics_events_client.track_error_response(
+                request_id.connection_id.0,
+                request_id.request_id.clone(),
+                error.clone(),
+                error_type,
+            );
         }
     }
 
@@ -6942,12 +6961,18 @@ impl CodexMessageProcessor {
         app_server_client_version: Option<String>,
     ) {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.track_error_response(
+                &request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+            );
             self.outgoing.send_error(request_id, error).await;
             return;
         }
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
+                self.track_error_response(&request_id, &error, /*error_type*/ None);
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
@@ -6959,6 +6984,7 @@ impl CodexMessageProcessor {
         )
         .await
         {
+            self.track_error_response(&request_id, &error, /*error_type*/ None);
             self.outgoing.send_error(request_id, error).await;
             return;
         }
@@ -7042,6 +7068,15 @@ impl CodexMessageProcessor {
                 };
 
                 let response = TurnStartResponse { turn };
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::TurnStart {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
+                }
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -7050,6 +7085,7 @@ impl CodexMessageProcessor {
                     message: format!("failed to start turn: {err}"),
                     data: None,
                 };
+                self.track_error_response(&request_id, &error, /*error_type*/ None);
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -7123,6 +7159,7 @@ impl CodexMessageProcessor {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
+                self.track_error_response(&request_id, &error, /*error_type*/ None);
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
@@ -7140,6 +7177,11 @@ impl CodexMessageProcessor {
             .record_request_turn_id(&request_id, &params.expected_turn_id)
             .await;
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.track_error_response(
+                &request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+            );
             self.outgoing.send_error(request_id, error).await;
             return;
         }
@@ -7160,36 +7202,51 @@ impl CodexMessageProcessor {
         {
             Ok(turn_id) => {
                 let response = TurnSteerResponse { turn_id };
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::TurnSteer {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
+                }
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
-                let (code, message, data) = match err {
+                let (code, message, data, error_type) = match err {
                     SteerInputError::NoActiveTurn(_) => (
                         INVALID_REQUEST_ERROR_CODE,
                         "no active turn to steer".to_string(),
                         None,
+                        Some(AnalyticsJsonRpcError::TurnSteer(
+                            TurnSteerRequestError::NoActiveTurn,
+                        )),
                     ),
                     SteerInputError::ExpectedTurnMismatch { expected, actual } => (
                         INVALID_REQUEST_ERROR_CODE,
                         format!("expected active turn id `{expected}` but found `{actual}`"),
                         None,
+                        Some(AnalyticsJsonRpcError::TurnSteer(
+                            TurnSteerRequestError::ExpectedTurnMismatch,
+                        )),
                     ),
                     SteerInputError::ActiveTurnNotSteerable { turn_kind } => {
-                        let message = match turn_kind {
-                            codex_protocol::protocol::NonSteerableTurnKind::Review => {
-                                "cannot steer a review turn".to_string()
-                            }
-                            codex_protocol::protocol::NonSteerableTurnKind::Compact => {
-                                "cannot steer a compact turn".to_string()
-                            }
+                        let (message, turn_steer_error) = match turn_kind {
+                            codex_protocol::protocol::NonSteerableTurnKind::Review => (
+                                "cannot steer a review turn".to_string(),
+                                TurnSteerRequestError::NonSteerableReview,
+                            ),
+                            codex_protocol::protocol::NonSteerableTurnKind::Compact => (
+                                "cannot steer a compact turn".to_string(),
+                                TurnSteerRequestError::NonSteerableCompact,
+                            ),
                         };
                         let error = TurnError {
                             message: message.clone(),
-                            codex_error_info: Some(
-                                AppServerCodexErrorInfo::ActiveTurnNotSteerable {
-                                    turn_kind: turn_kind.into(),
-                                },
-                            ),
+                            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                                turn_kind: turn_kind.into(),
+                            }),
                             additional_details: None,
                         };
                         let data = match serde_json::to_value(error) {
@@ -7202,12 +7259,18 @@ impl CodexMessageProcessor {
                                 None
                             }
                         };
-                        (INVALID_REQUEST_ERROR_CODE, message, data)
+                        (
+                            INVALID_REQUEST_ERROR_CODE,
+                            message,
+                            data,
+                            Some(AnalyticsJsonRpcError::TurnSteer(turn_steer_error)),
+                        )
                     }
                     SteerInputError::EmptyInput => (
                         INVALID_REQUEST_ERROR_CODE,
                         "input must not be empty".to_string(),
                         None,
+                        Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
                     ),
                 };
                 let error = JSONRPCErrorError {
@@ -7215,6 +7278,7 @@ impl CodexMessageProcessor {
                     message,
                     data,
                 };
+                self.track_error_response(&request_id, &error, error_type);
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -7281,6 +7345,7 @@ impl CodexMessageProcessor {
                 &request_id,
                 thread.as_ref(),
                 Op::RealtimeConversationStart(ConversationStartParams {
+                    output_modality: params.output_modality,
                     prompt: params.prompt,
                     session_id: params.session_id,
                     transport: params.transport.map(|transport| match transport {
@@ -7962,6 +8027,9 @@ impl CodexMessageProcessor {
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
+                            listener_task_context
+                                .general_analytics_enabled
+                                .then(|| listener_task_context.analytics_events_client.clone()),
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
@@ -9657,7 +9725,7 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
         .and_then(|meta| meta.modified().ok())
         .map(|modified| {
             let updated_at: DateTime<Utc> = modified.into();
-            updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)
+            updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)
         });
     updated_at.or_else(|| created_at.map(str::to_string))
 }
@@ -9906,6 +9974,22 @@ mod tests {
         metadata.model = model.map(ToString::to_string);
         metadata.reasoning_effort = reasoning_effort;
         Ok(metadata)
+    }
+
+    #[test]
+    fn summary_from_thread_metadata_formats_protocol_timestamps_as_seconds() -> Result<()> {
+        let mut metadata =
+            test_thread_metadata(/*model*/ None, /*reasoning_effort*/ None)?;
+        metadata.created_at =
+            DateTime::parse_from_rfc3339("2025-09-05T16:53:11.123Z")?.with_timezone(&Utc);
+        metadata.updated_at =
+            DateTime::parse_from_rfc3339("2025-09-05T16:53:12.456Z")?.with_timezone(&Utc);
+
+        let summary = summary_from_thread_metadata(&metadata);
+
+        assert_eq!(summary.timestamp, Some("2025-09-05T16:53:11Z".to_string()));
+        assert_eq!(summary.updated_at, Some("2025-09-05T16:53:12Z".to_string()));
+        Ok(())
     }
 
     #[test]
@@ -10167,7 +10251,7 @@ mod tests {
         let expected = ConversationSummary {
             conversation_id,
             timestamp: Some(timestamp.clone()),
-            updated_at: Some("2025-09-05T16:53:11Z".to_string()),
+            updated_at: Some(timestamp),
             path: path.clone(),
             preview: String::new(),
             model_provider: "fallback".to_string(),
