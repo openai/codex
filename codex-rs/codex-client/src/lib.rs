@@ -1,3 +1,4 @@
+mod chatgpt_cookies;
 mod custom_ca;
 mod default_client;
 mod error;
@@ -7,6 +8,7 @@ mod sse;
 mod telemetry;
 mod transport;
 
+pub use crate::chatgpt_cookies::with_chatgpt_cookie_store;
 pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///
