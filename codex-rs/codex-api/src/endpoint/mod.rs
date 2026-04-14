@@ -7,6 +7,8 @@ pub(crate) mod responses;
 pub(crate) mod responses_websocket;
 mod session;
 
+pub(crate) const REALTIME_WIRE_LOG_TARGET: &str = "codex_api::realtime::wire";
+
 pub use compact::CompactClient;
 pub use memories::MemoriesClient;
 pub use models::ModelsClient;

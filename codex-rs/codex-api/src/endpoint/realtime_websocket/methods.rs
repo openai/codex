@@ -1,3 +1,4 @@
+use crate::endpoint::REALTIME_WIRE_LOG_TARGET;
 use crate::endpoint::realtime_websocket::methods_common::conversation_handoff_append_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
@@ -45,8 +46,6 @@ use tracing::warn;
 use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
-const REALTIME_WIRE_LOG_TARGET: &str = "codex_api::realtime_websocket::wire";
-
 struct WsStream {
     tx_command: mpsc::Sender<WsCommand>,
     pump_task: tokio::task::JoinHandle<()>,
@@ -91,6 +90,10 @@ impl WsStream {
                                 }
                             }
                             WsCommand::Close { tx_result } => {
+                                trace!(
+                                    target: REALTIME_WIRE_LOG_TARGET,
+                                    "realtime websocket request close frame: code=None reason=None"
+                                );
                                 info!("realtime websocket sending close");
                                 let result = inner.close(None).await;
                                 if let Err(err) = &result {
@@ -107,14 +110,32 @@ impl WsStream {
                         };
                         match message {
                             Ok(Message::Ping(payload)) => {
-                                trace!(payload_len = payload.len(), "realtime websocket received ping");
+                                trace!(
+                                    target: REALTIME_WIRE_LOG_TARGET,
+                                    payload = ?payload,
+                                    payload_len = payload.len(),
+                                    "realtime websocket event ping frame"
+                                );
+                                trace!(
+                                    target: REALTIME_WIRE_LOG_TARGET,
+                                    payload = ?payload,
+                                    payload_len = payload.len(),
+                                    "realtime websocket request pong frame"
+                                );
                                 if let Err(err) = inner.send(Message::Pong(payload)).await {
                                     error!("realtime websocket failed to send pong: {err}");
                                     let _ = tx_message.send(Err(err));
                                     break;
                                 }
                             }
-                            Ok(Message::Pong(_)) => {}
+                            Ok(Message::Pong(payload)) => {
+                                trace!(
+                                    target: REALTIME_WIRE_LOG_TARGET,
+                                    payload = ?payload,
+                                    payload_len = payload.len(),
+                                    "realtime websocket event pong frame"
+                                );
+                            }
                             Ok(message @ (Message::Text(_)
                                 | Message::Binary(_)
                                 | Message::Close(_)
@@ -123,18 +144,36 @@ impl WsStream {
                                 match &message {
                                     Message::Text(_) => trace!("realtime websocket received text frame"),
                                     Message::Binary(binary) => {
+                                        trace!(
+                                            target: REALTIME_WIRE_LOG_TARGET,
+                                            payload = ?binary,
+                                            payload_len = binary.len(),
+                                            "realtime websocket event binary frame"
+                                        );
                                         error!(
                                             payload_len = binary.len(),
                                             "realtime websocket received unexpected binary frame"
                                         );
                                     }
-                                    Message::Close(frame) => info!(
-                                        "realtime websocket received close frame: code={:?} reason={:?}",
-                                        frame.as_ref().map(|frame| frame.code),
-                                        frame.as_ref().map(|frame| frame.reason.as_str())
-                                    ),
-                                    Message::Frame(_) => {
-                                        trace!("realtime websocket received raw frame");
+                                    Message::Close(frame) => {
+                                        trace!(
+                                            target: REALTIME_WIRE_LOG_TARGET,
+                                            code = ?frame.as_ref().map(|frame| frame.code),
+                                            reason = ?frame.as_ref().map(|frame| frame.reason.as_str()),
+                                            "realtime websocket event close frame"
+                                        );
+                                        info!(
+                                            "realtime websocket received close frame: code={:?} reason={:?}",
+                                            frame.as_ref().map(|frame| frame.code),
+                                            frame.as_ref().map(|frame| frame.reason.as_str())
+                                        );
+                                    }
+                                    Message::Frame(frame) => {
+                                        trace!(
+                                            target: REALTIME_WIRE_LOG_TARGET,
+                                            frame = ?frame,
+                                            "realtime websocket event raw frame"
+                                        );
                                     }
                                     Message::Ping(_) | Message::Pong(_) => {}
                                 }
