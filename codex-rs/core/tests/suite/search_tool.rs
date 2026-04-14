@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
-    "You have access to tools from the following MCP servers/connectors",
+    "You have access to tools from the following sources",
     "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";

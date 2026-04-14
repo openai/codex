@@ -157,6 +157,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let deferred_dynamic_tools = dynamic_tools
+        .iter()
+        .filter(|tool| tool.defer_loading)
+        .cloned()
+        .collect::<Vec<_>>();
     let mut tool_search_handler = None;
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
@@ -259,9 +264,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ToolSearch => {
                 if tool_search_handler.is_none() {
-                    tool_search_handler = deferred_mcp_tools
-                        .as_ref()
-                        .map(|tools| Arc::new(ToolSearchHandler::new(tools.clone())));
+                    tool_search_handler = Some(Arc::new(ToolSearchHandler::new(
+                        deferred_mcp_tools.clone().unwrap_or_default(),
+                        deferred_dynamic_tools.clone(),
+                    )));
                 }
                 if let Some(tool_search_handler) = tool_search_handler.as_ref() {
                     builder.register_handler(handler.name, tool_search_handler.clone());

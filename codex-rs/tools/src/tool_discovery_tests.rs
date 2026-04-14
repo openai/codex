@@ -50,7 +50,7 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_sources() {
         ),
         ToolSpec::ToolSearch {
             execution: "client".to_string(),
-            description: "# MCP tool discovery\n\nSearches over MCP tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following MCP servers/connectors:\n- Google Drive: Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work.\n- docs\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required MCP tools. For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates`.".to_string(),
+            description: "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following sources:\n- Google Drive: Use Google Drive as the single entrypoint for Drive, Docs, Sheets, and Slides work.\n- docs\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required tools. For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates`.".to_string(),
             parameters: JsonSchema::object(BTreeMap::from([
                     (
                         "limit".to_string(),
@@ -61,7 +61,7 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_sources() {
                     ),
                     (
                         "query".to_string(),
-                        JsonSchema::string(Some("Search query for MCP tools.".to_string()),),
+                        JsonSchema::string(Some("Search query for deferred tools.".to_string()),),
                     ),
                 ]), Some(vec!["query".to_string()]), Some(false.into())),
         }

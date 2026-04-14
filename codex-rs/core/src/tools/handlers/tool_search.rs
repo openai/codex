@@ -9,28 +9,49 @@ use bm25::Language;
 use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
 use codex_mcp::ToolInfo;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::ToolSearchOutputTool;
 use codex_tools::ToolSearchResultSource;
 use codex_tools::collect_tool_search_output_tools;
+use codex_tools::dynamic_tool_to_responses_api_tool;
 
 const COMPUTER_USE_MCP_SERVER_NAME: &str = "computer-use";
 const COMPUTER_USE_TOOL_SEARCH_LIMIT: usize = 20;
 
 pub struct ToolSearchHandler {
-    entries: Vec<(String, ToolInfo)>,
+    entries: Vec<ToolSearchEntry>,
     search_engine: SearchEngine<usize>,
 }
 
 impl ToolSearchHandler {
-    pub fn new(tools: std::collections::HashMap<String, ToolInfo>) -> Self {
-        let mut entries: Vec<(String, ToolInfo)> = tools.into_iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+    pub fn new(
+        mcp_tools: std::collections::HashMap<String, ToolInfo>,
+        dynamic_tools: Vec<DynamicToolSpec>,
+    ) -> Self {
+        let mut mcp_entries: Vec<ToolSearchEntry> = mcp_tools
+            .into_iter()
+            .map(|(name, info)| ToolSearchEntry::Mcp {
+                name,
+                info: Box::new(info),
+            })
+            .collect();
+        mcp_entries.sort_by(|a, b| a.sort_key().cmp(b.sort_key()));
+
+        let mut dynamic_entries: Vec<ToolSearchEntry> = dynamic_tools
+            .into_iter()
+            .map(|tool| ToolSearchEntry::Dynamic { tool })
+            .collect();
+        dynamic_entries.sort_by(|a, b| a.sort_key().cmp(b.sort_key()));
+
+        let mut entries = mcp_entries;
+        entries.extend(dynamic_entries);
 
         let documents: Vec<Document<usize>> = entries
             .iter()
             .enumerate()
-            .map(|(idx, (name, info))| Document::new(idx, build_search_text(name, info)))
+            .map(|(idx, entry)| Document::new(idx, entry.search_text()))
             .collect();
         let search_engine =
             SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
@@ -83,35 +104,61 @@ impl ToolHandler for ToolSearchHandler {
             return Ok(ToolSearchOutput { tools: Vec::new() });
         }
 
-        let results = self.search_result_entries(query, limit, requested_limit.is_none());
-
-        let tools = collect_tool_search_output_tools(results.into_iter().map(|(_, tool)| {
-            ToolSearchResultSource {
-                server_name: tool.server_name.as_str(),
-                tool_namespace: tool.callable_namespace.as_str(),
-                tool_name: tool.callable_name.as_str(),
-                tool: &tool.tool,
-                connector_name: tool.connector_name.as_deref(),
-                connector_description: tool.connector_description.as_deref(),
-            }
-        }))
-        .map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to encode {TOOL_SEARCH_TOOL_NAME} output: {err}"
-            ))
-        })?;
+        let tools = self.search(query, limit, requested_limit.is_none())?;
 
         Ok(ToolSearchOutput { tools })
     }
 }
 
 impl ToolSearchHandler {
+    fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        use_default_limit: bool,
+    ) -> Result<Vec<ToolSearchOutputTool>, FunctionCallError> {
+        let results = self.search_result_entries(query, limit, use_default_limit);
+        let mut tools = Vec::new();
+        let mut pending_mcp_sources = Vec::new();
+
+        for entry in results {
+            match entry {
+                ToolSearchEntry::Mcp { info, .. } => {
+                    pending_mcp_sources.push(ToolSearchResultSource {
+                        server_name: info.server_name.as_str(),
+                        tool_namespace: info.callable_namespace.as_str(),
+                        tool_name: info.callable_name.as_str(),
+                        tool: &info.tool,
+                        connector_name: info.connector_name.as_deref(),
+                        connector_description: info.connector_description.as_deref(),
+                    });
+                }
+                ToolSearchEntry::Dynamic { tool } => {
+                    tools.extend(
+                        collect_tool_search_output_tools(pending_mcp_sources.drain(..))
+                            .map_err(tool_search_output_error)?,
+                    );
+                    tools.push(ToolSearchOutputTool::Function(
+                        dynamic_tool_to_responses_api_tool(tool)
+                            .map_err(tool_search_output_error)?,
+                    ));
+                }
+            }
+        }
+
+        tools.extend(
+            collect_tool_search_output_tools(pending_mcp_sources)
+                .map_err(tool_search_output_error)?,
+        );
+        Ok(tools)
+    }
+
     fn search_result_entries(
         &self,
         query: &str,
         limit: usize,
         use_default_limit: bool,
-    ) -> Vec<&(String, ToolInfo)> {
+    ) -> Vec<&ToolSearchEntry> {
         let mut results = self
             .search_engine
             .search(query, limit)
@@ -124,7 +171,7 @@ impl ToolSearchHandler {
 
         if results
             .iter()
-            .any(|(_, tool)| tool.server_name == COMPUTER_USE_MCP_SERVER_NAME)
+            .any(|entry| entry.mcp_server_name() == Some(COMPUTER_USE_MCP_SERVER_NAME))
         {
             results = self
                 .search_engine
@@ -137,15 +184,17 @@ impl ToolSearchHandler {
     }
 }
 
-fn limit_results_per_server(results: Vec<&(String, ToolInfo)>) -> Vec<&(String, ToolInfo)> {
+fn limit_results_per_server(results: Vec<&ToolSearchEntry>) -> Vec<&ToolSearchEntry> {
     results
         .into_iter()
         .scan(
             std::collections::HashMap::<&str, usize>::new(),
             |counts, entry| {
-                let tool = &entry.1;
-                let count = counts.entry(tool.server_name.as_str()).or_default();
-                if *count >= default_limit_for_server(tool.server_name.as_str()) {
+                let Some(server_name) = entry.mcp_server_name() else {
+                    return Some(Some(entry));
+                };
+                let count = counts.entry(server_name).or_default();
+                if *count >= default_limit_for_server(server_name) {
                     Some(None)
                 } else {
                     *count += 1;
@@ -165,7 +214,41 @@ fn default_limit_for_server(server_name: &str) -> usize {
     }
 }
 
-fn build_search_text(name: &str, info: &ToolInfo) -> String {
+enum ToolSearchEntry {
+    Mcp { name: String, info: Box<ToolInfo> },
+    Dynamic { tool: DynamicToolSpec },
+}
+
+impl ToolSearchEntry {
+    fn sort_key(&self) -> &str {
+        match self {
+            Self::Mcp { name, .. } => name.as_str(),
+            Self::Dynamic { tool } => tool.name.as_str(),
+        }
+    }
+
+    fn search_text(&self) -> String {
+        match self {
+            Self::Mcp { name, info } => build_mcp_search_text(name, info),
+            Self::Dynamic { tool } => build_dynamic_search_text(tool),
+        }
+    }
+
+    fn mcp_server_name(&self) -> Option<&str> {
+        match self {
+            Self::Mcp { info, .. } => Some(info.server_name.as_str()),
+            Self::Dynamic { .. } => None,
+        }
+    }
+}
+
+fn tool_search_output_error(err: serde_json::Error) -> FunctionCallError {
+    FunctionCallError::Fatal(format!(
+        "failed to encode {TOOL_SEARCH_TOOL_NAME} output: {err}"
+    ))
+}
+
+fn build_mcp_search_text(name: &str, info: &ToolInfo) -> String {
     let mut parts = vec![
         name.to_string(),
         info.callable_name.clone(),
@@ -218,20 +301,91 @@ fn build_search_text(name: &str, info: &ToolInfo) -> String {
     parts.join(" ")
 }
 
+fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
+    let mut parts = vec![
+        tool.name.clone(),
+        tool.name.replace('_', " "),
+        tool.description.clone(),
+    ];
+
+    parts.extend(
+        tool.input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .map(|map| map.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default(),
+    );
+
+    parts.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_tools::JsonSchema;
+    use codex_tools::ResponsesApiTool;
     use pretty_assertions::assert_eq;
     use rmcp::model::Tool;
     use std::sync::Arc;
 
     #[test]
+    fn search_returns_deferred_dynamic_tools() {
+        let handler = ToolSearchHandler::new(
+            std::collections::HashMap::new(),
+            vec![DynamicToolSpec {
+                name: "automation_update".to_string(),
+                description: "Create, update, view, or delete recurring automations.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "mode": { "type": "string" },
+                        "kind": { "type": "string" }
+                    },
+                    "required": ["mode"],
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
+            }],
+        );
+
+        let tools = handler
+            .search(
+                "automation_update",
+                TOOL_SEARCH_DEFAULT_LIMIT,
+                /*use_default_limit*/ true,
+            )
+            .expect("search deferred dynamic tools");
+
+        assert_eq!(
+            tools,
+            vec![ToolSearchOutputTool::Function(ResponsesApiTool {
+                name: "automation_update".to_string(),
+                description: "Create, update, view, or delete recurring automations.".to_string(),
+                strict: false,
+                defer_loading: Some(true),
+                parameters: JsonSchema::object(
+                    std::collections::BTreeMap::from([
+                        ("kind".to_string(), JsonSchema::string(None)),
+                        ("mode".to_string(), JsonSchema::string(None)),
+                    ]),
+                    Some(vec!["mode".to_string()]),
+                    Some(false.into()),
+                ),
+                output_schema: None,
+            })],
+        );
+    }
+
+    #[test]
     fn computer_use_tool_search_uses_larger_limit() {
-        let handler = ToolSearchHandler::new(numbered_tools(
-            COMPUTER_USE_MCP_SERVER_NAME,
-            "computer use",
-            /*count*/ 100,
-        ));
+        let handler = ToolSearchHandler::new(
+            numbered_tools(
+                COMPUTER_USE_MCP_SERVER_NAME,
+                "computer use",
+                /*count*/ 100,
+            ),
+            Vec::new(),
+        );
 
         let results = handler.search_result_entries(
             "computer use",
@@ -243,7 +397,7 @@ mod tests {
         assert!(
             results
                 .iter()
-                .all(|(_, tool)| tool.server_name == COMPUTER_USE_MCP_SERVER_NAME)
+                .all(|entry| entry.mcp_server_name() == Some(COMPUTER_USE_MCP_SERVER_NAME))
         );
 
         let explicit_results = handler.search_result_entries(
@@ -267,7 +421,7 @@ mod tests {
             "calendar",
             /*count*/ 100,
         ));
-        let handler = ToolSearchHandler::new(tools);
+        let handler = ToolSearchHandler::new(tools, Vec::new());
 
         let results = handler.search_result_entries(
             "calendar",
@@ -279,7 +433,7 @@ mod tests {
         assert!(
             results
                 .iter()
-                .all(|(_, tool)| tool.server_name == "other-server")
+                .all(|entry| entry.mcp_server_name() == Some("other-server"))
         );
 
         let explicit_results = handler.search_result_entries(
@@ -301,7 +455,7 @@ mod tests {
             "computer use",
             /*count*/ 100,
         ));
-        let handler = ToolSearchHandler::new(tools);
+        let handler = ToolSearchHandler::new(tools, Vec::new());
 
         let results = handler.search_result_entries(
             "computer use",
@@ -360,10 +514,10 @@ mod tests {
         }
     }
 
-    fn count_results_for_server(results: &[&(String, ToolInfo)], server_name: &str) -> usize {
+    fn count_results_for_server(results: &[&ToolSearchEntry], server_name: &str) -> usize {
         results
             .iter()
-            .filter(|(_, tool)| tool.server_name == server_name)
+            .filter(|entry| entry.mcp_server_name() == Some(server_name))
             .count()
     }
 }

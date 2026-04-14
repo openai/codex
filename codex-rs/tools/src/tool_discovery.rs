@@ -153,7 +153,7 @@ pub fn create_tool_search_tool(
     let properties = BTreeMap::from([
         (
             "query".to_string(),
-            JsonSchema::string(Some("Search query for MCP tools.".to_string())),
+            JsonSchema::string(Some("Search query for deferred tools.".to_string())),
         ),
         (
             "limit".to_string(),
@@ -189,7 +189,7 @@ pub fn create_tool_search_tool(
     };
 
     let description = format!(
-        "# MCP tool discovery\n\nSearches over MCP tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following MCP servers/connectors:\n{source_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required MCP tools. For MCP tool discovery, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates`."
+        "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following sources:\n{source_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required tools. For MCP tool discovery, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates`."
     );
 
     ToolSpec::ToolSearch {
