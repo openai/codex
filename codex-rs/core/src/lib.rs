@@ -153,7 +153,9 @@ pub mod shell;
 pub mod shell_snapshot;
 pub mod spawn;
 pub mod state_db_bridge;
-pub use codex_rollout::state_db;
+pub mod state_db {
+    pub use crate::state_db_bridge::*;
+}
 mod thread_rollout_truncation;
 mod tools;
 pub mod turn_diff_tracker;

@@ -25,16 +25,18 @@ serde_with = { workspace = true }
 shlex = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
+ts-rs = { workspace = true }
+inventory = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rmcp = { workspace = true, default-features = false, features = [
     "base64",
     "macros",
     "schemars",
     "server",
 ] }
-ts-rs = { workspace = true }
-inventory = { workspace = true }
-tracing = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

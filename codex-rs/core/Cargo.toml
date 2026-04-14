@@ -47,10 +47,8 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
-codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-sandboxing = { workspace = true }
-codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -124,6 +122,8 @@ seccompiler = { workspace = true }
 core-foundation = "0.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+codex-rollout = { workspace = true }
+codex-state = { workspace = true }
 tokio-tungstenite = { workspace = true }
 
 # Build OpenSSL from source for musl builds.

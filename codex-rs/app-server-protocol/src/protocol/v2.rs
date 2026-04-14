@@ -5295,6 +5295,7 @@ impl McpServerElicitationAction {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<McpServerElicitationAction> for rmcp::model::ElicitationAction {
     fn from(value: McpServerElicitationAction) -> Self {
         match value {
@@ -5305,6 +5306,7 @@ impl From<McpServerElicitationAction> for rmcp::model::ElicitationAction {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<rmcp::model::ElicitationAction> for McpServerElicitationAction {
     fn from(value: rmcp::model::ElicitationAction) -> Self {
         match value {
@@ -5722,6 +5724,7 @@ pub struct McpServerElicitationRequestResponse {
     pub meta: Option<JsonValue>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<McpServerElicitationRequestResponse> for rmcp::model::CreateElicitationResult {
     fn from(value: McpServerElicitationRequestResponse) -> Self {
         Self {
@@ -5731,6 +5734,7 @@ impl From<McpServerElicitationRequestResponse> for rmcp::model::CreateElicitatio
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<rmcp::model::CreateElicitationResult> for McpServerElicitationRequestResponse {
     fn from(value: rmcp::model::CreateElicitationResult) -> Self {
         Self {
@@ -7186,6 +7190,7 @@ mod tests {
         assert_eq!(reason, Some("askForApproval.granular"));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn mcp_server_elicitation_response_round_trips_rmcp_result() {
         let rmcp_result = rmcp::model::CreateElicitationResult {
