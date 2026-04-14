@@ -503,14 +503,23 @@ fn is_injected_context_item(item: &ResponseItem) -> bool {
             crate::event_mapping::is_contextual_dev_message_content(content)
         }
         ResponseItem::Message { role, content, .. } if role == "user" => {
-            crate::event_mapping::is_contextual_user_message_content(content)
-                && !matches!(
-                    crate::event_mapping::parse_turn_item(item),
-                    Some(TurnItem::HookPrompt(_))
-                )
+            is_regenerable_contextual_user_message(content)
         }
         _ => false,
     }
+}
+
+fn is_regenerable_contextual_user_message(content: &[ContentItem]) -> bool {
+    !content.is_empty() && content.iter().all(is_regenerable_contextual_user_fragment)
+}
+
+fn is_regenerable_contextual_user_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+
+    codex_instructions::AGENTS_MD_FRAGMENT.matches_text(text)
+        || crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT.matches_text(text)
 }
 
 pub(crate) fn build_compacted_history(

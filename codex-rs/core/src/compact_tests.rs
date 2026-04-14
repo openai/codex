@@ -179,6 +179,14 @@ fn strip_injected_context_from_retained_suffix_preserves_live_history() {
         end_turn: None,
         phase: None,
     };
+    let user_instructions = input_message(
+        "user",
+        r#"# AGENTS.md instructions for /repo
+
+<INSTRUCTIONS>
+Use cargo test.
+</INSTRUCTIONS>"#,
+    );
     let contextual_user = input_message(
         "user",
         r#"<environment_context>
@@ -186,6 +194,32 @@ fn strip_injected_context_from_retained_suffix_preserves_live_history() {
   <shell>zsh</shell>
 </environment_context>"#,
     );
+    let skill_payload = input_message(
+        "user",
+        r#"<skill>
+<name>fix-ci</name>
+<path>/skills/fix-ci/SKILL.md</path>
+Debug the failing check.
+</skill>"#,
+    );
+    let user_shell_command = input_message(
+        "user",
+        r#"<user_shell_command>
+<command>
+echo hi
+</command>
+<result>
+Exit code: 0
+Output:
+hi
+</result>
+</user_shell_command>"#,
+    );
+    let subagent_notification = input_message(
+        "user",
+        r#"<subagent_notification>{"agent_path":"agent-1","status":"completed"}</subagent_notification>"#,
+    );
+    let turn_aborted = input_message("user", "<turn_aborted>interrupted</turn_aborted>");
     let real_user = input_message("user", "please continue");
     let assistant = ResponseItem::Message {
         id: None,
@@ -216,7 +250,12 @@ fn strip_injected_context_from_retained_suffix_preserves_live_history() {
     let cleaned = strip_injected_context_from_retained_suffix(vec![
         contextual_developer,
         mixed_developer,
+        user_instructions,
         contextual_user,
+        skill_payload.clone(),
+        user_shell_command.clone(),
+        subagent_notification.clone(),
+        turn_aborted.clone(),
         real_user.clone(),
         assistant.clone(),
         function_call.clone(),
@@ -227,6 +266,10 @@ fn strip_injected_context_from_retained_suffix_preserves_live_history() {
     assert_eq!(
         cleaned,
         vec![
+            skill_payload,
+            user_shell_command,
+            subagent_notification,
+            turn_aborted,
             real_user,
             assistant,
             function_call,
