@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -30,17 +29,12 @@ use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
-use toml::Value as TomlValue;
 use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::default_project_root_markers;
-use crate::config_loader::find_project_root;
-use crate::config_loader::merge_toml_values;
-use crate::config_loader::project_root_markers_from_config;
+use crate::config_loader::resolve_project_root;
 use crate::event_mapping::parse_turn_item;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
@@ -289,28 +283,12 @@ async fn apply_execpolicy_amendment_destination(
 }
 
 async fn project_codex_home(config: &Config) -> std::io::Result<std::path::PathBuf> {
-    let mut merged = TomlValue::Table(toml::map::Map::new());
-    for layer in config.config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
-        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
-            continue;
-        }
-        merge_toml_values(&mut merged, &layer.config);
-    }
-    let project_root_markers = match project_root_markers_from_config(&merged) {
-        Ok(Some(markers)) => markers,
-        Ok(None) => default_project_root_markers(),
-        Err(err) => {
-            warn!("invalid project_root_markers: {err}");
-            default_project_root_markers()
-        }
-    };
-    Ok(find_project_root(&config.cwd, &project_root_markers)
-        .await?
-        .join(".codex")
-        .to_path_buf())
+    Ok(
+        resolve_project_root(&config.config_layer_stack, &config.cwd)
+            .await?
+            .join(".codex")
+            .to_path_buf(),
+    )
 }
 
 pub(crate) async fn run_post_tool_use_hooks(

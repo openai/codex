@@ -25,6 +25,7 @@ use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
 use toml::Value as TomlValue;
+use tracing::warn;
 
 pub use codex_config::AppRequirementToml;
 pub use codex_config::AppsRequirementsToml;
@@ -758,6 +759,31 @@ pub(crate) async fn find_project_root(
         }
     }
     Ok(cwd.clone())
+}
+
+pub(crate) async fn resolve_project_root(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &AbsolutePathBuf,
+) -> io::Result<AbsolutePathBuf> {
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
+        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+    let project_root_markers = match project_root_markers_from_config(&merged) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            warn!("invalid project_root_markers: {err}");
+            default_project_root_markers()
+        }
+    };
+    find_project_root(cwd, &project_root_markers).await
 }
 
 /// Return the appropriate list of layers (each with
