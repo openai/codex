@@ -1127,7 +1127,7 @@ fn sort_plugin_entries(entries: &mut [(&PluginMarketplaceEntry, &PluginSummary, 
 }
 
 fn marketplace_tab_id(marketplace: &PluginMarketplaceEntry) -> String {
-    format!("marketplace:{}", marketplace.name)
+    format!("marketplace:{}", marketplace.path.display())
 }
 
 fn disambiguate_duplicate_tab_labels(labels: Vec<String>) -> Vec<String> {
