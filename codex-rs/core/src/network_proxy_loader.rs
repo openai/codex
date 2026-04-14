@@ -55,7 +55,14 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .await
     .context("failed to load Codex config")?;
 
-    let (exec_policy, warning) = match load_exec_policy(&config_layer_stack).await {
+    let active_permission_profile_name =
+        active_permission_profile_from_layers(&config_layer_stack)?;
+    let (exec_policy, warning) = match load_exec_policy(
+        &config_layer_stack,
+        active_permission_profile_name.as_deref(),
+    )
+    .await
+    {
         Ok(policy) => (policy, None),
         Err(err @ ExecPolicyError::ParsePolicy { .. }) => {
             (codex_execpolicy::Policy::empty(), Some(err))
@@ -180,6 +187,20 @@ fn network_tables_from_toml(value: &toml::Value) -> Result<NetworkTablesToml> {
         .clone()
         .try_into()
         .context("failed to deserialize network tables from config")
+}
+
+fn active_permission_profile_from_layers(layers: &ConfigLayerStack) -> Result<Option<String>> {
+    let mut active_profile_name = None;
+    for layer in layers.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        let parsed = network_tables_from_toml(&layer.config)?;
+        if parsed.default_permissions.is_some() {
+            active_profile_name = parsed.default_permissions;
+        }
+    }
+    Ok(active_profile_name)
 }
 
 fn selected_network_from_tables(parsed: NetworkTablesToml) -> Result<Option<NetworkToml>> {

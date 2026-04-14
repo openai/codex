@@ -562,9 +562,12 @@ impl Codex {
             Arc::clone(exec_policy)
         } else {
             Arc::new(
-                ExecPolicyManager::load(&config.config_layer_stack)
-                    .await
-                    .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
+                ExecPolicyManager::load(
+                    &config.config_layer_stack,
+                    config.permissions.active_profile_name.as_deref(),
+                )
+                .await
+                .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
             )
         };
 

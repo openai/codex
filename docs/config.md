@@ -50,6 +50,16 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Exec policy rules
+
+Codex loads execution policy files from `rules/` under each active config
+folder. When profile-based permissions are active via `default_permissions =
+"name"`, Codex loads only `rules/name.rules` for that permissions profile and
+stores newly approved command or network rules in `~/.codex/rules/name.rules`.
+When no permissions profile is active, Codex keeps the legacy behavior of
+loading all `*.rules` files and writing new approvals to
+`~/.codex/rules/default.rules`.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

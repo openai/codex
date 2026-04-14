@@ -441,7 +441,12 @@ pub async fn run_main_with_transport(
         }
     };
 
-    if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
+    if let Ok(Some(err)) = check_execpolicy_for_warnings(
+        &config.config_layer_stack,
+        config.permissions.active_profile_name.as_deref(),
+    )
+    .await
+    {
         let (path, range) = exec_policy_warning_location(&err);
         let message = ConfigWarningNotification {
             summary: "Error parsing rules; custom rules not applied.".to_string(),

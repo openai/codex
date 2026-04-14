@@ -171,13 +171,26 @@ async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_dif
 }
 
 #[tokio::test]
+async fn child_does_not_use_parent_exec_policy_when_active_permission_profile_differs() {
+    let (_home, parent_config) = test_config().await;
+    let mut child_config = parent_config.clone();
+    child_config.permissions.active_profile_name = Some("workspace".to_string());
+
+    assert!(!child_uses_parent_exec_policy(
+        &parent_config,
+        &child_config
+    ));
+}
+
+#[tokio::test]
 async fn returns_empty_policy_when_no_policy_files_exist() {
     let temp_dir = tempdir().expect("create temp dir");
     let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
 
-    let manager = ExecPolicyManager::load(&config_stack)
-        .await
-        .expect("manager result");
+    let manager =
+        ExecPolicyManager::load(&config_stack, /*active_permission_profile_name*/ None)
+            .await
+            .expect("manager result");
     let policy = manager.current();
 
     let commands = [vec!["rm".to_string()]];
@@ -199,7 +212,7 @@ async fn collect_policy_files_returns_empty_when_dir_missing() {
     let temp_dir = tempdir().expect("create temp dir");
 
     let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
-    let files = collect_policy_files(&policy_dir)
+    let files = collect_policy_files(&policy_dir, /*active_permission_profile_name*/ None)
         .await
         .expect("collect policy files");
 
@@ -223,7 +236,7 @@ async fn format_exec_policy_error_with_source_renders_range() {
     )
     .expect("write broken policy file");
 
-    let err = load_exec_policy(&config_stack)
+    let err = load_exec_policy(&config_stack, /*active_permission_profile_name*/ None)
         .await
         .expect_err("expected parse error");
     let rendered = format_exec_policy_error_with_source(&err);
@@ -263,7 +276,7 @@ async fn loads_policies_from_policy_subdirectory() {
     )
     .expect("write policy file");
 
-    let policy = load_exec_policy(&config_stack)
+    let policy = load_exec_policy(&config_stack, /*active_permission_profile_name*/ None)
         .await
         .expect("policy result");
     let command = [vec!["rm".to_string()]];
@@ -279,6 +292,100 @@ async fn loads_policies_from_policy_subdirectory() {
         },
         policy.check_multiple(command.iter(), &|_| Decision::Allow)
     );
+}
+
+#[tokio::test]
+async fn active_permission_profile_loads_only_matching_rules_file() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    fs::write(
+        policy_dir.join("workspace.rules"),
+        r#"prefix_rule(pattern=["echo"], decision="forbidden")"#,
+    )
+    .expect("write workspace policy file");
+    fs::write(
+        policy_dir.join("default.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )
+    .expect("write default policy file");
+    fs::write(
+        policy_dir.join("full.rules"),
+        r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
+    )
+    .expect("write full policy file");
+
+    let policy = load_exec_policy(&config_stack, Some("workspace"))
+        .await
+        .expect("policy result");
+
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Forbidden,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["echo".to_string()],
+                decision: Decision::Forbidden,
+                resolved_program: None,
+                justification: None,
+            }],
+        },
+        policy.check_multiple([vec!["echo".to_string()]].iter(), &|_| Decision::Allow)
+    );
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec!["rm".to_string()],
+                decision: Decision::Allow
+            }],
+        },
+        policy.check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+    );
+}
+
+#[tokio::test]
+async fn active_permission_profile_allows_missing_rules_file() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    fs::write(
+        policy_dir.join("default.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )
+    .expect("write default policy file");
+
+    let policy = load_exec_policy(&config_stack, Some("workspace"))
+        .await
+        .expect("policy result");
+
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec!["rm".to_string()],
+                decision: Decision::Allow
+            }],
+        },
+        policy.check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+    );
+}
+
+#[tokio::test]
+async fn active_permission_profile_rejects_path_like_name() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+
+    let err = load_exec_policy(&config_stack, Some("../workspace"))
+        .await
+        .expect_err("path-like profile name should be rejected");
+
+    assert!(matches!(
+        err,
+        ExecPolicyError::InvalidProfileName { profile_name }
+            if profile_name == "../workspace"
+    ));
 }
 
 #[tokio::test]
@@ -308,7 +415,7 @@ async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
     let config_stack =
         ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
 
-    let policy = load_exec_policy(&config_stack).await?;
+    let policy = load_exec_policy(&config_stack, /*active_permission_profile_name*/ None).await?;
     let (allowed, denied) = policy.compiled_network_domains();
 
     assert!(allowed.is_empty());
@@ -355,7 +462,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
     let config_stack =
         ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
 
-    let policy = load_exec_policy(&config_stack).await?;
+    let policy = load_exec_policy(&config_stack, /*active_permission_profile_name*/ None).await?;
 
     assert_eq!(
         policy
@@ -378,7 +485,7 @@ async fn ignores_policies_outside_policy_dir() {
     )
     .expect("write policy file");
 
-    let policy = load_exec_policy(&config_stack)
+    let policy = load_exec_policy(&config_stack, /*active_permission_profile_name*/ None)
         .await
         .expect("policy result");
     let command = [vec!["ls".to_string()]];
@@ -418,7 +525,7 @@ async fn ignores_rules_from_untrusted_project_layers() -> anyhow::Result<()> {
         ConfigRequirementsToml::default(),
     )?;
 
-    let policy = load_exec_policy(&config_stack).await?;
+    let policy = load_exec_policy(&config_stack, /*active_permission_profile_name*/ None).await?;
 
     assert_eq!(
         Evaluation {
@@ -475,7 +582,7 @@ async fn loads_policies_from_multiple_config_layers() -> anyhow::Result<()> {
         ConfigRequirementsToml::default(),
     )?;
 
-    let policy = load_exec_policy(&config_stack).await?;
+    let policy = load_exec_policy(&config_stack, /*active_permission_profile_name*/ None).await?;
 
     assert_eq!(
         Evaluation {
@@ -1165,6 +1272,30 @@ async fn append_execpolicy_amendment_updates_policy_and_file() {
         r#"prefix_rule(pattern=["echo", "hello"], decision="allow")
 "#
     );
+}
+
+#[tokio::test]
+async fn append_execpolicy_amendment_updates_active_profile_file() {
+    let codex_home = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(codex_home.path());
+    let prefix = vec!["echo".to_string(), "hello".to_string()];
+    let manager = ExecPolicyManager::load(&config_stack, Some("workspace"))
+        .await
+        .expect("load manager");
+
+    manager
+        .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(prefix))
+        .await
+        .expect("update policy");
+
+    let contents = fs::read_to_string(codex_home.path().join("rules").join("workspace.rules"))
+        .expect("profile policy file should have been created");
+    assert_eq!(
+        contents,
+        r#"prefix_rule(pattern=["echo", "hello"], decision="allow")
+"#
+    );
+    assert!(!default_policy_path(codex_home.path()).exists());
 }
 
 #[tokio::test]
