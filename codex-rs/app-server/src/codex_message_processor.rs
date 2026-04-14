@@ -9965,10 +9965,7 @@ mod tests {
         let summary = summary_from_thread_metadata(&metadata);
 
         assert_eq!(summary.timestamp, Some("2025-09-05T16:53:11Z".to_string()));
-        assert_eq!(
-            summary.updated_at,
-            Some("2025-09-05T16:53:12Z".to_string())
-        );
+        assert_eq!(summary.updated_at, Some("2025-09-05T16:53:12Z".to_string()));
         Ok(())
     }
 
