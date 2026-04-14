@@ -491,8 +491,16 @@ pub async fn logout_with_revoke(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let auth_dot_json = storage.load()?;
-    revoke_auth_tokens(auth_dot_json.as_ref()).await?;
+    match storage.load() {
+        Ok(auth_dot_json) => {
+            if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
+                tracing::warn!("failed to revoke auth tokens during logout: {err}");
+            }
+        }
+        Err(err) => {
+            tracing::warn!("failed to load auth before token revoke during logout: {err}");
+        }
+    }
     logout_all_stores(codex_home, auth_credentials_store_mode)
 }
 
