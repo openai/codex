@@ -15,6 +15,7 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 fn configured_marketplace_update() -> MarketplaceConfigUpdate<'static> {
     MarketplaceConfigUpdate {
         last_updated: "2026-04-13T00:00:00Z",
+        last_revision: None,
         source_type: "git",
         source: "https://github.com/owner/repo.git",
         ref_name: Some("main"),
@@ -37,7 +38,7 @@ async fn marketplace_remove_deletes_config_and_installed_root() -> Result<()> {
     write_installed_marketplace(codex_home.path(), "debug")?;
 
     codex_command(codex_home.path())?
-        .args(["marketplace", "remove", "debug"])
+        .args(["plugin", "marketplace", "remove", "debug"])
         .assert()
         .success()
         .stdout(contains("Removed marketplace `debug`."));
@@ -58,7 +59,7 @@ async fn marketplace_remove_rejects_unknown_marketplace() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     codex_command(codex_home.path())?
-        .args(["marketplace", "remove", "debug"])
+        .args(["plugin", "marketplace", "remove", "debug"])
         .assert()
         .failure()
         .stderr(contains(
