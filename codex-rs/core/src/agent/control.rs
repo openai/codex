@@ -117,6 +117,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::Other,
         ) => false,
         RolloutItem::Compacted(_)
+        | RolloutItem::AdvertisedMcpTools(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::SessionMeta(_)
         | RolloutItem::TurnContext(_) => true,

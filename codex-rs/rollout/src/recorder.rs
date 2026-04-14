@@ -686,6 +686,9 @@ impl RolloutRecorder {
                     RolloutItem::TurnContext(item) => {
                         items.push(RolloutItem::TurnContext(item));
                     }
+                    RolloutItem::AdvertisedMcpTools(item) => {
+                        items.push(RolloutItem::AdvertisedMcpTools(item));
+                    }
                     RolloutItem::EventMsg(_ev) => {
                         items.push(RolloutItem::EventMsg(_ev));
                     }
@@ -1303,6 +1306,7 @@ async fn resume_candidate_matches_cwd(
         && let Some(latest_turn_context_cwd) = items.iter().rev().find_map(|item| match item {
             RolloutItem::TurnContext(turn_context) => Some(turn_context.cwd.as_path()),
             RolloutItem::SessionMeta(_)
+            | RolloutItem::AdvertisedMcpTools(_)
             | RolloutItem::ResponseItem(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,

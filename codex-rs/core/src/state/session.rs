@@ -10,7 +10,7 @@ use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::mcp_tool_catalog::McpToolCatalog;
-use crate::mcp_tool_catalog::McpToolCatalogSnapshot;
+use crate::mcp_tool_catalog::McpToolCatalogMerge;
 use crate::mcp_tool_catalog::McpToolCatalogUpdate;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use codex_mcp::ToolInfo;
@@ -82,7 +82,7 @@ impl SessionState {
     pub(crate) fn merge_advertised_mcp_tools(
         &mut self,
         update: McpToolCatalogUpdate,
-    ) -> McpToolCatalogSnapshot {
+    ) -> McpToolCatalogMerge {
         self.advertised_mcp_tools.merge(update)
     }
 

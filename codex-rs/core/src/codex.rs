@@ -2360,8 +2360,33 @@ impl Session {
         &self,
         update: McpToolCatalogUpdate,
     ) -> McpToolCatalogSnapshot {
+        let merged = {
+            let mut state = self.state.lock().await;
+            state.merge_advertised_mcp_tools(update)
+        };
+        if merged.changed {
+            self.persist_advertised_mcp_catalog(&merged.snapshot).await;
+        }
+        merged.snapshot
+    }
+
+    async fn hydrate_advertised_mcp_catalog_from_rollout(&self, rollout_items: &[RolloutItem]) {
         let mut state = self.state.lock().await;
-        state.merge_advertised_mcp_tools(update)
+        for item in rollout_items {
+            if let RolloutItem::AdvertisedMcpTools(catalog) = item {
+                state.merge_advertised_mcp_tools(McpToolCatalogUpdate::from_advertised(
+                    catalog.clone(),
+                ));
+            }
+        }
+    }
+
+    async fn persist_advertised_mcp_catalog(&self, snapshot: &McpToolCatalogSnapshot) {
+        let Some(catalog) = snapshot.to_advertised() else {
+            return;
+        };
+        self.persist_rollout_items(&[RolloutItem::AdvertisedMcpTools(catalog)])
+            .await;
     }
 
     async fn list_model_visible_mcp_catalog_for_turn(
@@ -2413,6 +2438,8 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                self.hydrate_advertised_mcp_catalog_from_rollout(&rollout_items)
+                    .await;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
@@ -2451,6 +2478,8 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
+                self.hydrate_advertised_mcp_catalog_from_rollout(&rollout_items)
+                    .await;
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 

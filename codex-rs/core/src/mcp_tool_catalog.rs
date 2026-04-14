@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use codex_mcp::ToolInfo;
+use codex_protocol::protocol::AdvertisedMcpToolCatalog;
+use codex_protocol::protocol::AdvertisedMcpToolInfo;
+use tracing::warn;
 
 #[derive(Debug, Default)]
 pub(crate) struct McpToolCatalog {
@@ -20,14 +23,30 @@ pub(crate) struct McpToolCatalogSnapshot {
     pub(crate) tools: HashMap<String, ToolInfo>,
 }
 
+#[derive(Debug)]
+pub(crate) struct McpToolCatalogMerge {
+    pub(crate) snapshot: McpToolCatalogSnapshot,
+    pub(crate) changed: bool,
+}
+
 impl McpToolCatalog {
-    pub(crate) fn merge(&mut self, update: McpToolCatalogUpdate) -> McpToolCatalogSnapshot {
+    pub(crate) fn merge(&mut self, update: McpToolCatalogUpdate) -> McpToolCatalogMerge {
         let McpToolCatalogUpdate { has_servers, tools } = update;
-        self.has_servers |= has_servers;
-        for (name, tool) in tools {
-            self.tools.entry(name).or_insert(tool);
+        let mut changed = false;
+        if has_servers && !self.has_servers {
+            self.has_servers = true;
+            changed = true;
         }
-        self.snapshot()
+        for (name, tool) in tools {
+            if let std::collections::hash_map::Entry::Vacant(entry) = self.tools.entry(name) {
+                entry.insert(tool);
+                changed = true;
+            }
+        }
+        McpToolCatalogMerge {
+            snapshot: self.snapshot(),
+            changed,
+        }
     }
 
     pub(crate) fn snapshot(&self) -> McpToolCatalogSnapshot {
@@ -41,6 +60,87 @@ impl McpToolCatalog {
         let qualified_name = qualified_mcp_tool_name(name, namespace);
         self.tools.get(&qualified_name).cloned()
     }
+}
+
+impl McpToolCatalogUpdate {
+    pub(crate) fn from_advertised(catalog: AdvertisedMcpToolCatalog) -> Self {
+        let tools = catalog
+            .tools
+            .into_iter()
+            .filter_map(
+                |(name, tool)| match advertised_tool_info_into_tool_info(tool) {
+                    Ok(tool) => Some((name, tool)),
+                    Err(err) => {
+                        warn!("failed to hydrate advertised MCP tool {name} from rollout: {err}");
+                        None
+                    }
+                },
+            )
+            .collect();
+        Self {
+            has_servers: catalog.has_servers,
+            tools,
+        }
+    }
+}
+
+impl McpToolCatalogSnapshot {
+    pub(crate) fn to_advertised(&self) -> Option<AdvertisedMcpToolCatalog> {
+        if !self.has_servers && self.tools.is_empty() {
+            return None;
+        }
+
+        let tools = self
+            .tools
+            .iter()
+            .filter_map(
+                |(name, tool)| match advertised_tool_info_from_tool_info(tool) {
+                    Ok(tool) => Some((name.clone(), tool)),
+                    Err(err) => {
+                        warn!("failed to persist advertised MCP tool {name}: {err}");
+                        None
+                    }
+                },
+            )
+            .collect();
+
+        Some(AdvertisedMcpToolCatalog {
+            has_servers: self.has_servers,
+            tools,
+        })
+    }
+}
+
+fn advertised_tool_info_from_tool_info(
+    tool: &ToolInfo,
+) -> serde_json::Result<AdvertisedMcpToolInfo> {
+    Ok(AdvertisedMcpToolInfo {
+        server_name: tool.server_name.clone(),
+        callable_name: tool.callable_name.clone(),
+        callable_namespace: tool.callable_namespace.clone(),
+        server_instructions: tool.server_instructions.clone(),
+        tool: serde_json::to_value(&tool.tool)?,
+        connector_id: tool.connector_id.clone(),
+        connector_name: tool.connector_name.clone(),
+        plugin_display_names: tool.plugin_display_names.clone(),
+        connector_description: tool.connector_description.clone(),
+    })
+}
+
+fn advertised_tool_info_into_tool_info(
+    tool: AdvertisedMcpToolInfo,
+) -> serde_json::Result<ToolInfo> {
+    Ok(ToolInfo {
+        server_name: tool.server_name,
+        callable_name: tool.callable_name,
+        callable_namespace: tool.callable_namespace,
+        server_instructions: tool.server_instructions,
+        tool: serde_json::from_value(tool.tool)?,
+        connector_id: tool.connector_id,
+        connector_name: tool.connector_name,
+        plugin_display_names: tool.plugin_display_names,
+        connector_description: tool.connector_description,
+    })
 }
 
 fn qualified_mcp_tool_name(name: &str, namespace: Option<&str>) -> String {
@@ -129,17 +229,19 @@ mod tests {
     #[test]
     fn merge_preserves_advertised_server_presence() {
         let mut catalog = McpToolCatalog::default();
-        let snapshot = catalog.merge(McpToolCatalogUpdate {
+        let merged = catalog.merge(McpToolCatalogUpdate {
             has_servers: true,
             tools: HashMap::new(),
         });
-        assert!(snapshot.has_servers);
+        assert!(merged.changed);
+        assert!(merged.snapshot.has_servers);
 
-        let snapshot = catalog.merge(McpToolCatalogUpdate {
+        let merged = catalog.merge(McpToolCatalogUpdate {
             has_servers: false,
             tools: HashMap::new(),
         });
-        assert!(snapshot.has_servers);
-        assert!(snapshot.tools.is_empty());
+        assert!(!merged.changed);
+        assert!(merged.snapshot.has_servers);
+        assert!(merged.snapshot.tools.is_empty());
     }
 }

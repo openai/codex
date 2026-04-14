@@ -10,6 +10,7 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
+use crate::mcp_tool_catalog::McpToolCatalog;
 use crate::mcp_tool_catalog::McpToolCatalogUpdate;
 use crate::mcp_tool_exposure::DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
@@ -1109,6 +1110,77 @@ async fn build_tool_call_routes_advertised_mcp_tool_when_live_manager_is_empty()
         }
         other => panic!("expected MCP payload, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn resumed_history_hydrates_advertised_mcp_tools() {
+    let mut catalog = McpToolCatalog::default();
+    let advertised = catalog
+        .merge(McpToolCatalogUpdate {
+            has_servers: true,
+            tools: numbered_mcp_tools(1),
+        })
+        .snapshot
+        .to_advertised()
+        .expect("advertised catalog");
+
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::new(),
+            history: vec![RolloutItem::AdvertisedMcpTools(advertised)],
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    let router = built_tools(
+        session.as_ref(),
+        turn_context.as_ref(),
+        &[],
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("build tools");
+
+    assert!(
+        router
+            .model_visible_specs()
+            .iter()
+            .any(|spec| spec.name() == "mcp__rmcp__tool_0"),
+        "MCP tools advertised before process exit should be restored on resume"
+    );
+}
+
+#[tokio::test]
+async fn advertised_mcp_catalog_updates_are_persisted_to_rollout() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_rollout_recorder(&session).await;
+
+    session
+        .merge_advertised_mcp_catalog_for_model(McpToolCatalogUpdate {
+            has_servers: true,
+            tools: numbered_mcp_tools(1),
+        })
+        .await;
+    session.flush_rollout().await.expect("flush rollout");
+
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let advertised = resumed.history.iter().find_map(|item| match item {
+        RolloutItem::AdvertisedMcpTools(catalog) => Some(catalog),
+        _ => None,
+    });
+
+    assert!(
+        advertised.is_some_and(|catalog| catalog.tools.contains_key("mcp__rmcp__tool_0")),
+        "advertised MCP catalog should be persisted for process resume"
+    );
 }
 
 #[tokio::test]
