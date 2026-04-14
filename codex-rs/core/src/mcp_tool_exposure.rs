@@ -175,8 +175,8 @@ mod tests {
     #[test]
     fn collect_unavailable_called_mcp_tools_detects_mcp_function_calls() {
         let input = vec![
-            function_call("shell", None),
-            function_call("mcp__server__lookup", None),
+            function_call("shell", /*namespace*/ None),
+            function_call("mcp__server__lookup", /*namespace*/ None),
             function_call("_create_event", Some("mcp__codex_apps__calendar")),
         ];
 
@@ -202,8 +202,8 @@ mod tests {
     #[test]
     fn collect_unavailable_called_mcp_tools_skips_currently_available_tools() {
         let input = vec![
-            function_call("mcp__server__lookup", None),
-            function_call("mcp__server__missing", None),
+            function_call("mcp__server__lookup", /*namespace*/ None),
+            function_call("mcp__server__missing", /*namespace*/ None),
         ];
         let all_mcp_tools = HashMap::from([(
             "mcp__server__lookup".to_string(),
