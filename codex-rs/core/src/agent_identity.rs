@@ -159,7 +159,7 @@ impl AgentIdentityManager {
         };
 
         let url = agent_registration_url(&self.chatgpt_base_url);
-        let human_biscuit = self.mint_human_biscuit(binding, &url).await?;
+        let human_biscuit = self.mint_human_biscuit(binding, "POST", &url).await?;
         let client = create_client();
         let response = client
             .post(&url)
@@ -203,6 +203,7 @@ impl AgentIdentityManager {
     async fn mint_human_biscuit(
         &self,
         binding: &AgentIdentityBinding,
+        target_method: &str,
         target_url: &str,
     ) -> Result<String> {
         let url = agent_identity_biscuit_url(&self.chatgpt_base_url);
@@ -212,7 +213,7 @@ impl AgentIdentityManager {
             .get(&url)
             .bearer_auth(&binding.access_token)
             .header("X-Request-Id", request_id.clone())
-            .header("X-Original-Method", "GET")
+            .header("X-Original-Method", target_method)
             .header("X-Original-Url", target_url)
             .timeout(AGENT_IDENTITY_BISCUIT_TIMEOUT)
             .send()
@@ -649,7 +650,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path(biscuit_path))
             .and(header("authorization", "Bearer access-token-account-123"))
-            .and(header("x-original-method", "GET"))
+            .and(header("x-original-method", "POST"))
             .and(header("x-original-url", target_url))
             .respond_with(
                 ResponseTemplate::new(200).insert_header("x-openai-authorization", "human-biscuit"),
