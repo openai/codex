@@ -37,6 +37,7 @@ use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
+use super::review_session::GuardianReviewSessionMetadata;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
@@ -86,10 +87,13 @@ pub(crate) fn guardian_timeout_message() -> String {
 
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
-    Completed(anyhow::Result<GuardianAssessment>),
-    Failed(GuardianReviewFailure),
-    TimedOut,
-    Aborted,
+    Completed(
+        anyhow::Result<GuardianAssessment>,
+        Option<GuardianReviewSessionMetadata>,
+    ),
+    Failed(GuardianReviewFailure, Option<GuardianReviewSessionMetadata>),
+    TimedOut(Option<GuardianReviewSessionMetadata>),
+    Aborted(Option<GuardianReviewSessionMetadata>),
 }
 
 #[derive(Debug)]
@@ -218,6 +222,24 @@ struct GuardianReviewMetadataFields {
     reviewed_action_truncated: bool,
     token_usage: Option<TokenUsage>,
     time_to_first_token_ms: Option<u64>,
+}
+
+fn guardian_review_metadata_fields(
+    metadata: Option<GuardianReviewSessionMetadata>,
+) -> GuardianReviewMetadataFields {
+    match metadata {
+        Some(metadata) => GuardianReviewMetadataFields {
+            guardian_thread_id: Some(metadata.guardian_thread_id),
+            guardian_session_kind: Some(metadata.guardian_session_kind),
+            guardian_model: Some(metadata.guardian_model),
+            guardian_reasoning_effort: metadata.guardian_reasoning_effort,
+            had_prior_review_context: Some(metadata.had_prior_review_context),
+            reviewed_action_truncated: false,
+            token_usage: metadata.token_usage,
+            time_to_first_token_ms: None,
+        },
+        None => GuardianReviewMetadataFields::default(),
+    }
 }
 
 impl GuardianReviewAnalyticsContext {
@@ -404,8 +426,8 @@ async fn run_guardian_review(
 
     let completed_at = now_unix_seconds();
     let assessment = match outcome {
-        GuardianReviewOutcome::Completed(Ok(assessment)) => {
-            let metadata = GuardianReviewMetadataFields::default();
+        GuardianReviewOutcome::Completed(Ok(assessment), metadata) => {
+            let metadata = guardian_review_metadata_fields(metadata);
             analytics_context.track(
                 session.as_ref(),
                 turn.as_ref(),
@@ -440,8 +462,8 @@ async fn run_guardian_review(
             );
             assessment
         }
-        GuardianReviewOutcome::Completed(Err(err)) => {
-            let metadata = GuardianReviewMetadataFields::default();
+        GuardianReviewOutcome::Completed(Err(err), metadata) => {
+            let metadata = guardian_review_metadata_fields(metadata);
             let rationale = format!("Automatic approval review failed: {err}");
             analytics_context.track(
                 session.as_ref(),
@@ -471,8 +493,8 @@ async fn run_guardian_review(
                 rationale,
             }
         }
-        GuardianReviewOutcome::Failed(failure) => {
-            let metadata = GuardianReviewMetadataFields::default();
+        GuardianReviewOutcome::Failed(failure, metadata) => {
+            let metadata = guardian_review_metadata_fields(metadata);
             let rationale = format!("Automatic approval review failed: {}", failure.error());
             analytics_context.track(
                 session.as_ref(),
@@ -502,8 +524,8 @@ async fn run_guardian_review(
                 rationale,
             }
         }
-        GuardianReviewOutcome::TimedOut => {
-            let metadata = GuardianReviewMetadataFields::default();
+        GuardianReviewOutcome::TimedOut(metadata) => {
+            let metadata = guardian_review_metadata_fields(metadata);
             let rationale =
                 "Automatic approval review timed out while evaluating the requested approval."
                     .to_string();
@@ -554,8 +576,8 @@ async fn run_guardian_review(
                 .await;
             return ReviewDecision::TimedOut;
         }
-        GuardianReviewOutcome::Aborted => {
-            let metadata = GuardianReviewMetadataFields::default();
+        GuardianReviewOutcome::Aborted(metadata) => {
+            let metadata = guardian_review_metadata_fields(metadata);
             analytics_context.track(
                 session.as_ref(),
                 turn.as_ref(),
@@ -748,7 +770,10 @@ pub(super) async fn run_guardian_review_session(
         Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
             Ok(config) => Some(config),
             Err(err) => {
-                return GuardianReviewOutcome::Failed(GuardianReviewFailure::PromptBuild(err));
+                return GuardianReviewOutcome::Failed(
+                    GuardianReviewFailure::PromptBuild(err),
+                    None,
+                );
             }
         },
         None => None,
@@ -799,10 +824,12 @@ pub(super) async fn run_guardian_review_session(
     );
     let guardian_config = match guardian_config {
         Ok(config) => config,
-        Err(err) => return GuardianReviewOutcome::Failed(GuardianReviewFailure::PromptBuild(err)),
+        Err(err) => {
+            return GuardianReviewOutcome::Failed(GuardianReviewFailure::PromptBuild(err), None);
+        }
     };
 
-    match session
+    let (session_outcome, session_metadata) = session
         .guardian_review_session
         .run_review(GuardianReviewSessionParams {
             parent_session: Arc::clone(&session),
@@ -817,25 +844,37 @@ pub(super) async fn run_guardian_review_session(
             personality: turn.personality,
             external_cancel,
         })
-        .await
-    {
+        .await;
+
+    match session_outcome {
         GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => match last_agent_message
         {
             Some(last_agent_message) => {
                 match parse_guardian_assessment(Some(&last_agent_message)) {
-                    Ok(assessment) => GuardianReviewOutcome::Completed(Ok(assessment)),
-                    Err(err) => GuardianReviewOutcome::Failed(GuardianReviewFailure::Parse(err)),
+                    Ok(assessment) => {
+                        GuardianReviewOutcome::Completed(Ok(assessment), session_metadata)
+                    }
+                    Err(err) => GuardianReviewOutcome::Failed(
+                        GuardianReviewFailure::Parse(err),
+                        session_metadata,
+                    ),
                 }
             }
-            None => GuardianReviewOutcome::Failed(GuardianReviewFailure::Session(anyhow::anyhow!(
-                "guardian review completed without an assessment payload"
-            ))),
+            None => GuardianReviewOutcome::Failed(
+                GuardianReviewFailure::Session(anyhow::anyhow!(
+                    "guardian review completed without an assessment payload"
+                )),
+                session_metadata,
+            ),
         },
         GuardianReviewSessionOutcome::Completed(Err(err)) => {
-            GuardianReviewOutcome::Failed(GuardianReviewFailure::Session(err))
+            GuardianReviewOutcome::Failed(GuardianReviewFailure::Session(err), session_metadata)
         }
-        GuardianReviewSessionOutcome::TimedOut => GuardianReviewOutcome::TimedOut,
-        GuardianReviewSessionOutcome::Aborted => GuardianReviewOutcome::Aborted,
+        GuardianReviewSessionOutcome::PromptBuildFailed(err) => {
+            GuardianReviewOutcome::Failed(GuardianReviewFailure::PromptBuild(err), session_metadata)
+        }
+        GuardianReviewSessionOutcome::TimedOut => GuardianReviewOutcome::TimedOut(session_metadata),
+        GuardianReviewSessionOutcome::Aborted => GuardianReviewOutcome::Aborted(session_metadata),
     }
 }
 
