@@ -51,6 +51,16 @@ const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
 
+fn remove_file_command(path: &Path) -> String {
+    if cfg!(windows) {
+        let path = path.display().to_string().replace('\'', "''");
+        format!("Remove-Item -Force -ErrorAction SilentlyContinue '{path}'")
+    } else {
+        let path = path.display().to_string().replace('\'', r#"'\''"#);
+        format!("rm -f -- '{path}'")
+    }
+}
+
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
     let script_path = home.join("stop_hook.py");
     let log_path = home.join("stop_hook_log.jsonl");
@@ -1149,7 +1159,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     let server = start_mock_server().await;
     let call_id = "permissionrequest-shell-command";
     let marker = std::env::temp_dir().join("permissionrequest-shell-command-marker");
-    let command = format!("rm -f {}", marker.display());
+    let command = remove_file_command(&marker);
     let args = serde_json::json!({ "command": command });
     let responses = mount_sse_sequence(
         &server,
@@ -1228,7 +1238,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     let server = start_mock_server().await;
     let call_id = "permissionrequest-exec-command";
     let marker = std::env::temp_dir().join("permissionrequest-exec-command-marker");
-    let command = format!("rm -f {}", marker.display());
+    let command = remove_file_command(&marker);
     let justification = "remove the temporary marker";
     let args = serde_json::json!({
         "cmd": command,
