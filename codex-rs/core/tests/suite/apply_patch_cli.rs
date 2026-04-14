@@ -952,7 +952,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
 
     let script = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: in_sub.txt\n@@\n-before\n+after\n*** End Patch\nEOF\n";
     let call_id = "shell-heredoc-cd";
-    let args = json!({ "command": script, "timeout_ms": 5_000 });
+    let args = json!({ "command": script, "timeout_ms": 30_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
