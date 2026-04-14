@@ -35,8 +35,8 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// internal `apply_patch` path.
 ///
 /// Although this constant lives in `codex-apply-patch` (to avoid forcing
-/// `codex-arg0` to depend on `codex-core`), it remains part of the "codex
-/// core" process-invocation contract for the standalone `apply_patch` command
+/// `codex-arg0` to depend on `codex-core`), it remains part of the "codex core"
+/// process-invocation contract for the standalone `apply_patch` command
 /// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
@@ -244,26 +244,6 @@ pub async fn apply_hunks(
     }
 }
 
-pub(crate) async fn read_file_utf8_with_context(
-    path_abs: &AbsolutePathBuf,
-    fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext>,
-    context: String,
-) -> std::result::Result<String, ApplyPatchError> {
-    let bytes = fs.read_file(path_abs, sandbox).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: context.clone(),
-            source: err,
-        })
-    })?;
-    String::from_utf8(bytes).map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context,
-            source: io::Error::new(io::ErrorKind::InvalidData, err),
-        })
-    })
-}
-
 /// Applies each parsed patch hunk to the filesystem.
 /// Returns an error if any of the changes could not be applied.
 /// Tracks file paths affected by applying a patch, preserving the path spelling
@@ -294,13 +274,23 @@ async fn apply_hunks_to_files(
         let path_abs = hunk.resolve_path(cwd);
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                write_file_with_missing_parent_retry(
-                    fs,
-                    &path_abs,
-                    contents.clone().into_bytes(),
-                    sandbox,
-                )
-                .await?;
+                if let Some(parent_abs) = path_abs.parent() {
+                    fs.create_directory(
+                        &parent_abs,
+                        CreateDirectoryOptions { recursive: true },
+                        sandbox,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to create parent directories for {}",
+                            path_abs.display()
+                        )
+                    })?;
+                }
+                fs.write_file(&path_abs, contents.clone().into_bytes(), sandbox)
+                    .await
+                    .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
@@ -333,13 +323,23 @@ async fn apply_hunks_to_files(
                     derive_new_contents_from_chunks(&path_abs, chunks, fs, sandbox).await?;
                 if let Some(dest) = move_path {
                     let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
-                    write_file_with_missing_parent_retry(
-                        fs,
-                        &dest_abs,
-                        new_contents.into_bytes(),
-                        sandbox,
-                    )
-                    .await?;
+                    if let Some(parent_abs) = dest_abs.parent() {
+                        fs.create_directory(
+                            &parent_abs,
+                            CreateDirectoryOptions { recursive: true },
+                            sandbox,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "Failed to create parent directories for {}",
+                                dest_abs.display()
+                            )
+                        })?;
+                    }
+                    fs.write_file(&dest_abs, new_contents.into_bytes(), sandbox)
+                        .await
+                        .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
                     let result: io::Result<()> = async {
                         let metadata = fs.get_metadata(&path_abs, sandbox).await?;
                         if metadata.is_directory {
@@ -379,40 +379,6 @@ async fn apply_hunks_to_files(
     })
 }
 
-async fn write_file_with_missing_parent_retry(
-    fs: &dyn ExecutorFileSystem,
-    path_abs: &AbsolutePathBuf,
-    contents: Vec<u8>,
-    sandbox: Option<&FileSystemSandboxContext>,
-) -> anyhow::Result<()> {
-    match fs.write_file(path_abs, contents.clone(), sandbox).await {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent_abs) = path_abs.parent() {
-                fs.create_directory(
-                    &parent_abs,
-                    CreateDirectoryOptions { recursive: true },
-                    sandbox,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to create parent directories for {}",
-                        path_abs.display()
-                    )
-                })?;
-            }
-            fs.write_file(path_abs, contents, sandbox)
-                .await
-                .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
-            Ok(())
-        }
-        Err(err) => {
-            Err(err).with_context(|| format!("Failed to write file {}", path_abs.display()))
-        }
-    }
-}
-
 struct AppliedPatch {
     original_contents: String,
     new_contents: String,
@@ -426,13 +392,12 @@ async fn derive_new_contents_from_chunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = read_file_utf8_with_context(
-        path_abs,
-        fs,
-        sandbox,
-        format!("Failed to read file to update {}", path_abs.display()),
-    )
-    .await?;
+    let original_contents = fs.read_file_text(path_abs, sandbox).await.map_err(|err| {
+        ApplyPatchError::IoError(IoError {
+            context: format!("Failed to read file to update {}", path_abs.display()),
+            source: err,
+        })
+    })?;
 
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 
@@ -637,7 +602,6 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::fs;
-    use std::io::ErrorKind;
     use std::string::ToString;
     use tempfile::tempdir;
 
@@ -1337,30 +1301,5 @@ g
         )
         .await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_read_file_utf8_with_context_reports_invalid_utf8() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("invalid.bin");
-        fs::write(&path, [0xff, 0xfe]).unwrap();
-        let path = AbsolutePathBuf::from_absolute_path(&path).unwrap();
-
-        let err = read_file_utf8_with_context(
-            &path,
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-            "custom context".to_string(),
-        )
-        .await
-        .unwrap_err();
-
-        match err {
-            ApplyPatchError::IoError(io_err) => {
-                assert_eq!(io_err.context, "custom context");
-                assert_eq!(io_err.source.kind(), ErrorKind::InvalidData);
-            }
-            other => panic!("expected IoError, got {other:?}"),
-        }
     }
 }
