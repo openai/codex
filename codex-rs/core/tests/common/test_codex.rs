@@ -64,6 +64,7 @@ type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
 const REMOTE_EXEC_SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_EXEC_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const REMOTE_CODEX_LINUX_SANDBOX_EXE: &str = "codex-linux-sandbox";
 static REMOTE_EXEC_SERVER_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -178,7 +179,7 @@ pub async fn test_env() -> Result<TestEnv> {
                     Path::new(&remote_process.process.remote_exec_server_path)
                         .parent()
                         .expect("remote exec-server path should have a parent")
-                        .join(CODEX_LINUX_SANDBOX_ARG0),
+                        .join(REMOTE_CODEX_LINUX_SANDBOX_EXE),
                 ),
                 _remote_exec_server_process: Some(remote_process.process),
             })
