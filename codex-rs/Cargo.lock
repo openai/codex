@@ -1876,6 +1876,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-config-store"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
 name = "codex-connectors"
 version = "0.0.0"
 dependencies = [
