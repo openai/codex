@@ -18,15 +18,17 @@ clap = { workspace = true, features = ["derive"] }
 chrono = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
-codex-utils-rustls-provider = { workspace = true }
 globset = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+codex-utils-rustls-provider = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 rama-core = { version = "=0.3.0-alpha.4" }
 rama-http = { version = "=0.3.0-alpha.4" }
 rama-http-backend = { version = "=0.3.0-alpha.4", features = ["tls"] }
@@ -35,9 +37,12 @@ rama-socks5 = { version = "=0.3.0-alpha.4" }
 rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
 rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 
-[target.'cfg(target_family = "unix")'.dependencies]
+[target.'cfg(all(target_family = "unix", not(target_arch = "wasm32")))'.dependencies]
 rama-unix = { version = "=0.3.0-alpha.4" }

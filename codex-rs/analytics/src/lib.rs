@@ -1,17 +1,7 @@
-mod analytics_client;
+#[cfg(not(target_arch = "wasm32"))]
+include!("native.rs");
 
-pub use analytics_client::AnalyticsEventsClient;
-pub use analytics_client::AnalyticsFact;
-pub use analytics_client::AnalyticsReducer;
-pub use analytics_client::AppInvocation;
-pub use analytics_client::AppMentionedInput;
-pub use analytics_client::AppUsedInput;
-pub use analytics_client::CustomAnalyticsFact;
-pub use analytics_client::InvocationType;
-pub use analytics_client::PluginState;
-pub use analytics_client::PluginStateChangedInput;
-pub use analytics_client::PluginUsedInput;
-pub use analytics_client::SkillInvocation;
-pub use analytics_client::SkillInvokedInput;
-pub use analytics_client::TrackEventsContext;
-pub use analytics_client::build_track_events_context;
+#[cfg(target_arch = "wasm32")]
+mod wasm;
+#[cfg(target_arch = "wasm32")]
+pub use wasm::*;

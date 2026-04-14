@@ -15,16 +15,18 @@ workspace = true
 [dependencies]
 codex-app-server-protocol = { workspace = true }
 codex-git-utils = { workspace = true }
-codex-login = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha1 = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+codex-login = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
     "rt-multi-thread",
 ] }
-tracing = { workspace = true, features = ["log"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

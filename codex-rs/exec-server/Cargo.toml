@@ -15,17 +15,20 @@ path = "src/bin/codex-exec-server.rs"
 workspace = true
 
 [dependencies]
-arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-codex-utils-pty = { workspace = true }
-futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arc-swap = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-utils-pty = { workspace = true }
+futures = { workspace = true }
 tokio = { workspace = true, features = [
     "fs",
     "io-std",
@@ -38,7 +41,9 @@ tokio = { workspace = true, features = [
     "time",
 ] }
 tokio-tungstenite = { workspace = true }
-tracing = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
