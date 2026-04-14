@@ -298,15 +298,14 @@ async fn call_nested_tool(
         )));
     }
 
-    let display_name = tool_name.display();
     let (tool_call_name, payload) =
         if let Some(tool_info) = exec.session.resolve_mcp_tool_info(&tool_name).await {
-            let raw_arguments = match serialize_function_tool_arguments(&display_name, input) {
+            let raw_arguments = match serialize_function_tool_arguments(&tool_name, input) {
                 Ok(raw_arguments) => raw_arguments,
                 Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             };
             (
-                tool_info.callable_tool_name(),
+                tool_info.canonical_tool_name(),
                 ToolPayload::Mcp {
                     server: tool_info.server_name,
                     tool: tool_info.tool.name.to_string(),
@@ -369,21 +368,21 @@ fn build_function_tool_payload(
     tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let display_name = tool_name.display();
-    let arguments = serialize_function_tool_arguments(&display_name, input)?;
+    let arguments = serialize_function_tool_arguments(tool_name, input)?;
     Ok(ToolPayload::Function { arguments })
 }
 
 fn serialize_function_tool_arguments(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<String, String> {
+    let display_name = tool_name.display();
     match input {
         None => Ok("{}".to_string()),
         Some(JsonValue::Object(map)) => serde_json::to_string(&JsonValue::Object(map))
-            .map_err(|err| format!("failed to serialize tool `{tool_name}` arguments: {err}")),
+            .map_err(|err| format!("failed to serialize tool `{display_name}` arguments: {err}")),
         Some(_) => Err(format!(
-            "tool `{tool_name}` expects a JSON object for arguments"
+            "tool `{display_name}` expects a JSON object for arguments"
         )),
     }
 }

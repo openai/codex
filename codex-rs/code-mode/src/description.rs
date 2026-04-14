@@ -271,11 +271,15 @@ pub fn build_exec_tool_description(
         for tool in enabled_tools {
             let name = tool.name.as_str();
             let nested_description = render_code_mode_sample_for_definition(tool);
-            let next_namespace = namespace_descriptions
-                .get(name)
+            let namespace_description = tool
+                .tool_name
+                .namespace
+                .as_ref()
+                .and_then(|namespace| namespace_descriptions.get(namespace));
+            let next_namespace = namespace_description
                 .map(|namespace_description| namespace_description.name.as_str());
             if next_namespace != current_namespace {
-                if let Some(namespace_description) = namespace_descriptions.get(name) {
+                if let Some(namespace_description) = namespace_description {
                     let namespace_description_text = namespace_description.description.trim();
                     if !namespace_description_text.is_empty() {
                         nested_tool_sections.push(format!(
@@ -876,22 +880,13 @@ bar"
 
     #[test]
     fn code_mode_only_description_groups_namespace_instructions_once() {
-        let namespace_descriptions = BTreeMap::from([
-            (
-                "mcp__sample__alpha".to_string(),
-                ToolNamespaceDescription {
-                    name: "mcp__sample".to_string(),
-                    description: "Shared namespace guidance.".to_string(),
-                },
-            ),
-            (
-                "mcp__sample__beta".to_string(),
-                ToolNamespaceDescription {
-                    name: "mcp__sample".to_string(),
-                    description: "Shared namespace guidance.".to_string(),
-                },
-            ),
-        ]);
+        let namespace_descriptions = BTreeMap::from([(
+            "mcp__sample__".to_string(),
+            ToolNamespaceDescription {
+                name: "mcp__sample".to_string(),
+                description: "Shared namespace guidance.".to_string(),
+            },
+        )]);
         let description = build_exec_tool_description(
             &[
                 ToolDefinition {
@@ -943,7 +938,7 @@ bar"
     #[test]
     fn code_mode_only_description_omits_empty_namespace_sections() {
         let namespace_descriptions = BTreeMap::from([(
-            "mcp__sample__alpha".to_string(),
+            "mcp__sample__".to_string(),
             ToolNamespaceDescription {
                 name: "mcp__sample".to_string(),
                 description: String::new(),

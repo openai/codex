@@ -76,9 +76,9 @@ pub fn build_tool_registry_plan(
             .tool_namespaces
             .into_iter()
             .flatten()
-            .map(|(tool_name, detail)| {
+            .map(|(namespace, detail)| {
                 (
-                    tool_name.display(),
+                    namespace.clone(),
                     codex_code_mode::ToolNamespaceDescription {
                         name: detail.name.clone(),
                         description: detail.description.clone().unwrap_or_default(),
@@ -100,9 +100,8 @@ pub fn build_tool_registry_plan(
                 .iter()
                 .map(|configured_tool| &configured_tool.spec),
         );
-        enabled_tools.sort_by(|left, right| {
-            compare_code_mode_tool_names(&left.name, &right.name, &namespace_descriptions)
-        });
+        enabled_tools
+            .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
         plan.push_spec(
             create_code_mode_tool(
                 &enabled_tools,
@@ -500,15 +499,10 @@ pub fn build_tool_registry_plan(
 
         for (namespace, mut entries) in namespace_entries {
             entries.sort_by_key(|tool| tool.name.name.clone());
-            let description = entries
-                .iter()
-                .filter_map(|tool| {
-                    params
-                        .tool_namespaces
-                        .and_then(|namespaces| namespaces.get(&tool.name))
-                        .and_then(|namespace| namespace.description.clone())
-                })
-                .next()
+            let description = params
+                .tool_namespaces
+                .and_then(|namespaces| namespaces.get(&namespace))
+                .and_then(|namespace| namespace.description.clone())
                 .unwrap_or_default();
             let mut tools = Vec::new();
             for tool in entries {
@@ -563,39 +557,29 @@ pub fn build_tool_registry_plan(
     plan
 }
 
-fn compare_code_mode_tool_names(
-    left_name: &str,
-    right_name: &str,
+fn compare_code_mode_tools(
+    left: &codex_code_mode::ToolDefinition,
+    right: &codex_code_mode::ToolDefinition,
     namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
 ) -> std::cmp::Ordering {
-    let left_namespace = code_mode_namespace_name(left_name, namespace_descriptions);
-    let right_namespace = code_mode_namespace_name(right_name, namespace_descriptions);
+    let left_namespace = code_mode_namespace_name(left, namespace_descriptions);
+    let right_namespace = code_mode_namespace_name(right, namespace_descriptions);
 
     left_namespace
         .cmp(&right_namespace)
-        .then_with(|| {
-            code_mode_function_name(left_name, left_namespace)
-                .cmp(code_mode_function_name(right_name, right_namespace))
-        })
-        .then_with(|| left_name.cmp(right_name))
+        .then_with(|| left.tool_name.name.cmp(&right.tool_name.name))
+        .then_with(|| left.name.cmp(&right.name))
 }
 
 fn code_mode_namespace_name<'a>(
-    name: &str,
+    tool: &codex_code_mode::ToolDefinition,
     namespace_descriptions: &'a BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
 ) -> Option<&'a str> {
-    namespace_descriptions
-        .get(name)
+    tool.tool_name
+        .namespace
+        .as_ref()
+        .and_then(|namespace| namespace_descriptions.get(namespace))
         .map(|namespace_description| namespace_description.name.as_str())
-}
-
-fn code_mode_function_name<'a>(name: &'a str, namespace: Option<&str>) -> &'a str {
-    namespace
-        .and_then(|namespace| {
-            name.strip_prefix(namespace)
-                .and_then(|suffix| suffix.strip_prefix("__"))
-        })
-        .unwrap_or(name)
 }
 
 #[cfg(test)]

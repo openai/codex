@@ -157,7 +157,7 @@ pub struct ToolInfo {
 }
 
 impl ToolInfo {
-    pub fn callable_tool_name(&self) -> ToolName {
+    pub fn canonical_tool_name(&self) -> ToolName {
         ToolName::namespaced(self.callable_namespace.clone(), self.callable_name.clone())
     }
 }
@@ -1217,7 +1217,7 @@ impl McpConnectionManager {
         let all_tools = self.list_all_tools().await;
         all_tools
             .into_values()
-            .find(|tool| tool.callable_tool_name() == *tool_name)
+            .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {

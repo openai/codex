@@ -1609,7 +1609,7 @@ impl JsReplManager {
             .await
         {
             (
-                tool_info.callable_tool_name(),
+                tool_info.canonical_tool_name(),
                 crate::tools::context::ToolPayload::Mcp {
                     server: tool_info.server_name,
                     tool: tool_info.tool.name.to_string(),

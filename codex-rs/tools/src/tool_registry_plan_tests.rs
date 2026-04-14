@@ -1078,7 +1078,7 @@ fn test_build_specs_mcp_tools_converted() {
     let (tools, _) = build_specs(
         &tools_config,
         Some(HashMap::from([(
-            "test_server/do_something_cool".to_string(),
+            ToolName::namespaced("test_server/", "do_something_cool"),
             mcp_tool(
                 "do_something_cool",
                 "Do something cool",
@@ -1170,15 +1170,15 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
 
     let tools_map = HashMap::from([
         (
-            "test_server/do".to_string(),
+            ToolName::namespaced("test_server/", "do"),
             mcp_tool("do", "a", serde_json::json!({"type": "object"})),
         ),
         (
-            "test_server/something".to_string(),
+            ToolName::namespaced("test_server/", "something"),
             mcp_tool("something", "b", serde_json::json!({"type": "object"})),
         ),
         (
-            "test_server/cool".to_string(),
+            ToolName::namespaced("test_server/", "cool"),
             mcp_tool("cool", "c", serde_json::json!({"type": "object"})),
         ),
     ]);
@@ -1222,7 +1222,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
         &tools_config,
         Some(HashMap::from([
             (
-                "mcp__codex_apps__calendar_create_event".to_string(),
+                ToolName::namespaced("mcp__codex_apps__calendar", "_create_event"),
                 mcp_tool(
                     "calendar_create_event",
                     "Create calendar event",
@@ -1230,7 +1230,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
                 ),
             ),
             (
-                "mcp__rmcp__echo".to_string(),
+                ToolName::namespaced("mcp__rmcp__", "echo"),
                 mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
             ),
         ])),
@@ -1577,7 +1577,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
     let (tools, _) = build_specs(
         &tools_config,
         Some(HashMap::from([(
-            "mcp__sample__echo".to_string(),
+            ToolName::namespaced("mcp__sample__", "echo"),
             mcp_tool(
                 "echo",
                 "Echo text",
@@ -1630,7 +1630,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
     let (tools, _) = build_specs(
         &tools_config,
         Some(HashMap::from([(
-            "mcp__sample__fn".to_string(),
+            ToolName::namespaced("mcp__sample__", "fn"),
             mcp_tool(
                 "fn",
                 "Sample fn",
@@ -1845,7 +1845,7 @@ fn search_capable_model_info() -> ModelInfo {
 
 fn build_specs<'a>(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
@@ -1860,7 +1860,7 @@ fn build_specs<'a>(
 
 fn build_specs_with_discoverable_tools<'a>(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -1877,26 +1877,18 @@ fn build_specs_with_discoverable_tools<'a>(
 
 fn build_specs_with_optional_tool_namespaces<'a>(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
-    tool_namespaces: Option<HashMap<ToolName, ToolNamespace>>,
+    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
-            .map(|(qualified_name, tool)| {
-                let raw_tool_name = tool.name.as_ref();
-                let callable_namespace = qualified_name
-                    .strip_suffix(raw_tool_name)
-                    .filter(|namespace| !namespace.is_empty())
-                    .unwrap_or("mcp__test_server__");
-
-                ToolRegistryPlanMcpTool {
-                    name: ToolName::namespaced(callable_namespace.to_string(), raw_tool_name),
-                    tool,
-                }
+            .map(|(name, tool)| ToolRegistryPlanMcpTool {
+                name: name.clone(),
+                tool,
             })
             .collect::<Vec<_>>()
     });
@@ -1979,7 +1971,10 @@ fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([("mcp__sample__echo".to_string(), tool)])),
+        Some(HashMap::from([(
+            ToolName::namespaced("mcp__sample__", "echo"),
+            tool,
+        )])),
         /*deferred_mcp_tools*/ None,
         &[],
     );

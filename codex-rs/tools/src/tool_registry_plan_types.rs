@@ -59,7 +59,7 @@ pub struct ToolRegistryPlan {
 pub struct ToolRegistryPlanParams<'a> {
     pub mcp_tools: Option<&'a [ToolRegistryPlanMcpTool<'a>]>,
     pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
-    pub tool_namespaces: Option<&'a HashMap<ToolName, ToolNamespace>>,
+    pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
     pub dynamic_tools: &'a [DynamicToolSpec],
     pub default_agent_type_description: &'a str,

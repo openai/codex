@@ -9,7 +9,6 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolHandlerKind;
-use codex_tools::ToolName;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanDeferredTool;
 use codex_tools::ToolRegistryPlanMcpTool;
@@ -33,7 +32,7 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
 
 struct McpToolPlanInputs<'a> {
     mcp_tools: Vec<ToolRegistryPlanMcpTool<'a>>,
-    tool_namespaces: HashMap<ToolName, ToolNamespace>,
+    tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
 fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
@@ -41,7 +40,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
         mcp_tools: mcp_tools
             .values()
             .map(|tool| ToolRegistryPlanMcpTool {
-                name: tool.callable_tool_name(),
+                name: tool.canonical_tool_name(),
                 tool: &tool.tool,
             })
             .collect(),
@@ -49,7 +48,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
             .values()
             .map(|tool| {
                 (
-                    tool.callable_tool_name(),
+                    tool.callable_namespace.clone(),
                     ToolNamespace {
                         name: tool.callable_namespace.clone(),
                         description: tool
@@ -107,7 +106,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         tools
             .values()
             .map(|tool| ToolRegistryPlanDeferredTool {
-                name: tool.callable_tool_name(),
+                name: tool.canonical_tool_name(),
                 server_name: tool.server_name.as_str(),
                 connector_name: tool.connector_name.as_deref(),
                 connector_description: tool.connector_description.as_deref(),
