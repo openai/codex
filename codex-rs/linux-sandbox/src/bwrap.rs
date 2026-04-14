@@ -543,6 +543,10 @@ fn append_read_only_subpath_args(
     }
 
     if is_within_allowed_write_paths(subpath, allowed_write_paths) {
+        if fs::canonicalize(subpath).is_err() {
+            append_bwrap_mount_point_read_only_bind_args(args, cleanup_mount_points, subpath);
+            return;
+        }
         args.push("--ro-bind".to_string());
         args.push(path_to_string(subpath));
         args.push(path_to_string(subpath));
@@ -1156,9 +1160,10 @@ mod tests {
         ]);
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
-        assert_eq!(
-            args.cleanup_mount_points,
-            vec![first_missing_component.clone()]
+        assert!(
+            args.cleanup_mount_points.contains(&first_missing_component),
+            "missing protected subtree should be registered for cleanup: {:#?}",
+            args.cleanup_mount_points
         );
         let first_missing_component = path_to_string(&first_missing_component);
         let protected_path = path_to_string(&protected_path);
