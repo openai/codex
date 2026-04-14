@@ -100,9 +100,6 @@ mod tests {
             SessionSource::Cli,
         );
         let agent_task = RegisteredAgentTask {
-            binding_id: "chatgpt-account-account-123".to_string(),
-            chatgpt_account_id: "account-123".to_string(),
-            chatgpt_user_id: Some("user-123".to_string()),
             agent_runtime_id: "agent-123".to_string(),
             task_id: "task-123".to_string(),
             registered_at: "2026-03-23T12:00:00Z".to_string(),
@@ -133,9 +130,6 @@ mod tests {
             .await
             .expect("seed test identity");
         let agent_task = RegisteredAgentTask {
-            binding_id: "chatgpt-account-account-123".to_string(),
-            chatgpt_account_id: "account-123".to_string(),
-            chatgpt_user_id: Some("user-123".to_string()),
             agent_runtime_id: "agent-123".to_string(),
             task_id: "task-123".to_string(),
             registered_at: "2026-03-23T12:00:00Z".to_string(),
