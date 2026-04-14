@@ -9956,7 +9956,8 @@ mod tests {
 
     #[test]
     fn summary_from_thread_metadata_formats_protocol_timestamps_as_seconds() -> Result<()> {
-        let mut metadata = test_thread_metadata(None, None)?;
+        let mut metadata =
+            test_thread_metadata(/*model*/ None, /*reasoning_effort*/ None)?;
         metadata.created_at =
             DateTime::parse_from_rfc3339("2025-09-05T16:53:11.123Z")?.with_timezone(&Utc);
         metadata.updated_at =
