@@ -178,6 +178,9 @@ pub enum Feature {
     RealtimeConversation,
     /// Connect app-server to the ChatGPT remote control service.
     RemoteControl,
+    /// Removed compatibility flag retained as a no-op so old wrappers can
+    /// still pass `--enable image_detail_original`.
+    ImageDetailOriginal,
     /// Removed compatibility flag. The TUI now always uses the app-server implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
@@ -872,6 +875,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RemoteControl,
         key: "remote_control",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ImageDetailOriginal,
+        key: "image_detail_original",
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

@@ -2206,6 +2206,19 @@ mod tests {
     }
 
     #[test]
+    fn feature_toggles_accept_removed_image_detail_original_flag() {
+        let toggles = FeatureToggles {
+            enable: vec!["image_detail_original".to_string()],
+            disable: Vec::new(),
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec!["features.image_detail_original=true".to_string(),]
+        );
+    }
+
+    #[test]
     fn feature_toggles_unknown_feature_errors() {
         let toggles = FeatureToggles {
             enable: vec!["does_not_exist".to_string()],

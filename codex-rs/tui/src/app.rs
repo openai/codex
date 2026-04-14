@@ -3868,6 +3868,17 @@ impl App {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
+        match app_server
+            .skills_list(codex_app_server_protocol::SkillsListParams {
+                cwds: vec![app.config.cwd.to_path_buf()],
+                force_reload: true,
+                per_cwd_extra_user_roots: None,
+            })
+            .await
+        {
+            Ok(response) => app.handle_skills_list_response(response),
+            Err(err) => tracing::warn!("failed to load skills on startup: {err:#}"),
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
