@@ -1669,6 +1669,7 @@ dependencies = [
  "assert_matches",
  "clap",
  "clap_complete",
+ "codex-api",
  "codex-app-server",
  "codex-app-server-protocol",
  "codex-app-server-test-client",
