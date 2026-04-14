@@ -99,6 +99,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+    use crate::tools::handlers::unavailable_mcp_tool_message;
 
     let mut builder = ToolRegistryBuilder::new();
     let McpToolExposure {
@@ -295,9 +296,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
         if existing_spec_names.insert(unavailable_tool.qualified_name.clone()) {
             let spec = codex_tools::ToolSpec::Function(ResponsesApiTool {
                 name: unavailable_tool.qualified_name.clone(),
-                description: format!(
-                    "This MCP tool was called earlier in the conversation, but it is not currently available. Calling `{}` returns an error explaining that the MCP server or tool is unavailable.",
-                    unavailable_tool.qualified_name
+                description: unavailable_mcp_tool_message(
+                    &unavailable_tool.qualified_name,
+                    "Calling this placeholder returns an error explaining that the MCP server or tool is unavailable.",
                 ),
                 strict: false,
                 parameters: JsonSchema::object(

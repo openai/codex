@@ -7,6 +7,15 @@ use crate::tools::registry::ToolKind;
 
 pub struct UnavailableMcpHandler;
 
+pub(crate) fn unavailable_mcp_tool_message(
+    tool_name: impl std::fmt::Display,
+    next_step: &str,
+) -> String {
+    format!(
+        "MCP tool `{tool_name}` is not currently available. It appeared in earlier tool calls in this conversation, but the MCP server or tool is not available in the current request. {next_step}"
+    )
+}
+
 impl ToolHandler for UnavailableMcpHandler {
     type Output = FunctionToolOutput;
 
@@ -21,9 +30,9 @@ impl ToolHandler for UnavailableMcpHandler {
 
         match payload {
             ToolPayload::Function { .. } => Ok(FunctionToolOutput::from_text(
-                format!(
-                    "MCP tool `{}` is currently unavailable. It appeared in earlier tool calls in this conversation, but the MCP server or tool is not available in the current request. Retry after the MCP server reconnects or ask the user to re-enable it.",
-                    tool_name.display()
+                unavailable_mcp_tool_message(
+                    tool_name.display(),
+                    "Retry after the MCP server reconnects or ask the user to re-enable it.",
                 ),
                 Some(false),
             )),

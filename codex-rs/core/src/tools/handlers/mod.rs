@@ -51,6 +51,7 @@ pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use tool_suggest::ToolSuggestHandler;
 pub use unavailable_mcp::UnavailableMcpHandler;
+pub(crate) use unavailable_mcp::unavailable_mcp_tool_message;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 
