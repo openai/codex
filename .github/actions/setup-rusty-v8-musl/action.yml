@@ -1,0 +1,49 @@
+name: setup-rusty-v8-musl
+description: Download and verify musl rusty_v8 artifacts for Cargo builds.
+inputs:
+  target:
+    description: Rust musl target triple.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Configure musl rusty_v8 artifact overrides and verify checksums
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+
+        case "${TARGET}" in
+          x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
+            ;;
+          *)
+            echo "Unsupported musl rusty_v8 target: ${TARGET}" >&2
+            exit 1
+            ;;
+        esac
+
+        version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+        release_tag="rusty-v8-v${version}"
+        base_url="https://github.com/openai/codex/releases/download/${release_tag}"
+        binding_dir="${RUNNER_TEMP}/rusty_v8"
+        archive_path="${binding_dir}/librusty_v8_release_${TARGET}.a.gz"
+        binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
+        checksums_path="${binding_dir}/rusty_v8_release_${TARGET}.sha256"
+        checksums_source="${GITHUB_WORKSPACE}/third_party/v8/rusty_v8_${version//./_}.sha256"
+
+        mkdir -p "${binding_dir}"
+        curl -fsSL "${base_url}/librusty_v8_release_${TARGET}.a.gz" -o "${archive_path}"
+        curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
+        grep -E "  (librusty_v8_release_${TARGET}[.]a[.]gz|src_binding_release_${TARGET}[.]rs)$" \
+          "${checksums_source}" > "${checksums_path}"
+
+        if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
+          echo "Expected exactly two checksums for ${TARGET} in ${checksums_source}" >&2
+          exit 1
+        fi
+
+        (cd "${binding_dir}" && sha256sum -c "${checksums_path}")
+        echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
+        echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"

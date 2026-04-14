@@ -61,6 +61,7 @@ def parse_checksum_manifest(path: Path) -> dict[str, str]:
 
 
 def string_field(block: str, field: str) -> str | None:
+    # Matches one-line string fields inside http_file blocks, e.g. `sha256 = "...",`.
     match = re.search(rf'^\s*{re.escape(field)}\s*=\s*"([^"]+)",\s*$', block, re.M)
     if match:
         return match.group(1)

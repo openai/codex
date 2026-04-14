@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
-          python3 -m unittest discover -s .github/scripts -p 'test_rusty_v8_bazel.py'
+          python3 -m unittest discover -s .github/scripts -p test_rusty_v8_bazel.py
 
       - name: Set up Bazel CI
         id: setup_bazel
