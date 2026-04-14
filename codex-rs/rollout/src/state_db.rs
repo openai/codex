@@ -5,7 +5,6 @@ use crate::list::ThreadSortKey;
 use crate::metadata;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
-use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -131,8 +130,7 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
         dt.with_timezone(&Utc)
     } else {
         return None;
-    }
-    .with_nanosecond(0)?;
+    };
     Some(codex_state::Anchor { ts, id })
 }
 

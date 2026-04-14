@@ -21,7 +21,7 @@ const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "figma@openai-curated",
 ];
 
-pub(crate) fn list_tool_suggest_discoverable_plugins(
+pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
@@ -59,11 +59,10 @@ pub(crate) fn list_tool_suggest_discoverable_plugins(
 
         let plugin_id = plugin.id.clone();
 
-        match plugins_manager.read_plugin_detail_for_marketplace_plugin(
-            config,
-            &curated_marketplace_name,
-            plugin,
-        ) {
+        match plugins_manager
+            .read_plugin_detail_for_marketplace_plugin(config, &curated_marketplace_name, plugin)
+            .await
+        {
             Ok(plugin) => {
                 let plugin: PluginCapabilitySummary = plugin.into();
                 discoverable_plugins.push(DiscoverablePluginInfo {

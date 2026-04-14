@@ -12,6 +12,8 @@ use codex_utils_cli::CliConfigOverrides;
 // point the server at a temporary managed config file without writing to /etc.
 #[cfg(debug_assertions)]
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
+#[cfg(debug_assertions)]
+const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 #[derive(Debug, Parser)]
 struct AppServerArgs {
@@ -62,6 +64,9 @@ fn main() -> anyhow::Result<()> {
 fn loader_overrides_from_debug_env() -> LoaderOverrides {
     #[cfg(debug_assertions)]
     {
+        if disable_managed_config_from_debug_env() {
+            return LoaderOverrides::without_managed_config_for_tests();
+        }
         if let Ok(value) = std::env::var(MANAGED_CONFIG_PATH_ENV_VAR) {
             return if value.is_empty() {
                 LoaderOverrides::without_managed_config_for_tests()
@@ -75,4 +80,13 @@ fn loader_overrides_from_debug_env() -> LoaderOverrides {
     }
 
     LoaderOverrides::default()
+}
+
+#[cfg(debug_assertions)]
+fn disable_managed_config_from_debug_env() -> bool {
+    if let Ok(value) = std::env::var(DISABLE_MANAGED_CONFIG_ENV_VAR) {
+        return matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
+    }
+
+    false
 }

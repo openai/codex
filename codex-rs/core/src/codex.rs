@@ -55,6 +55,7 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
+use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -190,6 +191,7 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::environment_context::EnvironmentContext;
+use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
 use codex_config::types::ShellEnvironmentPolicy;
@@ -338,7 +340,6 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -496,7 +497,7 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let plugin_outcome = plugins_manager.plugins_for_config(&config);
+        let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input);
@@ -1569,6 +1570,7 @@ impl Session {
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             conversation_id.to_string(),
+            &session_source,
             sub_id.clone(),
             cwd.to_path_buf(),
             session_configuration.sandbox_policy.get(),
@@ -1746,7 +1748,9 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_servers = mcp_manager_for_mcp.effective_servers(&config_for_mcp, auth.as_ref());
+            let mcp_servers = mcp_manager_for_mcp
+                .effective_servers(&config_for_mcp, auth.as_ref())
+                .await;
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
@@ -2161,7 +2165,7 @@ impl Session {
         required_mcp_servers.sort();
         let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
         let required_mcp_server_count = required_mcp_servers.len();
-        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
+        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -2369,6 +2373,11 @@ impl Session {
                 SessionSource::SubAgent(_)
             )
         };
+        let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
+        {
+            let mut state = self.state.lock().await;
+            state.set_next_turn_is_first(!has_prior_user_turns);
+        }
         match conversation_history {
             InitialHistory::New | InitialHistory::Cleared => {
                 // Defer initial context insertion until the first real turn starts so
@@ -2658,7 +2667,8 @@ impl Session {
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config);
+            .plugins_for_config(&per_turn_config)
+            .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let skills_outcome = Arc::new(
@@ -3852,7 +3862,8 @@ impl Session {
         let loaded_plugins = self
             .services
             .plugins_manager
-            .plugins_for_config(&turn_context.config);
+            .plugins_for_config(&turn_context.config)
+            .await;
         if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
         {
             developer_sections.push(plugin_section);
@@ -4501,11 +4512,14 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
-        let mcp_config = config.to_mcp_config(self.services.plugins_manager.as_ref());
+        let mcp_config = config
+            .to_mcp_config(self.services.plugins_manager.as_ref())
+            .await;
         let tool_plugin_provenance = self
             .services
             .mcp_manager
-            .tool_plugin_provenance(config.as_ref());
+            .tool_plugin_provenance(config.as_ref())
+            .await;
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         let sandbox_state = SandboxState {
@@ -5360,7 +5374,8 @@ mod handlers {
         let mcp_servers = sess
             .services
             .mcp_manager
-            .effective_servers(config, auth.as_ref());
+            .effective_servers(config, auth.as_ref())
+            .await;
         let snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
             compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode)
@@ -5434,10 +5449,12 @@ mod handlers {
                     continue;
                 }
             };
-            let effective_skill_roots = plugins_manager.effective_skill_roots_for_layer_stack(
-                &config_layer_stack,
-                config.features.enabled(Feature::Plugins),
-            );
+            let effective_skill_roots = plugins_manager
+                .effective_skill_roots_for_layer_stack(
+                    &config_layer_stack,
+                    config.features.enabled(Feature::Plugins),
+                )
+                .await;
             let skills_input = crate::SkillsLoadInput::new(
                 cwd_abs,
                 effective_skill_roots,
@@ -5967,6 +5984,7 @@ async fn spawn_review_thread(
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.conversation_id.to_string(),
+        &session_source,
         review_turn_id.clone(),
         parent_turn_context.cwd.to_path_buf(),
         parent_turn_context.sandbox_policy.get(),
@@ -6144,7 +6162,8 @@ pub(crate) async fn run_turn(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config);
+        .plugins_for_config(&turn_context.config)
+        .await;
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
@@ -6317,6 +6336,8 @@ pub(crate) async fn run_turn(
         sess.record_conversation_items(&turn_context, &plugin_items)
             .await;
     }
+
+    track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
@@ -6619,6 +6640,52 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn track_turn_resolved_config_analytics(
+    sess: &Session,
+    turn_context: &TurnContext,
+    input: &[UserInput],
+) {
+    if !sess.enabled(Feature::GeneralAnalytics) {
+        return;
+    }
+
+    let thread_config = {
+        let state = sess.state.lock().await;
+        state.session_configuration.thread_config_snapshot()
+    };
+    let is_first_turn = {
+        let mut state = sess.state.lock().await;
+        state.take_next_turn_is_first()
+    };
+    sess.services
+        .analytics_events_client
+        .track_turn_resolved_config(TurnResolvedConfigFact {
+            turn_id: turn_context.sub_id.clone(),
+            thread_id: sess.conversation_id.to_string(),
+            num_input_images: input
+                .iter()
+                .filter(|item| {
+                    matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
+                })
+                .count(),
+            submission_type: None,
+            ephemeral: thread_config.ephemeral,
+            session_source: thread_config.session_source,
+            model: turn_context.model_info.slug.clone(),
+            model_provider: turn_context.config.model_provider_id.clone(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            reasoning_effort: turn_context.reasoning_effort,
+            reasoning_summary: Some(turn_context.reasoning_summary),
+            service_tier: turn_context.config.service_tier,
+            approval_policy: turn_context.approval_policy.value(),
+            approvals_reviewer: turn_context.config.approvals_reviewer,
+            sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
+            collaboration_mode: turn_context.collaboration_mode.mode,
+            personality: turn_context.personality,
+            is_first_turn,
+        });
 }
 
 async fn run_pre_sampling_compact(
@@ -7057,7 +7124,8 @@ pub(crate) async fn built_tools(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config);
+        .plugins_for_config(&turn_context.config)
+        .await;
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
@@ -7824,25 +7892,6 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
-                let preempt_for_mailbox_mail = match &item {
-                    ResponseItem::Message { role, phase, .. } => {
-                        role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
-                    }
-                    ResponseItem::Reasoning { .. } => true,
-                    ResponseItem::LocalShellCall { .. }
-                    | ResponseItem::FunctionCall { .. }
-                    | ResponseItem::ToolSearchCall { .. }
-                    | ResponseItem::FunctionCallOutput { .. }
-                    | ResponseItem::CustomToolCall { .. }
-                    | ResponseItem::CustomToolCallOutput { .. }
-                    | ResponseItem::ToolSearchOutput { .. }
-                    | ResponseItem::WebSearchCall { .. }
-                    | ResponseItem::ImageGenerationCall { .. }
-                    | ResponseItem::GhostSnapshot { .. }
-                    | ResponseItem::Compaction { .. }
-                    | ResponseItem::Other => false,
-                };
-
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_active_item)
                         .instrument(handle_responses)
@@ -7858,13 +7907,6 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                // todo: remove before stabilizing multi-agent v2
-                if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
-                    break Ok(SamplingRequestResult {
-                        needs_follow_up: true,
-                        last_agent_message,
-                    });
-                }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(

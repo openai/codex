@@ -2,7 +2,7 @@ use crate::endpoint::realtime_websocket::protocol_v1::parse_realtime_event_v1;
 use crate::endpoint::realtime_websocket::protocol_v2::parse_realtime_event_v2;
 pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
-pub use codex_protocol::protocol::RealtimeTranscriptDelta;
+pub use codex_protocol::protocol::RealtimeOutputModality;
 pub use codex_protocol::protocol::RealtimeTranscriptEntry;
 pub use codex_protocol::protocol::RealtimeVoice;
 use serde::Serialize;
@@ -27,6 +27,7 @@ pub struct RealtimeSessionConfig {
     pub session_id: Option<String>,
     pub event_parser: RealtimeEventParser,
     pub session_mode: RealtimeSessionMode,
+    pub output_modality: RealtimeOutputModality,
     pub voice: RealtimeVoice,
 }
 

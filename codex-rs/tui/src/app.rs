@@ -42,6 +42,7 @@ use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
 use crate::legacy_core::lookup_message_history_entry;
+use crate::legacy_core::plugins::PluginsManager;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
@@ -2009,6 +2010,26 @@ impl App {
                 plugin_id: plugin_id_for_event,
                 plugin_display_name,
                 result,
+            });
+        });
+    }
+
+    fn refresh_plugin_mentions(&mut self) {
+        let config = self.config.clone();
+        let app_event_tx = self.app_event_tx.clone();
+        if !config.features.enabled(Feature::Plugins) {
+            app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
+            return;
+        }
+
+        tokio::spawn(async move {
+            let plugins = PluginsManager::new(config.codex_home.to_path_buf())
+                .plugins_for_config(&config)
+                .await
+                .capability_summaries()
+                .to_vec();
+            app_event_tx.send(AppEvent::PluginMentionsLoaded {
+                plugins: Some(plugins),
             });
         });
     }
@@ -5039,6 +5060,15 @@ impl App {
                 {
                     self.fetch_plugins_list(app_server, cwd);
                 }
+            }
+            AppEvent::RefreshPluginMentions => {
+                self.refresh_plugin_mentions();
+            }
+            AppEvent::PluginMentionsLoaded { mut plugins } => {
+                if !self.config.features.enabled(Feature::Plugins) {
+                    plugins = None;
+                }
+                self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();

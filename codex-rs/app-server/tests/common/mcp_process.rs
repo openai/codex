@@ -102,10 +102,15 @@ pub struct McpProcess {
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[]).await
+    }
+
+    pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_env(codex_home, &[(DISABLE_MANAGED_CONFIG_ENV_VAR, Some("1"))]).await
     }
 
     pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {

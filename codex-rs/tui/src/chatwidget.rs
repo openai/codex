@@ -62,7 +62,6 @@ use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
 use crate::legacy_core::find_thread_name_by_id;
-use crate::legacy_core::plugins::PluginsManager;
 use crate::legacy_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -6273,7 +6272,8 @@ impl ChatWidget {
             | ServerNotification::FsChanged(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
-            | ServerNotification::ThreadRealtimeTranscriptUpdated(_)
+            | ServerNotification::ThreadRealtimeTranscriptDelta(_)
+            | ServerNotification::ThreadRealtimeTranscriptDone(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
@@ -10369,11 +10369,14 @@ impl ChatWidget {
             return;
         }
 
-        let plugins = PluginsManager::new(self.config.codex_home.to_path_buf())
-            .plugins_for_config(&self.config)
-            .capability_summaries()
-            .to_vec();
-        self.bottom_pane.set_plugin_mentions(Some(plugins));
+        self.app_event_tx.send(AppEvent::RefreshPluginMentions);
+    }
+
+    pub(crate) fn on_plugin_mentions_loaded(
+        &mut self,
+        plugins: Option<Vec<crate::legacy_core::plugins::PluginCapabilitySummary>>,
+    ) {
+        self.bottom_pane.set_plugin_mentions(plugins);
     }
 
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
