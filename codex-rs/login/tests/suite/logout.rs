@@ -51,10 +51,9 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
         AuthCredentialsStoreMode::File,
     )?;
 
-    let result = logout_with_revoke(codex_home.path(), AuthCredentialsStoreMode::File).await?;
+    let removed = logout_with_revoke(codex_home.path(), AuthCredentialsStoreMode::File).await?;
 
-    assert!(result.removed);
-    assert_eq!(result.revoke_error, None);
+    assert!(removed);
     assert!(!codex_home.path().join("auth.json").exists());
 
     let requests = server
@@ -78,7 +77,7 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
 
 #[serial_test::serial(logout_revoke)]
 #[tokio::test]
-async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
+async fn logout_with_revoke_keeps_auth_when_revoke_fails() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -104,17 +103,15 @@ async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let result = logout_with_revoke(codex_home.path(), AuthCredentialsStoreMode::File).await?;
+    let err = logout_with_revoke(codex_home.path(), AuthCredentialsStoreMode::File)
+        .await
+        .expect_err("revoke failure should fail logout");
 
-    assert!(result.removed);
     assert!(
-        result
-            .revoke_error
-            .as_deref()
-            .is_some_and(|err| err.contains("revoke failed")),
-        "expected revoke failure in result: {result:?}"
+        err.to_string().contains("revoke failed"),
+        "expected revoke failure in result: {err:?}"
     );
-    assert!(!codex_home.path().join("auth.json").exists());
+    assert!(codex_home.path().join("auth.json").exists());
 
     server.verify().await;
     Ok(())

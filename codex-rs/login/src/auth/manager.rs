@@ -21,7 +21,6 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
-use super::revoke::LogoutResult;
 use super::revoke::revoke_auth_tokens;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AuthDotJson;
@@ -88,7 +87,9 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -488,27 +489,11 @@ pub fn logout(
 pub async fn logout_with_revoke(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-) -> std::io::Result<LogoutResult> {
+) -> std::io::Result<bool> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let auth_dot_json = match storage.load() {
-        Ok(auth_dot_json) => auth_dot_json,
-        Err(err) => {
-            let removed = logout_all_stores(codex_home, auth_credentials_store_mode)?;
-            return Ok(LogoutResult {
-                removed,
-                revoke_error: Some(format!("failed to load stored auth for revocation: {err}")),
-            });
-        }
-    };
-    let revoke_error = revoke_auth_tokens(auth_dot_json.as_ref())
-        .await
-        .err()
-        .map(|err| err.to_string());
-    let removed = logout_all_stores(codex_home, auth_credentials_store_mode)?;
-    Ok(LogoutResult {
-        removed,
-        revoke_error,
-    })
+    let auth_dot_json = storage.load()?;
+    revoke_auth_tokens(auth_dot_json.as_ref()).await?;
+    logout_all_stores(codex_home, auth_credentials_store_mode)
 }
 
 /// Writes an `auth.json` that contains only the API key.
@@ -1665,7 +1650,7 @@ impl AuthManager {
         Ok(removed)
     }
 
-    pub async fn logout_with_revoke(&self) -> std::io::Result<LogoutResult> {
+    pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
         let result = logout_with_revoke(&self.codex_home, self.auth_credentials_store_mode).await?;
         // Always reload to clear any cached auth (even if file absent).
         self.reload();

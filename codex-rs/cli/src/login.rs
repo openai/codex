@@ -348,14 +348,11 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
     match logout_with_revoke(&config.codex_home, config.cli_auth_credentials_store_mode).await {
-        Ok(result) if result.removed => {
-            if let Some(err) = result.revoke_error {
-                eprintln!("Warning: {err}");
-            }
+        Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);
         }
-        Ok(_) => {
+        Ok(false) => {
             eprintln!("Not logged in");
             std::process::exit(0);
         }

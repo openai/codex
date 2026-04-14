@@ -5,19 +5,12 @@ use codex_client::CodexHttpClient;
 
 use super::manager::CLIENT_ID;
 use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use super::manager::REVOKE_TOKEN_URL;
+use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::storage::AuthDotJson;
 use super::util::try_parse_error_message;
 use crate::default_client::create_client;
 use crate::token_data::TokenData;
-
-const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
-pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogoutResult {
-    pub removed: bool,
-    pub revoke_error: Option<String>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RevokeTokenKind {
@@ -26,17 +19,10 @@ enum RevokeTokenKind {
 }
 
 impl RevokeTokenKind {
-    fn hint(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Access => "access_token",
             Self::Refresh => "refresh_token",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Access => "access token",
-            Self::Refresh => "refresh token",
         }
     }
 
@@ -108,7 +94,7 @@ async fn revoke_oauth_token(
 ) -> Result<(), std::io::Error> {
     let request = RevokeTokenRequest {
         token,
-        token_type_hint: kind.hint(),
+        token_type_hint: kind.as_str(),
         client_id: kind.client_id(),
     };
 
@@ -129,7 +115,7 @@ async fn revoke_oauth_token(
     let message = try_parse_error_message(&body);
     Err(std::io::Error::other(format!(
         "failed to revoke {}: {}: {}",
-        kind.label(),
+        kind.as_str(),
         status,
         message
     )))

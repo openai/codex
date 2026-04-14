@@ -1698,11 +1698,7 @@ impl CodexMessageProcessor {
         }
 
         match self.auth_manager.logout_with_revoke().await {
-            Ok(result) => {
-                if let Some(err) = result.revoke_error {
-                    tracing::warn!("failed to revoke OAuth token during logout: {err}");
-                }
-            }
+            Ok(_) => {}
             Err(err) => {
                 return Err(JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,

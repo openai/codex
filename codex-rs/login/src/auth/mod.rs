@@ -10,5 +10,3 @@ mod revoke;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;
-pub use revoke::LogoutResult;
-pub use revoke::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
