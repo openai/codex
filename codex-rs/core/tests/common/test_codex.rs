@@ -622,10 +622,10 @@ impl TestCodexBuilder {
         for setup in workspace_setups {
             setup(config.cwd.clone(), Arc::clone(&file_system)).await?;
         }
-        let cwd = test_env.local_cwd_temp_dir().unwrap_or(fallback_cwd);
+        let cwd_retention = test_env.local_cwd_temp_dir().unwrap_or(fallback_cwd);
         Box::pin(self.build_from_config(
             config,
-            cwd,
+            cwd_retention,
             home,
             resume_from,
             test_env,
@@ -637,7 +637,7 @@ impl TestCodexBuilder {
     async fn build_from_config(
         &mut self,
         config: Config,
-        cwd: Arc<TempDir>,
+        cwd_retention: Arc<TempDir>,
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
@@ -707,7 +707,7 @@ impl TestCodexBuilder {
             config,
             thread_manager,
             home,
-            cwd,
+            _cwd_retention: cwd_retention,
             _test_env: test_env,
         })
     }
@@ -797,14 +797,14 @@ pub struct TestCodex {
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
     pub home: Arc<TempDir>,
-    pub cwd: Arc<TempDir>,
+    _cwd_retention: Arc<TempDir>,
     // Drop the execution environment after the thread manager and conversation teardown.
     _test_env: TestEnv,
 }
 
 impl TestCodex {
     pub fn cwd_path(&self) -> &Path {
-        self.cwd.path()
+        self.config.cwd.as_path()
     }
 
     pub fn codex_home_path(&self) -> &Path {
@@ -812,7 +812,7 @@ impl TestCodex {
     }
 
     pub fn workspace_path(&self, rel: impl AsRef<Path>) -> PathBuf {
-        self.cwd_path().join(rel)
+        self.config.cwd.join(rel).into_path_buf()
     }
 
     pub fn executor_environment(&self) -> &TestEnv {
