@@ -10,6 +10,7 @@ use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
@@ -34,6 +35,7 @@ use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
 use test_case::test_case;
 use wiremock::Mock;
@@ -1444,14 +1446,18 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
         .await?;
 
     let mut last_diff: Option<String> = None;
-    wait_for_event(&codex, |event| match event {
-        EventMsg::TurnDiff(ev) => {
-            last_diff = Some(ev.unified_diff.clone());
-            false
-        }
-        EventMsg::TurnComplete(_) => true,
-        _ => false,
-    })
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::TurnDiff(ev) => {
+                last_diff = Some(ev.unified_diff.clone());
+                false
+            }
+            EventMsg::TurnComplete(_) => true,
+            _ => false,
+        },
+        Duration::from_secs(30),
+    )
     .await;
 
     let diff = last_diff.expect("expected TurnDiff after failed patch");
