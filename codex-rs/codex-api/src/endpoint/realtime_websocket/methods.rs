@@ -78,6 +78,11 @@ impl WsStream {
                         };
                         match command {
                             WsCommand::Send { message, tx_result } => {
+                                trace!(
+                                    target: REALTIME_WIRE_LOG_TARGET,
+                                    message = ?message,
+                                    "realtime websocket request frame"
+                                );
                                 debug!("realtime websocket sending message");
                                 let result = inner.send(message).await;
                                 let should_break = result.is_err();
@@ -105,76 +110,58 @@ impl WsStream {
                         }
                     }
                     message = inner.next() => {
-                        let Some(message) = message else {
-                            break;
+                        let message = match message {
+                            Some(Ok(message)) => message,
+                            Some(Err(err)) => {
+                                error!("realtime websocket receive failed: {err}");
+                                let _ = tx_message.send(Err(err));
+                                break;
+                            }
+                            None => {
+                                break;
+                            }
                         };
+                        trace!(
+                            target: REALTIME_WIRE_LOG_TARGET,
+                            message = ?message,
+                            "realtime websocket event frame"
+                        );
                         match message {
-                            Ok(Message::Ping(payload)) => {
+                            Message::Ping(payload) => {
+                                let pong = Message::Pong(payload);
                                 trace!(
                                     target: REALTIME_WIRE_LOG_TARGET,
-                                    payload = ?payload,
-                                    payload_len = payload.len(),
-                                    "realtime websocket event ping frame"
+                                    message = ?pong,
+                                    "realtime websocket request frame"
                                 );
-                                trace!(
-                                    target: REALTIME_WIRE_LOG_TARGET,
-                                    payload = ?payload,
-                                    payload_len = payload.len(),
-                                    "realtime websocket request pong frame"
-                                );
-                                if let Err(err) = inner.send(Message::Pong(payload)).await {
+                                if let Err(err) = inner.send(pong).await {
                                     error!("realtime websocket failed to send pong: {err}");
                                     let _ = tx_message.send(Err(err));
                                     break;
                                 }
                             }
-                            Ok(Message::Pong(payload)) => {
-                                trace!(
-                                    target: REALTIME_WIRE_LOG_TARGET,
-                                    payload = ?payload,
-                                    payload_len = payload.len(),
-                                    "realtime websocket event pong frame"
-                                );
-                            }
-                            Ok(message @ (Message::Text(_)
+                            Message::Pong(_) => {}
+                            message @ (Message::Text(_)
                                 | Message::Binary(_)
                                 | Message::Close(_)
-                                | Message::Frame(_))) => {
+                                | Message::Frame(_)) => {
                                 let is_close = matches!(message, Message::Close(_));
                                 match &message {
-                                    Message::Text(_) => trace!("realtime websocket received text frame"),
+                                    Message::Text(_) => {}
                                     Message::Binary(binary) => {
-                                        trace!(
-                                            target: REALTIME_WIRE_LOG_TARGET,
-                                            payload = ?binary,
-                                            payload_len = binary.len(),
-                                            "realtime websocket event binary frame"
-                                        );
                                         error!(
                                             payload_len = binary.len(),
                                             "realtime websocket received unexpected binary frame"
                                         );
                                     }
                                     Message::Close(frame) => {
-                                        trace!(
-                                            target: REALTIME_WIRE_LOG_TARGET,
-                                            code = ?frame.as_ref().map(|frame| frame.code),
-                                            reason = ?frame.as_ref().map(|frame| frame.reason.as_str()),
-                                            "realtime websocket event close frame"
-                                        );
                                         info!(
                                             "realtime websocket received close frame: code={:?} reason={:?}",
                                             frame.as_ref().map(|frame| frame.code),
                                             frame.as_ref().map(|frame| frame.reason.as_str())
                                         );
                                     }
-                                    Message::Frame(frame) => {
-                                        trace!(
-                                            target: REALTIME_WIRE_LOG_TARGET,
-                                            frame = ?frame,
-                                            "realtime websocket event raw frame"
-                                        );
-                                    }
+                                    Message::Frame(_) => {}
                                     Message::Ping(_) | Message::Pong(_) => {}
                                 }
                                 if tx_message.send(Ok(message)).is_err() {
@@ -183,11 +170,6 @@ impl WsStream {
                                 if is_close {
                                     break;
                                 }
-                            }
-                            Err(err) => {
-                                error!("realtime websocket receive failed: {err}");
-                                let _ = tx_message.send(Err(err));
-                                break;
                             }
                         }
                     }
@@ -392,7 +374,6 @@ impl RealtimeWebsocketWriter {
             ));
         }
 
-        trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket request: {payload}");
         self.stream
             .send(Message::Text(payload.into()))
             .await
@@ -426,7 +407,6 @@ impl RealtimeWebsocketEvents {
 
             match msg {
                 Message::Text(text) => {
-                    trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket event: {text}");
                     if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
                         debug!(?event, "realtime websocket parsed event");
