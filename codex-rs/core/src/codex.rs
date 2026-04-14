@@ -1337,6 +1337,10 @@ impl Session {
         }
     }
 
+    fn managed_network_proxy_active_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> bool {
+        !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -2003,7 +2007,10 @@ impl Session {
                 .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
-        let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
+        let managed_network_requirements_enabled = config
+            .managed_network_requirements_enabled_for_sandbox_policy(
+                config.permissions.sandbox_policy.get(),
+            );
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
         let network_policy_decider_session = if managed_network_requirements_enabled {
@@ -2199,7 +2206,11 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
-                network_proxy: session_network_proxy,
+                network_proxy: session_network_proxy.filter(|_| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                }),
                 rollout_path,
             }),
         })
@@ -2733,7 +2744,12 @@ impl Session {
             self.services
                 .network_proxy
                 .as_ref()
-                .map(StartedNetworkProxy::proxy),
+                .and_then(|started_proxy| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                    .then(|| started_proxy.proxy())
+                }),
             self.services.environment.clone(),
             sub_id,
             Arc::clone(&self.js_repl),
