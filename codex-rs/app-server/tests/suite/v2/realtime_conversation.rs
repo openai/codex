@@ -732,6 +732,10 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             "delta": "world"
         }),
         json!({
+            "type": "response.output_audio_transcript.done",
+            "transcript": "hello world"
+        }),
+        json!({
             "type": "conversation.item.done",
             "item": {
                 "id": "item_output_1",
@@ -828,6 +832,15 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             role: "assistant".to_string(),
             text: "hello world".to_string(),
         }
+    );
+    assert!(
+        timeout(
+            Duration::from_millis(200),
+            mcp.read_stream_until_notification_message("thread/realtime/transcript/done"),
+        )
+        .await
+        .is_err(),
+        "should not emit duplicate transcript done from audio transcript done"
     );
 
     realtime_server.shutdown().await;
