@@ -85,6 +85,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -112,7 +113,7 @@ fn sample_thread_with_source(
         updated_at: 2,
         status: AppServerThreadStatus::Idle,
         path: None,
-        cwd: PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp").abs(),
         cli_version: "0.0.0".to_string(),
         source,
         agent_nickname: None,
@@ -131,7 +132,7 @@ fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -
             model: model.to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: PathBuf::from("/tmp").abs(),
             instruction_sources: Vec::new(),
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
@@ -182,7 +183,7 @@ fn sample_thread_resume_response_with_source(
             model: model.to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: PathBuf::from("/tmp").abs(),
             instruction_sources: Vec::new(),
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
