@@ -23,6 +23,7 @@ use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_millis;
+use crate::model::datetime_to_epoch_seconds;
 use crate::model::epoch_millis_to_datetime;
 use crate::paths::file_modified_time_utc;
 use chrono::DateTime;
@@ -124,7 +125,7 @@ impl StateRuntime {
             }
         };
         let thread_updated_at_millis: Option<i64> =
-            sqlx::query_scalar("SELECT MAX(updated_at) FROM threads")
+            sqlx::query_scalar("SELECT MAX(threads.updated_at_ms) FROM threads")
                 .fetch_one(pool.as_ref())
                 .await?;
         let thread_updated_at_millis = thread_updated_at_millis.unwrap_or(0);

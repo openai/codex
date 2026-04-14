@@ -405,7 +405,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             approval_mode,
             tokens_used,
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
-            archived_at: archived_at.map(epoch_millis_to_datetime).transpose()?,
+            archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,
             git_origin_url,
@@ -426,6 +426,10 @@ pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {
     dt.timestamp_millis()
 }
 
+pub(crate) fn datetime_to_epoch_seconds(dt: DateTime<Utc>) -> i64 {
+    dt.timestamp()
+}
+
 pub(crate) fn epoch_millis_to_datetime(value: i64) -> Result<DateTime<Utc>> {
     // Values older than 2020 if interpreted as milliseconds are legacy second-precision rows.
     // Convert them in memory so old state DBs keep ordering correctly after new writes use ms.
@@ -437,6 +441,11 @@ pub(crate) fn epoch_millis_to_datetime(value: i64) -> Result<DateTime<Utc>> {
     };
     DateTime::<Utc>::from_timestamp_millis(millis)
         .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp millis: {value}"))
+}
+
+pub(crate) fn epoch_seconds_to_datetime(value: i64) -> Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp(value, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp seconds: {value}"))
 }
 
 /// Statistics about a backfill operation.
