@@ -6246,6 +6246,7 @@ pub(crate) async fn run_turn(
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
+        skills_outcome.as_deref(),
         Some(&session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),

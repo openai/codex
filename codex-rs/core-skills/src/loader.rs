@@ -1,5 +1,6 @@
 use crate::model::SkillDependencies;
 use crate::model::SkillError;
+use crate::model::SkillFileSystemsByPath;
 use crate::model::SkillInterface;
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
@@ -21,6 +22,7 @@ use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -157,20 +159,30 @@ where
     I: IntoIterator<Item = SkillRoot>,
 {
     let mut outcome = SkillLoadOutcome::default();
+    let mut file_systems_by_skill_path: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>> =
+        HashMap::new();
     for root in roots {
-        discover_skills_under_root(
-            root.file_system.as_ref(),
-            &root.path,
-            root.scope,
-            &mut outcome,
-        )
-        .await;
+        let fs = root.file_system;
+        let skills_before_root = outcome.skills.len();
+        discover_skills_under_root(fs.as_ref(), &root.path, root.scope, &mut outcome).await;
+        for skill in &outcome.skills[skills_before_root..] {
+            file_systems_by_skill_path
+                .entry(skill.path_to_skills_md.clone())
+                .or_insert_with(|| Arc::clone(&fs));
+        }
     }
 
     let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
     outcome
         .skills
         .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
+    let retained_skill_paths: HashSet<AbsolutePathBuf> = outcome
+        .skills
+        .iter()
+        .map(|skill| skill.path_to_skills_md.clone())
+        .collect();
+    file_systems_by_skill_path.retain(|path, _| retained_skill_paths.contains(path));
+    outcome.file_systems_by_skill_path = SkillFileSystemsByPath::new(file_systems_by_skill_path);
 
     fn scope_rank(scope: SkillScope) -> u8 {
         // Higher-priority scopes first (matches root scan order for dedupe).
