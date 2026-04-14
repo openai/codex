@@ -2007,10 +2007,15 @@ impl Session {
                 .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
+        let managed_network_requirements_configured = config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some();
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        let network_policy_decider_session = if managed_network_requirements_enabled {
+        let network_policy_decider_session = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2019,7 +2024,7 @@ impl Session {
         } else {
             None
         };
-        let blocked_request_observer = if managed_network_requirements_enabled {
+        let blocked_request_observer = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2046,7 +2051,7 @@ impl Session {
                     config.permissions.sandbox_policy.get(),
                     network_policy_decider.as_ref().map(Arc::clone),
                     blocked_request_observer.as_ref().map(Arc::clone),
-                    managed_network_requirements_enabled,
+                    managed_network_requirements_configured,
                     network_proxy_audit_metadata,
                 )
                 .instrument(info_span!(
