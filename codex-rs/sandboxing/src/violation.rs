@@ -148,6 +148,12 @@ pub fn classify_filesystem_sandbox_violation(
 }
 
 /// Preserve the legacy boolean sandbox-denial check for call sites that only need a retry decision.
+///
+/// We don't have a fully deterministic way to tell if a command failed because
+/// of the sandbox: a command in the user's zshrc file might hit an error, but
+/// the command itself might fail or succeed for other reasons. For now, we
+/// conservatively check for well known command failure exit codes and also look
+/// for common sandbox denial keywords in the command output.
 pub fn is_likely_sandbox_denied(
     sandbox_type: SandboxType,
     exec_output: &ExecToolCallOutput,
