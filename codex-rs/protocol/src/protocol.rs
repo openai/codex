@@ -294,40 +294,14 @@ pub struct RealtimeAudioFrame {
     pub item_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeTranscriptDelta {
     pub delta: String,
-    /// Internal key material used to reconcile streamed transcript parts.
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub item_id: Option<String>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub output_index: Option<u32>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub content_index: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeTranscriptDone {
     pub text: String,
-    /// Internal key material used to reconcile streamed transcript parts.
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub item_id: Option<String>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub output_index: Option<u32>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub content_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
