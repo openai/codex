@@ -207,12 +207,32 @@ fn linux_sandbox_exe_path(
     path_entry_guard: Option<&Arg0PathEntryGuard>,
     current_exe: Option<PathBuf>,
 ) -> Option<PathBuf> {
-    // Prefer the `codex-linux-sandbox` alias when available so callers can
-    // re-exec through a path whose basename still triggers arg0 dispatch on
+    if let Some(current_exe) = current_exe.as_ref() {
+        let sibling_helper = helper_target_for_alias(current_exe, CODEX_LINUX_SANDBOX_ARG0);
+        if sibling_helper != *current_exe {
+            return Some(sibling_helper);
+        }
+    }
+
+    // Fall back to the `codex-linux-sandbox` alias when no standalone helper
+    // binary exists so callers can still re-exec through argv0 dispatch on
     // bubblewrap builds that do not support `--argv0`.
     path_entry_guard
         .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
         .or(current_exe)
+}
+
+fn helper_target_for_alias(exe: &Path, filename: &str) -> PathBuf {
+    if filename == CODEX_LINUX_SANDBOX_ARG0
+        && let Some(parent) = exe.parent()
+    {
+        let sibling = parent.join(CODEX_LINUX_SANDBOX_ARG0);
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+
+    exe.to_path_buf()
 }
 
 fn build_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
@@ -320,17 +340,18 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         EXECVE_WRAPPER_ARG0,
     ] {
         let exe = std::env::current_exe()?;
+        let target = helper_target_for_alias(&exe, filename);
 
         #[cfg(unix)]
         {
             let link = path.join(filename);
-            symlink(&exe, &link)?;
+            symlink(&target, &link)?;
         }
 
         #[cfg(windows)]
         {
             let batch_script = path.join(format!("{filename}.bat"));
-            let exe = exe.display();
+            let exe = target.display();
             std::fs::write(
                 &batch_script,
                 format!(
@@ -440,6 +461,7 @@ mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::helper_target_for_alias;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
     use std::fs;
@@ -459,7 +481,36 @@ mod tests {
     }
 
     #[test]
-    fn linux_sandbox_exe_path_prefers_codex_linux_sandbox_alias() -> std::io::Result<()> {
+    fn linux_sandbox_exe_path_prefers_sibling_helper_over_alias() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let exe = temp_dir.path().join("codex");
+        let sandbox = temp_dir.path().join("codex-linux-sandbox");
+        fs::write(&exe, [])?;
+        fs::write(&sandbox, [])?;
+
+        let alias_dir = TempDir::new()?;
+        let lock_file = create_lock(alias_dir.path())?;
+        let alias_path = alias_dir.path().join("codex-linux-sandbox");
+        let path_entry = Arg0PathEntryGuard::new(
+            alias_dir,
+            lock_file,
+            Arg0DispatchPaths {
+                codex_self_exe: Some(exe.clone()),
+                codex_linux_sandbox_exe: Some(alias_path),
+                main_execve_wrapper_exe: None,
+            },
+        );
+
+        assert_eq!(
+            linux_sandbox_exe_path(Some(&path_entry), Some(exe)),
+            Some(sandbox)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn linux_sandbox_exe_path_prefers_codex_linux_sandbox_alias_without_sibling_helper()
+    -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let lock_file = create_lock(temp_dir.path())?;
         let alias_path = temp_dir.path().join("codex-linux-sandbox");
@@ -477,6 +528,31 @@ mod tests {
             linux_sandbox_exe_path(Some(&path_entry), Some(PathBuf::from("/usr/bin/codex"))),
             Some(alias_path),
         );
+        Ok(())
+    }
+
+    #[test]
+    fn helper_target_for_alias_prefers_sibling_linux_sandbox_binary() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let exe = temp_dir.path().join("codex");
+        let sandbox = temp_dir.path().join("codex-linux-sandbox");
+        fs::write(&exe, [])?;
+        fs::write(&sandbox, [])?;
+
+        assert_eq!(
+            helper_target_for_alias(&exe, super::CODEX_LINUX_SANDBOX_ARG0),
+            sandbox
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn helper_target_for_alias_keeps_main_binary_for_other_aliases() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let exe = temp_dir.path().join("codex");
+        fs::write(&exe, [])?;
+
+        assert_eq!(helper_target_for_alias(&exe, "apply_patch"), exe);
         Ok(())
     }
 

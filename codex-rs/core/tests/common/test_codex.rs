@@ -174,8 +174,9 @@ struct RemoteExecServerStart {
 fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecServerStart> {
     let container_name = remote_env.container_name.as_str();
     let instance_id = remote_exec_server_instance_id();
-    let remote_exec_server_path = format!("/tmp/codex-{instance_id}");
-    let remote_linux_sandbox_path = format!("/tmp/codex-linux-sandbox-{instance_id}");
+    let remote_bin_dir = format!("/tmp/codex-bin-{instance_id}");
+    let remote_exec_server_path = format!("{remote_bin_dir}/codex");
+    let remote_linux_sandbox_path = format!("{remote_bin_dir}/codex-linux-sandbox");
     let stdout_path = format!("/tmp/codex-exec-server-{instance_id}.stdout");
     let local_binary = codex_utils_cargo_bin::cargo_bin("codex").context("resolve codex binary")?;
     let local_linux_sandbox = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
@@ -185,6 +186,7 @@ fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecSe
     let remote_binary = format!("{container_name}:{remote_exec_server_path}");
     let remote_linux_sandbox = format!("{container_name}:{remote_linux_sandbox_path}");
 
+    docker_command_success(["exec", container_name, "mkdir", "-p", &remote_bin_dir])?;
     docker_command_success(["cp", &local_binary, &remote_binary])?;
     docker_command_success(["cp", &local_linux_sandbox, &remote_linux_sandbox])?;
     docker_command_success([
@@ -223,7 +225,7 @@ echo $!"
             pid,
             remote_exec_server_path,
             stdout_path,
-            cleanup_paths: vec![remote_linux_sandbox_path],
+            cleanup_paths: vec![remote_bin_dir],
         },
         listen_url,
     })
