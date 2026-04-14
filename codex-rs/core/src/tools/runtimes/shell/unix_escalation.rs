@@ -403,6 +403,7 @@ impl CoreShellActionProvider {
                     tool_name: "Bash".to_string(),
                     command: codex_shell_command::parse_command::shlex_join(&command),
                     description: None,
+                    permission_suggestions: Vec::new(),
                 };
                 let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
                 match run_permission_request_hooks(

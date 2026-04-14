@@ -1,5 +1,10 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
+use codex_hooks::PermissionSuggestion;
+use codex_hooks::PermissionSuggestionDestination;
+use codex_hooks::PermissionSuggestionRule;
+use codex_hooks::PermissionSuggestionType;
+use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
 use pretty_assertions::assert_eq;
@@ -106,5 +111,33 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
             },
         ),
         SandboxOverride::BypassSandboxFirstAttempt
+    );
+}
+
+#[test]
+fn command_approval_execpolicy_amendment_maps_to_user_settings_suggestion() {
+    let suggestions = exec_policy_permission_suggestions(
+        Some(&ExecPolicyAmendment::new(vec![
+            "rm".to_string(),
+            "-rf".to_string(),
+            "node_modules".to_string(),
+        ])),
+        &[PermissionSuggestionDestination::UserSettings],
+    );
+
+    assert_eq!(
+        suggestions,
+        vec![PermissionSuggestion {
+            suggestion_type: PermissionSuggestionType::AddRules,
+            rules: vec![PermissionSuggestionRule::PrefixRule {
+                command: vec![
+                    "rm".to_string(),
+                    "-rf".to_string(),
+                    "node_modules".to_string(),
+                ],
+            }],
+            behavior: PermissionSuggestionBehavior::Allow,
+            destination: PermissionSuggestionDestination::UserSettings,
+        }]
     );
 }

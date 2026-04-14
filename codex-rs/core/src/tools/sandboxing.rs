@@ -10,6 +10,11 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_hooks::PermissionSuggestion;
+use codex_hooks::PermissionSuggestionBehavior;
+use codex_hooks::PermissionSuggestionDestination;
+use codex_hooks::PermissionSuggestionRule;
+use codex_hooks::PermissionSuggestionType;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -136,6 +141,29 @@ pub(crate) struct PermissionRequestPayload {
     pub tool_name: String,
     pub command: String,
     pub description: Option<String>,
+    pub permission_suggestions: Vec<PermissionSuggestion>,
+}
+
+pub(crate) fn exec_policy_permission_suggestions(
+    proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
+    destinations: &[PermissionSuggestionDestination],
+) -> Vec<PermissionSuggestion> {
+    proposed_execpolicy_amendment
+        .into_iter()
+        .flat_map(|amendment| {
+            destinations
+                .iter()
+                .cloned()
+                .map(move |destination| PermissionSuggestion {
+                    suggestion_type: PermissionSuggestionType::AddRules,
+                    rules: vec![PermissionSuggestionRule::PrefixRule {
+                        command: amendment.command.clone(),
+                    }],
+                    behavior: PermissionSuggestionBehavior::Allow,
+                    destination,
+                })
+        })
+        .collect()
 }
 
 // Specifies what tool orchestrator should do with a given tool call.
@@ -282,7 +310,11 @@ pub(crate) trait Approvable<Req> {
 
     /// Return hook input for approval-time policy hooks when this runtime wants
     /// hook evaluation to run before guardian or user approval.
-    fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
+    fn permission_request_payload(
+        &self,
+        _req: &Req,
+        _approval_ctx: &ApprovalCtx<'_>,
+    ) -> Option<PermissionRequestPayload> {
         None
     }
 

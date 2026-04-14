@@ -30,8 +30,10 @@ use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::exec_policy_permission_suggestions;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_hooks::PermissionSuggestionDestination;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
@@ -199,11 +201,21 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Some(req.exec_approval_requirement.clone())
     }
 
-    fn permission_request_payload(&self, req: &ShellRequest) -> Option<PermissionRequestPayload> {
+    fn permission_request_payload(
+        &self,
+        req: &ShellRequest,
+        _approval_ctx: &ApprovalCtx<'_>,
+    ) -> Option<PermissionRequestPayload> {
+        let permission_suggestions = exec_policy_permission_suggestions(
+            req.exec_approval_requirement
+                .proposed_execpolicy_amendment(),
+            &[PermissionSuggestionDestination::UserSettings],
+        );
         Some(PermissionRequestPayload {
             tool_name: "Bash".to_string(),
             command: req.hook_command.clone(),
             description: req.justification.clone(),
+            permission_suggestions,
         })
     }
 

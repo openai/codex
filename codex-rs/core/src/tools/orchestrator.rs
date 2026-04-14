@@ -368,7 +368,7 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
-        if let Some(permission_request) = tool.permission_request_payload(req) {
+        if let Some(permission_request) = tool.permission_request_payload(req, &approval_ctx) {
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
