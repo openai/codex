@@ -51,12 +51,7 @@ pub(super) fn parse_transcript_delta_event(
         .get(field)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .map(|delta| RealtimeTranscriptDelta {
-            delta,
-            item_id: parse_string_field(parsed, "item_id"),
-            output_index: parse_u32_field(parsed, "output_index"),
-            content_index: parse_u32_field(parsed, "content_index"),
-        })
+        .map(|delta| RealtimeTranscriptDelta { delta })
 }
 
 pub(super) fn parse_transcript_done_event(
@@ -67,26 +62,7 @@ pub(super) fn parse_transcript_done_event(
         .get(field)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .map(|text| RealtimeTranscriptDone {
-            text,
-            item_id: parse_string_field(parsed, "item_id"),
-            output_index: parse_u32_field(parsed, "output_index"),
-            content_index: parse_u32_field(parsed, "content_index"),
-        })
-}
-
-fn parse_string_field(parsed: &Value, field: &str) -> Option<String> {
-    parsed
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
-fn parse_u32_field(parsed: &Value, field: &str) -> Option<u32> {
-    parsed
-        .get(field)
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
+        .map(|text| RealtimeTranscriptDone { text })
 }
 
 pub(super) fn parse_error_event(parsed: &Value) -> Option<RealtimeEvent> {

@@ -151,12 +151,7 @@ fn parse_item_done_transcript(item: &JsonMap<String, Value>) -> Option<RealtimeE
         return None;
     }
 
-    let done = RealtimeTranscriptDone {
-        text,
-        item_id: item.get("id").and_then(Value::as_str).map(str::to_string),
-        output_index: None,
-        content_index: None,
-    };
+    let done = RealtimeTranscriptDone { text };
     match role {
         "user" => Some(RealtimeEvent::InputTranscriptDone(done)),
         "assistant" => Some(RealtimeEvent::OutputTranscriptDone(done)),
