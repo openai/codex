@@ -238,10 +238,13 @@ impl AgentControl {
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
                         inherited_exec_policy,
+                        None,
                     )
                     .await?
             }
-            (None, _) => state.spawn_new_thread(config, self.clone()).await?,
+            (None, _) => state
+                .spawn_new_thread(config, self.clone(), None)
+                .await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());

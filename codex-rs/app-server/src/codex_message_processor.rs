@@ -46,6 +46,11 @@ use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
+use codex_app_server_protocol::ExecServerEnvironment;
+use codex_app_server_protocol::ExecServerEnvironmentListParams;
+use codex_app_server_protocol::ExecServerEnvironmentListResponse;
+use codex_app_server_protocol::ExecServerEnvironmentRegisterParams;
+use codex_app_server_protocol::ExecServerEnvironmentRegisterResponse;
 use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
@@ -244,6 +249,7 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -439,6 +445,7 @@ pub(crate) struct CodexMessageProcessor {
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    exec_environment_registry: ExecEnvironmentRegistry,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
@@ -470,6 +477,69 @@ struct ListenerTaskContext {
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ExecEnvironmentRegistry {
+    environments: Arc<RwLock<BTreeMap<String, String>>>,
+}
+
+impl ExecEnvironmentRegistry {
+    fn register(
+        &self,
+        name: String,
+        exec_server_url: String,
+    ) -> Result<ExecServerEnvironment, String> {
+        let mut environments = self
+            .environments
+            .write()
+            .map_err(|_| "exec environment registry lock poisoned".to_string())?;
+        environments.insert(name.clone(), exec_server_url.clone());
+        Ok(ExecServerEnvironment {
+            name,
+            exec_server_url,
+        })
+    }
+
+    fn list(
+        &self,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<ExecServerEnvironmentListResponse, String> {
+        let environments = self
+            .environments
+            .read()
+            .map_err(|_| "exec environment registry lock poisoned".to_string())?;
+        let effective_limit = limit.unwrap_or(u32::MAX).max(1) as usize;
+        let mut data = Vec::new();
+        for (name, exec_server_url) in environments.iter() {
+            if cursor.as_ref().is_some_and(|cursor| name <= cursor) {
+                continue;
+            }
+            data.push(ExecServerEnvironment {
+                name: name.clone(),
+                exec_server_url: exec_server_url.clone(),
+            });
+            if data.len() >= effective_limit {
+                break;
+            }
+        }
+        let next_cursor = data.last().and_then(|last| {
+            environments
+                .range(last.name.clone()..)
+                .nth(1)
+                .map(|_| last.name.clone())
+        });
+        Ok(ExecServerEnvironmentListResponse { data, next_cursor })
+    }
+
+    fn resolve(&self, name: &str) -> Result<Option<String>, String> {
+        let environments = self
+            .environments
+            .read()
+            .map_err(|_| "exec environment registry lock poisoned".to_string())?;
+        Ok(environments.get(name).cloned())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -599,6 +669,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     pub(crate) runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    pub(crate) exec_environment_registry: ExecEnvironmentRegistry,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
 }
@@ -672,6 +743,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            exec_environment_registry,
             feedback,
             log_db,
         } = args;
@@ -685,6 +757,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            exec_environment_registry,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
@@ -851,6 +924,14 @@ impl CodexMessageProcessor {
                     request_context,
                 )
                 .await;
+            }
+            ClientRequest::ExecServerEnvironmentRegister { request_id, params } => {
+                self.exec_environment_register(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ExecServerEnvironmentList { request_id, params } => {
+                self.exec_environment_list(to_connection_request_id(request_id), params)
+                    .await;
             }
             ClientRequest::ThreadUnsubscribe { request_id, params } => {
                 self.thread_unsubscribe(to_connection_request_id(request_id), params)
@@ -2240,6 +2321,7 @@ impl CodexMessageProcessor {
             experimental_raw_events,
             personality,
             ephemeral,
+            exec_environment_name,
             session_start_source,
             persist_extended_history,
         } = params;
@@ -2271,6 +2353,24 @@ impl CodexMessageProcessor {
         };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let selected_exec_environment = match exec_environment_name {
+            Some(name) => match self.exec_environment_registry.resolve(&name) {
+                Ok(Some(exec_server_url)) => Some((name, exec_server_url)),
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("unknown exec environment: {name}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(message) => {
+                    self.send_internal_error(request_id, message).await;
+                    return;
+                }
+            },
+            None => None,
+        };
         let thread_start_task = async move {
             Self::thread_start_task(
                 listener_task_context,
@@ -2283,6 +2383,7 @@ impl CodexMessageProcessor {
                 config,
                 typesafe_overrides,
                 dynamic_tools,
+                selected_exec_environment,
                 session_start_source,
                 persist_extended_history,
                 service_name,
@@ -2359,6 +2460,7 @@ impl CodexMessageProcessor {
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        selected_exec_environment: Option<(String, String)>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         persist_extended_history: bool,
         service_name: Option<String>,
@@ -2496,10 +2598,17 @@ impl CodexMessageProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
+        let selected_exec_environment_name =
+            selected_exec_environment.as_ref().map(|(name, _)| name.clone());
+        let environment_manager_override = selected_exec_environment
+            .as_ref()
+            .map(|(_, exec_server_url)| {
+                Arc::new(EnvironmentManager::new(Some(exec_server_url.clone())))
+            });
 
         match listener_task_context
             .thread_manager
-            .start_thread_with_tools_and_service_name(
+            .start_thread_with_tools_service_name_and_environment_manager(
                 config,
                 match session_start_source
                     .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
@@ -2510,6 +2619,7 @@ impl CodexMessageProcessor {
                 core_dynamic_tools,
                 persist_extended_history,
                 service_name,
+                environment_manager_override,
                 request_trace,
             )
             .instrument(tracing::info_span!(
@@ -2552,6 +2662,7 @@ impl CodexMessageProcessor {
                     &config_snapshot,
                     session_configured.rollout_path.clone(),
                 );
+                thread.exec_environment_name = selected_exec_environment_name.clone();
 
                 // Auto-attach a thread listener when starting a thread.
                 Self::log_listener_attach_result(
@@ -2581,6 +2692,13 @@ impl CodexMessageProcessor {
                         otel.name = "app_server.thread_start.upsert_thread",
                     ))
                     .await;
+
+                let thread_state = listener_task_context
+                    .thread_state_manager
+                    .thread_state(thread_id)
+                    .await;
+                thread_state.lock().await.exec_environment_name =
+                    selected_exec_environment_name.clone();
 
                 thread.status = resolve_thread_status(
                     listener_task_context
@@ -3755,18 +3873,18 @@ impl CodexMessageProcessor {
             .loaded_statuses_for_threads(status_ids)
             .await;
 
-        let data = threads
-            .into_iter()
-            .map(|(conversation_id, mut thread)| {
-                if let Some(title) = names.get(&conversation_id).cloned() {
-                    set_thread_name_from_title(&mut thread, title);
-                }
-                if let Some(status) = statuses.get(&thread.id) {
-                    thread.status = status.clone();
-                }
-                thread
-            })
-            .collect();
+        let mut data = Vec::with_capacity(threads.len());
+        for (conversation_id, mut thread) in threads {
+            if let Some(title) = names.get(&conversation_id).cloned() {
+                set_thread_name_from_title(&mut thread, title);
+            }
+            if let Some(status) = statuses.get(&thread.id) {
+                thread.status = status.clone();
+            }
+            self.attach_exec_environment_name(conversation_id, &mut thread)
+                .await;
+            data.push(thread);
+        }
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -3934,6 +4052,7 @@ impl CodexMessageProcessor {
             thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
         }
         self.attach_thread_name(thread_uuid, &mut thread).await;
+        self.attach_exec_environment_name(thread_uuid, &mut thread).await;
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_rollout_items_from_rollout(rollout_path).await {
@@ -3982,6 +4101,62 @@ impl CodexMessageProcessor {
         );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn exec_environment_register(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExecServerEnvironmentRegisterParams,
+    ) {
+        if params.name.trim().is_empty() {
+            self.send_invalid_request_error(
+                request_id,
+                "exec environment name must not be empty".to_string(),
+            )
+            .await;
+            return;
+        }
+        if params.exec_server_url.trim().is_empty() {
+            self.send_invalid_request_error(
+                request_id,
+                "exec_server_url must not be empty".to_string(),
+            )
+            .await;
+            return;
+        }
+        match self
+            .exec_environment_registry
+            .register(params.name, params.exec_server_url)
+        {
+            Ok(environment) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ExecServerEnvironmentRegisterResponse { environment },
+                    )
+                    .await;
+            }
+            Err(message) => self.send_internal_error(request_id, message).await,
+        }
+    }
+
+    async fn exec_environment_list(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExecServerEnvironmentListParams,
+    ) {
+        match self.exec_environment_registry.list(params.cursor, params.limit) {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(message) => self.send_internal_error(request_id, message).await,
+        }
+    }
+
+    async fn attach_exec_environment_name(&self, thread_id: ThreadId, thread: &mut Thread) {
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        if let Some(exec_environment_name) = thread_state.lock().await.exec_environment_name.clone()
+        {
+            thread.exec_environment_name = Some(exec_environment_name);
+        }
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -9608,6 +9783,7 @@ fn build_thread_from_snapshot(
     Thread {
         id: thread_id.to_string(),
         forked_from_id: None,
+        exec_environment_name: None,
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
         model_provider: config_snapshot.model_provider_id.clone(),
@@ -9651,6 +9827,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     Thread {
         id: conversation_id.to_string(),
         forked_from_id: None,
+        exec_environment_name: None,
         preview,
         ephemeral: false,
         model_provider,

@@ -241,6 +241,14 @@ client_request_definitions! {
         inspect_params: true,
         response: v2::ThreadStartResponse,
     },
+    ExecServerEnvironmentRegister => "execEnvironment/register" {
+        params: v2::ExecServerEnvironmentRegisterParams,
+        response: v2::ExecServerEnvironmentRegisterResponse,
+    },
+    ExecServerEnvironmentList => "execEnvironment/list" {
+        params: v2::ExecServerEnvironmentListParams,
+        response: v2::ExecServerEnvironmentListResponse,
+    },
     ThreadResume => "thread/resume" {
         params: v2::ThreadResumeParams,
         inspect_params: true,
@@ -1395,6 +1403,7 @@ mod tests {
                 thread: v2::Thread {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
                     forked_from_id: None,
+                    exec_environment_name: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
                     model_provider: "openai".to_string(),
@@ -1433,6 +1442,7 @@ mod tests {
                     "thread": {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                         "forkedFromId": null,
+                        "execEnvironmentName": null,
                         "preview": "first prompt",
                         "ephemeral": true,
                         "modelProvider": "openai",

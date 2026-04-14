@@ -6,6 +6,10 @@ use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ExecServerEnvironmentListParams;
+use codex_app_server_protocol::ExecServerEnvironmentListResponse;
+use codex_app_server_protocol::ExecServerEnvironmentRegisterParams;
+use codex_app_server_protocol::ExecServerEnvironmentRegisterResponse;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
@@ -522,6 +526,101 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(thread.status, ThreadStatus::SystemError,);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn registered_exec_environment_is_exposed_on_thread_surfaces() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let register_id = mcp
+        .send_exec_environment_register_request(ExecServerEnvironmentRegisterParams {
+            name: "dev-remote".to_string(),
+            exec_server_url: "none".to_string(),
+        })
+        .await?;
+    let register_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(register_id)),
+    )
+    .await??;
+    let ExecServerEnvironmentRegisterResponse { environment } =
+        to_response::<ExecServerEnvironmentRegisterResponse>(register_resp)?;
+    assert_eq!(environment.name, "dev-remote");
+    assert_eq!(environment.exec_server_url, "none");
+
+    let list_id = mcp
+        .send_exec_environment_list_request(ExecServerEnvironmentListParams {
+            cursor: None,
+            limit: Some(10),
+        })
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let ExecServerEnvironmentListResponse { data, next_cursor } =
+        to_response::<ExecServerEnvironmentListResponse>(list_resp)?;
+    assert_eq!(next_cursor, None);
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].name, "dev-remote");
+    assert_eq!(data[0].exec_server_url, "none");
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            exec_environment_name: Some("dev-remote".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let start_result = start_resp.result.clone();
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    assert_eq!(thread.exec_environment_name.as_deref(), Some("dev-remote"));
+    assert_eq!(
+        start_result
+            .get("thread")
+            .and_then(Value::as_object)
+            .and_then(|thread| thread.get("execEnvironmentName"))
+            .and_then(Value::as_str),
+        Some("dev-remote"),
+        "thread/start must serialize `thread.exec_environment_name` on the wire"
+    );
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let read_result = read_resp.result.clone();
+    let ThreadReadResponse { thread: read_thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    assert_eq!(read_thread.exec_environment_name.as_deref(), Some("dev-remote"));
+    assert_eq!(
+        read_result
+            .get("thread")
+            .and_then(Value::as_object)
+            .and_then(|thread| thread.get("execEnvironmentName"))
+            .and_then(Value::as_str),
+        Some("dev-remote"),
+        "thread/read must serialize `thread.exec_environment_name` on the wire"
+    );
 
     Ok(())
 }

@@ -2683,6 +2683,9 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.mockExperimentalField")]
     #[ts(optional = nullable)]
     pub mock_experimental_field: Option<String>,
+    /// Optional named exec-server environment to use for this thread.
+    #[ts(optional = nullable)]
+    pub exec_environment_name: Option<String>,
     /// If true, opt into emitting raw Responses API items on the event stream.
     /// This is for internal use only (e.g. Codex Cloud).
     #[experimental("thread/start.experimentalRawEvents")]
@@ -2693,6 +2696,56 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExecServerEnvironment {
+    /// Unique name used to reference this exec-server environment.
+    pub name: String,
+    /// Exec-server URL used when binding a thread to this environment.
+    pub exec_server_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExecServerEnvironmentRegisterParams {
+    /// Human-readable name for selecting this environment in thread start.
+    pub name: String,
+    /// Exec-server URL to register under this environment name.
+    pub exec_server_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExecServerEnvironmentRegisterResponse {
+    /// The environment entry that was registered.
+    pub environment: ExecServerEnvironment,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExecServerEnvironmentListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a reasonable server-side value.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExecServerEnvironmentListResponse {
+    pub data: Vec<ExecServerEnvironment>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -3718,6 +3771,8 @@ pub struct Thread {
     pub id: String,
     /// Source thread id when this thread was created by forking another thread.
     pub forked_from_id: Option<String>,
+    /// Optional named exec-server environment selected for this thread.
+    pub exec_environment_name: Option<String>,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
     /// Whether the thread is ephemeral and should not be materialized on disk.
@@ -8576,6 +8631,7 @@ mod tests {
             "thread": {
                 "id": "thread-id",
                 "forkedFromId": null,
+                "execEnvironmentName": null,
                 "preview": "",
                 "ephemeral": false,
                 "modelProvider": "openai",

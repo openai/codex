@@ -497,6 +497,28 @@ impl ThreadManager {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        Box::pin(self.start_thread_with_tools_service_name_and_environment_manager(
+            config,
+            initial_history,
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+            /*environment_manager_override*/ None,
+            parent_trace,
+        ))
+        .await
+    }
+
+    pub async fn start_thread_with_tools_service_name_and_environment_manager(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
+        metrics_service_name: Option<String>,
+        environment_manager_override: Option<Arc<EnvironmentManager>>,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
             initial_history,
@@ -505,6 +527,7 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            environment_manager_override,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -545,6 +568,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            /*environment_manager_override*/ None,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -564,6 +588,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*environment_manager_override*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -586,6 +611,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*environment_manager_override*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -694,6 +720,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            /*environment_manager_override*/ None,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -760,6 +787,7 @@ impl ThreadManagerState {
         &self,
         config: Config,
         agent_control: AgentControl,
+        environment_manager_override: Option<Arc<EnvironmentManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_new_thread_with_source(
             config,
@@ -769,6 +797,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
+            environment_manager_override,
         ))
         .await
     }
@@ -783,6 +812,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        environment_manager_override: Option<Arc<EnvironmentManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -795,6 +825,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            environment_manager_override,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -822,6 +853,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            /*environment_manager_override*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -850,6 +882,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            /*environment_manager_override*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -867,6 +900,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        environment_manager_override: Option<Arc<EnvironmentManager>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -881,6 +915,7 @@ impl ThreadManagerState {
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
+            environment_manager_override,
             parent_trace,
             user_shell_override,
         ))
@@ -900,6 +935,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        environment_manager_override: Option<Arc<EnvironmentManager>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -914,7 +950,8 @@ impl ThreadManagerState {
             config,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
-            environment_manager: Arc::clone(&self.environment_manager),
+            environment_manager: environment_manager_override
+                .unwrap_or_else(|| Arc::clone(&self.environment_manager)),
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),

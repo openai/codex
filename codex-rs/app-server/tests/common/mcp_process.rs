@@ -24,6 +24,8 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
+use codex_app_server_protocol::ExecServerEnvironmentListParams;
+use codex_app_server_protocol::ExecServerEnvironmentRegisterParams;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCreateDirectoryParams;
@@ -334,6 +336,24 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/start", params).await
+    }
+
+    /// Send an `execEnvironment/register` JSON-RPC request.
+    pub async fn send_exec_environment_register_request(
+        &mut self,
+        params: ExecServerEnvironmentRegisterParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("execEnvironment/register", params).await
+    }
+
+    /// Send an `execEnvironment/list` JSON-RPC request.
+    pub async fn send_exec_environment_list_request(
+        &mut self,
+        params: ExecServerEnvironmentListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("execEnvironment/list", params).await
     }
 
     /// Send a `thread/resume` JSON-RPC request.
