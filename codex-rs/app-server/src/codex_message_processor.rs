@@ -9437,7 +9437,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
             .to_rfc3339_opts(SecondsFormat::Secs, true),
         metadata
             .updated_at
-            .to_rfc3339_opts(SecondsFormat::Millis, true),
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
         metadata.model_provider.clone(),
         metadata.cwd.clone(),
         metadata.cli_version.clone(),
@@ -9952,6 +9952,24 @@ mod tests {
         metadata.model = model.map(ToString::to_string);
         metadata.reasoning_effort = reasoning_effort;
         Ok(metadata)
+    }
+
+    #[test]
+    fn summary_from_thread_metadata_formats_protocol_timestamps_as_seconds() -> Result<()> {
+        let mut metadata = test_thread_metadata(None, None)?;
+        metadata.created_at =
+            DateTime::parse_from_rfc3339("2025-09-05T16:53:11.123Z")?.with_timezone(&Utc);
+        metadata.updated_at =
+            DateTime::parse_from_rfc3339("2025-09-05T16:53:12.456Z")?.with_timezone(&Utc);
+
+        let summary = summary_from_thread_metadata(&metadata);
+
+        assert_eq!(summary.timestamp, Some("2025-09-05T16:53:11Z".to_string()));
+        assert_eq!(
+            summary.updated_at,
+            Some("2025-09-05T16:53:12Z".to_string())
+        );
+        Ok(())
     }
 
     #[test]
