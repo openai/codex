@@ -2922,14 +2922,15 @@ impl Session {
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
-        let Some(text) = realtime_text_for_event(msg) else {
-            return;
-        };
         if self.conversation.running_state().await.is_none()
             || self.conversation.active_handoff_id().await.is_none()
         {
             return;
         }
+        let Some(text) = realtime_text_for_event(msg, self.conversation.is_realtime_v2().await)
+        else {
+            return;
+        };
         if let Err(err) = self.conversation.handoff_out(text).await {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }
@@ -7346,13 +7347,14 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
         .collect()
 }
 
-fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
+fn realtime_text_for_event(msg: &EventMsg, suppress_final_answer: bool) -> Option<String> {
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
         EventMsg::ItemCompleted(event) => match &event.item {
             TurnItem::AgentMessage(item) => match item.phase.as_ref() {
-                Some(MessagePhase::FinalAnswer) => None,
+                Some(MessagePhase::FinalAnswer) if suppress_final_answer => None,
                 Some(MessagePhase::Commentary) | None => Some(agent_message_text(item)),
+                Some(MessagePhase::FinalAnswer) => Some(agent_message_text(item)),
             },
             _ => None,
         },

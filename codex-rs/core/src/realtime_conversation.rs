@@ -244,6 +244,13 @@ impl RealtimeConversationManager {
             .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
     }
 
+    pub(crate) async fn is_realtime_v2(&self) -> bool {
+        let state = self.state.lock().await;
+        state
+            .as_ref()
+            .is_some_and(|state| state.handoff.session_kind == RealtimeSessionKind::V2)
+    }
+
     async fn start(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
         let previous_state = {
             let mut guard = self.state.lock().await;
