@@ -23,6 +23,7 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
+    "config-store",
     "shell-command",
     "shell-escalation",
     "skills",
