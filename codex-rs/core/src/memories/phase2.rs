@@ -3,6 +3,7 @@ use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
 use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
+use crate::memories::extensions::prune_old_extension_resources;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
@@ -113,6 +114,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
         return;
     }
+    let removed_extension_resources = prune_old_extension_resources(&root).await;
     if raw_memories.is_empty() {
         // We check only after sync of the file system.
         job::succeed(
@@ -128,7 +130,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     }
 
     // 5. Spawn the agent
-    let prompt = agent::get_prompt(config, &selection);
+    let prompt = agent::get_prompt(config, &selection, &removed_extension_resources);
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let thread_id = match session
         .services
@@ -345,9 +347,10 @@ mod agent {
     pub(super) fn get_prompt(
         config: Arc<Config>,
         selection: &codex_state::Phase2InputSelection,
+        removed_extension_resources: &[crate::memories::extensions::RemovedExtensionResource],
     ) -> Vec<UserInput> {
         let root = memory_root(&config.codex_home);
-        let prompt = build_consolidation_prompt(&root, selection);
+        let prompt = build_consolidation_prompt(&root, selection, removed_extension_resources);
         vec![UserInput::Text {
             text: prompt,
             text_elements: vec![],
