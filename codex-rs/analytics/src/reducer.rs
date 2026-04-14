@@ -8,6 +8,8 @@ use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CodexTurnSteerEventParams;
+use crate::events::CodexTurnSteerEventRequest;
 use crate::events::GuardianReviewEventParams;
 use crate::events::GuardianReviewEventPayload;
 use crate::events::GuardianReviewEventRequest;
@@ -26,6 +28,7 @@ use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
 use crate::events::thread_source_name;
 use crate::facts::AnalyticsFact;
+use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
@@ -38,12 +41,17 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
+use crate::facts::TurnSteerRejectionReason;
+use crate::facts::TurnSteerResult;
+use crate::facts::TurnTokenUsageFact;
+use crate::now_unix_seconds;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
@@ -54,6 +62,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::TokenUsage;
 use sha1::Digest;
 use std::collections::HashMap;
 use std::path::Path;
@@ -75,12 +84,16 @@ struct ConnectionState {
 #[derive(Clone)]
 struct ThreadMetadataState {
     thread_source: Option<&'static str>,
+    initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
 }
 
 impl ThreadMetadataState {
-    fn from_session_source(session_source: &SessionSource) -> Self {
+    fn from_thread_metadata(
+        session_source: &SessionSource,
+        initialization_mode: ThreadInitializationMode,
+    ) -> Self {
         let (subagent_source, parent_thread_id) = match session_source {
             SessionSource::SubAgent(subagent_source) => (
                 Some(subagent_source_name(subagent_source)),
@@ -95,6 +108,7 @@ impl ThreadMetadataState {
         };
         Self {
             thread_source: thread_source_name(session_source),
+            initialization_mode,
             subagent_source,
             parent_thread_id,
         }
@@ -103,11 +117,19 @@ impl ThreadMetadataState {
 
 enum RequestState {
     TurnStart(PendingTurnStartState),
+    TurnSteer(PendingTurnSteerState),
 }
 
 struct PendingTurnStartState {
     thread_id: String,
     num_input_images: usize,
+}
+
+struct PendingTurnSteerState {
+    thread_id: String,
+    expected_turn_id: String,
+    num_input_images: usize,
+    created_at: u64,
 }
 
 #[derive(Clone)]
@@ -124,7 +146,9 @@ struct TurnState {
     num_input_images: Option<usize>,
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
+    token_usage: Option<TokenUsage>,
     completed: Option<CompletedTurnState>,
+    steer_count: usize,
 }
 
 impl AnalyticsReducer {
@@ -158,6 +182,14 @@ impl AnalyticsReducer {
             } => {
                 self.ingest_response(connection_id, *response, out);
             }
+            AnalyticsFact::ErrorResponse {
+                connection_id,
+                request_id,
+                error: _,
+                error_type,
+            } => {
+                self.ingest_error_response(connection_id, request_id, error_type, out);
+            }
             AnalyticsFact::Notification(notification) => {
                 self.ingest_notification(*notification, out);
             }
@@ -173,6 +205,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
                     self.ingest_turn_resolved_config(*input, out);
+                }
+                CustomAnalyticsFact::TurnTokenUsage(input) => {
+                    self.ingest_turn_token_usage(*input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -270,22 +305,29 @@ impl AnalyticsReducer {
         request_id: RequestId,
         request: ClientRequest,
     ) {
-        let ClientRequest::TurnStart { params, .. } = request else {
-            return;
-        };
-        self.requests.insert(
-            (connection_id, request_id),
-            RequestState::TurnStart(PendingTurnStartState {
-                thread_id: params.thread_id,
-                num_input_images: params
-                    .input
-                    .iter()
-                    .filter(|item| {
-                        matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
-                    })
-                    .count(),
-            }),
-        );
+        match request {
+            ClientRequest::TurnStart { params, .. } => {
+                self.requests.insert(
+                    (connection_id, request_id),
+                    RequestState::TurnStart(PendingTurnStartState {
+                        thread_id: params.thread_id,
+                        num_input_images: num_input_images(&params.input),
+                    }),
+                );
+            }
+            ClientRequest::TurnSteer { params, .. } => {
+                self.requests.insert(
+                    (connection_id, request_id),
+                    RequestState::TurnSteer(PendingTurnSteerState {
+                        thread_id: params.thread_id,
+                        expected_turn_id: params.expected_turn_id,
+                        num_input_images: num_input_images(&params.input),
+                        created_at: now_unix_seconds(),
+                    }),
+                );
+            }
+            _ => {}
+        }
     }
 
     fn ingest_turn_resolved_config(
@@ -302,11 +344,34 @@ impl AnalyticsReducer {
             num_input_images: None,
             resolved_config: None,
             started_at: None,
+            token_usage: None,
             completed: None,
+            steer_count: 0,
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
         turn_state.resolved_config = Some(input);
+        self.maybe_emit_turn_event(&turn_id, out);
+    }
+
+    fn ingest_turn_token_usage(
+        &mut self,
+        input: TurnTokenUsageFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let turn_id = input.turn_id.clone();
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at: None,
+            token_usage: None,
+            completed: None,
+            steer_count: 0,
+        });
+        turn_state.thread_id = Some(input.thread_id);
+        turn_state.token_usage = Some(input.token_usage);
         self.maybe_emit_turn_event(&turn_id, out);
     }
 
@@ -454,15 +519,73 @@ impl AnalyticsReducer {
                     num_input_images: None,
                     resolved_config: None,
                     started_at: None,
+                    token_usage: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
                 turn_state.num_input_images = Some(pending_request.num_input_images);
                 self.maybe_emit_turn_event(&turn_id, out);
             }
+            ClientResponse::TurnSteer {
+                request_id,
+                response,
+            } => {
+                self.ingest_turn_steer_response(connection_id, request_id, response, out);
+            }
             _ => {}
         }
+    }
+
+    fn ingest_error_response(
+        &mut self,
+        connection_id: u64,
+        request_id: RequestId,
+        error_type: Option<AnalyticsJsonRpcError>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(request) = self.requests.remove(&(connection_id, request_id)) else {
+            return;
+        };
+        self.ingest_request_error_response(connection_id, request, error_type, out);
+    }
+
+    fn ingest_request_error_response(
+        &mut self,
+        connection_id: u64,
+        request: RequestState,
+        error_type: Option<AnalyticsJsonRpcError>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        match request {
+            RequestState::TurnStart(_) => {}
+            RequestState::TurnSteer(pending_request) => {
+                self.ingest_turn_steer_error_response(
+                    connection_id,
+                    pending_request,
+                    error_type,
+                    out,
+                );
+            }
+        }
+    }
+
+    fn ingest_turn_steer_error_response(
+        &mut self,
+        connection_id: u64,
+        pending_request: PendingTurnSteerState,
+        error_type: Option<AnalyticsJsonRpcError>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.emit_turn_steer_event(
+            connection_id,
+            pending_request,
+            /*accepted_turn_id*/ None,
+            TurnSteerResult::Rejected,
+            rejection_reason_from_error_type(error_type),
+            out,
+        );
     }
 
     fn ingest_notification(
@@ -478,7 +601,9 @@ impl AnalyticsReducer {
                     num_input_images: None,
                     resolved_config: None,
                     started_at: None,
+                    token_usage: None,
                     completed: None,
+                    steer_count: 0,
                 });
                 turn_state.started_at = notification
                     .turn
@@ -495,7 +620,9 @@ impl AnalyticsReducer {
                             num_input_images: None,
                             resolved_config: None,
                             started_at: None,
+                            token_usage: None,
                             completed: None,
+                            steer_count: 0,
                         });
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
@@ -533,7 +660,8 @@ impl AnalyticsReducer {
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
-        let thread_metadata = ThreadMetadataState::from_session_source(&thread_source);
+        let thread_metadata =
+            ThreadMetadataState::from_thread_metadata(&thread_source, initialization_mode);
         self.thread_connections
             .insert(thread_id.clone(), connection_id);
         self.thread_metadata
@@ -598,6 +726,69 @@ impl AnalyticsReducer {
         )));
     }
 
+    fn ingest_turn_steer_response(
+        &mut self,
+        connection_id: u64,
+        request_id: RequestId,
+        response: TurnSteerResponse,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(RequestState::TurnSteer(pending_request)) =
+            self.requests.remove(&(connection_id, request_id))
+        else {
+            return;
+        };
+        if let Some(turn_state) = self.turns.get_mut(&response.turn_id) {
+            turn_state.steer_count += 1;
+        }
+        self.emit_turn_steer_event(
+            connection_id,
+            pending_request,
+            Some(response.turn_id),
+            TurnSteerResult::Accepted,
+            /*rejection_reason*/ None,
+            out,
+        );
+    }
+
+    fn emit_turn_steer_event(
+        &mut self,
+        connection_id: u64,
+        pending_request: PendingTurnSteerState,
+        accepted_turn_id: Option<String>,
+        result: TurnSteerResult,
+        rejection_reason: Option<TurnSteerRejectionReason>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(connection_state) = self.connections.get(&connection_id) else {
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(&pending_request.thread_id) else {
+            tracing::warn!(
+                thread_id = %pending_request.thread_id,
+                "dropping turn steer analytics event: missing thread lifecycle metadata"
+            );
+            return;
+        };
+        out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+            event_type: "codex_turn_steer_event",
+            event_params: CodexTurnSteerEventParams {
+                thread_id: pending_request.thread_id,
+                expected_turn_id: Some(pending_request.expected_turn_id),
+                accepted_turn_id,
+                app_server_client: connection_state.app_server_client.clone(),
+                runtime: connection_state.runtime.clone(),
+                thread_source: thread_metadata.thread_source.map(str::to_string),
+                subagent_source: thread_metadata.subagent_source.clone(),
+                parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                num_input_images: pending_request.num_input_images,
+                result,
+                rejection_reason,
+                created_at: pending_request.created_at,
+            },
+        }));
+    }
+
     fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
         let Some(turn_state) = self.turns.get(turn_id) else {
             return;
@@ -619,6 +810,24 @@ impl AnalyticsReducer {
                 )
             });
         let Some((app_server_client, runtime)) = connection_metadata else {
+            if let Some(connection_id) = turn_state.connection_id {
+                tracing::warn!(
+                    turn_id,
+                    connection_id,
+                    "dropping turn analytics event: missing connection metadata"
+                );
+            }
+            return;
+        };
+        let Some(thread_id) = turn_state.thread_id.as_ref() else {
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(thread_id) else {
+            tracing::warn!(
+                thread_id,
+                turn_id,
+                "dropping turn analytics event: missing thread lifecycle metadata"
+            );
             return;
         };
         out.push(TrackEventRequest::TurnEvent(Box::new(
@@ -629,6 +838,7 @@ impl AnalyticsReducer {
                     runtime,
                     turn_id.to_string(),
                     turn_state,
+                    thread_metadata,
                 ),
             },
         )));
@@ -641,6 +851,7 @@ fn codex_turn_event_params(
     runtime: CodexRuntimeMetadata,
     turn_id: String,
     turn_state: &TurnState,
+    thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
     let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
         turn_state.thread_id.clone(),
@@ -671,6 +882,7 @@ fn codex_turn_event_params(
         personality,
         is_first_turn,
     } = resolved_config;
+    let token_usage = turn_state.token_usage.clone();
     CodexTurnEventParams {
         thread_id,
         turn_id,
@@ -678,6 +890,10 @@ fn codex_turn_event_params(
         runtime,
         submission_type,
         ephemeral,
+        thread_source: thread_metadata.thread_source.map(str::to_string),
+        initialization_mode: thread_metadata.initialization_mode,
+        subagent_source: thread_metadata.subagent_source.clone(),
+        parent_thread_id: thread_metadata.parent_thread_id.clone(),
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),
@@ -695,7 +911,7 @@ fn codex_turn_event_params(
         is_first_turn,
         status: completed.status,
         turn_error: completed.turn_error,
-        steer_count: None,
+        steer_count: Some(turn_state.steer_count),
         total_tool_call_count: None,
         shell_command_count: None,
         file_change_count: None,
@@ -704,6 +920,21 @@ fn codex_turn_event_params(
         subagent_tool_call_count: None,
         web_search_count: None,
         image_generation_count: None,
+        input_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.input_tokens),
+        cached_input_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.cached_input_tokens),
+        output_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.output_tokens),
+        reasoning_output_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.reasoning_output_tokens),
+        total_tokens: token_usage
+            .as_ref()
+            .map(|token_usage| token_usage.total_tokens),
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),
@@ -746,6 +977,22 @@ fn analytics_turn_status(status: codex_app_server_protocol::TurnStatus) -> Optio
         codex_app_server_protocol::TurnStatus::Failed => Some(TurnStatus::Failed),
         codex_app_server_protocol::TurnStatus::Interrupted => Some(TurnStatus::Interrupted),
         codex_app_server_protocol::TurnStatus::InProgress => None,
+    }
+}
+
+fn num_input_images(input: &[UserInput]) -> usize {
+    input
+        .iter()
+        .filter(|item| matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. }))
+        .count()
+}
+
+fn rejection_reason_from_error_type(
+    error_type: Option<AnalyticsJsonRpcError>,
+) -> Option<TurnSteerRejectionReason> {
+    match error_type? {
+        AnalyticsJsonRpcError::TurnSteer(error) => Some(error.into()),
+        AnalyticsJsonRpcError::Input(error) => Some(error.into()),
     }
 }
 

@@ -1,7 +1,5 @@
 use std::sync::Arc;
 use std::time::Instant;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use crate::Prompt;
 use crate::client::ModelClientSession;
@@ -19,6 +17,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
+use codex_analytics::now_unix_seconds;
 use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
@@ -370,13 +369,6 @@ pub(crate) fn compaction_status_from_result<T>(result: &CodexResult<T>) -> Compa
         Err(CodexErr::Interrupted | CodexErr::TurnAborted) => CompactionStatus::Interrupted,
         Err(_) => CompactionStatus::Failed,
     }
-}
-
-fn now_unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {

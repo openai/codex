@@ -4,6 +4,7 @@ use crate::events::GuardianReviewEventParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_plugin::PluginTelemetryMetadata;
@@ -18,6 +19,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -77,12 +79,87 @@ pub enum ThreadInitializationMode {
     Resumed,
 }
 
+#[derive(Clone)]
+pub struct TurnTokenUsageFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub token_usage: TokenUsage,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
     Completed,
     Failed,
     Interrupted,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+    InputTooLarge,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnSteerEvent {
+    pub expected_turn_id: Option<String>,
+    pub accepted_turn_id: Option<String>,
+    pub num_input_images: usize,
+    pub result: TurnSteerResult,
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AnalyticsJsonRpcError {
+    TurnSteer(TurnSteerRequestError),
+    Input(InputError),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TurnSteerRequestError {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum InputError {
+    Empty,
+    TooLarge,
+}
+
+impl From<TurnSteerRequestError> for TurnSteerRejectionReason {
+    fn from(error: TurnSteerRequestError) -> Self {
+        match error {
+            TurnSteerRequestError::NoActiveTurn => Self::NoActiveTurn,
+            TurnSteerRequestError::ExpectedTurnMismatch => Self::ExpectedTurnMismatch,
+            TurnSteerRequestError::NonSteerableReview => Self::NonSteerableReview,
+            TurnSteerRequestError::NonSteerableCompact => Self::NonSteerableCompact,
+        }
+    }
+}
+
+impl From<InputError> for TurnSteerRejectionReason {
+    fn from(error: InputError) -> Self {
+        match error {
+            InputError::Empty => Self::EmptyInput,
+            InputError::TooLarge => Self::InputTooLarge,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -200,6 +277,12 @@ pub(crate) enum AnalyticsFact {
         connection_id: u64,
         response: Box<ClientResponse>,
     },
+    ErrorResponse {
+        connection_id: u64,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+        error_type: Option<AnalyticsJsonRpcError>,
+    },
     Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or
     // would require non-trivial protocol reshaping on this branch.
@@ -211,6 +294,7 @@ pub(crate) enum CustomAnalyticsFact {
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnTokenUsage(Box<TurnTokenUsageFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
