@@ -1,5 +1,4 @@
 use crate::auth::AuthProvider;
-use crate::endpoint::REALTIME_WIRE_LOG_TARGET;
 use crate::endpoint::realtime_websocket::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::session_update_session_json;
 use crate::endpoint::session::EndpointSession;
@@ -93,7 +92,6 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
         sdp: String,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
-        trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime call request SDP: {sdp}");
         let resp = self
             .session
             .execute_with(
@@ -135,7 +133,6 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
                 session: &session,
             })
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime call: {err}")))?;
-            trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime call request: {body}");
             let resp = self
                 .session
                 .execute(Method::POST, Self::path(), extra_headers, Some(body))
@@ -160,11 +157,6 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
         body.extend_from_slice(session.as_bytes());
         body.extend_from_slice(b"\r\n");
         body.extend_from_slice(format!("--{MULTIPART_BOUNDARY}--\r\n").as_bytes());
-        trace!(
-            target: REALTIME_WIRE_LOG_TARGET,
-            "realtime call request multipart: {}",
-            String::from_utf8_lossy(&body)
-        );
 
         let resp = self
             .session
@@ -196,13 +188,11 @@ fn realtime_session_json(session_config: RealtimeSessionConfig) -> Result<Value,
 }
 
 fn decode_sdp_response(body: &[u8]) -> Result<String, ApiError> {
-    let sdp = String::from_utf8(body.to_vec()).map_err(|err| {
+    String::from_utf8(body.to_vec()).map_err(|err| {
         ApiError::Stream(format!(
             "failed to decode realtime call SDP response: {err}"
         ))
-    })?;
-    trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime call response SDP: {sdp}");
-    Ok(sdp)
+    })
 }
 
 fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError> {
@@ -211,7 +201,7 @@ fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError>
         .ok_or_else(|| ApiError::Stream("realtime call response missing Location".to_string()))?
         .to_str()
         .map_err(|err| ApiError::Stream(format!("invalid realtime call Location: {err}")))?;
-    trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime call response Location: {location}");
+    trace!("realtime call Location: {location}");
 
     location
         .split('?')
