@@ -116,6 +116,7 @@ mod debug_config;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+mod external_agent_config_migration;
 mod external_editor;
 mod file_search;
 mod frames;

@@ -579,7 +579,18 @@ const fn default_true() -> bool {
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ExternalConfigMigrationPrompts {
+    /// Tracks whether home-level external config migration prompts are hidden.
+    pub home: Option<bool>,
+    /// Tracks which project paths have opted out of external config migration prompts.
+    #[serde(default)]
+    pub projects: BTreeMap<String, bool>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,
@@ -595,6 +606,9 @@ pub struct Notice {
     /// Tracks acknowledged model migrations as old->new model slug mappings.
     #[serde(default)]
     pub model_migrations: BTreeMap<String, String>,
+    /// Tracks scopes where external config migration prompts should be suppressed.
+    #[serde(default)]
+    pub external_config_migration_prompts: ExternalConfigMigrationPrompts,
 }
 
 pub use crate::skills_config::BundledSkillsConfig;

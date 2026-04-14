@@ -28,6 +28,8 @@ use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::external_agent_config_migration::ExternalAgentConfigMigrationOutcome;
+use crate::external_agent_config_migration::run_external_agent_config_migration_prompt;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -72,6 +74,8 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -139,6 +143,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -838,6 +843,209 @@ async fn prepare_startup_tooltip_override(
 
     config.model_availability_nux.shown_count = updated_shown_count;
     Some(tooltip_override.message)
+}
+
+async fn rebuild_startup_config(
+    config: &Config,
+    cli_kv_overrides: &[(String, TomlValue)],
+    harness_overrides: &ConfigOverrides,
+) -> Result<Config> {
+    ConfigBuilder::default()
+        .codex_home(config.codex_home.to_path_buf())
+        .cli_overrides(cli_kv_overrides.to_vec())
+        .harness_overrides(harness_overrides.clone())
+        .build()
+        .await
+        .wrap_err("Failed to reload config after external agent migration")
+}
+
+fn external_config_migration_project_key(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn is_external_config_migration_scope_hidden(config: &Config, cwd: Option<&Path>) -> bool {
+    match cwd {
+        Some(cwd) => config
+            .notices
+            .external_config_migration_prompts
+            .projects
+            .get(&external_config_migration_project_key(cwd))
+            .copied()
+            .unwrap_or(false),
+        None => config
+            .notices
+            .external_config_migration_prompts
+            .home
+            .unwrap_or(false),
+    }
+}
+
+fn visible_external_agent_config_migration_items(
+    config: &Config,
+    items: Vec<ExternalAgentConfigMigrationItem>,
+) -> Vec<ExternalAgentConfigMigrationItem> {
+    items
+        .into_iter()
+        .filter(|item| !is_external_config_migration_scope_hidden(config, item.cwd.as_deref()))
+        .collect()
+}
+
+async fn persist_external_agent_config_migration_prompt_dismissal(
+    config: &mut Config,
+    items: &[ExternalAgentConfigMigrationItem],
+) -> Result<()> {
+    let hide_home = items.iter().any(|item| item.cwd.is_none());
+    let projects = items
+        .iter()
+        .filter_map(|item| item.cwd.as_deref())
+        .map(external_config_migration_project_key)
+        .collect::<BTreeSet<_>>();
+
+    let mut edits = Vec::new();
+    if hide_home
+        && !config
+            .notices
+            .external_config_migration_prompts
+            .home
+            .unwrap_or(false)
+    {
+        edits.push(ConfigEdit::SetNoticeHideExternalConfigMigrationPromptHome(
+            true,
+        ));
+    }
+    for project in &projects {
+        if !config
+            .notices
+            .external_config_migration_prompts
+            .projects
+            .get(project)
+            .copied()
+            .unwrap_or(false)
+        {
+            edits.push(
+                ConfigEdit::SetNoticeHideExternalConfigMigrationPromptProject(
+                    project.clone(),
+                    true,
+                ),
+            );
+        }
+    }
+
+    if edits.is_empty() {
+        return Ok(());
+    }
+
+    ConfigEditsBuilder::new(&config.codex_home)
+        .with_edits(edits)
+        .apply()
+        .await
+        .map_err(|err| color_eyre::eyre::eyre!("{err}"))
+        .wrap_err("Failed to save external config migration prompt preference")?;
+
+    if hide_home {
+        config.notices.external_config_migration_prompts.home = Some(true);
+    }
+    for project in projects {
+        config
+            .notices
+            .external_config_migration_prompts
+            .projects
+            .insert(project, true);
+    }
+
+    Ok(())
+}
+
+async fn handle_external_agent_config_migration_prompt_if_needed(
+    tui: &mut tui::Tui,
+    app_server: &mut AppServerSession,
+    config: &mut Config,
+    cli_kv_overrides: &[(String, TomlValue)],
+    harness_overrides: &ConfigOverrides,
+) -> Result<Option<AppExitInfo>> {
+    let detected_items = match app_server
+        .external_agent_config_detect(ExternalAgentConfigDetectParams {
+            include_home: true,
+            cwds: Some(vec![config.cwd.to_path_buf()]),
+        })
+        .await
+    {
+        Ok(response) => visible_external_agent_config_migration_items(config, response.items),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                cwd = %config.cwd.display(),
+                "failed to detect external agent config migrations; continuing startup"
+            );
+            return Ok(None);
+        }
+    };
+
+    if detected_items.is_empty() {
+        return Ok(None);
+    }
+
+    let mut selected_items = detected_items.clone();
+    let mut error: Option<String> = None;
+
+    loop {
+        match run_external_agent_config_migration_prompt(
+            tui,
+            &detected_items,
+            &selected_items,
+            error.as_deref(),
+        )
+        .await
+        {
+            ExternalAgentConfigMigrationOutcome::Proceed(items) => {
+                selected_items = items.clone();
+                match app_server.external_agent_config_import(items).await {
+                    Ok(_) => {
+                        *config =
+                            rebuild_startup_config(config, cli_kv_overrides, harness_overrides)
+                                .await?;
+                        return Ok(None);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            cwd = %config.cwd.display(),
+                            "failed to import external agent config migration items"
+                        );
+                        error = Some(format!("Migration failed: {err}"));
+                    }
+                }
+            }
+            ExternalAgentConfigMigrationOutcome::Skip => return Ok(None),
+            ExternalAgentConfigMigrationOutcome::SkipForever => {
+                match persist_external_agent_config_migration_prompt_dismissal(
+                    config,
+                    &detected_items,
+                )
+                .await
+                {
+                    Ok(()) => return Ok(None),
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            cwd = %config.cwd.display(),
+                            "failed to persist external config migration prompt dismissal"
+                        );
+                        error = Some(format!("Failed to save preference: {err}"));
+                    }
+                }
+            }
+            ExternalAgentConfigMigrationOutcome::Exit => {
+                return Ok(Some(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    thread_id: None,
+                    thread_name: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                }));
+            }
+        }
+    }
 }
 
 async fn handle_model_migration_prompt_if_needed(
@@ -3624,6 +3832,24 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
+        let exit_info = handle_external_agent_config_migration_prompt_if_needed(
+            tui,
+            &mut app_server,
+            &mut config,
+            &cli_kv_overrides,
+            &harness_overrides,
+        )
+        .await?;
+        if let Some(exit_info) = exit_info {
+            app_server
+                .shutdown()
+                .await
+                .inspect_err(|err| {
+                    tracing::warn!("app-server shutdown failed: {err}");
+                })
+                .ok();
+            return Ok(exit_info);
+        }
         let bootstrap = app_server.bootstrap(&config).await?;
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
@@ -10079,6 +10305,55 @@ guardian_approval = true
         );
 
         assert_eq!(selected, None);
+    }
+
+    #[tokio::test]
+    async fn visible_external_agent_config_migration_items_omits_hidden_scopes() {
+        let codex_home = tempdir().expect("temp codex home");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        config.notices.external_config_migration_prompts.home = Some(true);
+        config
+            .notices
+            .external_config_migration_prompts
+            .projects
+            .insert("/tmp/project".to_string(), true);
+
+        let visible = visible_external_agent_config_migration_items(
+            &config,
+            vec![
+                ExternalAgentConfigMigrationItem {
+                    item_type:
+                        codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Config,
+                    description: "home".to_string(),
+                    cwd: None,
+                },
+                ExternalAgentConfigMigrationItem {
+                    item_type:
+                        codex_app_server_protocol::ExternalAgentConfigMigrationItemType::AgentsMd,
+                    description: "project".to_string(),
+                    cwd: Some(PathBuf::from("/tmp/project")),
+                },
+                ExternalAgentConfigMigrationItem {
+                    item_type:
+                        codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Skills,
+                    description: "other project".to_string(),
+                    cwd: Some(PathBuf::from("/tmp/other")),
+                },
+            ],
+        );
+
+        assert_eq!(
+            visible,
+            vec![ExternalAgentConfigMigrationItem {
+                item_type: codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Skills,
+                description: "other project".to_string(),
+                cwd: Some(PathBuf::from("/tmp/other")),
+            }]
+        );
     }
 
     #[tokio::test]

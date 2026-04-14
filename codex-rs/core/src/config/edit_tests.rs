@@ -553,6 +553,69 @@ gpt-5 = "gpt-5.1"
 }
 
 #[test]
+fn blocking_set_hide_external_config_migration_prompt_home_preserves_table() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[notice]
+existing = "value"
+"#,
+    )
+    .expect("seed");
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[ConfigEdit::SetNoticeHideExternalConfigMigrationPromptHome(
+            true,
+        )],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[notice]
+existing = "value"
+
+[notice.external_config_migration_prompts]
+home = true
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
+fn blocking_set_hide_external_config_migration_prompt_project_preserves_table() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[notice]
+existing = "value"
+"#,
+    )
+    .expect("seed");
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[
+            ConfigEdit::SetNoticeHideExternalConfigMigrationPromptProject(
+                "/Users/alexsong/code/skills".to_string(),
+                true,
+            ),
+        ],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[notice]
+existing = "value"
+
+[notice.external_config_migration_prompts.projects]
+"/Users/alexsong/code/skills" = true
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
 fn blocking_replace_mcp_servers_round_trips() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();
