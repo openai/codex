@@ -1,6 +1,7 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::parse_dynamic_tool;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::parse_mcp_tool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use serde::Deserialize;
@@ -68,6 +69,7 @@ pub fn dynamic_tool_to_responses_api_tool(
     )?))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn mcp_tool_to_responses_api_tool(
     name: String,
     tool: &rmcp::model::Tool,
@@ -77,6 +79,7 @@ pub fn mcp_tool_to_responses_api_tool(
     ))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn mcp_tool_to_deferred_responses_api_tool(
     name: String,
     tool: &rmcp::model::Tool,
@@ -97,6 +100,6 @@ pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) ->
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "responses_api_tests.rs"]
 mod tests;

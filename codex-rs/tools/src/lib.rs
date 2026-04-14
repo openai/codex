@@ -54,6 +54,7 @@ pub use mcp_resource_tool::create_list_mcp_resource_templates_tool;
 pub use mcp_resource_tool::create_list_mcp_resources_tool;
 pub use mcp_resource_tool::create_read_mcp_resource_tool;
 pub use mcp_tool::mcp_call_tool_result_output_schema;
+#[cfg(not(target_arch = "wasm32"))]
 pub use mcp_tool::parse_mcp_tool;
 pub use request_user_input_tool::create_request_user_input_tool;
 pub use responses_api::FreeformTool;
@@ -63,7 +64,9 @@ pub use responses_api::ResponsesApiNamespaceTool;
 pub use responses_api::ResponsesApiTool;
 pub use responses_api::ToolSearchOutputTool;
 pub use responses_api::dynamic_tool_to_responses_api_tool;
+#[cfg(not(target_arch = "wasm32"))]
 pub use responses_api::mcp_tool_to_deferred_responses_api_tool;
+#[cfg(not(target_arch = "wasm32"))]
 pub use responses_api::mcp_tool_to_responses_api_tool;
 pub use responses_api::tool_definition_to_responses_api_tool;
 pub use tool_definition::ToolDefinition;

@@ -1,8 +1,11 @@
+#[cfg(not(target_arch = "wasm32"))]
 use crate::ToolDefinition;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::parse_tool_input_schema;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_json::Error> {
     let mut serialized_input_schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
 
@@ -55,6 +58,6 @@ pub fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) 
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "mcp_tool_tests.rs"]
 mod tests;
