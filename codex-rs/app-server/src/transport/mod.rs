@@ -121,7 +121,7 @@ pub(crate) struct ConnectionState {
     pub(crate) outbound_initialized: Arc<AtomicBool>,
     pub(crate) outbound_experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
-    pub(crate) session: ConnectionSessionState,
+    pub(crate) session: Arc<ConnectionSessionState>,
 }
 
 impl ConnectionState {
@@ -134,7 +134,7 @@ impl ConnectionState {
             outbound_initialized,
             outbound_experimental_api_enabled,
             outbound_opted_out_notification_methods,
-            session: ConnectionSessionState::default(),
+            session: Arc::new(ConnectionSessionState::default()),
         }
     }
 }
