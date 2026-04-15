@@ -57,8 +57,7 @@ impl ToolCallRuntime {
         &self,
         tool_name: &codex_tools::ToolName,
     ) -> Option<ToolArgumentDiffConsumerBox> {
-        self.router
-            .create_diff_consumer(tool_name, self.turn_context.as_ref())
+        self.router.create_diff_consumer(tool_name)
     }
 
     #[instrument(level = "trace", skip_all)]
