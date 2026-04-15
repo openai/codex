@@ -137,35 +137,15 @@ function Invoke-WithInstallLock {
     }
 }
 
-function Remove-StaleSwapArtifacts {
-    param(
-        [string]$LinkPath
-    )
-
-    $parent = Split-Path -Parent $LinkPath
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        return
-    }
-
-    $leaf = Split-Path -Leaf $LinkPath
-    Get-ChildItem -LiteralPath $parent -Force -Filter "$leaf.pending.*" -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-}
-
 function Remove-StaleInstallArtifacts {
     param(
-        [string]$ReleasesDir,
-        [string]$CurrentDir,
-        [string]$VisibleBinDir
+        [string]$ReleasesDir
     )
 
     if (Test-Path -LiteralPath $ReleasesDir -PathType Container) {
         Get-ChildItem -LiteralPath $ReleasesDir -Force -Directory -Filter ".staging.*" -ErrorAction SilentlyContinue |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
-
-    Remove-StaleSwapArtifacts -LinkPath $CurrentDir
-    Remove-StaleSwapArtifacts -LinkPath $VisibleBinDir
 }
 
 function Resolve-Version {
@@ -284,62 +264,189 @@ function Move-OldStandaloneBinIfApproved {
     return $backupDir
 }
 
-function Ensure-Junction {
+function Add-JunctionSupportType {
+    if (([System.Management.Automation.PSTypeName]'CodexInstaller.Junction').Type) {
+        return
+    }
+
+    Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+namespace CodexInstaller
+{
+    public static class Junction
+    {
+        private const uint GENERIC_WRITE = 0x40000000;
+        private const uint FILE_SHARE_READ = 0x00000001;
+        private const uint FILE_SHARE_WRITE = 0x00000002;
+        private const uint FILE_SHARE_DELETE = 0x00000004;
+        private const uint OPEN_EXISTING = 3;
+        private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+        private const uint FSCTL_SET_REPARSE_POINT = 0x000900A4;
+        private const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
+        private const int HeaderLength = 20;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern SafeFileHandle CreateFileW(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DeviceIoControl(
+            SafeFileHandle hDevice,
+            uint dwIoControlCode,
+            byte[] lpInBuffer,
+            int nInBufferSize,
+            IntPtr lpOutBuffer,
+            int nOutBufferSize,
+            out int lpBytesReturned,
+            IntPtr lpOverlapped);
+
+        public static void SetTarget(string linkPath, string targetPath)
+        {
+            string substituteName = "\\??\\" + Path.GetFullPath(targetPath);
+            byte[] substituteNameBytes = Encoding.Unicode.GetBytes(substituteName);
+            if (substituteNameBytes.Length > ushort.MaxValue - HeaderLength) {
+                throw new ArgumentException("Junction target path is too long.", "targetPath");
+            }
+
+            byte[] reparseBuffer = new byte[substituteNameBytes.Length + HeaderLength];
+            WriteUInt32(reparseBuffer, 0, IO_REPARSE_TAG_MOUNT_POINT);
+            WriteUInt16(reparseBuffer, 4, checked((ushort)(substituteNameBytes.Length + 12)));
+            WriteUInt16(reparseBuffer, 8, 0);
+            WriteUInt16(reparseBuffer, 10, checked((ushort)substituteNameBytes.Length));
+            WriteUInt16(reparseBuffer, 12, checked((ushort)(substituteNameBytes.Length + 2)));
+            WriteUInt16(reparseBuffer, 14, 0);
+            Buffer.BlockCopy(substituteNameBytes, 0, reparseBuffer, 16, substituteNameBytes.Length);
+
+            using (SafeFileHandle handle = CreateFileW(
+                linkPath,
+                GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                IntPtr.Zero,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                IntPtr.Zero))
+            {
+                if (handle.IsInvalid) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                int bytesReturned;
+                if (!DeviceIoControl(
+                    handle,
+                    FSCTL_SET_REPARSE_POINT,
+                    reparseBuffer,
+                    reparseBuffer.Length,
+                    IntPtr.Zero,
+                    0,
+                    out bytesReturned,
+                    IntPtr.Zero))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            }
+        }
+
+        private static void WriteUInt16(byte[] buffer, int offset, ushort value)
+        {
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+        }
+
+        private static void WriteUInt32(byte[] buffer, int offset, uint value)
+        {
+            buffer[offset] = (byte)value;
+            buffer[offset + 1] = (byte)(value >> 8);
+            buffer[offset + 2] = (byte)(value >> 16);
+            buffer[offset + 3] = (byte)(value >> 24);
+        }
+    }
+}
+"@
+}
+
+function Set-JunctionTarget {
     param(
         [string]$LinkPath,
         [string]$TargetPath
     )
 
-    $swapId = [System.Guid]::NewGuid().ToString("N")
-    $pendingPath = "$LinkPath.pending.$swapId"
-    $backupPath = "$LinkPath.backup.$swapId"
+    Add-JunctionSupportType
+    [CodexInstaller.Junction]::SetTarget($LinkPath, $TargetPath)
+}
 
-    if (Test-Path -LiteralPath $pendingPath) {
-        [System.IO.Directory]::Delete($pendingPath)
+function Test-IsJunction {
+    param(
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
     }
-    if (Test-Path -LiteralPath $backupPath) {
-        [System.IO.Directory]::Delete($backupPath)
+
+    $item = Get-Item -LiteralPath $Path -Force
+    return ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $item.LinkType -eq "Junction"
+}
+
+function Ensure-Junction {
+    param(
+        [string]$LinkPath,
+        [string]$TargetPath,
+        [string]$InstallerOwnedTargetPrefix
+    )
+
+    if (-not (Test-Path -LiteralPath $LinkPath)) {
+        New-Item -ItemType Junction -Path $LinkPath -Target $TargetPath | Out-Null
+        return
     }
 
-    New-Item -ItemType Junction -Path $pendingPath -Target $TargetPath | Out-Null
-
-    if (Test-Path -LiteralPath $LinkPath) {
-        $item = Get-Item -LiteralPath $LinkPath -Force
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-            $existingTarget = [string]$item.Target
-            if ($existingTarget.Equals($TargetPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-                [System.IO.Directory]::Delete($pendingPath)
-                return
+    $item = Get-Item -LiteralPath $LinkPath -Force
+    if (Test-IsJunction -Path $LinkPath) {
+        $existingTarget = [string]$item.Target
+        if (-not [string]::IsNullOrWhiteSpace($InstallerOwnedTargetPrefix)) {
+            $ownedTargetPrefix = $InstallerOwnedTargetPrefix.TrimEnd("\\")
+            if (-not $existingTarget.StartsWith($ownedTargetPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to retarget junction at $LinkPath because it is not managed by this installer."
             }
-
-            try {
-                Move-Item -LiteralPath $LinkPath -Destination $backupPath
-                Move-Item -LiteralPath $pendingPath -Destination $LinkPath
-                [System.IO.Directory]::Delete($backupPath)
-            } catch {
-                if ((-not (Test-Path -LiteralPath $LinkPath)) -and (Test-Path -LiteralPath $backupPath)) {
-                    Move-Item -LiteralPath $backupPath -Destination $LinkPath
-                }
-                if (Test-Path -LiteralPath $pendingPath) {
-                    [System.IO.Directory]::Delete($pendingPath)
-                }
-                throw
-            }
-        } elseif ($item.PSIsContainer) {
-            if ((Get-ChildItem -LiteralPath $LinkPath -Force | Select-Object -First 1) -ne $null) {
-                [System.IO.Directory]::Delete($pendingPath)
-                throw "Refusing to replace non-empty directory at $LinkPath with a junction."
-            }
-
-            Remove-Item -LiteralPath $LinkPath -Force
-            Move-Item -LiteralPath $pendingPath -Destination $LinkPath
-        } else {
-            [System.IO.Directory]::Delete($pendingPath)
-            throw "Refusing to replace file at $LinkPath with a junction."
         }
-    } else {
-        Move-Item -LiteralPath $pendingPath -Destination $LinkPath
+        if ($existingTarget.Equals($TargetPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+
+        # Keep the path itself in place and only retarget the junction. That
+        # avoids a gap where current or the visible bin path disappears during
+        # an update.
+        Set-JunctionTarget -LinkPath $LinkPath -TargetPath $TargetPath
+        return
     }
+
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Refusing to replace non-junction reparse point at $LinkPath."
+    }
+
+    if ($item.PSIsContainer) {
+        if ((Get-ChildItem -LiteralPath $LinkPath -Force | Select-Object -First 1) -ne $null) {
+            throw "Refusing to replace non-empty directory at $LinkPath with a junction."
+        }
+
+        Remove-Item -LiteralPath $LinkPath -Force
+        New-Item -ItemType Junction -Path $LinkPath -Target $TargetPath | Out-Null
+        return
+    }
+
+    throw "Refusing to replace file at $LinkPath with a junction."
 }
 
 function Test-ReleaseIsComplete {
@@ -536,7 +643,7 @@ New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
 try {
     Invoke-WithInstallLock -LockPath $lockPath -Script {
-        Remove-StaleInstallArtifacts -ReleasesDir $releasesDir -CurrentDir $currentDir -VisibleBinDir $visibleBinDir
+        Remove-StaleInstallArtifacts -ReleasesDir $releasesDir
 
         if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target)) {
             if (Test-Path -LiteralPath $releaseDir) {
@@ -581,12 +688,12 @@ try {
         }
 
         New-Item -ItemType Directory -Force -Path $standaloneRoot | Out-Null
-        Ensure-Junction -LinkPath $currentDir -TargetPath $releaseDir
+        Ensure-Junction -LinkPath $currentDir -TargetPath $releaseDir -InstallerOwnedTargetPrefix $releasesDir
 
         $visibleParent = Split-Path -Parent $visibleBinDir
         New-Item -ItemType Directory -Force -Path $visibleParent | Out-Null
         $oldStandaloneBackup = Move-OldStandaloneBinIfApproved -VisibleBinDir $visibleBinDir -DefaultVisibleBinDir $defaultVisibleBinDir
-        Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentDir
+        Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentDir -InstallerOwnedTargetPrefix $standaloneRoot
         Test-VisibleCodexCommand -VisibleBinDir $visibleBinDir
         if ($null -ne $oldStandaloneBackup) {
             Remove-Item -LiteralPath $oldStandaloneBackup -Recurse -Force
