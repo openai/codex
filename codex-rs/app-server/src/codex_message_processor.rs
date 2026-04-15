@@ -9917,11 +9917,11 @@ mod tests {
     fn last_token_usage_from_rollout_items_uses_latest_token_count() {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
-                info: Some(token_usage_info(100, Some(1_000))),
+                info: Some(token_usage_info(/*total_tokens*/ 100, Some(1_000))),
                 rate_limits: None,
             })),
             RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
-                info: Some(token_usage_info(250, Some(2_000))),
+                info: Some(token_usage_info(/*total_tokens*/ 250, Some(2_000))),
                 rate_limits: None,
             })),
         ];
