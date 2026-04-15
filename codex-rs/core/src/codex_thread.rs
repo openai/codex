@@ -145,7 +145,13 @@ impl CodexThread {
         self.codex.session.total_token_usage().await
     }
 
-    /// Returns the most recently recorded token usage totals for this thread.
+    /// Returns the complete token usage snapshot currently cached for this thread.
+    ///
+    /// This accessor is intentionally narrower than direct session access: it lets
+    /// app-server lifecycle paths replay restored usage after resume or fork without
+    /// exposing broader session mutation authority. A caller that only reads
+    /// `total_token_usage` would drop last-turn usage and make the v2
+    /// `thread/tokenUsage/updated` payload incomplete.
     pub async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
         self.codex.session.token_usage_info().await
     }

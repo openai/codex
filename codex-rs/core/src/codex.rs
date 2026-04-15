@@ -2383,6 +2383,12 @@ impl Session {
         state.token_info().map(|info| info.total_token_usage)
     }
 
+    /// Returns the complete token usage snapshot currently cached for this session.
+    ///
+    /// Resume and fork reconstruction seed this state from the last persisted rollout
+    /// `TokenCount` event. Callers that need to replay restored usage to a client
+    /// should use this accessor instead of `total_token_usage`, because the app-server
+    /// notification includes both total and last-turn usage.
     pub(crate) async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
         let state = self.state.lock().await;
         state.token_info()

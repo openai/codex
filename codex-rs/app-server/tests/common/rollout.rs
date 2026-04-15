@@ -54,6 +54,12 @@ pub fn create_fake_rollout(
     )
 }
 
+/// Creates a minimal rollout whose history includes a persisted token usage event.
+///
+/// Resume and fork tests use this fixture to verify lifecycle replay of restored
+/// usage without starting a model turn. The exact token values are intentionally
+/// non-zero and asymmetric so assertions catch swapped total/last fields and
+/// dropped cached or reasoning counters.
 pub fn create_fake_rollout_with_token_usage(
     codex_home: &Path,
     filename_ts: &str,

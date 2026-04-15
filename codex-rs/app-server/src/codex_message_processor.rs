@@ -4229,6 +4229,9 @@ impl CodexMessageProcessor {
                 let connection_id = request_id.connection_id;
                 let token_usage_thread = response.thread.clone();
                 self.outgoing.send_response(request_id, response).await;
+                // The client needs restored usage before it starts another turn.
+                // Sending after the response preserves JSON-RPC request ordering while
+                // still filling the status line before the next turn lifecycle begins.
                 send_thread_token_usage_update_to_connection(
                     &self.outgoing,
                     connection_id,
@@ -4875,6 +4878,8 @@ impl CodexMessageProcessor {
         let connection_id = request_id.connection_id;
         let token_usage_thread = response.thread.clone();
         self.outgoing.send_response(request_id, response).await;
+        // Mirror the resume contract for forks: the new thread is usable as soon
+        // as the response arrives, so restored usage must follow immediately.
         send_thread_token_usage_update_to_connection(
             &self.outgoing,
             connection_id,
@@ -8559,6 +8564,8 @@ async fn handle_pending_thread_resume_request(
     };
     let token_usage_thread = response.thread.clone();
     outgoing.send_response(request_id, response).await;
+    // Rejoining a loaded thread has the same UI contract as a cold resume, but
+    // uses the live conversation state instead of reconstructing a new session.
     send_thread_token_usage_update_to_connection(
         outgoing,
         connection_id,
@@ -8572,6 +8579,13 @@ async fn handle_pending_thread_resume_request(
         .await;
 }
 
+/// Sends a restored token usage update to the connection that attached to a thread.
+///
+/// This is lifecycle replay rather than a model event: the rollout already contains
+/// the original `TokenCount`, and emitting through `send_event` here would duplicate
+/// persisted usage records. Keeping this helper connection-scoped also avoids
+/// surprising other subscribers with a historical usage update while they may be
+/// rendering live turn events.
 async fn send_thread_token_usage_update_to_connection(
     outgoing: &Arc<OutgoingMessageSender>,
     connection_id: ConnectionId,
@@ -8595,6 +8609,13 @@ async fn send_thread_token_usage_update_to_connection(
         .await;
 }
 
+/// Chooses the turn id that should own a replayed token usage update.
+///
+/// Token usage restored from rollout represents the latest completed persisted
+/// accounting, so an in-progress turn should not claim it. Falling back to the last
+/// turn preserves a stable wire shape for unusual histories that contain only an
+/// in-progress turn or no turns at all; a caller that used the active turn blindly
+/// would make the TUI attribute old usage to work that has not completed yet.
 fn latest_token_usage_turn_id(thread: &Thread) -> String {
     thread
         .turns
