@@ -24,6 +24,7 @@ use codex_mcp::McpConnectionManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_rollout::state_db::StateDbHandle;
+use codex_thread_store::LocalThreadStore;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -59,6 +60,7 @@ pub(crate) struct SessionServices {
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) thread_store: LocalThreadStore,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,

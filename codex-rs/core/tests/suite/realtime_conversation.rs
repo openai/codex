@@ -194,10 +194,16 @@ async fn seed_recent_thread(
     let db = test.codex.state_db().context("state db enabled")?;
     let thread_id = ThreadId::new();
     let updated_at = Utc::now();
+    let rollout_path = test
+        .codex_home_path()
+        .join(format!("rollout-{thread_id}.jsonl"));
+    // This helper seeds SQLite metadata directly. Local listing drops stale metadata rows whose
+    // rollout path no longer exists, so create the placeholder path that the test metadata points
+    // at without exercising rollout writing in this realtime-context test.
+    std::fs::write(&rollout_path, "")?;
     let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
-        test.codex_home_path()
-            .join(format!("rollout-{thread_id}.jsonl")),
+        rollout_path,
         updated_at,
         SessionSource::Cli,
     );

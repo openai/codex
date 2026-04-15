@@ -135,9 +135,11 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
+use codex_thread_store::LocalThreadStore;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
@@ -1454,6 +1456,12 @@ impl Session {
         per_turn_config.service_tier = session_configuration.service_tier;
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
+        per_turn_config.permissions.approval_policy = session_configuration.approval_policy.clone();
+        per_turn_config.permissions.sandbox_policy = session_configuration.sandbox_policy.clone();
+        per_turn_config.permissions.file_system_sandbox_policy =
+            session_configuration.file_system_sandbox_policy.clone();
+        per_turn_config.permissions.network_sandbox_policy =
+            session_configuration.network_sandbox_policy;
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
@@ -2126,6 +2134,7 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
+            thread_store: LocalThreadStore::new(RolloutConfig::from_view(config.as_ref())),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -3552,6 +3561,11 @@ impl Session {
         let active = active.as_ref()?;
         let ts = active.turn_state.lock().await;
         ts.granted_permissions()
+    }
+
+    pub(crate) async fn cwd(&self) -> AbsolutePathBuf {
+        let state = self.state.lock().await;
+        state.session_configuration.cwd.clone()
     }
 
     pub(crate) async fn granted_session_permissions(&self) -> Option<PermissionProfile> {
