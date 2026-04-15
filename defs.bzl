@@ -138,6 +138,7 @@ def codex_rust_crate(
         deps_extra = [],
         integration_compile_data_extra = [],
         integration_test_tags_extra_by_stem = {},
+        integration_test_flaky_by_stem = {},
         integration_test_args = [],
         integration_test_timeout = None,
         test_data_extra = [],
@@ -172,6 +173,9 @@ def codex_rust_crate(
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
         integration_compile_data_extra: Extra compile_data for integration tests.
+        integration_test_flaky_by_stem: Mapping from `tests/*.rs` stem to exact
+            Rust test names that should be split into dedicated flaky targets
+            and skipped from the main integration test target.
         integration_test_args: Optional args for integration test binaries.
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
@@ -309,11 +313,9 @@ def codex_rust_crate(
         binary = Label(binary_label).name
         cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
-    integration_test_kwargs = {}
-    if integration_test_args:
-        integration_test_kwargs["args"] = integration_test_args
+    integration_test_base_kwargs = {}
     if integration_test_timeout:
-        integration_test_kwargs["timeout"] = integration_test_timeout
+        integration_test_base_kwargs["timeout"] = integration_test_timeout
 
     for test in native.glob(["tests/*.rs"], allow_empty = True):
         test_file_stem = test.removeprefix("tests/").removesuffix(".rs")
@@ -322,6 +324,17 @@ def codex_rust_crate(
         if not test_name.endswith("-test"):
             test_name += "-test"
         extra_test_tags = integration_test_tags_extra_by_stem.get(test_file_stem, [])
+        flaky_tests = integration_test_flaky_by_stem.get(test_file_stem, [])
+        stem_integration_test_args = [] + integration_test_args
+        for flaky_test in flaky_tests:
+            stem_integration_test_args += [
+                "--skip",
+                flaky_test,
+            ]
+
+        integration_test_kwargs = dict(integration_test_base_kwargs)
+        if stem_integration_test_args:
+            integration_test_kwargs["args"] = stem_integration_test_args
 
         rust_test(
             name = test_name,
@@ -346,3 +359,29 @@ def codex_rust_crate(
             tags = test_tags + extra_test_tags,
             **integration_test_kwargs
         )
+
+        for flaky_test in flaky_tests:
+            flaky_test_suffix = flaky_test.replace("::", "-").replace("/", "-").replace("_", "-")
+            flaky_test_kwargs = dict(integration_test_base_kwargs)
+            flaky_test_kwargs["args"] = [
+                "--exact",
+                flaky_test,
+            ]
+
+            rust_test(
+                name = test_name.removesuffix("-test") + "-flaky-" + flaky_test_suffix + "-test",
+                crate_name = test_crate_name + "_flaky_" + flaky_test.replace("::", "_").replace("/", "_").replace("-", "_"),
+                crate_root = test,
+                srcs = [test],
+                data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
+                compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
+                deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+                rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
+                    "--remap-path-prefix=../codex-rs=",
+                    "--remap-path-prefix=codex-rs=",
+                ],
+                rustc_env = rustc_env,
+                env = cargo_env,
+                tags = test_tags + extra_test_tags + ["flaky"],
+                **flaky_test_kwargs
+            )
