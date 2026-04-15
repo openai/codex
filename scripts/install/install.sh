@@ -358,6 +358,17 @@ release_install_lock() {
   lock_kind=""
 }
 
+cleanup_stale_install_artifacts() {
+  mkdir -p "$RELEASES_DIR" "$STANDALONE_ROOT"
+
+  find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -name '.staging.*' -exec rm -rf {} +
+  find "$STANDALONE_ROOT" -mindepth 1 -maxdepth 1 -name '.current.*' -exec rm -f {} +
+
+  if [ -d "$BIN_DIR" ]; then
+    find "$BIN_DIR" -mindepth 1 -maxdepth 1 -name '.codex.*' -exec rm -f {} +
+  fi
+}
+
 replace_path_with_symlink() {
   link_path="$1"
   link_target="$2"
@@ -668,6 +679,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 acquire_install_lock
+cleanup_stale_install_artifacts
 
 if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"; then
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then

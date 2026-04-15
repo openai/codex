@@ -137,6 +137,37 @@ function Invoke-WithInstallLock {
     }
 }
 
+function Remove-StaleSwapArtifacts {
+    param(
+        [string]$LinkPath
+    )
+
+    $parent = Split-Path -Parent $LinkPath
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+        return
+    }
+
+    $leaf = Split-Path -Leaf $LinkPath
+    Get-ChildItem -LiteralPath $parent -Force -Filter "$leaf.pending.*" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Remove-StaleInstallArtifacts {
+    param(
+        [string]$ReleasesDir,
+        [string]$CurrentDir,
+        [string]$VisibleBinDir
+    )
+
+    if (Test-Path -LiteralPath $ReleasesDir -PathType Container) {
+        Get-ChildItem -LiteralPath $ReleasesDir -Force -Directory -Filter ".staging.*" -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Remove-StaleSwapArtifacts -LinkPath $CurrentDir
+    Remove-StaleSwapArtifacts -LinkPath $VisibleBinDir
+}
+
 function Resolve-Version {
     $normalizedVersion = Normalize-Version -RawVersion $Release
     if ($normalizedVersion -ne "latest") {
@@ -505,6 +536,8 @@ New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
 try {
     Invoke-WithInstallLock -LockPath $lockPath -Script {
+        Remove-StaleInstallArtifacts -ReleasesDir $releasesDir -CurrentDir $currentDir -VisibleBinDir $visibleBinDir
+
         if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target)) {
             if (Test-Path -LiteralPath $releaseDir) {
                 Write-WarningStep "Found incomplete existing release at $releaseDir. Reinstalling."
