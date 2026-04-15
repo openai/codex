@@ -108,16 +108,17 @@ pub fn is_azure_responses_provider(name: &str, base_url: Option<&str>) -> bool {
         return true;
     }
 
-    let Some(base_url) = base_url else {
-        return false;
-    };
-
-    let base = base_url.to_ascii_lowercase();
-    base.contains("openai.azure.") || matches_azure_responses_base_url(&base)
+    if let Some(base_url) = base_url {
+        matches_azure_responses_base_url(base_url)
+    } else {
+        false
+    }
 }
 
 fn matches_azure_responses_base_url(base_url: &str) -> bool {
-    const AZURE_MARKERS: [&str; 5] = [
+    let base_url = base_url.to_ascii_lowercase();
+    const AZURE_MARKERS: [&str; 6] = [
+        "openai.azure.",
         "cognitiveservices.azure.",
         "aoai.azure.",
         "azure-api.",
