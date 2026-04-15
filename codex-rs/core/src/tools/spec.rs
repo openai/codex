@@ -6,6 +6,7 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::unavailable_tool::UnavailableTool;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::AdditionalProperties;
@@ -65,6 +66,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tool_exposure: McpToolExposure,
+    unavailable_called_tools: Vec<UnavailableTool>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -85,7 +87,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::ToolSearchHandler;
     use crate::tools::handlers::ToolSuggestHandler;
-    use crate::tools::handlers::UnavailableMcpHandler;
+    use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
@@ -99,13 +101,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
-    use crate::tools::handlers::unavailable_mcp_tool_message;
+    use crate::tools::handlers::unavailable_tool_message;
 
     let mut builder = ToolRegistryBuilder::new();
     let McpToolExposure {
         direct_tools: mcp_tools,
         deferred_tools: deferred_mcp_tools,
-        unavailable_called_tools,
     } = mcp_tool_exposure;
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
@@ -161,7 +162,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
-    let unavailable_mcp_handler = Arc::new(UnavailableMcpHandler);
+    let unavailable_tool_handler = Arc::new(UnavailableToolHandler);
     let mut existing_spec_names = plan
         .specs
         .iter()
@@ -296,9 +297,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
         if existing_spec_names.insert(unavailable_tool.qualified_name.clone()) {
             let spec = codex_tools::ToolSpec::Function(ResponsesApiTool {
                 name: unavailable_tool.qualified_name.clone(),
-                description: unavailable_mcp_tool_message(
+                description: unavailable_tool_message(
                     &unavailable_tool.qualified_name,
-                    "Calling this placeholder returns an error explaining that the MCP server or tool is unavailable.",
+                    "Calling this placeholder returns an error explaining that the tool is unavailable.",
                 ),
                 strict: false,
                 parameters: JsonSchema::object(
@@ -318,12 +319,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
         builder.register_handler(
             ToolName::plain(unavailable_tool.qualified_name.clone()),
-            unavailable_mcp_handler.clone(),
+            unavailable_tool_handler.clone(),
         );
         if let Some(namespace) = unavailable_tool.namespace {
             builder.register_handler(
                 ToolName::namespaced(namespace, unavailable_tool.name),
-                unavailable_mcp_handler.clone(),
+                unavailable_tool_handler.clone(),
             );
         }
     }

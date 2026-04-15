@@ -279,8 +279,8 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
             mcp_tool_exposure: crate::mcp_tool_exposure::McpToolExposure {
                 direct_tools: Some(listed_mcp_tools),
                 deferred_tools: None,
-                unavailable_called_tools: Vec::new(),
             },
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names,
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),

@@ -312,6 +312,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             mcp_tool_exposure: McpToolExposure::default(),
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -5327,8 +5328,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             mcp_tool_exposure: McpToolExposure {
                 direct_tools: Some(tools),
                 deferred_tools: deferred_mcp_tools,
-                unavailable_called_tools: Vec::new(),
             },
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

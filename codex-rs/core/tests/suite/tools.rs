@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -9,8 +10,15 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -26,6 +34,7 @@ use core_test_support::test_codex::test_codex;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use tempfile::TempDir;
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -87,6 +96,99 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
         .unwrap_or_default();
     let expected = format!("unsupported custom tool call: {tool_name}");
     assert_eq!(output, expected);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let historical_call_id = "historical-mcp-call";
+    let retry_call_id = "retry-mcp-call";
+    let unavailable_tool_name = "mcp__missing_server__lookup";
+    let rollout = [
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: ThreadId::default(),
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: unavailable_tool_name.to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: historical_call_id.to_string(),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                call_id: historical_call_id.to_string(),
+                output: FunctionCallOutputPayload::from_text("previously unavailable".to_string()),
+            }),
+        },
+    ];
+
+    let tmpdir = TempDir::new()?;
+    let session_path = tmpdir.path().join("historical-unavailable-mcp.jsonl");
+    let rollout_jsonl = rollout
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(&session_path, format!("{rollout_jsonl}\n"))?;
+
+    let server = start_mock_server().await;
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(retry_call_id, unavailable_tool_name, "{}"),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let test = builder.resume(&server, codex_home, session_path).await?;
+
+    test.submit_turn("retry the missing MCP tool").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let first_request_tools = tool_names(&requests[0].body_json());
+    assert!(
+        first_request_tools
+            .iter()
+            .any(|name| name == unavailable_tool_name),
+        "historical unavailable MCP call should add a placeholder tool; got {first_request_tools:?}"
+    );
+    let output_text = requests[1]
+        .function_call_output_text(retry_call_id)
+        .context("placeholder tool output present")?;
+    assert!(output_text.contains("not currently available"));
+    assert!(
+        !output_text.contains("unsupported call"),
+        "placeholder handler should answer instead of falling back to unsupported call: {output_text}"
+    );
 
     Ok(())
 }

@@ -25,7 +25,6 @@ use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
-use crate::mcp_tool_exposure::collect_unavailable_called_mcp_tools;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -44,6 +43,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
+use crate::unavailable_tool::collect_unavailable_called_tools;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -7208,9 +7208,13 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         &turn_context.tools_config,
     );
-    let mut mcp_tool_exposure = mcp_tool_exposure;
-    let unavailable_called_tools = collect_unavailable_called_mcp_tools(input, &mcp_tool_exposure);
-    mcp_tool_exposure.unavailable_called_tools = unavailable_called_tools;
+    let exposed_tool_names = mcp_tool_exposure
+        .direct_tools
+        .iter()
+        .chain(mcp_tool_exposure.deferred_tools.iter())
+        .flat_map(|tools| tools.keys().map(String::as_str))
+        .collect::<HashSet<_>>();
+    let unavailable_called_tools = collect_unavailable_called_tools(input, &exposed_tool_names);
 
     let parallel_mcp_server_names = turn_context
         .config
@@ -7228,6 +7232,7 @@ pub(crate) async fn built_tools(
         &turn_context.tools_config,
         ToolRouterParams {
             mcp_tool_exposure,
+            unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

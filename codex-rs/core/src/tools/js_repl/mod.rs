@@ -1567,8 +1567,8 @@ impl JsReplManager {
                 mcp_tool_exposure: crate::mcp_tool_exposure::McpToolExposure {
                     direct_tools: Some(mcp_tools),
                     deferred_tools: None,
-                    unavailable_called_tools: Vec::new(),
                 },
+                unavailable_called_tools: Vec::new(),
                 // JS REPL dispatches nested tool calls directly, not through
                 // `ToolCallRuntime`'s parallel scheduling lock.
                 parallel_mcp_server_names: std::collections::HashSet::new(),
