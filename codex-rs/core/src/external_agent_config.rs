@@ -138,22 +138,11 @@ impl ExternalAgentConfigService {
                     let cwd = migration_item.cwd;
                     let details = migration_item.details;
                     tokio::spawn(async move {
-                        match service.import_plugins(cwd.as_deref(), details).await {
-                            Ok(outcome) => {
-                                tracing::info!(
-                                    succeeded_marketplaces = outcome.succeeded_marketplaces.len(),
-                                    succeeded_plugin_ids = outcome.succeeded_plugin_ids.len(),
-                                    failed_marketplaces = outcome.failed_marketplaces.len(),
-                                    failed_plugin_ids = outcome.failed_plugin_ids.len(),
-                                    "external agent config plugin import completed"
-                                );
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    error = %err,
-                                    "external agent config plugin import failed"
-                                );
-                            }
+                        if let Err(err) = service.import_plugins(cwd.as_deref(), details).await {
+                            tracing::warn!(
+                                error = %err,
+                                "external agent config plugin import failed"
+                            );
                         }
                     });
                     emit_migration_metric(
@@ -174,6 +163,8 @@ impl ExternalAgentConfigService {
         repo_root: Option<&Path>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
+        let configured_enabled_plugins =
+            configured_enabled_plugin_ids(&self.codex_home, repo_root)?;
         let cwd = repo_root.map(Path::to_path_buf);
         let source_settings = repo_root.map_or_else(
             || self.external_agent_home.join("settings.json"),
@@ -224,6 +215,7 @@ impl ExternalAgentConfigService {
             source_settings.as_path(),
             cwd.clone(),
             settings.as_ref(),
+            &configured_enabled_plugins,
             items,
         );
 
@@ -299,9 +291,12 @@ impl ExternalAgentConfigService {
         source_settings: &Path,
         cwd: Option<PathBuf>,
         settings: Option<&JsonValue>,
+        configured_enabled_plugins: &HashSet<String>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) {
-        let Some(plugin_details) = settings.and_then(extract_plugin_migration_details) else {
+        let Some(plugin_details) = settings.and_then(|settings| {
+            extract_plugin_migration_details(settings, configured_enabled_plugins)
+        }) else {
             return;
         };
 
@@ -537,9 +532,15 @@ fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
     Ok(Some(settings))
 }
 
-fn extract_plugin_migration_details(settings: &JsonValue) -> Option<MigrationDetails> {
+fn extract_plugin_migration_details(
+    settings: &JsonValue,
+    configured_enabled_plugins: &HashSet<String>,
+) -> Option<MigrationDetails> {
     let mut plugins = BTreeMap::new();
-    for plugin_id in collect_enabled_plugins(settings) {
+    for plugin_id in collect_enabled_plugins(settings)
+        .into_iter()
+        .filter(|plugin_id| !configured_enabled_plugins.contains(plugin_id))
+    {
         let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
             continue;
         };
@@ -589,6 +590,49 @@ fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
                 .map(|plugin_id| plugin_id.as_key())
         })
         .collect()
+}
+
+fn configured_enabled_plugin_ids(
+    codex_home: &Path,
+    repo_root: Option<&Path>,
+) -> io::Result<HashSet<String>> {
+    let mut plugin_states = BTreeMap::new();
+    for config_path in [
+        Some(codex_home.join("config.toml")),
+        repo_root.map(|repo_root| repo_root.join(".codex").join("config.toml")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !config_path.is_file() {
+            continue;
+        }
+
+        let raw_config = fs::read_to_string(&config_path)?;
+        if raw_config.trim().is_empty() {
+            continue;
+        }
+
+        let config = toml::from_str::<TomlValue>(&raw_config)
+            .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
+        let Some(plugins) = config.get("plugins").and_then(TomlValue::as_table) else {
+            continue;
+        };
+
+        for (plugin_id, enabled) in plugins.iter().filter_map(|(plugin_id, plugin_config)| {
+            plugin_config
+                .get("enabled")
+                .and_then(TomlValue::as_bool)
+                .map(|enabled| (plugin_id, enabled))
+        }) {
+            plugin_states.insert(plugin_id.clone(), enabled);
+        }
+    }
+
+    Ok(plugin_states
+        .into_iter()
+        .filter_map(|(plugin_id, enabled)| enabled.then_some(plugin_id))
+        .collect())
 }
 
 fn collect_marketplace_import_sources(

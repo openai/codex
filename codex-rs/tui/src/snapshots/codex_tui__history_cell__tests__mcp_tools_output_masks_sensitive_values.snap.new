@@ -1,0 +1,14 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 3327
+expression: rendered
+---
+/mcp
+
+🔌  MCP Tools
+
+  • docs (disabled)
+    • Reason: requirements (/etc/codex/requirements.toml)
+
+  • http (disabled)
+    • Reason: requirements (/etc/codex/requirements.toml)

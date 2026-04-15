@@ -449,6 +449,60 @@ fn detect_home_lists_enabled_plugins_from_settings() {
     );
 }
 
+#[test]
+fn detect_repo_skips_plugins_that_are_already_enabled_in_codex() {
+    let root = TempDir::new().expect("create tempdir");
+    let claude_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo claude dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true,
+            "deployer@acme-tools": true
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        r#"
+[plugins."formatter@acme-tools"]
+enabled = true
+"#,
+    )
+    .expect("write codex config");
+
+    let items = service_for_paths(claude_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Import enabled plugins from {}",
+                repo_root.join(".claude").join("settings.json").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["deployer".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
 #[tokio::test]
 async fn import_plugins_requires_details() {
     let (_root, claude_home, codex_home) = fixture_paths();

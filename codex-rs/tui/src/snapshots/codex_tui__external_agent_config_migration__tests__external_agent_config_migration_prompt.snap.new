@@ -1,6 +1,6 @@
 ---
 source: tui/src/external_agent_config_migration.rs
-assertion_line: 757
+assertion_line: 773
 expression: rendered
 ---
 
@@ -11,11 +11,9 @@ expression: rendered
     [x] Migrate /Users/alex/.claude/settings.json into /Users/alex/.codex/con…
 
   Project: /workspace/project
-    [x] Import enabled plugins from .claude/settings.json (4 marketplaces, 6 p…
-        • acme-tools: deployer, formatter, +1 more
+    [x] Import enabled plugins from .claude/settings.json
+        • acme-tools: deployer, formatter
         • team-marketplace: asana
-        • debug: sample
-        • +1 more marketplaces
     [x] Import CLAUDE.md to AGENTS.md
 
   Selected 3 of 3 item(s).

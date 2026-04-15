@@ -893,6 +893,24 @@ fn visible_external_agent_config_migration_items(
         .collect()
 }
 
+fn external_agent_config_migration_success_message(
+    items: &[ExternalAgentConfigMigrationItem],
+) -> String {
+    if items.iter().any(|item| {
+        item.item_type == codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Plugins
+    }) {
+        "External config migration completed. Plugin migration is still in progress and may take a few minutes."
+            .to_string()
+    } else {
+        "External config migration completed successfully.".to_string()
+    }
+}
+
+struct ExternalAgentConfigMigrationPromptResult {
+    exit_info: Option<AppExitInfo>,
+    success_message: Option<String>,
+}
+
 async fn persist_external_agent_config_migration_prompt_dismissal(
     config: &mut Config,
     items: &[ExternalAgentConfigMigrationItem],
@@ -965,7 +983,14 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
     config: &mut Config,
     cli_kv_overrides: &[(String, TomlValue)],
     harness_overrides: &ConfigOverrides,
-) -> Result<Option<AppExitInfo>> {
+) -> Result<ExternalAgentConfigMigrationPromptResult> {
+    if !config.features.enabled(Feature::ExternalMigrate) {
+        return Ok(ExternalAgentConfigMigrationPromptResult {
+            exit_info: None,
+            success_message: None,
+        });
+    }
+
     let detected_items = match app_server
         .external_agent_config_detect(ExternalAgentConfigDetectParams {
             include_home: true,
@@ -980,12 +1005,18 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
                 cwd = %config.cwd.display(),
                 "failed to detect external agent config migrations; continuing startup"
             );
-            return Ok(None);
+            return Ok(ExternalAgentConfigMigrationPromptResult {
+                exit_info: None,
+                success_message: None,
+            });
         }
     };
 
     if detected_items.is_empty() {
-        return Ok(None);
+        return Ok(ExternalAgentConfigMigrationPromptResult {
+            exit_info: None,
+            success_message: None,
+        });
     }
 
     let mut selected_items = detected_items.clone();
@@ -1004,10 +1035,15 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
                 selected_items = items.clone();
                 match app_server.external_agent_config_import(items).await {
                     Ok(_) => {
+                        let success_message =
+                            external_agent_config_migration_success_message(&selected_items);
                         *config =
                             rebuild_startup_config(config, cli_kv_overrides, harness_overrides)
                                 .await?;
-                        return Ok(None);
+                        return Ok(ExternalAgentConfigMigrationPromptResult {
+                            exit_info: None,
+                            success_message: Some(success_message),
+                        });
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -1019,7 +1055,12 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
                     }
                 }
             }
-            ExternalAgentConfigMigrationOutcome::Skip => return Ok(None),
+            ExternalAgentConfigMigrationOutcome::Skip => {
+                return Ok(ExternalAgentConfigMigrationPromptResult {
+                    exit_info: None,
+                    success_message: None,
+                });
+            }
             ExternalAgentConfigMigrationOutcome::SkipForever => {
                 match persist_external_agent_config_migration_prompt_dismissal(
                     config,
@@ -1027,7 +1068,12 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
                 )
                 .await
                 {
-                    Ok(()) => return Ok(None),
+                    Ok(()) => {
+                        return Ok(ExternalAgentConfigMigrationPromptResult {
+                            exit_info: None,
+                            success_message: None,
+                        });
+                    }
                     Err(err) => {
                         tracing::warn!(
                             error = %err,
@@ -1039,13 +1085,16 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
                 }
             }
             ExternalAgentConfigMigrationOutcome::Exit => {
-                return Ok(Some(AppExitInfo {
-                    token_usage: TokenUsage::default(),
-                    thread_id: None,
-                    thread_name: None,
-                    update_action: None,
-                    exit_reason: ExitReason::UserRequested,
-                }));
+                return Ok(ExternalAgentConfigMigrationPromptResult {
+                    exit_info: Some(AppExitInfo {
+                        token_usage: TokenUsage::default(),
+                        thread_id: None,
+                        thread_name: None,
+                        update_action: None,
+                        exit_reason: ExitReason::UserRequested,
+                    }),
+                    success_message: None,
+                });
             }
         }
     }
@@ -3855,15 +3904,19 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let exit_info = handle_external_agent_config_migration_prompt_if_needed(
-            tui,
-            &mut app_server,
-            &mut config,
-            &cli_kv_overrides,
-            &harness_overrides,
-        )
-        .await?;
-        if let Some(exit_info) = exit_info {
+        let external_agent_config_migration_result =
+            handle_external_agent_config_migration_prompt_if_needed(
+                tui,
+                &mut app_server,
+                &mut config,
+                &cli_kv_overrides,
+                &harness_overrides,
+            )
+            .await?;
+        let external_agent_config_migration_message = external_agent_config_migration_result
+            .success_message
+            .clone();
+        if let Some(exit_info) = external_agent_config_migration_result.exit_info {
             app_server
                 .shutdown()
                 .await
@@ -4043,6 +4096,9 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        if let Some(message) = external_agent_config_migration_message {
+            chat_widget.add_info_message(message, /*hint*/ None);
+        }
 
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
@@ -10376,18 +10432,21 @@ guardian_approval = true
                         codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Config,
                     description: "home".to_string(),
                     cwd: None,
+                    details: None,
                 },
                 ExternalAgentConfigMigrationItem {
                     item_type:
                         codex_app_server_protocol::ExternalAgentConfigMigrationItemType::AgentsMd,
                     description: "project".to_string(),
                     cwd: Some(PathBuf::from("/tmp/project")),
+                    details: None,
                 },
                 ExternalAgentConfigMigrationItem {
                     item_type:
                         codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Skills,
                     description: "other project".to_string(),
                     cwd: Some(PathBuf::from("/tmp/other")),
+                    details: None,
                 },
             ],
         );
@@ -10398,8 +10457,46 @@ guardian_approval = true
                 item_type: codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Skills,
                 description: "other project".to_string(),
                 cwd: Some(PathBuf::from("/tmp/other")),
+                details: None,
             }]
         );
+    }
+
+    #[test]
+    fn external_agent_config_migration_success_message_mentions_plugins_when_present() {
+        let message = external_agent_config_migration_success_message(&[
+            ExternalAgentConfigMigrationItem {
+                item_type: codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Config,
+                description: String::new(),
+                cwd: None,
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Plugins,
+                description: String::new(),
+                cwd: None,
+                details: None,
+            },
+        ]);
+
+        assert_eq!(
+            message,
+            "External config migration completed. Plugin migration is still in progress and may take a few minutes."
+        );
+    }
+
+    #[test]
+    fn external_agent_config_migration_success_message_omits_plugins_copy_when_absent() {
+        let message =
+            external_agent_config_migration_success_message(&[ExternalAgentConfigMigrationItem {
+                item_type:
+                    codex_app_server_protocol::ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: String::new(),
+                cwd: None,
+                details: None,
+            }]);
+
+        assert_eq!(message, "External config migration completed successfully.");
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+use crate::diff_render::display_path_for;
 use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
@@ -7,6 +8,7 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
+use codex_app_server_protocol::PluginsMigration;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -79,7 +81,15 @@ struct MigrationSelection {
 
 struct RenderLineEntry {
     item_idx: Option<usize>,
+    kind: RenderLineKind,
     line: Line<'static>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderLineKind {
+    Section,
+    Item,
+    ItemDetail,
 }
 
 pub(crate) async fn run_external_agent_config_migration_prompt(
@@ -136,6 +146,78 @@ struct ExternalAgentConfigMigrationScreen {
 }
 
 impl ExternalAgentConfigMigrationScreen {
+    fn display_description(item: &ExternalAgentConfigMigrationItem) -> String {
+        let Some(cwd) = item.cwd.as_deref() else {
+            return item.description.clone();
+        };
+
+        fn reformat_description(
+            description: &str,
+            prefix: &str,
+            separator: &str,
+            cwd: &std::path::Path,
+        ) -> Option<String> {
+            let remainder = description.strip_prefix(prefix)?;
+            let (left, right) = remainder.split_once(separator)?;
+            Some(format!(
+                "{prefix}{}{}{}",
+                display_path_for(std::path::Path::new(left), cwd),
+                separator,
+                display_path_for(std::path::Path::new(right), cwd)
+            ))
+        }
+
+        if let Some(reformatted) =
+            reformat_description(&item.description, "Migrate ", " into ", cwd)
+        {
+            return reformatted;
+        }
+
+        if let Some(reformatted) =
+            reformat_description(&item.description, "Copy skill folders from ", " to ", cwd)
+        {
+            return reformatted;
+        }
+
+        if let Some(reformatted) = reformat_description(&item.description, "Import ", " to ", cwd) {
+            return reformatted;
+        }
+
+        if let Some(source) = item
+            .description
+            .strip_prefix("Import enabled plugins from ")
+        {
+            let description = format!(
+                "Import enabled plugins from {}",
+                display_path_for(std::path::Path::new(source), cwd)
+            );
+            if let Some(details) = &item.details {
+                let marketplace_count = details.plugins.len();
+                let plugin_count = details
+                    .plugins
+                    .iter()
+                    .map(|plugin_group| plugin_group.plugin_names.len())
+                    .sum::<usize>();
+                return format!(
+                    "{description} ({marketplace_count} {}, {plugin_count} {})",
+                    if marketplace_count == 1 {
+                        "marketplace"
+                    } else {
+                        "marketplaces"
+                    },
+                    if plugin_count == 1 {
+                        "plugin"
+                    } else {
+                        "plugins"
+                    }
+                );
+            }
+            return description;
+        }
+
+        item.description.clone()
+    }
+
     fn new(
         request_frame: FrameRequester,
         items: &[ExternalAgentConfigMigrationItem],
@@ -162,6 +244,40 @@ impl ExternalAgentConfigMigrationScreen {
             outcome: ExternalAgentConfigMigrationOutcome::Skip,
             error,
         }
+    }
+
+    fn plugin_detail_lines(plugin_groups: &[PluginsMigration]) -> Vec<Line<'static>> {
+        let mut lines = plugin_groups
+            .iter()
+            .take(3)
+            .map(|plugin_group| {
+                let mut plugin_names = plugin_group
+                    .plugin_names
+                    .iter()
+                    .take(2)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let hidden_plugin_count = plugin_group
+                    .plugin_names
+                    .len()
+                    .saturating_sub(plugin_names.len());
+                if hidden_plugin_count > 0 {
+                    plugin_names.push(format!("+{hidden_plugin_count} more"));
+                }
+                Line::from(format!(
+                    "      • {}: {}",
+                    plugin_group.marketplace_name,
+                    plugin_names.join(", ")
+                ))
+            })
+            .collect::<Vec<_>>();
+        let hidden_marketplace_count = plugin_groups.len().saturating_sub(lines.len());
+        if hidden_marketplace_count > 0 {
+            lines.push(Line::from(format!(
+                "      • +{hidden_marketplace_count} more marketplaces"
+            )));
+        }
+        lines
     }
 
     fn is_done(&self) -> bool {
@@ -317,6 +433,21 @@ impl ExternalAgentConfigMigrationScreen {
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => self.move_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_down(),
+            KeyCode::Char('1') => {
+                self.focus = FocusArea::Actions;
+                self.highlighted_action = ActionMenuOption::Proceed;
+                self.proceed();
+            }
+            KeyCode::Char('2') => {
+                self.focus = FocusArea::Actions;
+                self.highlighted_action = ActionMenuOption::Skip;
+                self.skip();
+            }
+            KeyCode::Char('3') => {
+                self.focus = FocusArea::Actions;
+                self.highlighted_action = ActionMenuOption::SkipForever;
+                self.skip_forever();
+            }
             KeyCode::Char(' ') => self.toggle_selected_item(),
             KeyCode::Char('a') => self.set_all_enabled(/*enabled*/ true),
             KeyCode::Char('n') => self.set_all_enabled(/*enabled*/ false),
@@ -370,23 +501,35 @@ impl ExternalAgentConfigMigrationScreen {
                 if current_scope.is_some() {
                     lines.push(RenderLineEntry {
                         item_idx: None,
+                        kind: RenderLineKind::Section,
                         line: Line::from(""),
                     });
                 }
                 lines.push(RenderLineEntry {
                     item_idx: None,
+                    kind: RenderLineKind::Section,
                     line: Self::section_title(scope),
                 });
                 current_scope = Some(scope);
             }
             lines.push(RenderLineEntry {
                 item_idx: Some(idx),
+                kind: RenderLineKind::Item,
                 line: Line::from(format!(
                     "  [{}] {}",
                     if item.enabled { "x" } else { " " },
-                    item.item.description
+                    Self::display_description(&item.item)
                 )),
             });
+            if let Some(details) = &item.item.details {
+                for line in Self::plugin_detail_lines(&details.plugins) {
+                    lines.push(RenderLineEntry {
+                        item_idx: None,
+                        kind: RenderLineKind::ItemDetail,
+                        line,
+                    });
+                }
+            }
         }
         lines
     }
@@ -423,7 +566,7 @@ impl ExternalAgentConfigMigrationScreen {
                 line.spans.iter_mut().for_each(|span| {
                     span.style = span.style.cyan().bold();
                 });
-            } else if entry.item_idx.is_none() && !line.spans.is_empty() {
+            } else if entry.kind != RenderLineKind::Item && !line.spans.is_empty() {
                 line.spans.iter_mut().for_each(|span| {
                     span.style = span.style.dim();
                 });
@@ -549,6 +692,12 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
             " to move, ".dim(),
             key_hint::plain(KeyCode::Char(' ')).into(),
             " to toggle, ".dim(),
+            "1".cyan(),
+            "/".dim(),
+            "2".cyan(),
+            "/".dim(),
+            "3".cyan(),
+            " to choose, ".dim(),
             "a".cyan(),
             "/".dim(),
             "n".cyan(),
@@ -590,6 +739,7 @@ mod tests {
     use crate::tui::FrameRequester;
     use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
     use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+    use codex_app_server_protocol::PluginsMigration;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
@@ -606,12 +756,44 @@ mod tests {
                     "Migrate /Users/alex/.claude/settings.json into /Users/alex/.codex/config.toml"
                         .to_string(),
                 cwd: None,
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                description: "Import enabled plugins from /workspace/project/.claude/settings.json"
+                    .to_string(),
+                cwd: Some(PathBuf::from("/workspace/project")),
+                details: Some(codex_app_server_protocol::MigrationDetails {
+                    plugins: vec![
+                        PluginsMigration {
+                            marketplace_name: "acme-tools".to_string(),
+                            plugin_names: vec![
+                                "deployer".to_string(),
+                                "formatter".to_string(),
+                                "lint".to_string(),
+                            ],
+                        },
+                        PluginsMigration {
+                            marketplace_name: "team-marketplace".to_string(),
+                            plugin_names: vec!["asana".to_string()],
+                        },
+                        PluginsMigration {
+                            marketplace_name: "debug".to_string(),
+                            plugin_names: vec!["sample".to_string()],
+                        },
+                        PluginsMigration {
+                            marketplace_name: "data-tools".to_string(),
+                            plugin_names: vec!["warehouse".to_string()],
+                        },
+                    ],
+                }),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: "Import /workspace/project/CLAUDE.md to /workspace/project/AGENTS.md"
                     .to_string(),
                 cwd: Some(PathBuf::from("/workspace/project")),
+                details: None,
             },
         ]
     }
@@ -748,6 +930,47 @@ mod tests {
         assert!(
             rendered.contains("Select at least one item or choose a skip option."),
             "expected inline validation error, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn numeric_shortcuts_choose_actions() {
+        let items = sample_items();
+
+        let mut proceed_screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        proceed_screen.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert_eq!(
+            proceed_screen.outcome(),
+            ExternalAgentConfigMigrationOutcome::Proceed(items.clone())
+        );
+
+        let mut skip_screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        skip_screen.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert_eq!(
+            skip_screen.outcome(),
+            ExternalAgentConfigMigrationOutcome::Skip
+        );
+
+        let mut skip_forever_screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        skip_forever_screen.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert_eq!(
+            skip_forever_screen.outcome(),
+            ExternalAgentConfigMigrationOutcome::SkipForever
         );
     }
 }

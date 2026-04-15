@@ -104,6 +104,23 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
 }
 
 #[test]
+fn external_migrate_is_experimental_and_disabled_by_default() {
+    let spec = Feature::ExternalMigrate.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("External migrate"));
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "Show a startup prompt when Codex detects migratable external agent config for this machine or project."
+        )
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(Feature::ExternalMigrate.default_enabled(), false);
+}
+
+#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),
