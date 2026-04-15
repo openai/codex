@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ struct TestToolServer {
 
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
+const SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
@@ -49,12 +51,27 @@ pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
 
 impl TestToolServer {
     fn new() -> Self {
+        #[expect(clippy::expect_used)]
+        let sandbox_meta_schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("sandbox_meta tool schema should deserialize");
+        let mut sandbox_meta_tool = Tool::new(
+            Cow::Borrowed("sandbox_meta"),
+            Cow::Borrowed("Return the MCP request metadata received by this test server."),
+            Arc::new(sandbox_meta_schema),
+        );
+        sandbox_meta_tool.annotations = Some(ToolAnnotations::new().read_only(true));
+
         let tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
             Self::sync_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
+            sandbox_meta_tool,
         ];
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
@@ -341,12 +358,18 @@ struct ImageScenarioArgs {
 
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
+        let mut capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .enable_resources()
+            .build();
+        capabilities.experimental = Some(BTreeMap::from([(
+            SANDBOX_STATE_META_CAPABILITY.to_string(),
+            JsonObject::new(),
+        )]));
+
         ServerInfo {
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .enable_tool_list_changed()
-                .enable_resources()
-                .build(),
+            capabilities,
             ..ServerInfo::default()
         }
     }
@@ -418,9 +441,15 @@ impl ServerHandler for TestToolServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
+            "sandbox_meta" => Ok(CallToolResult {
+                content: Vec::new(),
+                structured_content: Some(serde_json::Value::Object(context.meta.0)),
+                is_error: Some(false),
+                meta: None,
+            }),
             "echo" | "echo-tool" => {
                 let args: EchoArgs = match request.arguments {
                     Some(arguments) => serde_json::from_value(serde_json::Value::Object(

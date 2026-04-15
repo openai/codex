@@ -23,5 +23,8 @@ url = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

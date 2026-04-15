@@ -5,12 +5,14 @@
 //! any other backing store.
 
 mod error;
+mod local;
 mod recorder;
 mod store;
 mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
+pub use local::LocalThreadStore;
 pub use recorder::ThreadRecorder;
 pub use store::ThreadStore;
 pub use types::AppendThreadItemsParams;
