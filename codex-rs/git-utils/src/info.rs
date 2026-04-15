@@ -619,25 +619,21 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
 /// repository. Handles worktrees via filesystem inspection without invoking
 /// the `git` executable.
 pub async fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
-    let base = match tokio::fs::metadata(cwd).await {
-        Ok(metadata) if metadata.is_dir() => cwd,
-        _ => cwd.parent()?,
-    };
-    let (repo_root, dot_git) = find_ancestor_git_entry_async(base).await?;
-    if tokio::fs::metadata(&dot_git).await.ok()?.is_dir() {
-        return Some(canonicalize_or_raw_async(repo_root).await);
+    let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
+    let (repo_root, dot_git) = find_ancestor_git_entry(base)?;
+    if dot_git.is_dir() {
+        return Some(canonicalize_or_raw(repo_root));
     }
 
-    let git_dir_s = tokio::fs::read_to_string(&dot_git).await.ok()?;
+    let git_dir_s = std::fs::read_to_string(&dot_git).ok()?;
     let git_dir_rel = git_dir_s.trim().strip_prefix("gitdir:")?.trim();
     if git_dir_rel.is_empty() {
         return None;
     }
 
-    let git_dir_path = canonicalize_or_raw_async(
+    let git_dir_path = canonicalize_or_raw(
         AbsolutePathBuf::resolve_path_against_base(git_dir_rel, &repo_root).into_path_buf(),
-    )
-    .await;
+    );
     let worktrees_dir = git_dir_path.parent()?;
     if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
         return None;
@@ -645,7 +641,7 @@ pub async fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
 
     let common_dir = worktrees_dir.parent()?;
     let main_repo_root = common_dir.parent()?;
-    Some(canonicalize_or_raw_async(main_repo_root.to_path_buf()).await)
+    Some(canonicalize_or_raw(main_repo_root.to_path_buf()))
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -667,27 +663,8 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-async fn find_ancestor_git_entry_async(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
-    let mut dir = base_dir.to_path_buf();
-
-    loop {
-        let dot_git = dir.join(".git");
-        if tokio::fs::metadata(&dot_git).await.is_ok() {
-            return Some((dir, dot_git));
-        }
-
-        // Pop one component (go up one directory). `pop` returns false when
-        // we have reached the filesystem root.
-        if !dir.pop() {
-            break;
-        }
-    }
-
-    None
-}
-
-async fn canonicalize_or_raw_async(path: PathBuf) -> PathBuf {
-    tokio::fs::canonicalize(&path).await.unwrap_or(path)
+fn canonicalize_or_raw(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 /// Returns a list of local git branches.

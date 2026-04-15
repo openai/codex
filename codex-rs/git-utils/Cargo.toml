@@ -17,7 +17,7 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "macros", "process", "rt", "time"] }
+tokio = { workspace = true, features = ["macros", "process", "rt", "time"] }
 ts-rs = { workspace = true, features = [
     "uuid-impl",
     "serde-json-impl",

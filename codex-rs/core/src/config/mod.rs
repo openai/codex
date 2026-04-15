@@ -1416,27 +1416,6 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 }
 
 impl Config {
-    fn resolve_config_cwd(cwd: Option<&Path>) -> std::io::Result<AbsolutePathBuf> {
-        AbsolutePathBuf::try_from(normalize_for_native_workdir({
-            use std::env;
-
-            match cwd {
-                None => {
-                    tracing::info!("cwd not set, using current dir");
-                    env::current_dir()?
-                }
-                Some(p) if p.is_absolute() => p.to_path_buf(),
-                Some(p) => {
-                    // Resolve relative path against the current working directory.
-                    tracing::info!("cwd is relative, resolving against current dir");
-                    let mut current = env::current_dir()?;
-                    current.push(p);
-                    current
-                }
-            }
-        }))
-    }
-
     #[cfg(test)]
     async fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
@@ -1454,7 +1433,24 @@ impl Config {
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
-        let resolved_cwd = Self::resolve_config_cwd(overrides.cwd.as_deref())?;
+        let resolved_cwd = AbsolutePathBuf::try_from(normalize_for_native_workdir({
+            use std::env;
+
+            match overrides.cwd.as_deref() {
+                None => {
+                    tracing::info!("cwd not set, using current dir");
+                    env::current_dir()?
+                }
+                Some(p) if p.is_absolute() => p.to_path_buf(),
+                Some(p) => {
+                    // Resolve relative path against the current working directory.
+                    tracing::info!("cwd is relative, resolving against current dir");
+                    let mut current = env::current_dir()?;
+                    current.push(p);
+                    current
+                }
+            }
+        }))?;
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
             .await
