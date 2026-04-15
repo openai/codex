@@ -347,6 +347,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::StreamError(_)
                     | EventMsg::PatchApplyBegin(_)
+                    | EventMsg::PatchApplyDelta(_)
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::TurnDiff(_)
                     | EventMsg::WebSearchBegin(_)

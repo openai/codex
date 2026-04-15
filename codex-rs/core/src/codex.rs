@@ -323,6 +323,7 @@ use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::util::ApplyPatchInputStream;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
@@ -7433,6 +7434,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyBegin(_)
+        | EventMsg::PatchApplyDelta(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::ImageGenerationBegin(_)
@@ -7806,6 +7808,8 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut active_apply_patch_call_id: Option<String> = None;
+    let mut apply_patch_input_stream = ApplyPatchInputStream::default();
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -7849,6 +7853,19 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                if active_apply_patch_call_id
+                    .as_deref()
+                    .is_some_and(|active_call_id| {
+                        matches!(
+                            &item,
+                            ResponseItem::FunctionCall { call_id, .. }
+                                | ResponseItem::CustomToolCall { call_id, .. }
+                                if call_id == active_call_id
+                        )
+                    })
+                {
+                    active_apply_patch_call_id = None;
+                }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7901,6 +7918,11 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
+                if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {
+                    active_apply_patch_call_id = (name == "apply_patch").then(|| call_id.clone());
+                } else if matches!(&item, ResponseItem::FunctionCall { .. }) {
+                    active_apply_patch_call_id = None;
+                }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -8026,6 +8048,30 @@ async fn try_run_sampling_request(
                     }
                 } else {
                     error_or_panic("OutputTextDelta without active item".to_string());
+                }
+            }
+            ResponseEvent::ToolCallInputDelta {
+                item_id: _,
+                call_id,
+                delta,
+            } => {
+                if !turn_context
+                    .features
+                    .enabled(Feature::ApplyPatchStreamingEvents)
+                {
+                    continue;
+                }
+                let Some(active_call_id) = active_apply_patch_call_id.clone() else {
+                    continue;
+                };
+                let call_id = match call_id {
+                    Some(call_id) if call_id != active_call_id => continue,
+                    Some(call_id) => call_id,
+                    None => active_call_id,
+                };
+                if let Some(event) = apply_patch_input_stream.push_delta(call_id, &delta) {
+                    sess.send_event(&turn_context, EventMsg::PatchApplyDelta(event))
+                        .await;
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {

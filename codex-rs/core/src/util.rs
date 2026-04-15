@@ -1,8 +1,14 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_apply_patch::ApplyPatchArgs;
+use codex_apply_patch::Hunk;
+use codex_apply_patch::parse_patch_streaming;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::PatchApplyDeltaEvent;
 use rand::Rng;
 use tracing::error;
 
@@ -132,6 +138,110 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
             format!("codex resume {escaped}")
         }
     })
+}
+
+#[derive(Default)]
+pub(crate) struct ApplyPatchInputStream {
+    call_id: Option<String>,
+    input: String,
+    last_progress: Option<Vec<Hunk>>,
+}
+
+impl ApplyPatchInputStream {
+    pub(crate) fn push_delta(
+        &mut self,
+        call_id: String,
+        delta: &str,
+    ) -> Option<PatchApplyDeltaEvent> {
+        if self.call_id.as_deref() != Some(call_id.as_str()) {
+            self.call_id = Some(call_id.clone());
+            self.input.clear();
+            self.last_progress = None;
+        }
+
+        self.input.push_str(delta);
+
+        let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&self.input).ok()?;
+        if hunks.is_empty() {
+            return None;
+        }
+        if self.last_progress.as_ref() == Some(&hunks) {
+            return None;
+        }
+
+        let active_path = hunks.last().map(Hunk::path).map(Path::to_path_buf);
+        let changes = convert_apply_patch_hunks_to_protocol(&hunks);
+        self.last_progress = Some(hunks);
+        Some(PatchApplyDeltaEvent {
+            call_id,
+            changes,
+            active_path,
+        })
+    }
+}
+
+fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, FileChange> {
+    hunks
+        .iter()
+        .map(|hunk| {
+            let path = hunk_source_path(hunk).to_path_buf();
+            let change = match hunk {
+                Hunk::AddFile { contents, .. } => FileChange::Add {
+                    content: contents.clone(),
+                },
+                Hunk::DeleteFile { .. } => FileChange::Delete {
+                    content: String::new(),
+                },
+                Hunk::UpdateFile {
+                    chunks, move_path, ..
+                } => FileChange::Update {
+                    unified_diff: format_update_chunks_for_progress(chunks),
+                    move_path: move_path.clone(),
+                },
+            };
+            (path, change)
+        })
+        .collect()
+}
+
+fn hunk_source_path(hunk: &Hunk) -> &Path {
+    match hunk {
+        Hunk::AddFile { path, .. } | Hunk::DeleteFile { path } | Hunk::UpdateFile { path, .. } => {
+            path
+        }
+    }
+}
+
+fn format_update_chunks_for_progress(chunks: &[codex_apply_patch::UpdateFileChunk]) -> String {
+    let mut unified_diff = String::new();
+    for chunk in chunks {
+        match &chunk.change_context {
+            Some(context) => {
+                unified_diff.push_str("@@ ");
+                unified_diff.push_str(context);
+                unified_diff.push('\n');
+            }
+            None => {
+                unified_diff.push_str("@@");
+                unified_diff.push('\n');
+            }
+        }
+        for line in &chunk.old_lines {
+            unified_diff.push('-');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        for line in &chunk.new_lines {
+            unified_diff.push('+');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        if chunk.is_end_of_file {
+            unified_diff.push_str("*** End of File");
+            unified_diff.push('\n');
+        }
+    }
+    unified_diff
 }
 
 #[cfg(test)]
