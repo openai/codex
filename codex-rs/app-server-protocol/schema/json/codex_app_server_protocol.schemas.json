@@ -1841,11 +1841,15 @@
           ]
         },
         "cwd": {
-          "description": "The command's working directory.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command's working directory."
         },
         "itemId": {
           "type": "string"
@@ -4379,20 +4383,40 @@
           "properties": {
             "method": {
               "enum": [
-                "thread/realtime/transcriptUpdated"
+                "thread/realtime/transcript/delta"
               ],
-              "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
+              "title": "Thread/realtime/transcript/deltaNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptUpdatedNotification"
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptDeltaNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Thread/realtime/transcriptUpdatedNotification",
+          "title": "Thread/realtime/transcript/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/transcript/done"
+              ],
+              "title": "Thread/realtime/transcript/doneNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptDoneNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/transcript/doneNotification",
           "type": "object"
         },
         {
@@ -5930,7 +5954,7 @@
                 "type": "string"
               },
               "path": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "type": {
                 "enum": [
@@ -7485,6 +7509,16 @@
           "description": {
             "type": "string"
           },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/MigrationDetails"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "itemType": {
             "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
           }
@@ -7500,6 +7534,7 @@
           "AGENTS_MD",
           "CONFIG",
           "SKILLS",
+          "PLUGINS",
           "MCP_SERVER_CONFIG"
         ],
         "type": "string"
@@ -8223,7 +8258,7 @@
                 "type": "string"
               },
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "source": {
                 "$ref": "#/definitions/v2/GuardianCommandSource"
@@ -8254,7 +8289,7 @@
                 "type": "array"
               },
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "program": {
                 "type": "string"
@@ -8283,11 +8318,11 @@
           {
             "properties": {
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "files": {
                 "items": {
-                  "type": "string"
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
                 },
                 "type": "array"
               },
@@ -8563,7 +8598,7 @@
             "$ref": "#/definitions/v2/HookScope"
           },
           "sourcePath": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "startedAt": {
             "format": "int64",
@@ -9527,6 +9562,20 @@
           }
         ]
       },
+      "MigrationDetails": {
+        "properties": {
+          "plugins": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginsMigration"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "plugins"
+        ],
+        "type": "object"
+      },
       "ModeKind": {
         "description": "Initial collaboration mode to use when the TUI starts.",
         "enum": [
@@ -9806,12 +9855,6 @@
             },
             "type": [
               "array",
-              "null"
-            ]
-          },
-          "dangerFullAccessDenylistOnly": {
-            "type": [
-              "boolean",
               "null"
             ]
           },
@@ -10455,6 +10498,24 @@
         "title": "PluginUninstallResponse",
         "type": "object"
       },
+      "PluginsMigration": {
+        "properties": {
+          "marketplaceName": {
+            "type": "string"
+          },
+          "pluginNames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "marketplaceName",
+          "pluginNames"
+        ],
+        "type": "object"
+      },
       "ProfileV2": {
         "additionalProperties": true,
         "properties": {
@@ -10715,6 +10776,13 @@
         "enum": [
           "v1",
           "v2"
+        ],
+        "type": "string"
+      },
+      "RealtimeOutputModality": {
+        "enum": [
+          "text",
+          "audio"
         ],
         "type": "string"
       },
@@ -12137,15 +12205,23 @@
             ]
           },
           "iconLarge": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "iconSmall": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "shortDescription": {
@@ -12626,8 +12702,12 @@
             "type": "integer"
           },
           "cwd": {
-            "description": "Working directory captured for the thread.",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Working directory captured for the thread."
           },
           "ephemeral": {
             "description": "Whether the thread is ephemeral and should not be materialized on disk.",
@@ -12907,13 +12987,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },
@@ -13171,8 +13251,12 @@
                 "type": "array"
               },
               "cwd": {
-                "description": "The command's working directory.",
-                "type": "string"
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  }
+                ],
+                "description": "The command's working directory."
               },
               "durationMs": {
                 "description": "The duration of the command execution in milliseconds.",
@@ -13501,7 +13585,7 @@
                 "type": "string"
               },
               "path": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "type": {
                 "enum": [
@@ -13534,9 +13618,13 @@
                 ]
               },
               "savedPath": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "status": {
@@ -14088,14 +14176,38 @@
         "title": "ThreadRealtimeStartedNotification",
         "type": "object"
       },
-      "ThreadRealtimeTranscriptUpdatedNotification": {
+      "ThreadRealtimeTranscriptDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+        "properties": {
+          "delta": {
+            "description": "Live transcript delta from the realtime event.",
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta",
+          "role",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeTranscriptDeltaNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeTranscriptDoneNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - final transcript text emitted when realtime completes a transcript part.",
         "properties": {
           "role": {
             "type": "string"
           },
           "text": {
+            "description": "Final complete text for the transcript part.",
             "type": "string"
           },
           "threadId": {
@@ -14107,7 +14219,7 @@
           "text",
           "threadId"
         ],
-        "title": "ThreadRealtimeTranscriptUpdatedNotification",
+        "title": "ThreadRealtimeTranscriptDoneNotification",
         "type": "object"
       },
       "ThreadResumeParams": {
@@ -14235,13 +14347,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },
@@ -14534,13 +14646,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },

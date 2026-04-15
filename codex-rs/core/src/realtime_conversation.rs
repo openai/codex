@@ -42,6 +42,7 @@ use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationSdpEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use http::HeaderMap;
@@ -593,8 +594,14 @@ async fn prepare_realtime_start(
         api_provider.base_url = realtime_ws_base_url.clone();
     }
     let version = config.realtime.version;
-    let session_config =
-        build_realtime_session_config(sess, params.prompt, params.session_id, params.voice).await?;
+    let session_config = build_realtime_session_config(
+        sess,
+        params.prompt,
+        params.session_id,
+        params.output_modality,
+        params.voice,
+    )
+    .await?;
     let requested_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
@@ -622,6 +629,7 @@ pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
     prompt: Option<Option<String>>,
     session_id: Option<String>,
+    output_modality: RealtimeOutputModality,
     voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
@@ -653,6 +661,13 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
+    if config.realtime.version == RealtimeWsVersion::V1
+        && matches!(output_modality, RealtimeOutputModality::Text)
+    {
+        return Err(CodexErr::InvalidRequest(
+            "text realtime output modality requires realtime v2".to_string(),
+        ));
+    }
     let session_mode = match config.realtime.session_type {
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
@@ -667,6 +682,7 @@ pub(crate) async fn build_realtime_session_config(
         session_id: Some(session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
         event_parser,
         session_mode,
+        output_modality,
         voice,
     })
 }
@@ -789,7 +805,9 @@ async fn handle_start_inner(
             if let Some(text) = maybe_routed_text {
                 debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
-                sess_for_routed_text.route_realtime_text_input(text).await;
+                sess_for_routed_text
+                    .route_realtime_text_input(wrap_realtime_delegation_input(&text))
+                    .await;
             }
             if !fanout_realtime_active.load(Ordering::Relaxed) {
                 break;
@@ -849,6 +867,20 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
     (!active_transcript.is_empty())
         .then_some(active_transcript)
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
+}
+
+fn wrap_realtime_delegation_input(input: &str) -> String {
+    format!(
+        "<realtime_delegation>\n  <input>{}</input>\n</realtime_delegation>",
+        escape_xml_text(input)
+    )
+}
+
+fn escape_xml_text(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
@@ -1216,7 +1248,9 @@ async fn handle_realtime_server_event(
         RealtimeEvent::Error(_) => true,
         RealtimeEvent::SessionUpdated { .. }
         | RealtimeEvent::InputTranscriptDelta(_)
+        | RealtimeEvent::InputTranscriptDone(_)
         | RealtimeEvent::OutputTranscriptDelta(_)
+        | RealtimeEvent::OutputTranscriptDone(_)
         | RealtimeEvent::ConversationItemAdded(_)
         | RealtimeEvent::ConversationItemDone { .. } => false,
     };

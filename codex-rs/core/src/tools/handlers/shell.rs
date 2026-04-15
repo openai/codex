@@ -469,7 +469,6 @@ impl ShellHandler {
             &exec_params.command,
             &exec_params.cwd,
             fs.as_ref(),
-            exec_params.expiration.timeout_ms(),
             session.clone(),
             turn.clone(),
             Some(&tracker),
@@ -484,7 +483,7 @@ impl ShellHandler {
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
-            exec_params.cwd.to_path_buf(),
+            exec_params.cwd.clone(),
             source,
             freeform,
         );

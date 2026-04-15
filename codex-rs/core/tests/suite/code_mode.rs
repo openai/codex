@@ -1832,7 +1832,6 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
         .with_model("gpt-5.3-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
-            let _ = config.features.enable(Feature::ImageDetailOriginal);
         });
     let test = builder.build(&server).await?;
 

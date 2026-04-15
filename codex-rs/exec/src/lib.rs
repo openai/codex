@@ -1021,7 +1021,7 @@ fn session_configured_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
     let session_id = codex_protocol::ThreadId::from_string(thread_id)
@@ -1191,7 +1191,7 @@ async fn latest_thread_cwd(thread: &AppServerThread) -> PathBuf {
     {
         return cwd;
     }
-    thread.cwd.clone()
+    thread.cwd.to_path_buf()
 }
 
 async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
@@ -1245,7 +1245,8 @@ async fn resolve_resume_thread_id(
             .await
             .map_err(anyhow::Error::msg)?;
             for thread in response.data {
-                if args.all || cwds_match(config.cwd.as_path(), &latest_thread_cwd(&thread).await) {
+                let latest_cwd = latest_thread_cwd(&thread).await;
+                if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
                     return Ok(Some(thread.id));
                 }
             }
@@ -1309,7 +1310,8 @@ async fn resolve_resume_thread_id(
             if thread.name.as_deref() != Some(session_id) {
                 continue;
             }
-            if args.all || cwds_match(config.cwd.as_path(), &latest_thread_cwd(&thread).await) {
+            let latest_cwd = latest_thread_cwd(&thread).await;
+            if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
                 return Ok(Some(thread.id));
             }
         }

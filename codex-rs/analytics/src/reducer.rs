@@ -26,7 +26,6 @@ use crate::events::plugin_state_event_type;
 use crate::events::subagent_parent_thread_id;
 use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
-use crate::events::thread_source_name;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
@@ -107,7 +106,7 @@ impl ThreadMetadataState {
             | SessionSource::Unknown => (None, None),
         };
         Self {
-            thread_source: thread_source_name(session_source),
+            thread_source: session_source.thread_source_name(),
             initialization_mode,
             subagent_source,
             parent_thread_id,
