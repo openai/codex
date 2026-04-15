@@ -6,6 +6,25 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+fn env_key_eq(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+fn has_env_key(env_map: &HashMap<String, String>, key: &str) -> bool {
+    env_map.keys().any(|existing| env_key_eq(existing, key))
+}
+
+fn inherit_env_var_with<F>(env_map: &mut HashMap<String, String>, key: &str, lookup: F)
+where
+    F: FnOnce(&str) -> Option<String>,
+{
+    if !has_env_key(env_map, key)
+        && let Some(value) = lookup(key)
+    {
+        env_map.insert(key.to_string(), value);
+    }
+}
+
 pub fn normalize_null_device_env(env_map: &mut HashMap<String, String>) {
     let keys: Vec<String> = env_map.keys().cloned().collect();
     for k in keys {
@@ -30,16 +49,32 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
 
 // Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
 pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
-    if !env_map.contains_key("PATH")
-        && let Ok(path) = env::var("PATH")
-    {
-        env_map.insert("PATH".into(), path);
+    inherit_env_var_with(env_map, "PATH", |key| env::var(key).ok());
+    inherit_env_var_with(env_map, "PATHEXT", |key| env::var(key).ok());
+}
+
+fn inherit_windows_bootstrap_env_with<F>(env_map: &mut HashMap<String, String>, mut lookup: F)
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    for key in [
+        "PATH",
+        "PATHEXT",
+        "SystemRoot",
+        "WINDIR",
+        "ComSpec",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ] {
+        inherit_env_var_with(env_map, key, |name| lookup(name));
     }
-    if !env_map.contains_key("PATHEXT")
-        && let Ok(pathext) = env::var("PATHEXT")
-    {
-        env_map.insert("PATHEXT".into(), pathext);
-    }
+}
+
+pub fn inherit_windows_bootstrap_env(env_map: &mut HashMap<String, String>) {
+    inherit_windows_bootstrap_env_with(env_map, |key| env::var(key).ok());
 }
 
 fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
@@ -171,4 +206,63 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inherit_windows_bootstrap_env_with;
+    use std::collections::HashMap;
+
+    #[test]
+    fn inherit_windows_bootstrap_env_fills_missing_bootstrap_vars() {
+        let mut env_map = HashMap::from([("FOO".to_string(), "bar".to_string())]);
+        inherit_windows_bootstrap_env_with(&mut env_map, |key| match key {
+            "PATH" => Some(r"C:\Windows\System32".to_string()),
+            "PATHEXT" => Some(".COM;.EXE;.BAT;.CMD".to_string()),
+            "SystemRoot" => Some(r"C:\Windows".to_string()),
+            "WINDIR" => Some(r"C:\Windows".to_string()),
+            "ComSpec" => Some(r"C:\Windows\System32\cmd.exe".to_string()),
+            "TEMP" => Some(r"C:\Temp".to_string()),
+            "TMP" => Some(r"C:\Temp".to_string()),
+            "USERPROFILE" => Some(r"C:\Users\codex".to_string()),
+            "HOMEDRIVE" => Some("C:".to_string()),
+            "HOMEPATH" => Some(r"\Users\codex".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(
+            env_map.get("SystemRoot").map(String::as_str),
+            Some(r"C:\Windows")
+        );
+        assert_eq!(
+            env_map.get("ComSpec").map(String::as_str),
+            Some(r"C:\Windows\System32\cmd.exe")
+        );
+        assert_eq!(env_map.get("TEMP").map(String::as_str), Some(r"C:\Temp"));
+        assert_eq!(
+            env_map.get("USERPROFILE").map(String::as_str),
+            Some(r"C:\Users\codex")
+        );
+    }
+
+    #[test]
+    fn inherit_windows_bootstrap_env_respects_existing_case_insensitive_entries() {
+        let mut env_map = HashMap::from([
+            ("Path".to_string(), "custom-path".to_string()),
+            ("systemroot".to_string(), "custom-root".to_string()),
+        ]);
+        inherit_windows_bootstrap_env_with(&mut env_map, |key| match key {
+            "PATH" => Some("fallback-path".to_string()),
+            "SystemRoot" => Some("fallback-root".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(env_map.get("Path").map(String::as_str), Some("custom-path"));
+        assert_eq!(
+            env_map.get("systemroot").map(String::as_str),
+            Some("custom-root")
+        );
+        assert!(!env_map.contains_key("PATH"));
+        assert!(!env_map.contains_key("SystemRoot"));
+    }
 }

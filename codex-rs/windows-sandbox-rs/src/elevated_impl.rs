@@ -22,7 +22,7 @@ mod windows_impl {
     use crate::acl::allow_null_device;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
-    use crate::env::inherit_path_env;
+    use crate::env::inherit_windows_bootstrap_env;
     use crate::env::normalize_null_device_env;
     use crate::helper_materialization::HelperExecutable;
     use crate::helper_materialization::resolve_helper_for_launch;
@@ -244,7 +244,7 @@ mod windows_impl {
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
-        inherit_path_env(&mut env_map);
+        inherit_windows_bootstrap_env(&mut env_map);
         inject_git_safe_directory(&mut env_map, cwd, None);
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
