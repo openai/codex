@@ -91,13 +91,28 @@ pub fn mcp_tool_to_deferred_responses_api_tool(
 }
 
 pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) -> ResponsesApiTool {
+    let ToolDefinition {
+        name,
+        description,
+        input_schema,
+        output_schema,
+        defer_loading,
+    } = tool_definition;
+
+    let description = description.trim();
+    let description = if description.is_empty() {
+        format!("Call the {name} tool.")
+    } else {
+        description.to_string()
+    };
+
     ResponsesApiTool {
-        name: tool_definition.name,
-        description: tool_definition.description,
+        name,
+        description,
         strict: false,
-        defer_loading: tool_definition.defer_loading.then_some(true),
-        parameters: tool_definition.input_schema,
-        output_schema: tool_definition.output_schema,
+        defer_loading: defer_loading.then_some(true),
+        parameters: input_schema,
+        output_schema,
     }
 }
 

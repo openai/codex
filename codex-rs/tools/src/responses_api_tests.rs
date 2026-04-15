@@ -49,6 +49,35 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
 }
 
 #[test]
+fn tool_definition_to_responses_api_tool_falls_back_for_blank_description() {
+    assert_eq!(
+        tool_definition_to_responses_api_tool(ToolDefinition {
+            name: "lookup_order".to_string(),
+            description: " \n ".to_string(),
+            input_schema: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
+            output_schema: None,
+            defer_loading: false,
+        }),
+        ResponsesApiTool {
+            name: "lookup_order".to_string(),
+            description: "Call the lookup_order tool.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None
+            ),
+            output_schema: None,
+        }
+    );
+}
+
+#[test]
 fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
     let tool = DynamicToolSpec {
         name: "lookup_order".to_string(),

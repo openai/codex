@@ -485,11 +485,20 @@ pub fn build_tool_registry_plan(
 
         for (namespace, mut entries) in namespace_entries {
             entries.sort_by_key(|tool| tool.name.name.clone());
-            let description = params
+            let tool_namespace = params
                 .tool_namespaces
-                .and_then(|namespaces| namespaces.get(&namespace))
-                .and_then(|namespace| namespace.description.clone())
-                .unwrap_or_default();
+                .and_then(|namespaces| namespaces.get(&namespace));
+            let description = tool_namespace
+                .and_then(|namespace| namespace.description.as_deref())
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    let namespace_name = tool_namespace
+                        .map(|namespace| namespace.name.as_str())
+                        .unwrap_or(namespace.as_str());
+                    format!("Tools in the {namespace_name} namespace.")
+                });
             let mut tools = Vec::new();
             for tool in entries {
                 match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
