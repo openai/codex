@@ -1719,6 +1719,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::FsGetMetadataParams {
                 path: absolute_path("tmp/example"),
+                environment_id: None,
             },
         };
         assert_eq!(
@@ -1726,7 +1727,8 @@ mod tests {
                 "method": "fs/getMetadata",
                 "id": 9,
                 "params": {
-                    "path": absolute_path_string("tmp/example")
+                    "path": absolute_path_string("tmp/example"),
+                    "environmentId": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1741,6 +1743,7 @@ mod tests {
             params: v2::FsWatchParams {
                 watch_id: "watch-git".to_string(),
                 path: absolute_path("tmp/repo/.git"),
+                environment_id: None,
             },
         };
         assert_eq!(
@@ -1749,7 +1752,8 @@ mod tests {
                 "id": 10,
                 "params": {
                     "watchId": "watch-git",
-                    "path": absolute_path_string("tmp/repo/.git")
+                    "path": absolute_path_string("tmp/repo/.git"),
+                    "environmentId": null
                 }
             }),
             serde_json::to_value(&request)?,
