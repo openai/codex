@@ -6,6 +6,7 @@ use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tokio::sync::watch;
 
 use tokio::time::timeout;
@@ -16,6 +17,7 @@ use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::process::ExecProcessEvent;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
@@ -53,6 +55,7 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateParams;
@@ -65,6 +68,7 @@ use crate::rpc::RpcClientEvent;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
@@ -100,6 +104,7 @@ impl RemoteExecServerConnectArgs {
 
 pub(crate) struct SessionState {
     wake_tx: watch::Sender<u64>,
+    event_tx: broadcast::Sender<ExecProcessEvent>,
     failure: Mutex<Option<String>>,
 }
 
@@ -450,8 +455,10 @@ impl From<RpcCallError> for ExecServerError {
 impl SessionState {
     fn new() -> Self {
         let (wake_tx, _wake_rx) = watch::channel(0);
+        let (event_tx, _event_rx) = broadcast::channel(PROCESS_EVENT_CHANNEL_CAPACITY);
         Self {
             wake_tx,
+            event_tx,
             failure: Mutex::new(None),
         }
     }
@@ -460,19 +467,31 @@ impl SessionState {
         self.wake_tx.subscribe()
     }
 
+    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<ExecProcessEvent> {
+        self.event_tx.subscribe()
+    }
+
     fn note_change(&self, seq: u64) {
         let next = (*self.wake_tx.borrow()).max(seq);
         let _ = self.wake_tx.send(next);
     }
 
+    fn publish_event(&self, event: ExecProcessEvent) {
+        let _ = self.event_tx.send(event);
+    }
+
     async fn set_failure(&self, message: String) {
         let mut failure = self.failure.lock().await;
-        if failure.is_none() {
-            *failure = Some(message);
+        let should_publish = failure.is_none();
+        if should_publish {
+            *failure = Some(message.clone());
         }
         drop(failure);
         let next = (*self.wake_tx.borrow()).saturating_add(1);
         let _ = self.wake_tx.send(next);
+        if should_publish {
+            self.publish_event(ExecProcessEvent::Failed(message));
+        }
     }
 
     async fn failed_response(&self) -> Option<ReadResponse> {
@@ -503,6 +522,10 @@ impl Session {
 
     pub(crate) fn subscribe_wake(&self) -> watch::Receiver<u64> {
         self.state.subscribe()
+    }
+
+    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<ExecProcessEvent> {
+        self.state.subscribe_events()
     }
 
     pub(crate) async fn read(
@@ -628,6 +651,11 @@ async fn handle_server_notification(
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             if let Some(session) = inner.get_session(&params.process_id) {
                 session.note_change(params.seq);
+                session.publish_event(ExecProcessEvent::Output(ProcessOutputChunk {
+                    seq: params.seq,
+                    stream: params.stream,
+                    chunk: params.chunk,
+                }));
             }
         }
         EXEC_EXITED_METHOD => {
@@ -635,6 +663,10 @@ async fn handle_server_notification(
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             if let Some(session) = inner.get_session(&params.process_id) {
                 session.note_change(params.seq);
+                session.publish_event(ExecProcessEvent::Exited {
+                    seq: params.seq,
+                    exit_code: params.exit_code,
+                });
             }
         }
         EXEC_CLOSED_METHOD => {
@@ -645,6 +677,7 @@ async fn handle_server_notification(
             let session = inner.remove_session(&params.process_id).await;
             if let Some(session) = session {
                 session.note_change(params.seq);
+                session.publish_event(ExecProcessEvent::Closed { seq: params.seq });
             }
         }
         other => {

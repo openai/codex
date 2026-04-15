@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tracing::trace;
 
 use crate::ExecBackend;
 use crate::ExecProcess;
+use crate::ExecProcessEvent;
 use crate::ExecServerError;
 use crate::StartedExecProcess;
 use crate::client::ExecServerClient;
@@ -54,6 +56,10 @@ impl ExecProcess for RemoteExecProcess {
 
     fn subscribe_wake(&self) -> watch::Receiver<u64> {
         self.session.subscribe_wake()
+    }
+
+    fn subscribe_events(&self) -> broadcast::Receiver<ExecProcessEvent> {
+        self.session.subscribe_events()
     }
 
     async fn read(
