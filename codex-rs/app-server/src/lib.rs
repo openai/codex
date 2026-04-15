@@ -69,6 +69,7 @@ mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;
 mod config_api;
+mod connection_rpc_gate;
 mod dynamic_tools;
 mod error_code;
 mod external_agent_config_api;
@@ -80,6 +81,7 @@ pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod request_serialization;
 mod server_request_error;
 mod thread_state;
 mod thread_status;
@@ -747,9 +749,9 @@ pub async fn run_main_with_transport(
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
-                                if connections.remove(&connection_id).is_none() {
+                                let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
-                                }
+                                };
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
@@ -757,7 +759,7 @@ pub async fn run_main_with_transport(
                                 {
                                     break;
                                 }
-                                processor.connection_closed(connection_id).await;
+                                processor.connection_closed(connection_id, &connection_state.session).await;
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
                                 }
@@ -871,6 +873,12 @@ pub async fn run_main_with_transport(
             }
 
             if !shutdown_state.forced() {
+                futures::future::join_all(
+                    connections
+                        .values()
+                        .map(|connection_state| connection_state.session.rpc_gate.shutdown()),
+                )
+                .await;
                 processor.drain_background_tasks().await;
                 processor.shutdown_threads().await;
             }

@@ -173,6 +173,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
+    thread_list_state_lock: Arc<tokio::sync::RwLock<()>>,
     api_version: ApiVersion,
     fallback_model_provider: String,
     codex_home: &Path,
@@ -1818,6 +1819,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             if let Some(request_id) = pending {
+                let _thread_list_state_guard = thread_list_state_lock.write().await;
                 let Some(rollout_path) = conversation.rollout_path() else {
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
@@ -3135,6 +3137,7 @@ mod tests {
                 self.outgoing.clone(),
                 self.thread_state.clone(),
                 self.thread_watch_manager.clone(),
+                Arc::new(tokio::sync::RwLock::new(())),
                 ApiVersion::V2,
                 "test-provider".to_string(),
                 &self.codex_home,
