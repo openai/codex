@@ -394,7 +394,8 @@ mod tests {
         account_id: &str,
     ) -> StoredAgentIdentity {
         let key_material = generate_agent_key_material().expect("key material");
-        let binding = AgentIdentityBinding::from_auth(auth, None).expect("binding");
+        let binding =
+            AgentIdentityBinding::from_auth(auth, /*forced_workspace_id*/ None).expect("binding");
         let stored_identity = StoredAgentIdentity {
             binding_id: binding.binding_id,
             chatgpt_account_id: account_id.to_string(),
