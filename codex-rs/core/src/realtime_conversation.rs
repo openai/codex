@@ -71,6 +71,8 @@ const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
+const REALTIME_DELEGATION_OPEN_TAG: &str = "<realtime_delegation>\n  <input>";
+const REALTIME_DELEGATION_CLOSE_TAG: &str = "</input>\n</realtime_delegation>";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RealtimeConversationEnd {
@@ -862,9 +864,16 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .map(|entry| format!("{role}: {text}", role = entry.role, text = entry.text))
         .collect::<Vec<_>>()
         .join("\n");
-    (!active_transcript.is_empty())
+    let text = (!active_transcript.is_empty())
         .then_some(active_transcript)
-        .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
+        .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))?;
+    let text = text
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    Some(format!(
+        "{REALTIME_DELEGATION_OPEN_TAG}{text}{REALTIME_DELEGATION_CLOSE_TAG}"
+    ))
 }
 
 fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
