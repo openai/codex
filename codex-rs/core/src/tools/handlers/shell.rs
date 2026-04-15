@@ -395,6 +395,11 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
+        let effective_permissions = session.effective_permission_settings(turn.as_ref()).await;
+        let turn = Arc::new(
+            turn.with_effective_permission_settings(effective_permissions)
+                .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?,
+        );
         let Some(environment) = turn.environment.as_ref() else {
             return Err(FunctionCallError::RespondToModel(
                 "shell is unavailable in this session".to_string(),

@@ -126,6 +126,11 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::request_permission_preset::PermissionPresetId;
+use codex_protocol::request_permission_preset::RequestPermissionPresetArgs;
+use codex_protocol::request_permission_preset::RequestPermissionPresetDecision;
+use codex_protocol::request_permission_preset::RequestPermissionPresetEvent;
+use codex_protocol::request_permission_preset::RequestPermissionPresetResponse;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
@@ -138,6 +143,8 @@ use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
+use codex_utils_approval_presets::PermissionPreset;
+use codex_utils_approval_presets::find_builtin_permission_preset;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -304,6 +311,7 @@ use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::state::TurnPermissionPresetOverride;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -877,7 +885,7 @@ impl TurnSkillsContext {
 }
 
 /// The context needed for a single turn of the thread.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) trace_id: Option<String>,
@@ -925,6 +933,21 @@ pub(crate) struct TurnContext {
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
 }
 impl TurnContext {
+    pub(crate) fn with_effective_permission_settings(
+        &self,
+        settings: EffectivePermissionSettings,
+    ) -> ConstraintResult<Self> {
+        let mut next = self.clone();
+        next.approval_policy.set(settings.approval_policy)?;
+        let mut config = (*next.config).clone();
+        config.approvals_reviewer = settings.approvals_reviewer;
+        next.config = Arc::new(config);
+        next.sandbox_policy.set(settings.sandbox_policy)?;
+        next.file_system_sandbox_policy = settings.file_system_sandbox_policy;
+        next.network_sandbox_policy = settings.network_sandbox_policy;
+        Ok(next)
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info.context_window.map(|context_window| {
@@ -1315,6 +1338,15 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct EffectivePermissionSettings {
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) approvals_reviewer: ApprovalsReviewer,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -3285,6 +3317,13 @@ impl Session {
         rx_approve
     }
 
+    /// Sends a narrow permission grant request to the active client and waits for the user's decision.
+    ///
+    /// The returned response contains the permissions the client says the user
+    /// granted, which may be empty or narrower than the requested profile. A
+    /// caller that treats the original request as granted would bypass the
+    /// confirmation contract and could run a later tool with permissions the
+    /// user declined.
     pub async fn request_permissions(
         &self,
         turn_context: &TurnContext,
@@ -3335,9 +3374,227 @@ impl Session {
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
             permissions: args.permissions,
+            suggested_scope: args.scope,
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
+    }
+
+    /// Sends a permission preset request to the active client and waits for the user's decision.
+    ///
+    /// Core resolves and validates the preset before emitting the event so the
+    /// client confirms concrete settings rather than interpreting policy names.
+    /// The settings are not applied by this function; they become active only
+    /// when `notify_request_permission_preset_response` receives an accepted
+    /// response for the pending call id.
+    pub async fn request_permission_preset(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: RequestPermissionPresetArgs,
+    ) -> RequestPermissionPresetResponse {
+        if let AskForApproval::Granular(granular_config) = turn_context.approval_policy.value()
+            && !granular_config.allows_request_permissions()
+        {
+            return RequestPermissionPresetResponse {
+                decision: RequestPermissionPresetDecision::Declined,
+                preset: args.preset,
+                message: "permission preset prompts are disabled by granular.request_permissions"
+                    .to_string(),
+            };
+        }
+
+        let Some(preset) = resolve_permission_preset(turn_context, args.preset) else {
+            return RequestPermissionPresetResponse {
+                decision: RequestPermissionPresetDecision::Declined,
+                preset: args.preset,
+                message: "requested permission preset is not available in this session".to_string(),
+            };
+        };
+
+        if let Err(err) = turn_context.approval_policy.can_set(&preset.approval) {
+            return RequestPermissionPresetResponse {
+                decision: RequestPermissionPresetDecision::Declined,
+                preset: args.preset,
+                message: err.to_string(),
+            };
+        }
+        if let Err(err) = turn_context.sandbox_policy.can_set(&preset.sandbox) {
+            return RequestPermissionPresetResponse {
+                decision: RequestPermissionPresetDecision::Declined,
+                preset: args.preset,
+                message: err.to_string(),
+            };
+        }
+
+        let Some(preset_id) = PermissionPresetId::from_id(preset.id) else {
+            return RequestPermissionPresetResponse {
+                decision: RequestPermissionPresetDecision::Declined,
+                preset: args.preset,
+                message: "requested permission preset is not supported".to_string(),
+            };
+        };
+
+        let (tx_response, rx_response) = oneshot::channel();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_request_permission_preset(call_id.clone(), tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending request_permission_preset for call_id: {call_id}");
+        }
+
+        let event = EventMsg::RequestPermissionPreset(RequestPermissionPresetEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+            preset: preset_id,
+            label: preset.label.to_string(),
+            description: preset.description.to_string(),
+            approval_policy: preset.approval,
+            approvals_reviewer: preset.approvals_reviewer,
+            sandbox_policy: preset.sandbox,
+            reason: args.reason,
+        });
+        self.send_event(turn_context, event).await;
+        rx_response
+            .await
+            .unwrap_or_else(|_| RequestPermissionPresetResponse {
+                decision: RequestPermissionPresetDecision::Declined,
+                preset: args.preset,
+                message: "request_permission_preset was cancelled before receiving a response"
+                    .to_string(),
+            })
+    }
+
+    /// Applies an accepted permission preset response and completes the pending tool call.
+    ///
+    /// Responses for unknown call ids are logged and ignored. Accepted
+    /// responses are re-resolved against the current session before applying so
+    /// a stale client response cannot select a preset that is no longer
+    /// available.
+    pub async fn notify_request_permission_preset_response(
+        &self,
+        call_id: &str,
+        response: RequestPermissionPresetResponse,
+    ) {
+        let Some((turn_state, tx_response)) = ({
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let turn_state = at.turn_state.clone();
+                    let entry = {
+                        let mut ts = turn_state.lock().await;
+                        ts.remove_pending_request_permission_preset(call_id)
+                    };
+                    entry.map(|tx_response| (turn_state, tx_response))
+                }
+                None => None,
+            }
+        }) else {
+            warn!("No pending request_permission_preset found for call_id: {call_id}");
+            return;
+        };
+
+        let mut response = response;
+        if matches!(response.decision, RequestPermissionPresetDecision::Accepted) {
+            match self
+                .resolve_permission_preset_for_current_session(response.preset)
+                .await
+            {
+                Some(preset) => {
+                    let preset_override = TurnPermissionPresetOverride {
+                        approval_policy: preset.approval,
+                        approvals_reviewer: preset.approvals_reviewer,
+                        sandbox_policy: preset.sandbox.clone(),
+                    };
+                    if let Err(err) = self
+                        .update_settings(SessionSettingsUpdate {
+                            approval_policy: Some(preset.approval),
+                            approvals_reviewer: Some(preset.approvals_reviewer),
+                            sandbox_policy: Some(preset.sandbox),
+                            ..Default::default()
+                        })
+                        .await
+                    {
+                        warn!("failed to apply approved permission preset: {err}");
+                        response = RequestPermissionPresetResponse {
+                            decision: RequestPermissionPresetDecision::Declined,
+                            preset: response.preset,
+                            message: format!(
+                                "requested permission preset could not be applied: {err}"
+                            ),
+                        };
+                    } else {
+                        let mut ts = turn_state.lock().await;
+                        ts.record_permission_preset_override(preset_override);
+                    }
+                }
+                None => {
+                    response = RequestPermissionPresetResponse {
+                        decision: RequestPermissionPresetDecision::Declined,
+                        preset: response.preset,
+                        message: "requested permission preset is no longer available".to_string(),
+                    };
+                }
+            }
+        }
+
+        tx_response.send(response).ok();
+    }
+
+    async fn resolve_permission_preset_for_current_session(
+        &self,
+        preset_id: PermissionPresetId,
+    ) -> Option<PermissionPreset> {
+        let features = self.features();
+        find_builtin_permission_preset(
+            preset_id.as_str(),
+            cfg!(target_os = "windows"),
+            features.enabled(Feature::GuardianApproval),
+        )
+    }
+
+    pub(crate) async fn effective_permission_settings(
+        &self,
+        turn_context: &TurnContext,
+    ) -> EffectivePermissionSettings {
+        let preset_override = {
+            let active = self.active_turn.lock().await;
+            match active.as_ref() {
+                Some(at) => {
+                    let ts = at.turn_state.lock().await;
+                    ts.permission_preset_override()
+                }
+                None => None,
+            }
+        };
+
+        if let Some(preset_override) = preset_override {
+            return EffectivePermissionSettings {
+                approval_policy: preset_override.approval_policy,
+                approvals_reviewer: preset_override.approvals_reviewer,
+                file_system_sandbox_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                    &preset_override.sandbox_policy,
+                    &turn_context.cwd,
+                ),
+                network_sandbox_policy: NetworkSandboxPolicy::from(&preset_override.sandbox_policy),
+                sandbox_policy: preset_override.sandbox_policy,
+            };
+        }
+
+        EffectivePermissionSettings {
+            approval_policy: turn_context.approval_policy.value(),
+            approvals_reviewer: turn_context.config.approvals_reviewer,
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            file_system_sandbox_policy: turn_context.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: turn_context.network_sandbox_policy,
+        }
     }
 
     pub async fn request_user_input(
@@ -3476,6 +3733,12 @@ impl Session {
         }
     }
 
+    /// Records an approved narrow permission grant and completes the pending tool call.
+    ///
+    /// Turn-scoped grants are stored on the active turn, while session-scoped
+    /// grants are stored in session state after the turn lock is released.
+    /// Unknown call ids are ignored because they may be late replies from a
+    /// client prompt that was already resolved or abandoned.
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
@@ -3786,6 +4049,9 @@ impl Session {
                     turn_context
                         .features
                         .enabled(Feature::RequestPermissionsTool),
+                    turn_context
+                        .features
+                        .enabled(Feature::RequestPermissionPresetTool),
                 )
                 .into_text(),
             );
@@ -4772,6 +5038,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::request_permissions_response(&sess, id, response).await;
                     false
                 }
+                Op::RequestPermissionPresetResponse { id, response } => {
+                    handlers::request_permission_preset_response(&sess, id, response).await;
+                    false
+                }
                 Op::DynamicToolResponse { id, response } => {
                     handlers::dynamic_tool_response(&sess, id, response).await;
                     false
@@ -4907,6 +5177,17 @@ fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     dispatch_span
 }
 
+fn resolve_permission_preset(
+    turn_context: &TurnContext,
+    preset_id: PermissionPresetId,
+) -> Option<PermissionPreset> {
+    find_builtin_permission_preset(
+        preset_id.as_str(),
+        cfg!(target_os = "windows"),
+        turn_context.features.enabled(Feature::GuardianApproval),
+    )
+}
+
 /// Operation handlers
 mod handlers {
     use crate::codex::Session;
@@ -4953,6 +5234,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
+    use codex_protocol::request_permission_preset::RequestPermissionPresetResponse;
     use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -5301,6 +5583,15 @@ mod handlers {
         response: RequestPermissionsResponse,
     ) {
         sess.notify_request_permissions_response(&id, response)
+            .await;
+    }
+
+    pub async fn request_permission_preset_response(
+        sess: &Arc<Session>,
+        id: String,
+        response: RequestPermissionPresetResponse,
+    ) {
+        sess.notify_request_permission_preset_response(&id, response)
             .await;
     }
 
@@ -7454,6 +7745,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ImageGenerationEnd(_)
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestPermissions(_)
+        | EventMsg::RequestPermissionPreset(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
         | EventMsg::DynamicToolCallResponse(_)

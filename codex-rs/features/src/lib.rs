@@ -97,6 +97,8 @@ pub enum Feature {
     CodexHooks,
     /// Expose the built-in request_permissions tool.
     RequestPermissionsTool,
+    /// Expose the built-in request_permission_preset tool.
+    RequestPermissionPresetTool,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -712,8 +714,14 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestPermissionsTool,
         key: "request_permissions_tool",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RequestPermissionPresetTool,
+        key: "request_permission_preset_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
