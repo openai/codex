@@ -1,0 +1,276 @@
+# What: make rust_test sharding assign tests by stable name hash and accept
+# explicit per-target shard env vars.
+# Why: Codex generates separate Bazel test labels for each shard so BuildBuddy
+# can report flakiness and timing per shard label, but Bazel reserves TEST_*
+# vars in normal test env. This mirrors hermeticbuild/rules_rust#14.
+
+diff --git a/rust/private/rust.bzl b/rust/private/rust.bzl
+index 57b2794f7..ffa8ece7d 100644
+--- a/rust/private/rust.bzl
++++ b/rust/private/rust.bzl
+@@ -928,15 +928,6 @@ _RUST_TEST_ATTRS = {
+     "env_inherit": attr.string_list(
+         doc = "Specifies additional environment variables to inherit from the external environment when the test is executed by bazel test.",
+     ),
+-    "use_libtest_harness": attr.bool(
+-        mandatory = False,
+-        default = True,
+-        doc = dedent("""\
+-            Whether to use `libtest`. For targets using this flag, individual tests can be run by using the
+-            [--test_arg](https://docs.bazel.build/versions/4.0.0/command-line-reference.html#flag--test_arg) flag.
+-            E.g. `bazel test //src:rust_test --test_arg=foo::test::test_fn`.
+-        """),
+-    ),
+     "experimental_enable_sharding": attr.bool(
+         mandatory = False,
+         default = False,
+@@ -945,14 +936,25 @@ _RUST_TEST_ATTRS = {
+ 
+             When enabled, tests are executed via a wrapper script that:
+             1. Enumerates tests using libtest's --list flag
+-            2. Partitions tests across shards based on TEST_SHARD_INDEX/TEST_TOTAL_SHARDS
+-            3. Runs only the tests assigned to the current shard
++            2. Sorts tests by name and partitions them across shards by stable name hash
++            3. Uses either Bazel's native TEST_TOTAL_SHARDS/TEST_SHARD_INDEX env
++               or explicit RULES_RUST_TEST_TOTAL_SHARDS/RULES_RUST_TEST_SHARD_INDEX env
++            4. Runs only the tests assigned to the current shard
+ 
+             This attribute only has an effect when use_libtest_harness is True.
+ 
+             This is experimental and may change in future releases.
+         """),
+     ),
++    "use_libtest_harness": attr.bool(
++        mandatory = False,
++        default = True,
++        doc = dedent("""\
++            Whether to use `libtest`. For targets using this flag, individual tests can be run by using the
++            [--test_arg](https://docs.bazel.build/versions/4.0.0/command-line-reference.html#flag--test_arg) flag.
++            E.g. `bazel test //src:rust_test --test_arg=foo::test::test_fn`.
++        """),
++    ),
+     "_test_sharding_wrapper_unix": attr.label(
+         default = Label("//rust/private:test_sharding_wrapper.sh"),
+         allow_single_file = True,
+diff --git a/rust/private/test_sharding_wrapper.bat b/rust/private/test_sharding_wrapper.bat
+index 5c90681c8..3e0acbb54 100644
+--- a/rust/private/test_sharding_wrapper.bat
++++ b/rust/private/test_sharding_wrapper.bat
+@@ -14,7 +14,8 @@
+ 
+ @REM Wrapper script for rust_test that enables Bazel test sharding support.
+ @REM This script intercepts test execution, enumerates tests using libtest's
+-@REM --list flag, partitions them by shard index, and runs only the relevant subset.
++@REM --list flag, partitions them by stable test-name hash, and runs only the
++@REM relevant subset.
+ 
+ @ECHO OFF
+ SETLOCAL EnableDelayedExpansion
+@@ -65,6 +66,35 @@ IF !FOUND_BINARY! EQU 0 IF DEFINED RUNFILES_DIR (
+     )
+ )
+ 
++@REM Try 4: manifest-based runfile lookup. This covers nested launchers that
++@REM execute the sharding wrapper from another test's runfiles tree.
++IF !FOUND_BINARY! EQU 0 (
++    SET "MANIFEST=!RUNFILES_MANIFEST_FILE!"
++    IF NOT DEFINED MANIFEST IF EXIST "%~f0.runfiles_manifest" SET "MANIFEST=%~f0.runfiles_manifest"
++    IF NOT DEFINED MANIFEST IF EXIST "%~dpn0.runfiles_manifest" SET "MANIFEST=%~dpn0.runfiles_manifest"
++    IF NOT DEFINED MANIFEST IF EXIST "%~f0.exe.runfiles_manifest" SET "MANIFEST=%~f0.exe.runfiles_manifest"
++
++    IF DEFINED MANIFEST IF EXIST "!MANIFEST!" (
++        SET "TEST_BINARY_MANIFEST_PATH=!TEST_BINARY_RAW!"
++        SET "TEST_BINARY_MANIFEST_PATH=!TEST_BINARY_MANIFEST_PATH:\=/!"
++        IF DEFINED TEST_WORKSPACE SET "TEST_BINARY_MANIFEST_WORKSPACE_PATH=!TEST_WORKSPACE!/!TEST_BINARY_MANIFEST_PATH!"
++        FOR /F "usebackq tokens=1,* delims= " %%A IN ("!MANIFEST!") DO (
++            IF "%%A"=="!TEST_BINARY_MANIFEST_PATH!" (
++                SET "TEST_BINARY_PATH=%%B"
++                SET FOUND_BINARY=1
++                GOTO :FOUND_TEST_BINARY
++            )
++            IF DEFINED TEST_BINARY_MANIFEST_WORKSPACE_PATH IF "%%A"=="!TEST_BINARY_MANIFEST_WORKSPACE_PATH!" (
++                SET "TEST_BINARY_PATH=%%B"
++                SET FOUND_BINARY=1
++                GOTO :FOUND_TEST_BINARY
++            )
++        )
++    )
++)
++
++:FOUND_TEST_BINARY
++
+ IF !FOUND_BINARY! EQU 0 (
+     ECHO ERROR: Could not find test binary at any expected location
+     EXIT /B 1
+@@ -73,40 +74,73 @@ IF !FOUND_BINARY! EQU 0 (
+     EXIT /B 1
+ )
+ 
++@REM Native Bazel test sharding sets TEST_TOTAL_SHARDS/TEST_SHARD_INDEX.
++@REM Explicit shard test targets can set RULES_RUST_TEST_TOTAL_SHARDS/
++@REM RULES_RUST_TEST_SHARD_INDEX instead because Bazel may reserve TEST_*
++@REM variables for its own test runner env.
++SET TOTAL_SHARDS=%RULES_RUST_TEST_TOTAL_SHARDS%
++IF "%TOTAL_SHARDS%"=="" SET TOTAL_SHARDS=%TEST_TOTAL_SHARDS%
++SET SHARD_INDEX=%RULES_RUST_TEST_SHARD_INDEX%
++IF "%SHARD_INDEX%"=="" SET SHARD_INDEX=%TEST_SHARD_INDEX%
++
+ @REM If sharding is not enabled, run test binary directly
+-IF "%TEST_TOTAL_SHARDS%"=="" (
++IF "%TOTAL_SHARDS%"=="" (
+     !TEST_BINARY_PATH! %*
+     EXIT /B !ERRORLEVEL!
+ )
++IF "%TOTAL_SHARDS%"=="0" (
++    !TEST_BINARY_PATH! %*
++    EXIT /B !ERRORLEVEL!
++)
++
++IF "%SHARD_INDEX%"=="" (
++    ECHO ERROR: TEST_SHARD_INDEX or RULES_RUST_TEST_SHARD_INDEX must be set when sharding is enabled
++    EXIT /B 1
++)
+ 
+ @REM Touch status file to advertise sharding support to Bazel
+-IF NOT "%TEST_SHARD_STATUS_FILE%"=="" (
++IF NOT "%TEST_SHARD_STATUS_FILE%"=="" IF NOT "%TEST_TOTAL_SHARDS%"=="" IF NOT "%TEST_TOTAL_SHARDS%"=="0" (
+     TYPE NUL > "%TEST_SHARD_STATUS_FILE%"
+ )
+ 
+ @REM Create a temporary file for test list
+ SET TEMP_LIST=%TEMP%\rust_test_list_%RANDOM%.txt
++SET TEMP_SHARD_LIST=%TEMP%\rust_test_shard_%RANDOM%.txt
+ 
+ @REM Enumerate all tests using libtest's --list flag
+ !TEST_BINARY_PATH! --list --format terse 2>NUL > "!TEMP_LIST!"
+ 
+-@REM Count tests and filter for this shard
+-SET INDEX=0
++@REM Sort tests by ordinal name and filter this shard by stable FNV-1a hash so
++@REM adding or removing one test does not move unrelated tests between shards.
++@REM In the PowerShell fragment below, 2166136261 is the 32-bit FNV offset basis,
++@REM 16777619 is the FNV prime, and 4294967295 is the UInt32 mask. Use decimal
++@REM constants because Windows PowerShell can interpret 0xffffffff as -1.
++powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
++    "$ErrorActionPreference = 'Stop';" ^
++    "$tests = @(Get-Content -LiteralPath $env:TEMP_LIST | Where-Object { $_.EndsWith(': test') } | ForEach-Object { $_.Substring(0, $_.Length - 6) });" ^
++    "[Array]::Sort($tests, [StringComparer]::Ordinal);" ^
++    "$totalShards = [uint32]$env:TOTAL_SHARDS; $shardIndex = [uint32]$env:SHARD_INDEX;" ^
++    "$fnvPrime = [uint64]16777619; $u32Mask = [uint64]4294967295;" ^
++    "foreach ($test in $tests) { $hash = [uint32]2166136261; foreach ($byte in [Text.Encoding]::UTF8.GetBytes($test)) { $hash = [uint32](([uint64]($hash -bxor $byte) * $fnvPrime) -band $u32Mask) }; if (($hash %% $totalShards) -eq $shardIndex) { $test } }" ^
++    > "!TEMP_SHARD_LIST!"
++IF ERRORLEVEL 1 (
++    DEL "!TEMP_LIST!" 2>NUL
++    DEL "!TEMP_SHARD_LIST!" 2>NUL
++    EXIT /B 1
++)
++
+ SET SHARD_TESTS=
+ 
+-FOR /F "tokens=1 delims=:" %%T IN ('TYPE "!TEMP_LIST!" ^| FINDSTR /E ": test"') DO (
+-    SET /A MOD=!INDEX! %% %TEST_TOTAL_SHARDS%
+-    IF !MOD! EQU %TEST_SHARD_INDEX% (
+-        IF "!SHARD_TESTS!"=="" (
+-            SET SHARD_TESTS=%%T
+-        ) ELSE (
+-            SET SHARD_TESTS=!SHARD_TESTS! %%T
+-        )
++FOR /F "usebackq delims=" %%T IN ("!TEMP_SHARD_LIST!") DO (
++    IF "!SHARD_TESTS!"=="" (
++        SET SHARD_TESTS=%%T
++    ) ELSE (
++        SET SHARD_TESTS=!SHARD_TESTS! %%T
+     )
+-    SET /A INDEX=!INDEX! + 1
+ )
+ 
+ DEL "!TEMP_LIST!" 2>NUL
++DEL "!TEMP_SHARD_LIST!" 2>NUL
+ 
+ @REM If no tests for this shard, exit successfully
+ IF "!SHARD_TESTS!"=="" (
+diff --git a/rust/private/test_sharding_wrapper.sh b/rust/private/test_sharding_wrapper.sh
+index e05970ba0..b1f0fb55d 100755
+--- a/rust/private/test_sharding_wrapper.sh
++++ b/rust/private/test_sharding_wrapper.sh
+@@ -15,40 +15,70 @@
+ 
+ # Wrapper script for rust_test that enables Bazel test sharding support.
+ # This script intercepts test execution, enumerates tests using libtest's
+-# --list flag, partitions them by shard index, and runs only the relevant subset.
++# --list flag, partitions them by stable test-name hash, and runs only the
++# relevant subset.
+ 
+ set -euo pipefail
+ 
+ TEST_BINARY="{{TEST_BINARY}}"
++# Native Bazel test sharding sets TEST_TOTAL_SHARDS/TEST_SHARD_INDEX. Explicit
++# shard test targets can set RULES_RUST_TEST_TOTAL_SHARDS/RULES_RUST_TEST_SHARD_INDEX
++# instead because Bazel may reserve TEST_* variables for its own test runner env.
++TOTAL_SHARDS="${RULES_RUST_TEST_TOTAL_SHARDS:-${TEST_TOTAL_SHARDS:-}}"
++SHARD_INDEX="${RULES_RUST_TEST_SHARD_INDEX:-${TEST_SHARD_INDEX:-}}"
++
++test_shard_index() {
++    local test_name="$1"
++    # FNV-1a 32-bit hash. The initial value is the FNV offset basis, and
++    # 16777619 is the FNV prime. This gives a stable, cheap string hash without
++    # depending on platform-specific tools being present in the test sandbox.
++    local hash=2166136261
++    local byte
++    local char
++    local i
++    local LC_ALL=C
++
++    for ((i = 0; i < ${#test_name}; i++)); do
++        char="${test_name:i:1}"
++        printf -v byte "%d" "'$char"
++        hash=$(( ((hash ^ byte) * 16777619) & 0xffffffff ))
++    done
++
++    echo $(( hash % TOTAL_SHARDS ))
++}
+ 
+ # If sharding is not enabled, run test binary directly
+-if [[ -z "${TEST_TOTAL_SHARDS:-}" ]]; then
++if [[ -z "${TOTAL_SHARDS}" || "${TOTAL_SHARDS}" == "0" ]]; then
+     exec "./${TEST_BINARY}" "$@"
+ fi
+ 
++if [[ -z "${SHARD_INDEX}" ]]; then
++    echo "TEST_SHARD_INDEX or RULES_RUST_TEST_SHARD_INDEX must be set when sharding is enabled" >&2
++    exit 1
++fi
++
+ # Touch status file to advertise sharding support to Bazel
+-if [[ -n "${TEST_SHARD_STATUS_FILE:-}" ]]; then
++if [[ -n "${TEST_SHARD_STATUS_FILE:-}" && "${TEST_TOTAL_SHARDS:-0}" != "0" ]]; then
+     touch "${TEST_SHARD_STATUS_FILE}"
+ fi
+ 
+-# Enumerate all tests using libtest's --list flag
++# Enumerate all tests using libtest's --list flag. Sort the list so execution
++# order does not depend on libtest's output order.
+ # Output format: "test_name: test" - we need to strip the ": test" suffix
+-test_list=$("./${TEST_BINARY}" --list --format terse 2>/dev/null | grep ': test$' | sed 's/: test$//' || true)
++test_list=$("./${TEST_BINARY}" --list --format terse 2>/dev/null | grep ': test$' | sed 's/: test$//' | LC_ALL=C sort || true)
+ 
+ # If no tests found, exit successfully
+ if [[ -z "$test_list" ]]; then
+     exit 0
+ fi
+ 
+-# Filter tests for this shard
+-# test_index % TEST_TOTAL_SHARDS == TEST_SHARD_INDEX
++# Filter tests for this shard. Use a stable name hash instead of list position
++# so adding or removing one test does not move unrelated tests between shards.
+ shard_tests=()
+-index=0
+ while IFS= read -r test_name; do
+-    if (( index % TEST_TOTAL_SHARDS == TEST_SHARD_INDEX )); then
++    if (( $(test_shard_index "$test_name") == SHARD_INDEX )); then
+         shard_tests+=("$test_name")
+     fi
+-    ((index++)) || true
+ done <<< "$test_list"
+ 
+ # If no tests for this shard, exit successfully
