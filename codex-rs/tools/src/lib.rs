@@ -85,6 +85,7 @@ pub use responses_api::ResponsesApiNamespace;
 pub use responses_api::ResponsesApiNamespaceTool;
 pub use responses_api::ResponsesApiTool;
 pub use responses_api::ToolSearchOutputTool;
+pub(crate) use responses_api::default_namespace_description;
 pub use responses_api::dynamic_tool_to_responses_api_tool;
 pub use responses_api::mcp_tool_to_deferred_responses_api_tool;
 pub use responses_api::mcp_tool_to_responses_api_tool;

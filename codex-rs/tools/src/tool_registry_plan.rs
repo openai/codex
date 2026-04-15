@@ -55,6 +55,7 @@ use crate::create_wait_agent_tool_v2;
 use crate::create_wait_tool;
 use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
+use crate::default_namespace_description;
 use crate::dynamic_tool_to_responses_api_tool;
 use crate::mcp_tool_to_responses_api_tool;
 use crate::request_permissions_tool_description;
@@ -497,7 +498,7 @@ pub fn build_tool_registry_plan(
                     let namespace_name = tool_namespace
                         .map(|namespace| namespace.name.as_str())
                         .unwrap_or(namespace.as_str());
-                    format!("Tools in the {namespace_name} namespace.")
+                    default_namespace_description(namespace_name)
                 });
             let mut tools = Vec::new();
             for tool in entries {
