@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -121,16 +124,23 @@ impl FileSystemSandboxRunner {
             match additional_permissions.and_then(|permissions| permissions.file_system.clone()) {
                 Some(mut file_system) => {
                     if let Some(helper_read_root) = &helper_read_root {
-                        let read_paths = file_system.read.get_or_insert_with(Vec::new);
-                        if !read_paths.contains(helper_read_root) {
-                            read_paths.push(helper_read_root.clone());
+                        let helper_read_entry = FileSystemSandboxEntry {
+                            path: FileSystemPath::Path {
+                                path: helper_read_root.clone(),
+                            },
+                            access: FileSystemAccessMode::Read,
+                        };
+                        if !file_system.entries.contains(&helper_read_entry) {
+                            file_system.entries.push(helper_read_entry);
                         }
                     }
                     Some(file_system)
                 }
-                None => helper_read_root.map(|helper_read_root| FileSystemPermissions {
-                    read: Some(vec![helper_read_root]),
-                    write: None,
+                None => helper_read_root.map(|helper_read_root| {
+                    FileSystemPermissions::from_read_write_roots(
+                        Some(vec![helper_read_root]),
+                        /*write*/ None,
+                    )
                 }),
             };
 
@@ -289,6 +299,7 @@ mod tests {
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -373,27 +384,32 @@ mod tests {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![]),
-                write: Some(vec![writable.clone()]),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![]),
+                Some(vec![writable.clone()]),
+            )),
         }));
 
         assert_eq!(permissions.network, None);
-        assert_eq!(
-            permissions
-                .file_system
-                .as_ref()
-                .and_then(|fs| fs.write.clone()),
-            Some(vec![writable])
-        );
-        assert_eq!(
-            permissions
-                .file_system
-                .as_ref()
-                .and_then(|fs| fs.read.clone()),
-            Some(vec![readable])
-        );
+        let file_system = permissions
+            .file_system
+            .expect("helper permissions should include filesystem access");
+        let mut read_paths = file_system
+            .explicit_path_entries()
+            .filter_map(|(path, access)| {
+                (access == FileSystemAccessMode::Read).then_some(path.clone())
+            })
+            .collect::<Vec<_>>();
+        read_paths.sort_by(|left, right| left.as_path().cmp(right.as_path()));
+        let mut write_paths = file_system
+            .explicit_path_entries()
+            .filter_map(|(path, access)| {
+                (access == FileSystemAccessMode::Write).then_some(path.clone())
+            })
+            .collect::<Vec<_>>();
+        write_paths.sort_by(|left, right| left.as_path().cmp(right.as_path()));
+        assert_eq!(read_paths, vec![readable]);
+        assert_eq!(write_paths, vec![writable]);
     }
 
     #[test]
@@ -415,10 +431,10 @@ mod tests {
         assert_eq!(permissions.network, None);
         assert_eq!(
             permissions.file_system,
-            Some(FileSystemPermissions {
-                read: Some(vec![readable]),
-                write: None,
-            })
+            Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![readable]),
+                /*write*/ None,
+            ))
         );
     }
 }
