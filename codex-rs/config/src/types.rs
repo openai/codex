@@ -6,6 +6,7 @@
 pub use crate::mcp_types::AppToolApproval;
 pub use crate::mcp_types::McpServerConfig;
 pub use crate::mcp_types::McpServerDisabledReason;
+pub use crate::mcp_types::McpServerEnvironment;
 pub use crate::mcp_types::McpServerToolConfig;
 pub use crate::mcp_types::McpServerTransportConfig;
 pub use crate::mcp_types::RawMcpServerConfig;

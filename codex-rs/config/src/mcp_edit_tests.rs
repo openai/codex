@@ -22,6 +22,7 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
                 env_vars: Vec::new(),
                 cwd: None,
             },
+            environment: Default::default(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: true,

@@ -269,6 +269,7 @@ fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) ->
             http_headers,
             env_http_headers: None,
         },
+        environment: Default::default(),
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,

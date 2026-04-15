@@ -14,6 +14,7 @@ use toml_edit::value;
 use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
+use crate::McpServerEnvironment;
 use crate::McpServerTransportConfig;
 
 pub async fn load_global_mcp_servers(
@@ -173,6 +174,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
 
     if !config.enabled {
         entry["enabled"] = value(false);
+    }
+    if matches!(config.environment, McpServerEnvironment::Remote) {
+        entry["environment"] = value("remote");
     }
     if config.required {
         entry["required"] = value(true);

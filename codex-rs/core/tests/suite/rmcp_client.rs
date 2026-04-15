@@ -144,6 +144,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
+            environment: Default::default(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
