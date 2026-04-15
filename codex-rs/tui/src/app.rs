@@ -6235,7 +6235,7 @@ async fn fetch_plugins_list(
 ) -> Result<PluginListResponse> {
     let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
     let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
-    request_handle
+    let mut response = request_handle
         .request_typed(ClientRequest::PluginList {
             request_id,
             params: PluginListParams {
@@ -6244,7 +6244,17 @@ async fn fetch_plugins_list(
             },
         })
         .await
-        .wrap_err("plugin/list failed in TUI")
+        .wrap_err("plugin/list failed in TUI")?;
+    hide_cli_only_plugin_marketplaces(&mut response);
+    Ok(response)
+}
+
+const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
+
+fn hide_cli_only_plugin_marketplaces(response: &mut PluginListResponse) {
+    response
+        .marketplaces
+        .retain(|marketplace| !CLI_HIDDEN_PLUGIN_MARKETPLACES.contains(&marketplace.name.as_str()));
 }
 
 async fn fetch_plugin_detail(
@@ -6422,6 +6432,7 @@ mod tests {
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
     use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
     use codex_app_server_protocol::PermissionsRequestApprovalParams;
+    use codex_app_server_protocol::PluginMarketplaceEntry;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -6478,6 +6489,41 @@ mod tests {
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    #[test]
+    fn hide_cli_only_plugin_marketplaces_removes_openai_bundled() {
+        let mut response = PluginListResponse {
+            marketplaces: vec![
+                PluginMarketplaceEntry {
+                    name: "openai-bundled".to_string(),
+                    path: test_absolute_path("/marketplaces/openai-bundled"),
+                    interface: None,
+                    plugins: Vec::new(),
+                },
+                PluginMarketplaceEntry {
+                    name: "openai-curated".to_string(),
+                    path: test_absolute_path("/marketplaces/openai-curated"),
+                    interface: None,
+                    plugins: Vec::new(),
+                },
+            ],
+            marketplace_load_errors: Vec::new(),
+            remote_sync_error: None,
+            featured_plugin_ids: Vec::new(),
+        };
+
+        hide_cli_only_plugin_marketplaces(&mut response);
+
+        assert_eq!(
+            response.marketplaces,
+            vec![PluginMarketplaceEntry {
+                name: "openai-curated".to_string(),
+                path: test_absolute_path("/marketplaces/openai-curated"),
+                interface: None,
+                plugins: Vec::new(),
+            }]
+        );
     }
 
     #[test]
