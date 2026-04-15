@@ -139,18 +139,6 @@ fn assert_normalized_path_rejected(error: &std::io::Error) {
     }
 }
 
-fn sandbox_temp_dir() -> Result<TempDir> {
-    let slash_tmp = Path::new("/tmp");
-    if cfg!(target_os = "linux") && slash_tmp.is_dir() {
-        tempfile::Builder::new()
-            .prefix("codex-fs-sandbox-")
-            .tempdir_in(slash_tmp)
-            .map_err(Into::into)
-    } else {
-        TempDir::new().map_err(Into::into)
-    }
-}
-
 fn alias_root_candidate() -> Result<Option<PathBuf>> {
     for root in [Path::new("/tmp").to_path_buf(), std::env::temp_dir()] {
         if root.is_dir() && root.canonicalize().is_ok_and(|canonical| canonical != root) {
@@ -389,7 +377,7 @@ async fn file_system_sandboxed_read_allows_readable_root() -> Result<()> {
     let context = create_file_system_context(/*use_remote*/ false).await?;
     let file_system = context.file_system;
 
-    let tmp = sandbox_temp_dir()?;
+    let tmp = TempDir::new()?;
     let allowed_dir = tmp.path().join("allowed");
     let file_path = allowed_dir.join("note.txt");
     std::fs::create_dir_all(&allowed_dir)?;
@@ -411,12 +399,10 @@ async fn file_system_sandboxed_write_rejects_unwritable_path(use_remote: bool) -
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
-    let tmp = sandbox_temp_dir()?;
-    let allowed_dir = tmp.path().join("allowed");
+    let tmp = TempDir::new()?;
     let blocked_path = tmp.path().join("blocked.txt");
-    std::fs::create_dir_all(&allowed_dir)?;
 
-    let sandbox = read_only_sandbox(allowed_dir);
+    let sandbox = read_only_sandbox(tmp.path().to_path_buf());
     let error = match file_system
         .write_file(
             &absolute_path(blocked_path.clone()),

@@ -175,10 +175,6 @@ fn create_bwrap_flags(
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
-    if !file_system_sandbox_policy.has_full_disk_read_access() {
-        args.push("--remount-ro".to_string());
-        args.push("/".to_string());
-    }
     if normalized_command_cwd.as_path() != command_cwd {
         // Bubblewrap otherwise inherits the helper's logical cwd, which can be
         // a symlink alias that disappears once the sandbox only mounts
