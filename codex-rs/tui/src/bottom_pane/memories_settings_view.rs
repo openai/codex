@@ -211,12 +211,10 @@ impl BottomPaneView for MemoriesSettingsView {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            }
-            | KeyEvent {
+            } => self.save(),
+            KeyEvent {
                 code: KeyCode::Esc, ..
-            } => {
-                self.on_ctrl_c();
-            }
+            } => self.cancel(),
             _ => {}
         }
     }
@@ -226,12 +224,22 @@ impl BottomPaneView for MemoriesSettingsView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        self.cancel();
+        CancellationEvent::Handled
+    }
+}
+
+impl MemoriesSettingsView {
+    fn save(&mut self) {
         self.app_event_tx.send(AppEvent::UpdateMemorySettings {
             use_memories: self.current_setting(MemoriesSetting::Use),
             generate_memories: self.current_setting(MemoriesSetting::Generate),
         });
         self.complete = true;
-        CancellationEvent::Handled
+    }
+
+    fn cancel(&mut self) {
+        self.complete = true;
     }
 }
 

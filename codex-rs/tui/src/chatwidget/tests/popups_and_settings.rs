@@ -1513,7 +1513,7 @@ async fn memories_enable_prompt_snapshot() {
 }
 
 #[tokio::test]
-async fn memories_enable_prompt_updates_feature_and_emits_notice() {
+async fn memories_enable_prompt_updates_feature_without_notice() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ false);
 
@@ -1524,12 +1524,10 @@ async fn memories_enable_prompt_updates_feature_and_emits_notice() {
         rx.try_recv(),
         Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::MemoryTool, true)]
     );
-    let cell = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
-    assert!(rendered.contains("Memories will be enabled in the next session."));
+    assert!(
+        rx.try_recv().is_err(),
+        "memory enable prompt should not emit the success notice before persistence succeeds"
+    );
 }
 
 #[tokio::test]

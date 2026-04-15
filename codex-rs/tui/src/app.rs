@@ -1385,9 +1385,15 @@ impl App {
         }
 
         self.config = next_config;
+        let show_memory_enable_notice = feature_updates_to_apply
+            .iter()
+            .any(|(feature, enabled)| *feature == Feature::MemoryTool && *enabled);
         for (feature, effective_enabled) in feature_updates_to_apply {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
+        }
+        if show_memory_enable_notice {
+            self.chat_widget.add_memories_enable_notice();
         }
         if approvals_reviewer_override.is_some() {
             self.set_approvals_reviewer_in_app_and_widget(self.config.approvals_reviewer);
