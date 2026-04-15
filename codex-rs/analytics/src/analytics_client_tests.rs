@@ -1290,7 +1290,7 @@ fn plugin_management_event_serializes_expected_shape() {
 
 #[test]
 fn hook_run_event_serializes_expected_shape() {
-    let home = std::env::var("HOME").expect("HOME should be set for analytics tests");
+    let home = dirs::home_dir().expect("home dir should be available for analytics tests");
 
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
@@ -1323,9 +1323,7 @@ fn hook_run_event_serializes_expected_shape() {
                 "model_slug": "gpt-5",
                 "hook_name": "pre_tool_use",
                 "hook_source": "user",
-                "status": "success",
-                "source_path": format!("{home}/.codex/hooks.json"),
-                "duration_ms": 42
+                "status": "success"
             }
         })
     );
@@ -1333,7 +1331,7 @@ fn hook_run_event_serializes_expected_shape() {
 
 #[test]
 fn hook_run_metadata_maps_sources_and_statuses() {
-    let home = std::env::var("HOME").expect("HOME should be set for analytics tests");
+    let home = dirs::home_dir().expect("home dir should be available for analytics tests");
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
@@ -1490,7 +1488,6 @@ async fn reducer_ingests_hook_run_fact() {
     assert_eq!(payload[0]["event_params"]["hook_name"], "post_tool_use");
     assert_eq!(payload[0]["event_params"]["hook_source"], "unknown");
     assert_eq!(payload[0]["event_params"]["status"], "error");
-    assert_eq!(payload[0]["event_params"]["duration_ms"], 7);
 }
 
 #[tokio::test]

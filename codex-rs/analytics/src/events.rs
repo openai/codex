@@ -330,8 +330,6 @@ pub(crate) struct CodexHookRunMetadata {
     pub(crate) hook_name: Option<HookEventName>,
     pub(crate) hook_source: Option<CodexHookSource>,
     pub(crate) status: Option<CodexHookStatus>,
-    pub(crate) source_path: Option<String>,
-    pub(crate) duration_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -583,8 +581,6 @@ pub(crate) fn codex_hook_run_metadata(
             hook.cwd.as_path(),
         )),
         status: Some(hook_status(hook.status)),
-        source_path: Some(hook.source_path.display().to_string()),
-        duration_ms: hook.duration_ms,
     }
 }
 
@@ -651,13 +647,15 @@ fn hook_source_for_path(source_path: &Path, cwd: &Path) -> CodexHookSource {
         return CodexHookSource::System;
     }
 
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let home = dirs::home_dir();
     if let Some(home) = home
         && source_path.starts_with(home.join(".codex"))
     {
         return CodexHookSource::User;
     }
 
+    // Project hooks are loaded from a `.codex/hooks.json` rooted at or above the
+    // current working directory, so classify by walking cwd ancestors.
     if source_path.ends_with(".codex/hooks.json")
         && cwd
             .ancestors()
