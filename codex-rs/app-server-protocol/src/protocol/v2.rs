@@ -18,6 +18,7 @@ use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleA
 use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -744,7 +745,7 @@ pub struct Config {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,

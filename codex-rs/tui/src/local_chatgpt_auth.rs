@@ -5,6 +5,7 @@ use std::path::Path;
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::load_auth_dot_json;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalChatgptAuth {
@@ -16,7 +17,7 @@ pub(crate) struct LocalChatgptAuth {
 pub(crate) fn load_local_chatgpt_auth(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    forced_chatgpt_workspace_id: Option<&str>,
+    forced_chatgpt_workspace_id: Option<&ForcedChatgptWorkspaceIds>,
 ) -> Result<LocalChatgptAuth, String> {
     let auth = load_auth_dot_json(codex_home, auth_credentials_store_mode)
         .map_err(|err| format!("failed to load local auth: {err}"))?
@@ -33,11 +34,12 @@ pub(crate) fn load_local_chatgpt_auth(
         .account_id
         .or(tokens.id_token.chatgpt_account_id.clone())
         .ok_or_else(|| "local ChatGPT auth is missing chatgpt account id".to_string())?;
-    if let Some(expected_workspace) = forced_chatgpt_workspace_id
-        && chatgpt_account_id != expected_workspace
+    if let Some(allowed_workspace_ids) = forced_chatgpt_workspace_id
+        && !allowed_workspace_ids.contains(&chatgpt_account_id)
     {
+        let allowed_description = allowed_workspace_ids.description();
         return Err(format!(
-            "local ChatGPT auth must use workspace {expected_workspace}, but found {chatgpt_account_id:?}"
+            "local ChatGPT auth must use {allowed_description}, but found {chatgpt_account_id:?}"
         ));
     }
 
@@ -114,15 +116,20 @@ mod tests {
             .expect("chatgpt auth should save");
     }
 
+    fn workspace_ids(id: &str) -> ForcedChatgptWorkspaceIds {
+        ForcedChatgptWorkspaceIds::Single(id.to_string())
+    }
+
     #[test]
     fn loads_local_chatgpt_auth_from_managed_auth() {
         let codex_home = TempDir::new().expect("tempdir");
         write_chatgpt_auth(codex_home.path(), "business");
+        let forced_workspace_ids = workspace_ids("workspace-1");
 
         let auth = load_local_chatgpt_auth(
             codex_home.path(),
             AuthCredentialsStoreMode::File,
-            Some("workspace-1"),
+            Some(&forced_workspace_ids),
         )
         .expect("chatgpt auth should load");
 
@@ -175,6 +182,7 @@ mod tests {
     fn prefers_managed_auth_over_external_ephemeral_tokens() {
         let codex_home = TempDir::new().expect("tempdir");
         write_chatgpt_auth(codex_home.path(), "business");
+        let forced_workspace_ids = workspace_ids("workspace-1");
         login_with_chatgpt_auth_tokens(
             codex_home.path(),
             &fake_jwt("user@example.com", "workspace-2", "enterprise"),
@@ -186,7 +194,7 @@ mod tests {
         let auth = load_local_chatgpt_auth(
             codex_home.path(),
             AuthCredentialsStoreMode::File,
-            Some("workspace-1"),
+            Some(&forced_workspace_ids),
         )
         .expect("managed auth should win");
 
@@ -198,11 +206,12 @@ mod tests {
     fn preserves_usage_based_plan_type_wire_name() {
         let codex_home = TempDir::new().expect("tempdir");
         write_chatgpt_auth(codex_home.path(), "self_serve_business_usage_based");
+        let forced_workspace_ids = workspace_ids("workspace-1");
 
         let auth = load_local_chatgpt_auth(
             codex_home.path(),
             AuthCredentialsStoreMode::File,
-            Some("workspace-1"),
+            Some(&forced_workspace_ids),
         )
         .expect("chatgpt auth should load");
 

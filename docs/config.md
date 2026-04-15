@@ -54,6 +54,27 @@ When Codex knows which client started the turn, the legacy notify JSON payload a
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
 
+## Managed ChatGPT Workspace Restrictions
+
+Managed deployments can restrict ChatGPT login to one or more workspace IDs with
+`forced_chatgpt_workspace_id`. Existing single-workspace configurations remain
+valid:
+
+```toml
+forced_chatgpt_workspace_id = "workspace_id"
+```
+
+To allow any of several workspaces, set the same key to a list:
+
+```toml
+forced_chatgpt_workspace_id = ["workspace_id_a", "workspace_id_b"]
+```
+
+Codex trims whitespace from configured workspace IDs and ignores empty entries.
+An empty list remains an active allowlist and allows no ChatGPT workspace. If
+this setting is present, ChatGPT credentials whose token workspace ID is not in
+the configured allowlist are rejected and logged out.
+
 ## SQLite State DB
 
 Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the

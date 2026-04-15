@@ -264,6 +264,69 @@ pub enum ForcedLoginMethod {
     Api,
 }
 
+/// Workspace IDs that ChatGPT auth is allowed to use.
+///
+/// The config parser accepts the historical single-string form and the newer
+/// list form for deployments that allow multiple ChatGPT workspaces.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    /// Trims configured IDs and removes empty entries.
+    ///
+    /// A legacy empty string normalizes to `None` for compatibility. An
+    /// explicitly configured list remains active even if all entries are empty,
+    /// which avoids accidentally disabling a managed workspace restriction.
+    pub fn normalized(self) -> Option<Self> {
+        match self {
+            Self::Single(id) => {
+                let trimmed = id.trim();
+                (!trimmed.is_empty()).then(|| Self::Single(trimmed.to_string()))
+            }
+            Self::Multiple(ids) => {
+                let ids = ids
+                    .into_iter()
+                    .filter_map(|id| {
+                        let trimmed = id.trim();
+                        (!trimmed.is_empty()).then(|| trimmed.to_string())
+                    })
+                    .collect::<Vec<_>>();
+
+                match ids.as_slice() {
+                    [id] => Some(Self::Single(id.clone())),
+                    _ => Some(Self::Multiple(ids)),
+                }
+            }
+        }
+    }
+
+    /// Returns the allowed workspace IDs in config order.
+    pub fn ids(&self) -> &[String] {
+        match self {
+            Self::Single(id) => std::slice::from_ref(id),
+            Self::Multiple(ids) => ids.as_slice(),
+        }
+    }
+
+    /// Returns true when `workspace_id` is one of the configured IDs.
+    pub fn contains(&self, workspace_id: &str) -> bool {
+        self.ids().iter().any(|id| id == workspace_id)
+    }
+
+    /// Human-readable description for login and auth error messages.
+    pub fn description(&self) -> String {
+        match self.ids() {
+            [] => "a configured workspace".to_string(),
+            [id] => format!("workspace {id}"),
+            ids => format!("one of workspaces {}", ids.join(", ")),
+        }
+    }
+}
+
 const DEFAULT_PROVIDER_AUTH_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS: u64 = 300_000;
 

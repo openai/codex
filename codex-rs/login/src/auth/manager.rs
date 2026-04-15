@@ -37,6 +37,7 @@ use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -540,7 +541,7 @@ pub struct AuthConfig {
     pub codex_home: PathBuf,
     pub auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub forced_login_method: Option<ForcedLoginMethod>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 }
 
 pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
@@ -578,7 +579,7 @@ pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
         }
     }
 
-    if let Some(expected_account_id) = config.forced_chatgpt_workspace_id.as_deref() {
+    if let Some(allowed_workspace_ids) = config.forced_chatgpt_workspace_id.as_ref() {
         if !auth.is_chatgpt_auth() {
             return Ok(());
         }
@@ -598,13 +599,14 @@ pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
 
         // workspace is the external identifier for account id.
         let chatgpt_account_id = token_data.id_token.chatgpt_account_id.as_deref();
-        if chatgpt_account_id != Some(expected_account_id) {
+        if chatgpt_account_id.is_none_or(|actual| !allowed_workspace_ids.contains(actual)) {
+            let allowed_description = allowed_workspace_ids.description();
             let message = match chatgpt_account_id {
                 Some(actual) => format!(
-                    "Login is restricted to workspace {expected_account_id}, but current credentials belong to {actual}. Logging out."
+                    "Login is restricted to {allowed_description}, but current credentials belong to {actual}. Logging out."
                 ),
                 None => format!(
-                    "Login is restricted to workspace {expected_account_id}, but current credentials lack a workspace identifier. Logging out."
+                    "Login is restricted to {allowed_description}, but current credentials lack a workspace identifier. Logging out."
                 ),
             };
             return logout_with_message(
@@ -1155,7 +1157,7 @@ pub struct AuthManager {
     inner: RwLock<CachedAuth>,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    forced_chatgpt_workspace_id: RwLock<Option<String>>,
+    forced_chatgpt_workspace_id: RwLock<Option<ForcedChatgptWorkspaceIds>>,
     refresh_lock: AsyncMutex<()>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     auth_state_tx: watch::Sender<()>,
@@ -1174,8 +1176,8 @@ pub trait AuthManagerConfig {
     /// Returns the CLI auth credential storage mode for auth loading.
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode;
 
-    /// Returns the workspace ID that ChatGPT auth should be restricted to, if any.
-    fn forced_chatgpt_workspace_id(&self) -> Option<String>;
+    /// Returns the workspace IDs that ChatGPT auth should be restricted to, if any.
+    fn forced_chatgpt_workspace_id(&self) -> Option<ForcedChatgptWorkspaceIds>;
 }
 
 impl Debug for AuthManager {
@@ -1445,7 +1447,10 @@ impl AuthManager {
         }
     }
 
-    pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
+    pub fn set_forced_chatgpt_workspace_id(
+        &self,
+        workspace_id: Option<ForcedChatgptWorkspaceIds>,
+    ) {
         if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write()
             && *guard != workspace_id
         {
@@ -1454,7 +1459,7 @@ impl AuthManager {
         }
     }
 
-    pub fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+    pub fn forced_chatgpt_workspace_id(&self) -> Option<ForcedChatgptWorkspaceIds> {
         self.forced_chatgpt_workspace_id
             .read()
             .ok()
@@ -1698,12 +1703,13 @@ impl AuthManager {
                 "external auth refresh did not return ChatGPT metadata",
             )));
         };
-        if let Some(expected_workspace_id) = forced_chatgpt_workspace_id.as_deref()
-            && chatgpt_metadata.account_id != expected_workspace_id
+        if let Some(allowed_workspace_ids) = forced_chatgpt_workspace_id.as_ref()
+            && !allowed_workspace_ids.contains(&chatgpt_metadata.account_id)
         {
+            let allowed_description = allowed_workspace_ids.description();
             return Err(RefreshTokenError::Transient(std::io::Error::other(
                 format!(
-                    "external auth refresh returned workspace {:?}, expected {expected_workspace_id:?}",
+                    "external auth refresh returned workspace {:?}, expected {allowed_description}",
                     chatgpt_metadata.account_id,
                 ),
             )));
