@@ -3,7 +3,6 @@ use crate::plugins::PluginId;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
 use crate::plugins::add_marketplace;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
