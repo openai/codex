@@ -2567,29 +2567,15 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (
-            session_configuration,
-            sandbox_policy_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-        ) = {
+        let (session_configuration, previous_cwd, codex_home, session_source) = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let previous_cwd = state.session_configuration.cwd.clone();
-                    let sandbox_policy_changed =
-                        state.session_configuration.sandbox_policy != next.sandbox_policy;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
-                    (
-                        next,
-                        sandbox_policy_changed,
-                        previous_cwd,
-                        codex_home,
-                        session_source,
-                    )
+                    (next, previous_cwd, codex_home, session_source)
                 }
                 Err(err) => {
                     drop(state);
@@ -2618,7 +2604,6 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
-                sandbox_policy_changed,
             )
             .await)
     }
@@ -2628,7 +2613,6 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         {
@@ -2636,27 +2620,6 @@ impl Session {
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
             mcp_connection_manager
                 .set_sandbox_policy(per_turn_config.permissions.sandbox_policy.get());
-        }
-
-        if sandbox_policy_changed {
-            self.refresh_managed_network_proxy_for_current_sandbox_policy()
-                .await;
-            let sandbox_state = SandboxState {
-                sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
-                codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-                sandbox_cwd: per_turn_config.cwd.to_path_buf(),
-                use_legacy_landlock: per_turn_config.features.use_legacy_landlock(),
-            };
-            if let Err(e) = self
-                .services
-                .mcp_connection_manager
-                .read()
-                .await
-                .notify_sandbox_state_change(&sandbox_state)
-                .await
-            {
-                warn!("Failed to notify sandbox state change to MCP servers: {e:#}");
-            }
         }
 
         let model_info = self
@@ -2807,7 +2770,6 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            /*sandbox_policy_changed*/ false,
         )
         .await
     }
