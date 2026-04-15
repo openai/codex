@@ -39,7 +39,9 @@ async fn memory_reset_clears_memory_files_and_state_db_rows() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp.send_raw_request("memory/reset", None).await?;
+    let request_id = mcp
+        .send_raw_request("memory/reset", /*params*/ None)
+        .await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
