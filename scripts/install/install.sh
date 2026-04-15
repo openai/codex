@@ -12,6 +12,7 @@ RELEASES_DIR="$STANDALONE_ROOT/releases"
 CURRENT_LINK="$STANDALONE_ROOT/current"
 LOCK_FILE="$STANDALONE_ROOT/install.lock"
 LOCK_DIR="$STANDALONE_ROOT/install.lock.d"
+LOCK_STALE_AFTER_SECS=600
 
 path_action="already"
 path_profile=""
@@ -333,8 +334,40 @@ rewrite_path_block() {
   mv "$tmp_profile" "$profile"
 }
 
+mkdir_lock_is_stale() {
+  [ -d "$LOCK_DIR" ] || return 1
+
+  pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  started_at="$(cat "$LOCK_DIR/started_at" 2>/dev/null || true)"
+  now="$(date +%s 2>/dev/null || printf '0')"
+
+  case "$started_at" in
+    ''|*[!0-9]*)
+      started_at=0
+      ;;
+  esac
+
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+
+  if [ "$started_at" -eq 0 ] || [ "$now" -eq 0 ]; then
+    return 0
+  fi
+
+  [ $((now - started_at)) -ge "$LOCK_STALE_AFTER_SECS" ]
+}
+
 acquire_install_lock() {
   mkdir -p "$STANDALONE_ROOT"
+
+  if [ "$os" = "darwin" ] && command -v lockf >/dev/null 2>&1; then
+    : >>"$LOCK_FILE"
+    exec 9<>"$LOCK_FILE"
+    lockf 9
+    lock_kind="lockf"
+    return
+  fi
 
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCK_FILE"
@@ -344,16 +377,24 @@ acquire_install_lock() {
   fi
 
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    if mkdir_lock_is_stale; then
+      warn "Removing stale installer lock at $LOCK_DIR"
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
     sleep 1
   done
+
+  printf '%s\n' "$$" >"$LOCK_DIR/pid"
+  date +%s >"$LOCK_DIR/started_at" 2>/dev/null || true
   lock_kind="mkdir"
 }
 
 release_install_lock() {
   if [ "$lock_kind" = "mkdir" ]; then
-    rmdir "$LOCK_DIR" 2>/dev/null || true
-  elif [ "$lock_kind" = "flock" ]; then
-    flock -u 9 2>/dev/null || true
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+  elif [ "$lock_kind" = "flock" ] || [ "$lock_kind" = "lockf" ]; then
+    exec 9>&- 2>/dev/null || true
   fi
   lock_kind=""
 }
