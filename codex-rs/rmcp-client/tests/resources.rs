@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
-use codex_rmcp_client::LocalStdioTransportRuntime;
+use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_utils_cargo_bin::CargoBinError;
 use futures::FutureExt as _;
@@ -63,7 +63,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
         /*env*/ None,
         &[],
         /*cwd*/ None,
-        Arc::new(LocalStdioTransportRuntime),
+        Arc::new(LocalStdioServerLauncher),
     )
     .await?;
 
