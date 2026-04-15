@@ -187,6 +187,9 @@ def codex_rust_crate(
         # `codex-rs` checkout.
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
+        # Bazel's Rust test runner can use a smaller default thread stack than
+        # Cargo on macOS. Keep recursive async-heavy tests below the stack limit.
+        "RUST_MIN_STACK": "8388608",
     }
 
     native.filegroup(
