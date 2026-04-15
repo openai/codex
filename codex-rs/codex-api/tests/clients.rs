@@ -112,14 +112,12 @@ impl StaticAuth {
 impl AuthProvider for StaticAuth {
     fn add_auth_headers(&self, headers: &mut HeaderMap) {
         let token = &self.token;
-        headers.insert(
-            http::header::AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}")).expect("valid authorization header"),
-        );
-        headers.insert(
-            "ChatGPT-Account-ID",
-            HeaderValue::from_str(&self.account_id).expect("valid account header"),
-        );
+        if let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}")) {
+            headers.insert(http::header::AUTHORIZATION, header);
+        }
+        if let Ok(header) = HeaderValue::from_str(&self.account_id) {
+            headers.insert("ChatGPT-Account-ID", header);
+        }
     }
 }
 
