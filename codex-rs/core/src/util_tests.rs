@@ -3,10 +3,7 @@ use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::AuthEnvTelemetry;
-use codex_protocol::protocol::FileChange;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::Event;
@@ -472,58 +469,4 @@ fn resume_command_quotes_thread_name_when_needed() {
 
     let command = resume_command(Some("quote'case"), /*thread_id*/ None);
     assert_eq!(command, Some("codex resume \"quote'case\"".to_string()));
-}
-
-#[test]
-fn does_not_stream_json_tool_call_arguments() {
-    let mut stream = ApplyPatchInputStream::default();
-    assert!(
-        stream
-            .push_delta("call-1".to_string(), r#"{"input":"*** Begin Patch\n"#)
-            .is_none()
-    );
-    assert!(
-        stream
-            .push_delta(
-                "call-1".to_string(),
-                r#"*** Add File: hello.txt\n+hello\n*** End Patch\n"}"#
-            )
-            .is_none()
-    );
-}
-
-#[test]
-fn streams_apply_patch_changes() {
-    let mut stream = ApplyPatchInputStream::default();
-    assert!(
-        stream
-            .push_delta("call-1".to_string(), "*** Begin Patch\n")
-            .is_none()
-    );
-
-    let event = stream
-        .push_delta("call-1".to_string(), "*** Add File: hello.txt\n+hello")
-        .expect("progress event");
-    let expected_changes = HashMap::from([(
-        PathBuf::from("hello.txt"),
-        FileChange::Add {
-            content: "hello\n".to_string(),
-        },
-    )]);
-    assert_eq!(event.call_id, "call-1");
-    assert_eq!(event.active_path, Some(PathBuf::from("hello.txt")));
-    assert_eq!(event.changes, expected_changes);
-
-    let event = stream
-        .push_delta("call-1".to_string(), "\n+world")
-        .expect("progress event");
-    let expected_changes = HashMap::from([(
-        PathBuf::from("hello.txt"),
-        FileChange::Add {
-            content: "hello\nworld\n".to_string(),
-        },
-    )]);
-    assert_eq!(event.call_id, "call-1");
-    assert_eq!(event.active_path, Some(PathBuf::from("hello.txt")));
-    assert_eq!(event.changes, expected_changes);
 }

@@ -2,11 +2,76 @@ use super::*;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use tempfile::TempDir;
+
+#[test]
+fn diff_consumer_does_not_stream_json_tool_call_arguments() {
+    let mut consumer = ApplyPatchArgumentDiffConsumer::default();
+    assert!(
+        consumer
+            .push_delta("call-1".to_string(), r#"{"input":"*** Begin Patch\n"#)
+            .is_none()
+    );
+    assert!(
+        consumer
+            .push_delta(
+                "call-1".to_string(),
+                r#"*** Add File: hello.txt\n+hello\n*** End Patch\n"}"#
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn diff_consumer_streams_apply_patch_changes() {
+    let mut consumer = ApplyPatchArgumentDiffConsumer::default();
+    assert!(
+        consumer
+            .push_delta("call-1".to_string(), "*** Begin Patch\n")
+            .is_none()
+    );
+
+    let event = consumer
+        .push_delta("call-1".to_string(), "*** Add File: hello.txt\n+hello")
+        .expect("progress event");
+    assert_eq!(
+        (event.call_id, event.active_path, event.changes),
+        (
+            "call-1".to_string(),
+            Some(PathBuf::from("hello.txt")),
+            HashMap::from([(
+                PathBuf::from("hello.txt"),
+                FileChange::Add {
+                    content: "hello\n".to_string(),
+                },
+            )]),
+        )
+    );
+
+    let event = consumer
+        .push_delta("call-1".to_string(), "\n+world")
+        .expect("progress event");
+    assert_eq!(
+        (event.call_id, event.active_path, event.changes),
+        (
+            "call-1".to_string(),
+            Some(PathBuf::from("hello.txt")),
+            HashMap::from([(
+                PathBuf::from("hello.txt"),
+                FileChange::Add {
+                    content: "hello\nworld\n".to_string(),
+                },
+            )]),
+        )
+    );
+}
 
 #[tokio::test]
 async fn approval_keys_include_move_destination() {

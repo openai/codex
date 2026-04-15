@@ -1,4 +1,8 @@
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
@@ -22,27 +26,30 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
-use crate::util::ApplyPatchInputStream;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchArgs;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_apply_patch::Hunk;
+use codex_apply_patch::parse_patch_streaming;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::PatchApplyDeltaEvent;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ApplyPatchToolArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::collections::BTreeSet;
-use std::sync::Arc;
 
 pub struct ApplyPatchHandler;
 
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
-    input_stream: ApplyPatchInputStream,
+    input: String,
+    last_progress: Option<Vec<Hunk>>,
 }
 
 impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
@@ -56,10 +63,96 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
             return None;
         }
 
-        self.input_stream
-            .push_delta(call_id, diff)
+        self.push_delta(call_id, diff)
             .map(EventMsg::PatchApplyDelta)
     }
+}
+
+impl ApplyPatchArgumentDiffConsumer {
+    fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyDeltaEvent> {
+        self.input.push_str(delta);
+
+        let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&self.input).ok()?;
+        if hunks.is_empty() {
+            return None;
+        }
+        if self.last_progress.as_ref() == Some(&hunks) {
+            return None;
+        }
+
+        let active_path = hunks.last().map(Hunk::path).map(Path::to_path_buf);
+        let changes = convert_apply_patch_hunks_to_protocol(&hunks);
+        self.last_progress = Some(hunks);
+        Some(PatchApplyDeltaEvent {
+            call_id,
+            changes,
+            active_path,
+        })
+    }
+}
+
+fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, FileChange> {
+    hunks
+        .iter()
+        .map(|hunk| {
+            let path = hunk_source_path(hunk).to_path_buf();
+            let change = match hunk {
+                Hunk::AddFile { contents, .. } => FileChange::Add {
+                    content: contents.clone(),
+                },
+                Hunk::DeleteFile { .. } => FileChange::Delete {
+                    content: String::new(),
+                },
+                Hunk::UpdateFile {
+                    chunks, move_path, ..
+                } => FileChange::Update {
+                    unified_diff: format_update_chunks_for_progress(chunks),
+                    move_path: move_path.clone(),
+                },
+            };
+            (path, change)
+        })
+        .collect()
+}
+
+fn hunk_source_path(hunk: &Hunk) -> &Path {
+    match hunk {
+        Hunk::AddFile { path, .. } | Hunk::DeleteFile { path } | Hunk::UpdateFile { path, .. } => {
+            path
+        }
+    }
+}
+
+fn format_update_chunks_for_progress(chunks: &[codex_apply_patch::UpdateFileChunk]) -> String {
+    let mut unified_diff = String::new();
+    for chunk in chunks {
+        match &chunk.change_context {
+            Some(context) => {
+                unified_diff.push_str("@@ ");
+                unified_diff.push_str(context);
+                unified_diff.push('\n');
+            }
+            None => {
+                unified_diff.push_str("@@");
+                unified_diff.push('\n');
+            }
+        }
+        for line in &chunk.old_lines {
+            unified_diff.push('-');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        for line in &chunk.new_lines {
+            unified_diff.push('+');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        if chunk.is_end_of_file {
+            unified_diff.push_str("*** End of File");
+            unified_diff.push('\n');
+        }
+    }
+    unified_diff
 }
 
 fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
