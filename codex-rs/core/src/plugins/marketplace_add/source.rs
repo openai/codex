@@ -124,9 +124,9 @@ fn normalize_git_url(url: &str) -> String {
 }
 
 fn looks_like_local_path(source: &str) -> bool {
-    source.starts_with("./")
+    Path::new(source).is_absolute()
+        || source.starts_with("./")
         || source.starts_with("../")
-        || source.starts_with('/')
         || source.starts_with("~/")
         || source == "."
         || source == ".."

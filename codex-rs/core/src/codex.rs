@@ -91,6 +91,7 @@ use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
+use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -4454,16 +4455,12 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn resolve_mcp_tool_info(
-        &self,
-        name: &str,
-        namespace: Option<&str>,
-    ) -> Option<ToolInfo> {
+    pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .resolve_tool_info(name, namespace)
+            .resolve_tool_info(tool_name)
             .await
     }
 
