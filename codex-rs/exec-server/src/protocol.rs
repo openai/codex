@@ -199,6 +199,7 @@ pub struct FsGetMetadataParams {
 pub struct FsGetMetadataResponse {
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }

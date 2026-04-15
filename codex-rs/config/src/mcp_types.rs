@@ -69,6 +69,10 @@ pub struct McpServerConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
 
+    /// When `true`, every tool from this server is advertised as safe for parallel tool calls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supports_parallel_tool_calls: bool,
+
     /// Reason this server was disabled after applying requirements.
     #[serde(skip)]
     pub disabled_reason: Option<McpServerDisabledReason>,
@@ -146,6 +150,8 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub required: Option<bool>,
     #[serde(default)]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_tools: Option<Vec<String>>,
@@ -180,6 +186,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             tool_timeout_sec,
             enabled,
             required,
+            supports_parallel_tool_calls,
             enabled_tools,
             disabled_tools,
             scopes,
@@ -243,6 +250,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             tool_timeout_sec,
             enabled: enabled.unwrap_or_else(default_enabled),
             required: required.unwrap_or_default(),
+            supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
             disabled_reason: None,
             enabled_tools,
             disabled_tools,

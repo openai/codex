@@ -1,19 +1,21 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
+use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::build_skill_name_counts;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
+use codex_exec_server::LOCAL_FS;
 use codex_instructions::SkillInstructions;
 use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
-use tokio::fs;
 
 #[derive(Debug, Default)]
 pub struct SkillInjections {
@@ -23,6 +25,7 @@ pub struct SkillInjections {
 
 pub async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
+    loaded_skills: Option<&SkillLoadOutcome>,
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
@@ -38,7 +41,13 @@ pub async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        match fs::read_to_string(&skill.path_to_skills_md).await {
+        let fs = loaded_skills
+            .and_then(|outcome| outcome.file_system_for_skill(skill))
+            .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
+        match fs
+            .read_file_text(&skill.path_to_skills_md, /*sandbox*/ None)
+            .await
+        {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {

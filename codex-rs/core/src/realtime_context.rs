@@ -27,7 +27,7 @@ const CURRENT_THREAD_SECTION_TOKEN_BUDGET: usize = 1_200;
 const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
 const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
 const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
-const CURRENT_THREAD_TURN_TOKEN_BUDGET: usize = 300;
+pub(crate) const REALTIME_TURN_TOKEN_BUDGET: usize = 300;
 const MAX_RECENT_THREADS: usize = 40;
 const MAX_RECENT_WORK_GROUPS: usize = 8;
 const MAX_CURRENT_CWD_ASKS: usize = 8;
@@ -262,30 +262,9 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
             turn_lines.push(assistant_messages.join("\n\n"));
         }
 
-        let turn_budget = CURRENT_THREAD_TURN_TOKEN_BUDGET.min(remaining_budget);
+        let turn_budget = REALTIME_TURN_TOKEN_BUDGET.min(remaining_budget);
         let turn_text = turn_lines.join("\n");
-        let mut truncation_budget = turn_budget;
-        let turn_text = loop {
-            let candidate = truncate_text(&turn_text, TruncationPolicy::Tokens(truncation_budget));
-            let candidate_tokens = approx_token_count(&candidate);
-            if candidate_tokens <= turn_budget {
-                break candidate;
-            }
-
-            // The shared truncator adds its marker after choosing preserved
-            // content, so tighten the content budget until the rendered turn
-            // itself fits the per-turn cap.
-            let excess_tokens = candidate_tokens.saturating_sub(turn_budget);
-            let next_budget = truncation_budget.saturating_sub(excess_tokens.max(1));
-            if next_budget == 0 {
-                let candidate = truncate_text(&turn_text, TruncationPolicy::Tokens(0));
-                if approx_token_count(&candidate) <= turn_budget {
-                    break candidate;
-                }
-                break String::new();
-            }
-            truncation_budget = next_budget;
-        };
+        let turn_text = truncate_realtime_text_to_token_budget(&turn_text, turn_budget);
         let turn_tokens = approx_token_count(&turn_text);
         if turn_tokens == 0 {
             continue;
@@ -298,6 +277,31 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
     }
 
     (retained_turn_count > 0).then(|| lines.join("\n"))
+}
+
+pub(crate) fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: usize) -> String {
+    let mut truncation_budget = budget_tokens;
+    loop {
+        let candidate = truncate_text(text, TruncationPolicy::Tokens(truncation_budget));
+        let candidate_tokens = approx_token_count(&candidate);
+        if candidate_tokens <= budget_tokens {
+            break candidate;
+        }
+
+        // The shared truncator adds its marker after choosing preserved
+        // content, so tighten the content budget until the rendered turn
+        // itself fits the per-turn cap.
+        let excess_tokens = candidate_tokens.saturating_sub(budget_tokens);
+        let next_budget = truncation_budget.saturating_sub(excess_tokens.max(1));
+        if next_budget == 0 {
+            let candidate = truncate_text(text, TruncationPolicy::Tokens(0));
+            if approx_token_count(&candidate) <= budget_tokens {
+                break candidate;
+            }
+            break String::new();
+        }
+        truncation_budget = next_budget;
+    }
 }
 
 fn build_workspace_section_with_user_root(

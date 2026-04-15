@@ -81,11 +81,6 @@ impl RowBuilder {
         self.flush_current_line(/*explicit_break*/ true);
     }
 
-    /// Drain and return all produced rows.
-    pub fn drain_rows(&mut self) -> Vec<Row> {
-        std::mem::take(&mut self.rows)
-    }
-
     /// Return a snapshot of produced rows (non-draining).
     pub fn rows(&self) -> &[Row] {
         &self.rows

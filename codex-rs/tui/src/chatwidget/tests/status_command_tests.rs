@@ -79,7 +79,7 @@ async fn status_command_renders_immediately_without_rate_limit_refresh() {
 #[tokio::test]
 async fn status_command_renders_instruction_sources_from_thread_session() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.instruction_source_paths = vec![chat.config.cwd.join("AGENTS.md").to_path_buf()];
+    chat.instruction_source_paths = vec![chat.config.cwd.join("AGENTS.md")];
 
     chat.dispatch_command(SlashCommand::Status);
 
