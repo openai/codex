@@ -693,8 +693,18 @@ try {
         $visibleParent = Split-Path -Parent $visibleBinDir
         New-Item -ItemType Directory -Force -Path $visibleParent | Out-Null
         $oldStandaloneBackup = Move-OldStandaloneBinIfApproved -VisibleBinDir $visibleBinDir -DefaultVisibleBinDir $defaultVisibleBinDir
-        Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentDir -InstallerOwnedTargetPrefix $standaloneRoot
-        Test-VisibleCodexCommand -VisibleBinDir $visibleBinDir
+        try {
+            Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentDir -InstallerOwnedTargetPrefix $standaloneRoot
+            Test-VisibleCodexCommand -VisibleBinDir $visibleBinDir
+        } catch {
+            if ($null -ne $oldStandaloneBackup -and (Test-Path -LiteralPath $oldStandaloneBackup)) {
+                if (Test-Path -LiteralPath $visibleBinDir) {
+                    Remove-Item -LiteralPath $visibleBinDir -Recurse -Force
+                }
+                Move-Item -LiteralPath $oldStandaloneBackup -Destination $visibleBinDir
+            }
+            throw
+        }
         if ($null -ne $oldStandaloneBackup) {
             Remove-Item -LiteralPath $oldStandaloneBackup -Recurse -Force
         }
