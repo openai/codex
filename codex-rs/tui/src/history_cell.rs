@@ -4004,7 +4004,7 @@ mod tests {
             test_path_buf("/tmp/project").abs().to_path_buf(),
             "test",
         )
-        .with_yolo_mode(true);
+        .with_yolo_mode(/*yolo_mode*/ true);
 
         let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
         insta::assert_snapshot!(rendered);
