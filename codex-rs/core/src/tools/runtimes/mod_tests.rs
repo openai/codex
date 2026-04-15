@@ -326,6 +326,85 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
 }
 
 #[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_runtime_sandbox_env_from_env() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport CODEX_SANDBOX='snapshot-sandbox'\nexport CODEX_SANDBOX_NETWORK_DISABLED='snapshot-disabled'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s|%s' \"$CODEX_SANDBOX\" \"$CODEX_SANDBOX_NETWORK_DISABLED\"".to_string(),
+    ];
+    let env = HashMap::from([
+        ("CODEX_SANDBOX".to_string(), "seatbelt".to_string()),
+        (
+            "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
+            "1".to_string(),
+        ),
+    ]);
+    let rewritten =
+        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, &dir.path().abs(), &env, &env);
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env("CODEX_SANDBOX", "seatbelt")
+        .env("CODEX_SANDBOX_NETWORK_DISABLED", "1")
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "seatbelt|1");
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_clears_runtime_sandbox_env_when_unset() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport CODEX_SANDBOX='snapshot-sandbox'\nexport CODEX_SANDBOX_NETWORK_DISABLED='snapshot-disabled'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s|%s' \"${CODEX_SANDBOX-unset}\" \"${CODEX_SANDBOX_NETWORK_DISABLED-unset}\""
+            .to_string(),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env_remove("CODEX_SANDBOX")
+        .env_remove("CODEX_SANDBOX_NETWORK_DISABLED")
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "unset|unset");
+}
+
+#[test]
 fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");

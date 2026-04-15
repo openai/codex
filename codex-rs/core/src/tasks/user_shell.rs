@@ -14,6 +14,8 @@ use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
@@ -124,10 +126,14 @@ pub(crate) async fn execute_user_shell_command(
     let use_login_shell = true;
     let session_shell = session.user_shell();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
-    let exec_env_map = create_env(
+    let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
+    // User shell commands should start from the user's shell environment, not
+    // inherit Codex's own sandbox marker variables from the parent process.
+    exec_env_map.remove(CODEX_SANDBOX_ENV_VAR);
+    exec_env_map.remove(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
