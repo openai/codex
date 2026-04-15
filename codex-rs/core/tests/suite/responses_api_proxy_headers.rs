@@ -56,7 +56,7 @@ async fn responses_api_parent_and_subagent_requests_include_identity_headers() -
         |req: &wiremock::Request| {
             request_body_contains(req, CHILD_PROMPT)
                 && !request_body_contains(req, SPAWN_CALL_ID)
-                && request_header(req, "x-openai-subagent").as_deref() == Some("collab_spawn")
+                && request_header(req, "x-openai-subagent") == Some("collab_spawn")
         },
         sse(vec![
             ev_response_created("resp-child-1"),
