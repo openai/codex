@@ -1,8 +1,11 @@
+use super::build_current_thread_section;
 use super::build_recent_work_section;
 use super::build_workspace_section_with_user_root;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_state::ThreadMetadata;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -41,6 +44,120 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
         git_branch: Some("main".to_string()),
         git_origin_url: None,
     }
+}
+
+fn message(role: &str, content: ContentItem) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: role.to_string(),
+        content: vec![content],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn user_message(text: impl Into<String>) -> ResponseItem {
+    message("user", ContentItem::InputText { text: text.into() })
+}
+
+fn assistant_message(text: impl Into<String>) -> ResponseItem {
+    message("assistant", ContentItem::OutputText { text: text.into() })
+}
+
+fn long_turn_text(index: usize) -> String {
+    format!(
+        "turn-{index}-start {} turn-{index}-middle {} turn-{index}-end",
+        "head filler ".repeat(160),
+        "tail filler ".repeat(240),
+    )
+}
+
+#[test]
+fn current_thread_section_includes_short_turns_newest_first_until_budget() {
+    let items = vec![
+        user_message("user turn 1"),
+        assistant_message("assistant turn 1"),
+        user_message("user turn 2"),
+        assistant_message("assistant turn 2"),
+        user_message("user turn 3"),
+        assistant_message("assistant turn 3"),
+        user_message("user turn 4"),
+        assistant_message("assistant turn 4"),
+    ];
+
+    assert_eq!(
+        build_current_thread_section(&items),
+        Some(
+            r#"Most recent user/assistant turns from this exact thread. Use them for continuity when responding.
+
+### Latest turn
+User:
+user turn 4
+
+Assistant:
+assistant turn 4
+
+### Previous turn 1
+User:
+user turn 3
+
+Assistant:
+assistant turn 3
+
+### Previous turn 2
+User:
+user turn 2
+
+Assistant:
+assistant turn 2
+
+### Previous turn 3
+User:
+user turn 1
+
+Assistant:
+assistant turn 1"#
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn current_thread_turn_truncation_preserves_start_and_end() {
+    let items = vec![user_message(long_turn_text(/*index*/ 0))];
+    let section = build_current_thread_section(&items).expect("current thread section");
+
+    assert_eq!(
+        (
+            section.contains("turn-0-start"),
+            section.contains("turn-0-middle"),
+            section.contains("turn-0-end"),
+            section.contains("tokens truncated"),
+        ),
+        (true, false, true, true),
+    );
+}
+
+#[test]
+fn current_thread_section_keeps_latest_turns_when_history_exceeds_budget() {
+    let mut items = Vec::new();
+    for index in 1..=8 {
+        items.push(user_message(long_turn_text(index)));
+        items.push(assistant_message(format!("assistant turn {index}")));
+    }
+
+    let section = build_current_thread_section(&items).expect("current thread section");
+
+    assert_eq!(
+        (
+            section.contains("turn-8-start"),
+            section.contains("turn-8-end"),
+            section.contains("### Previous turn 2"),
+            section.contains("turn-1-start"),
+            section.contains("turn-1-end"),
+        ),
+        (true, true, true, false, false),
+    );
 }
 
 #[test]

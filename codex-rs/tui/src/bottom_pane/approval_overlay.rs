@@ -29,6 +29,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -66,7 +67,7 @@ pub(crate) enum ApprovalRequest {
         thread_label: Option<String>,
         id: String,
         reason: Option<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         changes: HashMap<PathBuf, FileChange>,
     },
     McpElicitation {
@@ -277,7 +278,9 @@ impl ApprovalOverlay {
         };
         let granted_permissions = match decision {
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
-            ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
+            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+                Default::default()
+            }
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
@@ -720,6 +723,7 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('d'))],
             }),
+            ReviewDecision::TimedOut => None,
             ReviewDecision::Abort => Some(ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),

@@ -32,6 +32,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -274,8 +275,15 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         .get("output")
         .and_then(Value::as_str)
         .expect("function_call_output output should be a JSON string");
+    let payload = assert_regex_match(
+        r#"(?s)^Wall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n(.*)$"#,
+        output,
+    )
+    .get(1)
+    .expect("wall-time wrapped output should include payload")
+    .as_str();
     assert_eq!(
-        serde_json::from_str::<Value>(output)?,
+        serde_json::from_str::<Value>(payload)?,
         json!([{
             "type": "text",
             "text": "accepted"

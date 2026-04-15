@@ -17,7 +17,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -101,7 +101,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -196,7 +196,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -261,7 +261,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -301,7 +301,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -341,7 +341,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -384,7 +384,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -398,8 +398,8 @@ async fn submission_prefers_selected_duplicate_skill_path() {
     });
     drain_insert_history(&mut rx);
 
-    let repo_skill_path = PathBuf::from("/tmp/repo/figma/SKILL.md");
-    let user_skill_path = PathBuf::from("/tmp/user/figma/SKILL.md");
+    let repo_skill_path = test_path_buf("/tmp/repo/figma/SKILL.md").abs();
+    let user_skill_path = test_path_buf("/tmp/user/figma/SKILL.md").abs();
     chat.set_skills(Some(vec![
         SkillMetadata {
             name: "figma".to_string(),
@@ -445,7 +445,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(selected_skill_paths, vec![user_skill_path]);
+    assert_eq!(selected_skill_paths, vec![user_skill_path.to_path_buf()]);
 }
 
 #[tokio::test]

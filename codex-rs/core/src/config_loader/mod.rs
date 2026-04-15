@@ -877,8 +877,9 @@ async fn load_project_layers(
 /// exactly one value rather than a list of allowed values.
 ///
 /// If present, re-interpret `managed_config.toml` as a `requirements.toml`
-/// where each specified field is treated as a constraint allowing only that
-/// value.
+/// where each specified field is treated as a constraint. Most fields allow
+/// only the specified value. `approvals_reviewer = "guardian_subagent"` also
+/// allows `user` so people can opt out of the guardian reviewer.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
@@ -899,7 +900,11 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
         }
         if let Some(approvals_reviewer) = approvals_reviewer {
-            config_requirements_toml.allowed_approvals_reviewers = Some(vec![approvals_reviewer]);
+            let mut allowed_reviewers = vec![approvals_reviewer];
+            if approvals_reviewer == ApprovalsReviewer::GuardianSubagent {
+                allowed_reviewers.push(ApprovalsReviewer::User);
+            }
+            config_requirements_toml.allowed_approvals_reviewers = Some(allowed_reviewers);
         }
         if let Some(sandbox_mode) = sandbox_mode {
             let required_mode: SandboxModeRequirement = sandbox_mode.into();
@@ -980,7 +985,7 @@ foo = "xyzzy"
     }
 
     #[test]
-    fn legacy_managed_config_backfill_includes_approvals_reviewer() {
+    fn legacy_managed_config_backfill_allows_user_when_guardian_is_required() {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
@@ -991,7 +996,26 @@ foo = "xyzzy"
 
         assert_eq!(
             requirements.allowed_approvals_reviewers,
-            Some(vec![ApprovalsReviewer::GuardianSubagent])
+            Some(vec![
+                ApprovalsReviewer::GuardianSubagent,
+                ApprovalsReviewer::User
+            ])
+        );
+    }
+
+    #[test]
+    fn legacy_managed_config_backfill_preserves_user_only_approvals_reviewer() {
+        let legacy = LegacyManagedConfigToml {
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            sandbox_mode: None,
+        };
+
+        let requirements = ConfigRequirementsToml::from(legacy);
+
+        assert_eq!(
+            requirements.allowed_approvals_reviewers,
+            Some(vec![ApprovalsReviewer::User])
         );
     }
 

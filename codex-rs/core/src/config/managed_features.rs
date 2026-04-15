@@ -202,9 +202,9 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     let mut explicit_settings = Vec::new();
 
     if let Some(features) = cfg.features.as_ref() {
-        for (key, enabled) in &features.entries {
-            if let Some(feature) = feature_for_key(key) {
-                explicit_settings.push((format!("features.{key}"), feature, *enabled));
+        for (key, enabled) in features.entries() {
+            if let Some(feature) = feature_for_key(&key) {
+                explicit_settings.push((format!("features.{key}"), feature, enabled));
             }
         }
     }
@@ -224,12 +224,12 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     }
     for (profile_name, profile) in &cfg.profiles {
         if let Some(features) = profile.features.as_ref() {
-            for (key, enabled) in &features.entries {
-                if let Some(feature) = feature_for_key(key) {
+            for (key, enabled) in features.entries() {
+                if let Some(feature) = feature_for_key(&key) {
                     explicit_settings.push((
                         format!("profiles.{profile_name}.features.{key}"),
                         feature,
-                        *enabled,
+                        enabled,
                     ));
                 }
             }

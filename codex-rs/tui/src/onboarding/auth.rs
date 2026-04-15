@@ -954,6 +954,7 @@ pub(super) fn maybe_open_auth_url_in_browser(request_handle: &AppServerRequestHa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::legacy_core::config::ConfigBuilder;
     use codex_app_server_client::AppServerRequestHandle;
     use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
     use codex_app_server_client::InProcessAppServerClient;
@@ -961,7 +962,6 @@ mod tests {
     use codex_arg0::Arg0DispatchPaths;
     use codex_cloud_requirements::cloud_requirements_loader_for_storage;
     use codex_config::types::AuthCredentialsStoreMode;
-    use codex_core::config::ConfigBuilder;
 
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
@@ -988,6 +988,9 @@ mod tests {
                 "https://chatgpt.com/backend-api/".to_string(),
             ),
             feedback: codex_feedback::CodexFeedback::new(),
+            environment_manager: Arc::new(codex_app_server_client::EnvironmentManager::new(
+                /*exec_server_url*/ None,
+            )),
             config_warnings: Vec::new(),
             session_source: SessionSource::Cli,
             enable_codex_api_key_env: false,

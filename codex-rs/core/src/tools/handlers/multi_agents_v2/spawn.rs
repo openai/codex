@@ -5,7 +5,6 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
-use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -71,17 +70,25 @@ impl ToolHandler for Handler {
             .await;
         let mut config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-        apply_requested_spawn_agent_model_overrides(
-            &session,
-            turn.as_ref(),
-            &mut config,
-            args.model.as_deref(),
-            args.reasoning_effort,
-        )
-        .await?;
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        if matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory)) {
+            reject_full_fork_spawn_overrides(
+                role_name,
+                args.model.as_deref(),
+                args.reasoning_effort,
+            )?;
+        } else {
+            apply_requested_spawn_agent_model_overrides(
+                &session,
+                turn.as_ref(),
+                &mut config,
+                args.model.as_deref(),
+                args.reasoning_effort,
+            )
+            .await?;
+            apply_role_to_config(&mut config, role_name)
+                .await
+                .map_err(FunctionCallError::RespondToModel)?;
+        }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
         config.developer_instructions = Some(
@@ -207,10 +214,7 @@ impl ToolHandler for Handler {
             )
         })?;
 
-        let hide_agent_metadata = turn
-            .config
-            .features
-            .enabled(Feature::DebugHideSpawnAgentMetadata);
+        let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
         if hide_agent_metadata {
             Ok(SpawnAgentResult::HiddenMetadata { task_name })
         } else {

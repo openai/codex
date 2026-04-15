@@ -51,8 +51,9 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .into_iter()
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
+    let extra_root = test_path_buf("/tmp/extra").abs();
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![PathBuf::from("C:\\extra").abs()],
+        writable_roots: vec![extra_root],
         read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
@@ -462,7 +463,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-            cwd: test_project_path(),
+            cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -496,7 +497,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         .features
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true);
 
-    let extra_root = PathBuf::from("/tmp/guardian-approvals-extra").abs();
+    let extra_root = test_path_buf("/tmp/guardian-approvals-extra").abs();
 
     chat.handle_codex_event(Event {
         id: "session-configured-custom-workspace".to_string(),
@@ -516,7 +517,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },
-            cwd: test_project_path(),
+            cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,

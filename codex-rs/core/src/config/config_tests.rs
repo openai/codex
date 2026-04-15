@@ -12,6 +12,7 @@ use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
+use codex_config::config_toml::RealtimeTransport;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_config::config_toml::ToolsToml;
@@ -33,12 +34,14 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
+use codex_config::types::TuiNotificationSettings;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -52,6 +55,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::RealtimeVoice;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -79,6 +83,7 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
         },
         enabled: true,
         required: false,
+        supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -100,6 +105,7 @@ fn http_mcp(url: &str) -> McpServerConfig {
         },
         enabled: true,
         required: false,
+        supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -121,10 +127,60 @@ fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
             cwd: Some(PathBuf::from("nested")),
             ..Default::default()
         },
-        codex_home.abs().into_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(config.cwd, expected_cwd);
+    Ok(())
+}
+
+#[test]
+fn load_config_records_global_agents_path() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+    std::fs::write(&global_agents_path, "\n  global instructions  \n")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )?;
+
+    assert_eq!(
+        config.user_instructions.as_deref(),
+        Some("global instructions")
+    );
+    assert_eq!(
+        config.user_instructions_path.as_deref(),
+        Some(global_agents_path.as_path())
+    );
+    Ok(())
+}
+
+#[test]
+fn load_config_records_preferred_global_agents_override_path() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    std::fs::write(
+        codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME),
+        "global instructions",
+    )?;
+    let global_agents_override_path = codex_home.path().join(LOCAL_PROJECT_DOC_FILENAME);
+    std::fs::write(&global_agents_override_path, "local override instructions")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )?;
+
+    assert_eq!(
+        config.user_instructions.as_deref(),
+        Some("local override instructions")
+    );
+    assert_eq!(
+        config.user_instructions_path.as_deref(),
+        Some(global_agents_override_path.as_path())
+    );
     Ok(())
 }
 
@@ -193,7 +249,7 @@ consolidation_model = "gpt-5"
     let config = Config::load_from_base_config_with_overrides(
         memories_cfg,
         ConfigOverrides::default(),
-        tempdir().expect("tempdir").path().to_path_buf(),
+        tempdir().expect("tempdir").abs(),
     )
     .expect("load config from memories settings");
     assert_eq!(
@@ -303,8 +359,7 @@ fn config_toml_deserializes_model_availability_nux() {
     assert_eq!(
         cfg.tui.expect("tui config should deserialize"),
         Tui {
-            notifications: Notifications::default(),
-            notification_method: NotificationMethod::default(),
+            notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
             alternate_screen: AltScreenMode::default(),
@@ -326,7 +381,7 @@ fn runtime_config_defaults_model_availability_nux() {
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        tempdir().expect("tempdir").path().to_path_buf(),
+        tempdir().expect("tempdir").abs(),
     )
     .expect("load config");
 
@@ -441,7 +496,7 @@ fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::i
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
     let network = config
         .permissions
@@ -491,7 +546,7 @@ fn permissions_profiles_network_disabled_by_default_does_not_start_proxy() -> st
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert!(config.permissions.network.is_none());
@@ -539,7 +594,7 @@ fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::io::Re
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     let memories_root = codex_home.path().join("memories").abs();
@@ -620,7 +675,7 @@ fn permissions_profiles_require_default_permissions() -> std::io::Result<()> {
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )
     .expect_err("missing default_permissions should be rejected");
 
@@ -662,7 +717,7 @@ fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Resul
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )
     .expect_err("writes outside the workspace root should be rejected");
 
@@ -707,7 +762,7 @@ fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> std::io
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )
     .expect_err("nested entries outside :project_roots should be rejected");
 
@@ -736,7 +791,7 @@ fn load_workspace_permission_profile(profile: PermissionProfileToml) -> std::io:
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )
 }
 
@@ -904,7 +959,7 @@ fn permissions_profiles_reject_project_root_parent_traversal() -> std::io::Resul
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )
     .expect_err("parent traversal should be rejected for project root subpaths");
 
@@ -948,7 +1003,7 @@ fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> {
             cwd: Some(cwd.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert!(
@@ -1000,8 +1055,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
     assert_eq!(
         tui,
         Tui {
-            notifications: Notifications::Enabled(true),
-            notification_method: NotificationMethod::Auto,
+            notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
             alternate_screen: AltScreenMode::Auto,
@@ -1177,7 +1231,7 @@ exclude_slash_tmp = true
                 cwd: Some(cwd.path().to_path_buf()),
                 ..Default::default()
             },
-            codex_home.path().to_path_buf(),
+            codex_home.abs(),
         )?;
 
         let sandbox_policy = config.permissions.sandbox_policy.get();
@@ -1357,7 +1411,7 @@ fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         overrides,
-        temp_dir.path().to_path_buf(),
+        temp_dir.path().abs(),
     )?;
 
     let expected_backend = backend.abs();
@@ -1395,7 +1449,7 @@ fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<(
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
@@ -1419,7 +1473,7 @@ fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     if cfg!(target_os = "windows") {
@@ -1461,7 +1515,7 @@ fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -1473,7 +1527,7 @@ fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
 }
 
 #[test]
-fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
+fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
         cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
@@ -1483,34 +1537,91 @@ fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
         config.cli_auth_credentials_store_mode,
-        AuthCredentialsStoreMode::Keyring,
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Keyring,
+            env!("CARGO_PKG_VERSION"),
+        ),
     );
 
     Ok(())
 }
 
 #[test]
-fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
+fn config_resolves_default_oauth_store_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml::default();
 
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
         config.mcp_oauth_credentials_store_mode,
-        OAuthCredentialsStoreMode::Auto,
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Auto,
+            env!("CARGO_PKG_VERSION"),
+        ),
     );
 
     Ok(())
+}
+
+#[test]
+fn local_dev_builds_force_file_cli_auth_store_modes() {
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Keyring,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        AuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Auto,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        AuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Ephemeral,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        AuthCredentialsStoreMode::Ephemeral,
+    );
+    assert_eq!(
+        resolve_cli_auth_credentials_store_mode(AuthCredentialsStoreMode::Keyring, "1.2.3"),
+        AuthCredentialsStoreMode::Keyring,
+    );
+}
+
+#[test]
+fn local_dev_builds_force_file_mcp_oauth_store_modes() {
+    assert_eq!(
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Keyring,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        OAuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Auto,
+            LOCAL_DEV_BUILD_VERSION,
+        ),
+        OAuthCredentialsStoreMode::File,
+    );
+    assert_eq!(
+        resolve_mcp_oauth_credentials_store_mode(OAuthCredentialsStoreMode::Keyring, "1.2.3"),
+        OAuthCredentialsStoreMode::Keyring,
+    );
 }
 
 #[test]
@@ -1524,7 +1635,7 @@ fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(config.feedback_enabled, true);
@@ -1686,7 +1797,7 @@ fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert!(matches!(
@@ -1719,11 +1830,7 @@ fn cli_override_takes_precedence_over_profile_sandbox_mode() -> std::io::Result<
         ..Default::default()
     };
 
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        overrides,
-        codex_home.path().to_path_buf(),
-    )?;
+    let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home.abs())?;
 
     if cfg!(target_os = "windows") {
         assert!(matches!(
@@ -1746,14 +1853,14 @@ fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
     let mut entries = BTreeMap::new();
     entries.insert("apply_patch_freeform".to_string(), false);
     let cfg = ConfigToml {
-        features: Some(FeaturesToml { entries }),
+        features: Some(FeaturesToml::from(entries)),
         ..Default::default()
     };
 
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
@@ -1774,7 +1881,7 @@ fn legacy_toggles_map_to_features() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert!(config.features.enabled(Feature::ApplyPatchFreeform));
@@ -1794,14 +1901,14 @@ fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> 
         let mut entries = BTreeMap::new();
         entries.insert(feature_key.to_string(), true);
         let cfg = ConfigToml {
-            features: Some(FeaturesToml { entries }),
+            features: Some(FeaturesToml::from(entries)),
             ..Default::default()
         };
 
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            codex_home.abs(),
         )?;
 
         assert_eq!(config.model_provider.wire_api, WireApi::Responses);
@@ -1821,7 +1928,7 @@ fn config_honors_explicit_file_oauth_store_mode() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -1866,11 +1973,14 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
     let final_config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
     assert_eq!(
         final_config.mcp_oauth_credentials_store_mode,
-        OAuthCredentialsStoreMode::Keyring,
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Keyring,
+            env!("CARGO_PKG_VERSION"),
+        ),
     );
 
     Ok(())
@@ -1903,6 +2013,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(3)),
             tool_timeout_sec: Some(Duration::from_secs(5)),
@@ -2081,25 +2192,25 @@ approval_mode = "approve"
     );
 }
 
-#[test]
-fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
+#[tokio::test]
+async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
-    let mcp_config = config.to_mcp_config(&plugins_manager);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
 
     let _ = config.features.disable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(!mcp_config.apps_enabled);
 
     let _ = config.features.enable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
 
     Ok(())
@@ -2149,6 +2260,7 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2222,6 +2334,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2275,6 +2388,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2326,6 +2440,7 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -2393,6 +2508,7 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -2472,6 +2588,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -2504,6 +2621,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2571,6 +2689,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
@@ -2593,6 +2712,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 },
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -2678,6 +2798,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
             },
             enabled: false,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2725,6 +2846,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
             },
             enabled: true,
             required: true,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2772,6 +2894,7 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2823,6 +2946,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -3005,14 +3129,14 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&true),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(true),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         None,
     );
 
@@ -3047,14 +3171,14 @@ async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&false),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(false),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         None,
     );
 
@@ -3087,15 +3211,15 @@ async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&true),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(true),
     );
     assert_eq!(
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("guardian_approval")),
-        Some(&false),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
+        Some(false),
     );
 
     Ok(())
@@ -3119,8 +3243,8 @@ impl PrecedenceTestFixture {
         self.cwd.path().to_path_buf()
     }
 
-    fn codex_home(&self) -> PathBuf {
-        self.codex_home.path().to_path_buf()
+    fn codex_home(&self) -> AbsolutePathBuf {
+        self.codex_home.abs()
     }
 }
 
@@ -3135,7 +3259,7 @@ fn cli_override_sets_compact_prompt() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         overrides,
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -3165,11 +3289,7 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
         ..Default::default()
     };
 
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        overrides,
-        codex_home.path().to_path_buf(),
-    )?;
+    let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home.abs())?;
 
     assert_eq!(
         config.compact_prompt.as_deref(),
@@ -3180,13 +3300,13 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[test]
-fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+fn load_config_uses_requirements_guardian_policy_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
         crate::config_loader::ConfigRequirementsToml {
-            guardian_developer_instructions: Some(
+            guardian_policy_config: Some(
                 "  Use the workspace-managed guardian policy.  ".to_string(),
             ),
             ..Default::default()
@@ -3200,12 +3320,12 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
             cwd: Some(codex_home.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
         config_layer_stack,
     )?;
 
     assert_eq!(
-        config.guardian_developer_instructions.as_deref(),
+        config.guardian_policy_config.as_deref(),
         Some("Use the workspace-managed guardian policy.")
     );
 
@@ -3213,13 +3333,13 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
 }
 
 #[test]
-fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+fn load_config_ignores_empty_requirements_guardian_policy_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
         crate::config_loader::ConfigRequirementsToml {
-            guardian_developer_instructions: Some("   ".to_string()),
+            guardian_policy_config: Some("   ".to_string()),
             ..Default::default()
         },
     )
@@ -3231,11 +3351,11 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
             cwd: Some(codex_home.path().to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
         config_layer_stack,
     )?;
 
-    assert_eq!(config.guardian_developer_instructions, None);
+    assert_eq!(config.guardian_policy_config, None);
 
     Ok(())
 }
@@ -3264,7 +3384,7 @@ fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
     let result = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     );
     let err = result.expect_err("missing role config file should be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -4132,7 +4252,7 @@ fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Result<()
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -4170,7 +4290,7 @@ fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::Result
     let result = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     );
     let err = result.expect_err("empty nickname candidates should be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -4205,7 +4325,7 @@ fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::io::Re
     let result = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     );
     let err = result.expect_err("duplicate nickname candidates should be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -4240,7 +4360,7 @@ fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io::Resul
     let result = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     );
     let err = result.expect_err("unsafe nickname candidates should be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -4271,7 +4391,7 @@ fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(config.model_catalog, Some(catalog));
@@ -4292,7 +4412,7 @@ fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
     let err = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )
     .expect_err("empty custom catalog should fail config load");
 
@@ -4457,11 +4577,15 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
+            user_instructions_path: None,
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
-            mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+                Default::default(),
+                LOCAL_DEV_BUILD_VERSION,
+            ),
             mcp_oauth_callback_port: None,
             mcp_oauth_callback_url: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4474,8 +4598,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
-            sqlite_home: fixture.codex_home(),
-            log_dir: fixture.codex_home().join("log"),
+            sqlite_home: fixture.codex_home().to_path_buf(),
+            log_dir: fixture.codex_home().join("log").to_path_buf(),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
@@ -4506,7 +4630,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_startup_context: None,
             base_instructions: None,
             developer_instructions: None,
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
             include_environment_context: true,
@@ -4520,6 +4644,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
+            multi_agent_v2: MultiAgentV2Config::default(),
             features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("o3".to_string()),
@@ -4529,7 +4654,6 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -4602,11 +4726,15 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
-        mcp_oauth_credentials_store_mode: Default::default(),
+        mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+            Default::default(),
+            LOCAL_DEV_BUILD_VERSION,
+        ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
@@ -4619,8 +4747,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
-        sqlite_home: fixture.codex_home(),
-        log_dir: fixture.codex_home().join("log"),
+        sqlite_home: fixture.codex_home().to_path_buf(),
+        log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -4651,7 +4779,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_environment_context: true,
@@ -4665,6 +4793,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
+        multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt3".to_string()),
@@ -4674,7 +4803,6 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         check_for_update_on_startup: true,
         disable_paste_burst: false,
         tui_notifications: Default::default(),
-        tui_notification_method: Default::default(),
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -4745,11 +4873,15 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
-        mcp_oauth_credentials_store_mode: Default::default(),
+        mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+            Default::default(),
+            LOCAL_DEV_BUILD_VERSION,
+        ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
@@ -4762,8 +4894,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
-        sqlite_home: fixture.codex_home(),
-        log_dir: fixture.codex_home().join("log"),
+        sqlite_home: fixture.codex_home().to_path_buf(),
+        log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -4794,7 +4926,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_environment_context: true,
@@ -4808,6 +4940,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
+        multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("zdr".to_string()),
@@ -4817,7 +4950,6 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         check_for_update_on_startup: true,
         disable_paste_burst: false,
         tui_notifications: Default::default(),
-        tui_notification_method: Default::default(),
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -4874,11 +5006,15 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
+        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
-        mcp_oauth_credentials_store_mode: Default::default(),
+        mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+            Default::default(),
+            LOCAL_DEV_BUILD_VERSION,
+        ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
@@ -4891,8 +5027,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
         codex_home: fixture.codex_home(),
-        sqlite_home: fixture.codex_home(),
-        log_dir: fixture.codex_home().join("log"),
+        sqlite_home: fixture.codex_home().to_path_buf(),
+        log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -4923,7 +5059,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_environment_context: true,
@@ -4937,6 +5073,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
+        multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt5".to_string()),
@@ -4946,7 +5083,6 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         check_for_update_on_startup: true,
         disable_paste_burst: false,
         tui_notifications: Default::default(),
-        tui_notification_method: Default::default(),
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -4982,7 +5118,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         rules: None,
         enforce_residency: None,
         network: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
     };
     let requirement_source = crate::config_loader::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();
@@ -5193,7 +5329,7 @@ fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error() -> 
     let result = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     );
     assert!(result.is_err());
     let error = result.unwrap_err();
@@ -5456,7 +5592,7 @@ mcp_oauth_callback_port = 5678
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(config.mcp_oauth_callback_port, Some(5678));
@@ -5477,7 +5613,7 @@ allow_login_shell = false
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert!(!config.permissions.allow_login_shell);
@@ -5497,7 +5633,7 @@ mcp_oauth_callback_url = "https://example.com/callback"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -5527,7 +5663,7 @@ fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Resul
             cwd: Some(test_path.to_path_buf()),
             ..Default::default()
         },
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     // Verify that untrusted projects get UnlessTrusted approval policy
@@ -5603,7 +5739,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         rules: None,
         enforce_residency: None,
         network: None,
-        guardian_developer_instructions: None,
+        guardian_policy_config: None,
     };
 
     let config = ConfigBuilder::without_managed_config_for_tests()
@@ -6097,6 +6233,71 @@ smart_approvals = true
 }
 
 #[tokio::test]
+async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+usage_hint_enabled = false
+usage_hint_text = "Custom delegation guidance."
+hide_spawn_agent_metadata = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::MultiAgentV2));
+    assert!(!config.multi_agent_v2.usage_hint_enabled);
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("Custom delegation guidance.")
+    );
+    assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "no_hint"
+
+[features.multi_agent_v2]
+usage_hint_enabled = true
+usage_hint_text = "base hint"
+hide_spawn_agent_metadata = true
+
+[profiles.no_hint.features.multi_agent_v2]
+usage_hint_enabled = false
+usage_hint_text = "profile hint"
+hide_spawn_agent_metadata = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(!config.multi_agent_v2.usage_hint_enabled);
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("profile hint")
+    );
+    assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
@@ -6196,7 +6397,7 @@ discoverables = [
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -6235,7 +6436,7 @@ experimental_realtime_start_instructions = "start instructions from config"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -6263,7 +6464,7 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -6291,7 +6492,7 @@ experimental_realtime_ws_backend_prompt = "prompt from config"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -6319,7 +6520,7 @@ experimental_realtime_ws_startup_context = "startup context from config"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -6347,12 +6548,39 @@ experimental_realtime_ws_model = "realtime-test-model"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
         config.experimental_realtime_ws_model.as_deref(),
         Some("realtime-test-model")
+    );
+    Ok(())
+}
+
+#[test]
+fn realtime_config_partial_table_uses_realtime_defaults() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[realtime]
+voice = "marin"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )?;
+
+    assert_eq!(
+        config.realtime,
+        RealtimeConfig {
+            voice: Some(RealtimeVoice::Marin),
+            ..RealtimeConfig::default()
+        }
     );
     Ok(())
 }
@@ -6364,6 +6592,8 @@ fn realtime_loads_from_config_toml() -> std::io::Result<()> {
 [realtime]
 version = "v2"
 type = "transcription"
+transport = "webrtc"
+voice = "cedar"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -6373,6 +6603,8 @@ type = "transcription"
         Some(RealtimeToml {
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
+            transport: Some(RealtimeTransport::WebRtc),
+            voice: Some(RealtimeVoice::Cedar),
         })
     );
 
@@ -6380,7 +6612,7 @@ type = "transcription"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -6388,6 +6620,8 @@ type = "transcription"
         RealtimeConfig {
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
+            transport: RealtimeTransport::WebRtc,
+            voice: Some(RealtimeVoice::Cedar),
         }
     );
     Ok(())
@@ -6415,7 +6649,7 @@ speaker = "Desk Speakers"
     let config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(config.realtime_audio.microphone.as_deref(), Some("USB Mic"));
@@ -6428,10 +6662,8 @@ speaker = "Desk Speakers"
 
 #[derive(Deserialize, Debug, PartialEq)]
 struct TuiTomlTest {
-    #[serde(default)]
-    notifications: Notifications,
-    #[serde(default)]
-    notification_method: NotificationMethod,
+    #[serde(default, flatten)]
+    notifications: TuiNotificationSettings,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -6446,7 +6678,10 @@ fn test_tui_notifications_true() {
             notifications = true
         "#;
     let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
-    assert_matches!(parsed.tui.notifications, Notifications::Enabled(true));
+    assert_matches!(
+        parsed.tui.notifications.notifications,
+        Notifications::Enabled(true)
+    );
 }
 
 #[test]
@@ -6457,7 +6692,7 @@ fn test_tui_notifications_custom_array() {
         "#;
     let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=[\"foo\"]");
     assert_matches!(
-        parsed.tui.notifications,
+        parsed.tui.notifications.notifications,
         Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
     );
 }
@@ -6470,5 +6705,48 @@ fn test_tui_notification_method() {
         "#;
     let parsed: RootTomlTest =
         toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
-    assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+    assert_eq!(parsed.tui.notifications.method, NotificationMethod::Bel);
+}
+
+#[test]
+fn test_tui_notification_condition_defaults_to_unfocused() {
+    let toml = r#"
+            [tui]
+        "#;
+    let parsed: RootTomlTest =
+        toml::from_str(toml).expect("deserialize default notification condition");
+    assert_eq!(
+        parsed.tui.notifications.condition,
+        NotificationCondition::Unfocused
+    );
+}
+
+#[test]
+fn test_tui_notification_condition_always() {
+    let toml = r#"
+            [tui]
+            notification_condition = "always"
+        "#;
+    let parsed: RootTomlTest =
+        toml::from_str(toml).expect("deserialize notification_condition=\"always\"");
+    assert_eq!(
+        parsed.tui.notifications.condition,
+        NotificationCondition::Always
+    );
+}
+
+#[test]
+fn test_tui_notification_condition_rejects_unknown_value() {
+    let toml = r#"
+            [tui]
+            notification_condition = "background"
+        "#;
+    let err = toml::from_str::<RootTomlTest>(toml).expect_err("reject unknown condition");
+    let err = err.to_string();
+    assert!(
+        err.contains("unknown variant `background`")
+            && err.contains("unfocused")
+            && err.contains("always"),
+        "unexpected error: {err}"
+    );
 }

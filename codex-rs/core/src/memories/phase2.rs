@@ -21,7 +21,6 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::Stage1Output;
 use codex_state::StateRuntime;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -156,6 +155,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
                 &session.services.analytics_events_client,
                 client_metadata,
                 thread_id,
+                /*parent_thread_id*/ None,
                 thread_config,
                 SubAgentSource::MemoryConsolidation,
             );
@@ -287,16 +287,7 @@ mod agent {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.as_ref().clone();
 
-        match AbsolutePathBuf::from_absolute_path(root) {
-            Ok(root) => agent_config.cwd = root,
-            Err(err) => {
-                warn!(
-                    "memory phase-2 consolidation could not set cwd from codex_home {}: {err}",
-                    agent_config.codex_home.display()
-                );
-                return None;
-            }
-        }
+        agent_config.cwd = root;
         // Consolidation threads must never feed back into phase-1 memory generation.
         agent_config.memories.generate_memories = false;
         // Approval policy
@@ -307,14 +298,7 @@ mod agent {
         let _ = agent_config.features.disable(Feature::MemoryTool);
 
         // Sandbox policy
-        let mut writable_roots = Vec::new();
-        match AbsolutePathBuf::from_absolute_path(agent_config.codex_home.clone()) {
-            Ok(codex_home) => writable_roots.push(codex_home),
-            Err(err) => warn!(
-                "memory phase-2 consolidation could not add codex_home writable root {}: {err}",
-                agent_config.codex_home.display()
-            ),
-        }
+        let writable_roots = vec![agent_config.codex_home.clone()];
         // The consolidation agent only needs local codex_home write access and no network.
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots,

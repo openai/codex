@@ -8,8 +8,10 @@ use crate::endpoint::realtime_websocket::methods_v2::session_update_session as v
 use crate::endpoint::realtime_websocket::methods_v2::websocket_intent as v2_websocket_intent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
+use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
+use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 use serde_json::Result as JsonResult;
 use serde_json::Value;
@@ -56,11 +58,15 @@ pub(super) fn session_update_session(
     event_parser: RealtimeEventParser,
     instructions: String,
     session_mode: RealtimeSessionMode,
+    output_modality: RealtimeOutputModality,
+    voice: RealtimeVoice,
 ) -> SessionUpdateSession {
     let session_mode = normalized_session_mode(event_parser, session_mode);
     match event_parser {
-        RealtimeEventParser::V1 => v1_session_update_session(instructions),
-        RealtimeEventParser::RealtimeV2 => v2_session_update_session(instructions, session_mode),
+        RealtimeEventParser::V1 => v1_session_update_session(instructions, voice),
+        RealtimeEventParser::RealtimeV2 => {
+            v2_session_update_session(instructions, session_mode, output_modality, voice)
+        }
     }
 }
 
@@ -69,6 +75,8 @@ pub fn session_update_session_json(config: RealtimeSessionConfig) -> JsonResult<
         config.event_parser,
         config.instructions,
         config.session_mode,
+        config.output_modality,
+        config.voice,
     );
     session.id = config.session_id;
     session.model = config.model;

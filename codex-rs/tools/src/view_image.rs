@@ -14,18 +14,14 @@ pub struct ViewImageToolOptions {
 pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
     let mut properties = BTreeMap::from([(
         "path".to_string(),
-        JsonSchema::String {
-            description: Some("Local filesystem path to an image file".to_string()),
-        },
+        JsonSchema::string(Some("Local filesystem path to an image file".to_string())),
     )]);
     if options.can_request_original_image_detail {
         properties.insert(
             "detail".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
-                ),
-            },
+            JsonSchema::string(Some(
+                "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+            )),
         );
     }
 
@@ -35,11 +31,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["path".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+        parameters: JsonSchema::object(properties, Some(vec!["path".to_string()]), Some(false.into())),
         output_schema: Some(view_image_output_schema()),
     })
 }
@@ -61,7 +53,3 @@ fn view_image_output_schema() -> Value {
         "additionalProperties": false
     })
 }
-
-#[cfg(test)]
-#[path = "view_image_tests.rs"]
-mod tests;

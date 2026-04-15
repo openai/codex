@@ -77,6 +77,29 @@ async fn status_command_renders_immediately_without_rate_limit_refresh() {
 }
 
 #[tokio::test]
+async fn status_command_renders_instruction_sources_from_thread_session() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.instruction_source_paths = vec![chat.config.cwd.join("AGENTS.md")];
+
+    chat.dispatch_command(SlashCommand::Status);
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 80))
+        }
+        other => panic!("expected status output, got {other:?}"),
+    };
+    assert!(
+        rendered.contains("Agents.md"),
+        "expected /status to render app-server instruction sources, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("Agents.md  <none>"),
+        "expected /status to avoid stale <none> when app-server provided instruction sources, got: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn status_command_overlapping_refreshes_update_matching_cells_only() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);

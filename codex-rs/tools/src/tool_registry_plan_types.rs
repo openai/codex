@@ -1,5 +1,6 @@
 use crate::ConfiguredToolSpec;
 use crate::DiscoverableTool;
+use crate::ToolName;
 use crate::ToolSpec;
 use crate::ToolsConfig;
 use crate::WaitAgentTimeoutOptions;
@@ -45,7 +46,7 @@ pub enum ToolHandlerKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolHandlerSpec {
-    pub name: String,
+    pub name: ToolName,
     pub kind: ToolHandlerKind,
 }
 
@@ -58,16 +59,22 @@ pub struct ToolRegistryPlan {
 #[derive(Debug, Clone, Copy)]
 pub struct ToolRegistryPlanParams<'a> {
     pub mcp_tools: Option<&'a HashMap<String, McpTool>>,
-    pub app_tools: Option<&'a [ToolRegistryPlanAppTool<'a>]>,
+    pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
+    pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
     pub dynamic_tools: &'a [DynamicToolSpec],
     pub default_agent_type_description: &'a str,
     pub wait_agent_timeouts: WaitAgentTimeoutOptions,
-    pub codex_apps_mcp_server_name: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolNamespace {
+    pub name: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ToolRegistryPlanAppTool<'a> {
+pub struct ToolRegistryPlanDeferredTool<'a> {
     pub tool_name: &'a str,
     pub tool_namespace: &'a str,
     pub server_name: &'a str,
@@ -98,7 +105,7 @@ impl ToolRegistryPlan {
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
 
-    pub(crate) fn register_handler(&mut self, name: impl Into<String>, kind: ToolHandlerKind) {
+    pub(crate) fn register_handler(&mut self, name: impl Into<ToolName>, kind: ToolHandlerKind) {
         self.handlers.push(ToolHandlerSpec {
             name: name.into(),
             kind,

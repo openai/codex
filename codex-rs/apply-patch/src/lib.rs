@@ -12,6 +12,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use parser::Hunk;
@@ -34,9 +35,9 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// internal `apply_patch` path.
 ///
 /// Although this constant lives in `codex-apply-patch` (to avoid forcing
-/// `codex-arg0` to depend on `codex-core`), it is part of the "codex core"
-/// process-invocation contract between the apply-patch runtime and the arg0
-/// dispatcher.
+/// `codex-arg0` to depend on `codex-core`), it remains part of the "codex core"
+/// process-invocation contract for the standalone `apply_patch` command
+/// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
 #[derive(Debug, Error, PartialEq)]
@@ -133,8 +134,8 @@ pub enum MaybeApplyPatchVerified {
 pub struct ApplyPatchAction {
     changes: HashMap<PathBuf, ApplyPatchFileChange>,
 
-    /// The raw patch argument that can be used with `apply_patch` as an exec
-    /// call. i.e., if the original arg was parsed in "lenient" mode with a
+    /// The raw patch argument that can be used to apply the patch. i.e., if the
+    /// original arg was parsed in "lenient" mode with a
     /// heredoc, this should be the value without the heredoc wrapper.
     pub patch: String,
 
@@ -184,6 +185,7 @@ pub async fn apply_patch(
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
     fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<(), ApplyPatchError> {
     let hunks = match parse_patch(patch) {
         Ok(source) => source.hunks,
@@ -207,7 +209,7 @@ pub async fn apply_patch(
         }
     };
 
-    apply_hunks(&hunks, cwd, stdout, stderr, fs).await?;
+    apply_hunks(&hunks, cwd, stdout, stderr, fs, sandbox).await?;
 
     Ok(())
 }
@@ -219,9 +221,10 @@ pub async fn apply_hunks(
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
     fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<(), ApplyPatchError> {
     // Delegate to a helper that applies each hunk to the filesystem.
-    match apply_hunks_to_files(hunks, cwd, fs).await {
+    match apply_hunks_to_files(hunks, cwd, fs, sandbox).await {
         Ok(affected) => {
             print_summary(&affected, stdout).map_err(ApplyPatchError::from)?;
             Ok(())
@@ -257,6 +260,7 @@ async fn apply_hunks_to_files(
     hunks: &[Hunk],
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<AffectedPaths> {
     if hunks.is_empty() {
         anyhow::bail!("No files were modified.");
@@ -270,24 +274,18 @@ async fn apply_hunks_to_files(
         let path_abs = hunk.resolve_path(cwd);
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                if let Some(parent_abs) = path_abs.parent() {
-                    fs.create_directory(&parent_abs, CreateDirectoryOptions { recursive: true })
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to create parent directories for {}",
-                                path_abs.display()
-                            )
-                        })?;
-                }
-                fs.write_file(&path_abs, contents.clone().into_bytes())
-                    .await
-                    .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                write_file_with_missing_parent_retry(
+                    fs,
+                    &path_abs,
+                    contents.clone().into_bytes(),
+                    sandbox,
+                )
+                .await?;
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
                 let result: io::Result<()> = async {
-                    let metadata = fs.get_metadata(&path_abs).await?;
+                    let metadata = fs.get_metadata(&path_abs, sandbox).await?;
                     if metadata.is_directory {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
@@ -300,6 +298,7 @@ async fn apply_hunks_to_files(
                             recursive: false,
                             force: false,
                         },
+                        sandbox,
                     )
                     .await
                 }
@@ -311,27 +310,18 @@ async fn apply_hunks_to_files(
                 move_path, chunks, ..
             } => {
                 let AppliedPatch { new_contents, .. } =
-                    derive_new_contents_from_chunks(&path_abs, chunks, fs).await?;
+                    derive_new_contents_from_chunks(&path_abs, chunks, fs, sandbox).await?;
                 if let Some(dest) = move_path {
                     let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
-                    if let Some(parent_abs) = dest_abs.parent() {
-                        fs.create_directory(
-                            &parent_abs,
-                            CreateDirectoryOptions { recursive: true },
-                        )
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to create parent directories for {}",
-                                dest_abs.display()
-                            )
-                        })?;
-                    }
-                    fs.write_file(&dest_abs, new_contents.into_bytes())
-                        .await
-                        .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
+                    write_file_with_missing_parent_retry(
+                        fs,
+                        &dest_abs,
+                        new_contents.into_bytes(),
+                        sandbox,
+                    )
+                    .await?;
                     let result: io::Result<()> = async {
-                        let metadata = fs.get_metadata(&path_abs).await?;
+                        let metadata = fs.get_metadata(&path_abs, sandbox).await?;
                         if metadata.is_directory {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -344,6 +334,7 @@ async fn apply_hunks_to_files(
                                 recursive: false,
                                 force: false,
                             },
+                            sandbox,
                         )
                         .await
                     }
@@ -353,7 +344,7 @@ async fn apply_hunks_to_files(
                     })?;
                     modified.push(affected_path);
                 } else {
-                    fs.write_file(&path_abs, new_contents.into_bytes())
+                    fs.write_file(&path_abs, new_contents.into_bytes(), sandbox)
                         .await
                         .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
                     modified.push(affected_path);
@@ -368,6 +359,40 @@ async fn apply_hunks_to_files(
     })
 }
 
+async fn write_file_with_missing_parent_retry(
+    fs: &dyn ExecutorFileSystem,
+    path_abs: &AbsolutePathBuf,
+    contents: Vec<u8>,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> anyhow::Result<()> {
+    match fs.write_file(path_abs, contents.clone(), sandbox).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent_abs) = path_abs.parent() {
+                fs.create_directory(
+                    &parent_abs,
+                    CreateDirectoryOptions { recursive: true },
+                    sandbox,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to create parent directories for {}",
+                        path_abs.display()
+                    )
+                })?;
+            }
+            fs.write_file(path_abs, contents, sandbox)
+                .await
+                .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+            Ok(())
+        }
+        Err(err) => {
+            Err(err).with_context(|| format!("Failed to write file {}", path_abs.display()))
+        }
+    }
+}
+
 struct AppliedPatch {
     original_contents: String,
     new_contents: String,
@@ -379,8 +404,9 @@ async fn derive_new_contents_from_chunks(
     path_abs: &AbsolutePathBuf,
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path_abs).await.map_err(|err| {
+    let original_contents = fs.read_file_text(path_abs, sandbox).await.map_err(|err| {
         ApplyPatchError::IoError(IoError {
             context: format!("Failed to read file to update {}", path_abs.display()),
             source: err,
@@ -540,8 +566,9 @@ pub async fn unified_diff_from_chunks(
     path_abs: &AbsolutePathBuf,
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    unified_diff_from_chunks_with_context(path_abs, chunks, /*context*/ 1, fs).await
+    unified_diff_from_chunks_with_context(path_abs, chunks, /*context*/ 1, fs, sandbox).await
 }
 
 pub async fn unified_diff_from_chunks_with_context(
@@ -549,11 +576,12 @@ pub async fn unified_diff_from_chunks_with_context(
     chunks: &[UpdateFileChunk],
     context: usize,
     fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let AppliedPatch {
         original_contents,
         new_contents,
-    } = derive_new_contents_from_chunks(path_abs, chunks, fs).await?;
+    } = derive_new_contents_from_chunks(path_abs, chunks, fs, sandbox).await?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {
@@ -614,6 +642,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -667,9 +696,16 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        apply_patch(&patch, &cwd, &mut stdout, &mut stderr, LOCAL_FS.as_ref())
-            .await
-            .unwrap();
+        apply_patch(
+            &patch,
+            &cwd,
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(fs::read_to_string(&relative_add).unwrap(), "relative add\n");
         assert_eq!(fs::read_to_string(&absolute_add).unwrap(), "absolute add\n");
@@ -709,6 +745,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -744,6 +781,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -783,6 +821,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -831,6 +870,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -888,6 +928,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -931,6 +972,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -973,6 +1015,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -1019,9 +1062,14 @@ mod tests {
             _ => panic!("Expected a single UpdateFile hunk"),
         };
         let path_abs = path.as_path().abs();
-        let diff = unified_diff_from_chunks(&path_abs, update_file_chunks, LOCAL_FS.as_ref())
-            .await
-            .unwrap();
+        let diff = unified_diff_from_chunks(
+            &path_abs,
+            update_file_chunks,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
         let expected_diff = r#"@@ -1,4 +1,4 @@
  foo
 -bar
@@ -1061,9 +1109,10 @@ mod tests {
         };
 
         let path_abs = path.as_path().abs();
-        let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-            .await
-            .unwrap();
+        let diff =
+            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+                .await
+                .unwrap();
         let expected_diff = r#"@@ -1,2 +1,2 @@
 -foo
 +FOO
@@ -1101,9 +1150,10 @@ mod tests {
         };
 
         let path_abs = path.as_path().abs();
-        let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-            .await
-            .unwrap();
+        let diff =
+            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+                .await
+                .unwrap();
         let expected_diff = r#"@@ -2,2 +2,2 @@
  bar
 -baz
@@ -1139,9 +1189,10 @@ mod tests {
         };
 
         let path_abs = path.as_path().abs();
-        let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-            .await
-            .unwrap();
+        let diff =
+            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+                .await
+                .unwrap();
         let expected_diff = r#"@@ -3 +3,2 @@
  baz
 +quux
@@ -1188,9 +1239,10 @@ mod tests {
         };
 
         let path_abs = path.as_path().abs();
-        let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-            .await
-            .unwrap();
+        let diff =
+            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+                .await
+                .unwrap();
 
         let expected_diff = r#"@@ -1,6 +1,7 @@
  a
@@ -1219,6 +1271,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await
         .unwrap();
@@ -1258,6 +1311,7 @@ g
             &mut stdout,
             &mut stderr,
             LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await;
         assert!(result.is_err());

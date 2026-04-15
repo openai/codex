@@ -40,9 +40,17 @@ osx.frameworks(names = [
     "ColorSync",
     "CoreFoundation",
     "CoreGraphics",
+    "CoreImage",
+    "CoreMedia",
+    "CoreMIDI",
     "CoreServices",
     "CoreText",
+    "CoreVideo",
+    "DiskArbitration",
     "AudioToolbox",
+    "AVFoundation",
+    "AVFAudio",
+    "AVRouting",
     "CFNetwork",
     "FontServices",
     "AudioUnit",
@@ -50,11 +58,19 @@ osx.frameworks(names = [
     "CoreAudioTypes",
     "Foundation",
     "ImageIO",
+    "IOSurface",
     "IOKit",
     "Kernel",
+    "Metal",
+    "MetalKit",
+    "OpenGL",
     "OSLog",
+    "QuartzCore",
+    "ScreenCaptureKit",
     "Security",
     "SystemConfiguration",
+    "UniformTypeIdentifiers",
+    "VideoToolbox",
 ])
 use_repo(osx, "macos_sdk")
 
@@ -345,6 +361,23 @@ crate.annotation(
 
 inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
 
+crate.annotation(
+    # Provide the hermetic SDK path so the build script doesn't try to invoke an unavailable `xcrun --show-sdk-path`.
+    build_script_data = [
+        "@macos_sdk//sysroot",
+    ],
+    build_script_env = {
+        "WEBRTC_SYS_DARWIN_SDK_PATH": "$(location @macos_sdk//sysroot)",
+        "WEBRTC_SYS_LINK_OUT_DIR": "1",
+    },
+    crate = "webrtc-sys",
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-sys_hermetic_darwin_sysroot.patch",
+    ],
+)
+
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",
@@ -390,6 +423,7 @@ http_archive(
 http_file(
     name = "rusty_v8_146_4_0_aarch64_apple_darwin_archive",
     downloaded_file_path = "librusty_v8_release_aarch64-apple-darwin.a.gz",
+    sha256 = "bfe2c9be32a56c28546f0f965825ee68fbf606405f310cc4e17b448a568cf98a",
     urls = [
         "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-apple-darwin.a.gz",
     ],
@@ -398,6 +432,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_aarch64_unknown_linux_gnu_archive",
     downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
+    sha256 = "dbf165b07c81bdb054bc046b43d23e69fcf7bcc1a4c1b5b4776983a71062ecd8",
     urls = [
         "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
     ],
@@ -406,6 +441,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_aarch64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+    sha256 = "ed13363659c6d08583ac8fdc40493445c5767d8b94955a4d5d7bb8d5a81f6bf8",
     urls = [
         "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
     ],
@@ -414,6 +450,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_x86_64_apple_darwin_archive",
     downloaded_file_path = "librusty_v8_release_x86_64-apple-darwin.a.gz",
+    sha256 = "630cd240f1bbecdb071417dc18387ab81cf67c549c1c515a0b4fcf9eba647bb7",
     urls = [
         "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-apple-darwin.a.gz",
     ],
@@ -422,6 +459,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_x86_64_unknown_linux_gnu_archive",
     downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
+    sha256 = "e64b4d99e4ae293a2e846244a89b80178ba10382c13fb591c1fa6968f5291153",
     urls = [
         "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
     ],
@@ -430,6 +468,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_x86_64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+    sha256 = "90a9a2346acd3685a355e98df85c24dbe406cb124367d16259a4b5d522621862",
     urls = [
         "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
     ],
@@ -438,6 +477,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_archive",
     downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
+    sha256 = "27a08ed26c34297bfd93e514692ccc44b85f8b15c6aa39cf34e784f84fb37e8e",
     urls = [
         "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
     ],
@@ -446,6 +486,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_binding",
     downloaded_file_path = "src_binding_release_aarch64-unknown-linux-musl.rs",
+    sha256 = "09f8900ced8297c229246c7a50b2e0ec23c54d0a554f369619cc29863f38dd1a",
     urls = [
         "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_aarch64-unknown-linux-musl.rs",
     ],
@@ -454,6 +495,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_archive",
     downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
+    sha256 = "20d8271ad712323d352c1383c36e3c4b755abc41ece35819c49c75ec7134d2f8",
     urls = [
         "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
     ],
@@ -462,6 +504,7 @@ http_file(
 http_file(
     name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_binding",
     downloaded_file_path = "src_binding_release_x86_64-unknown-linux-musl.rs",
+    sha256 = "09f8900ced8297c229246c7a50b2e0ec23c54d0a554f369619cc29863f38dd1a",
     urls = [
         "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_x86_64-unknown-linux-musl.rs",
     ],
