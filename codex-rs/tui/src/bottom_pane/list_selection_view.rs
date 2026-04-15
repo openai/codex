@@ -745,11 +745,11 @@ impl BottomPaneView for ListSelectionView {
             KeyEvent {
                 code: KeyCode::Left,
                 ..
-            } if self.tabs_enabled() => self.switch_tab(-1),
+            } if self.tabs_enabled() => self.switch_tab(/*step*/ -1),
             KeyEvent {
                 code: KeyCode::Right,
                 ..
-            } if self.tabs_enabled() => self.switch_tab(1),
+            } if self.tabs_enabled() => self.switch_tab(/*step*/ 1),
             KeyEvent {
                 code: KeyCode::Char('k'),
                 modifiers: KeyModifiers::NONE,
