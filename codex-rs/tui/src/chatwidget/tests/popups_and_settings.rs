@@ -164,6 +164,122 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
 }
 
 #[tokio::test]
+async fn plugins_popup_add_marketplace_tab_opens_prompt_and_submits_source() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Add a marketplace from a Git repo or local root."),
+        "expected Add Marketplace tab, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceAddPrompt) => {}
+        other => panic!("expected OpenMarketplaceAddPrompt event, got {other:?}"),
+    }
+
+    chat.open_marketplace_add_prompt();
+    let prompt = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        prompt.contains("owner/repo, git URL, or local marketplace path"),
+        "expected marketplace source prompt, got:\n{prompt}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceAddLoading { source }) => {
+            assert_eq!(source, "owner/repo");
+        }
+        other => panic!("expected OpenMarketplaceAddLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceAdd {
+            cwd: event_cwd,
+            source,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(source, "owner/repo");
+        }
+        other => panic!("expected FetchMarketplaceAdd event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    let marketplace_path = plugins_test_absolute_path("marketplaces/debug");
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
+    );
+    chat.open_marketplace_add_loading_popup("owner/repo");
+    chat.on_marketplace_add_loaded(
+        cwd.clone(),
+        "owner/repo".to_string(),
+        Ok(MarketplaceAddResponse {
+            marketplace_name: "debug".to_string(),
+            installed_root: marketplace_path.clone(),
+            already_added: false,
+        }),
+    );
+    chat.on_plugins_loaded(
+        cwd,
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            PluginMarketplaceEntry {
+                name: "debug".to_string(),
+                path: marketplace_path,
+                interface: Some(MarketplaceInterface {
+                    display_name: Some("Debug Marketplace".to_string()),
+                }),
+                plugins: vec![plugins_test_summary(
+                    "plugin-debug",
+                    "debug",
+                    Some("Debug Plugin"),
+                    Some("Debug marketplace plugin."),
+                    /*installed*/ false,
+                    /*enabled*/ true,
+                    PluginInstallPolicy::Available,
+                )],
+            },
+        ])),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Debug Marketplace.") && popup.contains("Debug Plugin"),
+        "expected marketplace add refresh to switch to the new marketplace tab, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summaries() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);

@@ -82,6 +82,8 @@ use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::MarketplaceAddParams;
+use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MergeStrategy;
@@ -2083,6 +2085,28 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::PluginsLoaded { cwd, result });
+        });
+    }
+
+    fn fetch_marketplace_add(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        source: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let source_for_event = source.clone();
+            let result = fetch_marketplace_add(request_handle, source)
+                .await
+                .map_err(|err| format!("Failed to add marketplace: {err}"));
+            app_event_tx.send(AppEvent::MarketplaceAddLoaded {
+                cwd: cwd_for_event,
+                source: source_for_event,
+                result,
+            });
         });
     }
 
@@ -4644,6 +4668,37 @@ impl App {
             AppEvent::FetchPluginsList { cwd } => {
                 self.fetch_plugins_list(app_server, cwd);
             }
+            AppEvent::OpenMarketplaceAddPrompt => {
+                self.chat_widget.open_marketplace_add_prompt();
+            }
+            AppEvent::OpenMarketplaceAddLoading { source } => {
+                self.chat_widget.open_marketplace_add_loading_popup(&source);
+            }
+            AppEvent::FetchMarketplaceAdd { cwd, source } => {
+                self.fetch_marketplace_add(app_server, cwd, source);
+            }
+            AppEvent::MarketplaceAddLoaded {
+                cwd,
+                source,
+                result,
+            } => {
+                let add_succeeded = result.is_ok();
+                if add_succeeded {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to refresh config after marketplace add"
+                        );
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                }
+                self.chat_widget
+                    .on_marketplace_add_loaded(cwd.clone(), source, result);
+                if add_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
+                    self.fetch_plugins_list(app_server, cwd);
+                }
+            }
             AppEvent::OpenPluginDetailLoading {
                 plugin_display_name,
             } => {
@@ -6468,6 +6523,24 @@ fn hide_cli_only_plugin_marketplaces(response: &mut PluginListResponse) {
     response
         .marketplaces
         .retain(|marketplace| !CLI_HIDDEN_PLUGIN_MARKETPLACES.contains(&marketplace.name.as_str()));
+}
+
+async fn fetch_marketplace_add(
+    request_handle: AppServerRequestHandle,
+    source: String,
+) -> Result<MarketplaceAddResponse> {
+    let request_id = RequestId::String(format!("marketplace-add-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::MarketplaceAdd {
+            request_id,
+            params: MarketplaceAddParams {
+                source,
+                ref_name: None,
+                sparse_paths: None,
+            },
+        })
+        .await
+        .wrap_err("marketplace/add failed")
 }
 
 async fn fetch_plugin_detail(

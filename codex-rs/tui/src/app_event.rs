@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
@@ -210,6 +211,27 @@ pub(crate) enum AppEvent {
     PluginsLoaded {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
+    },
+
+    /// Open the prompt for adding a marketplace source.
+    OpenMarketplaceAddPrompt,
+
+    /// Replace the plugins popup with a marketplace-add loading state.
+    OpenMarketplaceAddLoading {
+        source: String,
+    },
+
+    /// Add a marketplace from the provided source.
+    FetchMarketplaceAdd {
+        cwd: PathBuf,
+        source: String,
+    },
+
+    /// Result of adding a marketplace.
+    MarketplaceAddLoaded {
+        cwd: PathBuf,
+        source: String,
+        result: Result<MarketplaceAddResponse, String>,
     },
 
     /// Replace the plugins popup with a plugin-detail loading state.
