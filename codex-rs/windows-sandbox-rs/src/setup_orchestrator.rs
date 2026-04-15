@@ -331,16 +331,9 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
 }
 
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        roots.push(dir.to_path_buf());
-    }
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
-    roots.push(helper_dir);
-    roots
+    vec![helper_dir]
 }
 
 fn gather_legacy_full_read_roots(
@@ -1007,6 +1000,26 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn gather_read_roots_excludes_current_exe_parent_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        let policy = SandboxPolicy::new_read_only_policy();
+
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let current_exe_dir = std::env::current_exe()
+            .expect("current exe")
+            .parent()
+            .expect("current exe parent")
+            .to_path_buf();
+        let current_exe_dir =
+            dunce::canonicalize(current_exe_dir).expect("canonical current exe dir");
+
+        assert!(!roots.contains(&current_exe_dir));
     }
 
     #[test]
