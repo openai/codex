@@ -2039,6 +2039,7 @@ mod tests {
                 file_system: Some(v2::AdditionalFileSystemPermissions {
                     read: Some(vec![absolute_path("/tmp/allowed")]),
                     write: None,
+                    entries: None,
                 }),
             }),
             proposed_execpolicy_amendment: None,
