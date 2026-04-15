@@ -10,9 +10,15 @@ CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 STANDALONE_ROOT="$CODEX_HOME_DIR/packages/standalone"
 RELEASES_DIR="$STANDALONE_ROOT/releases"
 CURRENT_LINK="$STANDALONE_ROOT/current"
+LOCK_FILE="$STANDALONE_ROOT/install.lock"
+LOCK_DIR="$STANDALONE_ROOT/install.lock.d"
 
 path_action="already"
 path_profile=""
+conflict_manager=""
+conflict_path=""
+lock_kind=""
+tmp_dir=""
 
 step() {
   printf '==> %s\n' "$1"
@@ -105,6 +111,92 @@ release_url_for_asset() {
   resolved_version="$2"
 
   printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
+}
+
+release_metadata_url() {
+  resolved_version="$1"
+
+  printf 'https://api.github.com/repos/openai/codex/releases/tags/rust-v%s\n' "$resolved_version"
+}
+
+release_asset_digest() {
+  asset="$1"
+  resolved_version="$2"
+  release_json="$(download_text "$(release_metadata_url "$resolved_version")")"
+
+  digest="$(printf '%s\n' "$release_json" | awk -v asset="$asset" '
+    {
+      if ($0 ~ "\"name\":[[:space:]]*\"" asset "\"") {
+        in_asset = 1
+        asset_depth = depth
+      }
+
+      if (in_asset && /"digest":[[:space:]]*"[^"]+"/) {
+        sub(/^.*"digest":[[:space:]]*"/, "")
+        sub(/".*$/, "")
+        digest = $0
+      }
+
+      line = $0
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
+      depth += opens - closes
+
+      if (in_asset && depth < asset_depth) {
+        in_asset = 0
+      }
+    }
+    END {
+      if (digest != "") {
+        print digest
+      }
+    }
+  ')"
+
+  case "$digest" in
+    sha256:????????????????????????????????????????????????????????????????)
+      printf '%s\n' "${digest#sha256:}"
+      ;;
+    *)
+      echo "Could not find SHA-256 digest for release asset $asset." >&2
+      exit 1
+      ;;
+  esac
+}
+
+file_sha256() {
+  path="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+    return
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+    return
+  fi
+
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$path" | sed 's/^.*= //'
+    return
+  fi
+
+  echo "sha256sum, shasum, or openssl is required to verify the Codex download." >&2
+  exit 1
+}
+
+verify_archive_digest() {
+  archive_path="$1"
+  expected_digest="$2"
+  actual_digest="$(file_sha256 "$archive_path")"
+
+  if [ "$actual_digest" != "$expected_digest" ]; then
+    echo "Downloaded Codex archive checksum did not match release metadata." >&2
+    echo "expected: $expected_digest" >&2
+    echo "actual:   $actual_digest" >&2
+    exit 1
+  fi
 }
 
 require_command() {
@@ -241,6 +333,51 @@ rewrite_path_block() {
   mv "$tmp_profile" "$profile"
 }
 
+acquire_install_lock() {
+  mkdir -p "$STANDALONE_ROOT"
+
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
+    flock 9
+    lock_kind="flock"
+    return
+  fi
+
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    sleep 1
+  done
+  lock_kind="mkdir"
+}
+
+release_install_lock() {
+  if [ "$lock_kind" = "mkdir" ]; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+  elif [ "$lock_kind" = "flock" ]; then
+    flock -u 9 2>/dev/null || true
+  fi
+  lock_kind=""
+}
+
+replace_path_with_symlink() {
+  link_path="$1"
+  link_target="$2"
+  tmp_link="$3"
+
+  rm -f "$tmp_link"
+  ln -s "$link_target" "$tmp_link"
+
+  if mv -Tf "$tmp_link" "$link_path" 2>/dev/null; then
+    return
+  fi
+
+  if mv -hf "$tmp_link" "$link_path" 2>/dev/null; then
+    return
+  fi
+
+  rm -f "$link_path"
+  mv -f "$tmp_link" "$link_path"
+}
+
 version_from_binary() {
   codex_path="$1"
 
@@ -354,7 +491,7 @@ maybe_launch_codex_now() {
   fi
 }
 
-handle_conflicting_install() {
+detect_conflicting_install() {
   existing_path="$(resolve_existing_codex)"
   manager="$(classify_existing_codex "$existing_path" || true)"
 
@@ -362,10 +499,18 @@ handle_conflicting_install() {
     return
   fi
 
+  conflict_manager="$manager"
+  conflict_path="$existing_path"
   step "Detected existing $manager-managed Codex at $existing_path"
   warn "Multiple managed Codex installs can be ambiguous because PATH order decides which one runs."
+}
 
-  case "$manager" in
+handle_conflicting_install() {
+  if [ -z "$conflict_manager" ]; then
+    return
+  fi
+
+  case "$conflict_manager" in
     brew)
       uninstall_cmd="brew uninstall --cask codex"
       ;;
@@ -377,32 +522,32 @@ handle_conflicting_install() {
       ;;
   esac
 
-  if prompt_yes_no "Uninstall the existing $manager-managed Codex now?"; then
+  if prompt_yes_no "Uninstall the existing $conflict_manager-managed Codex now?"; then
     step "Running: $uninstall_cmd"
     if ! sh -c "$uninstall_cmd"; then
-      warn "Failed to uninstall the existing $manager-managed Codex. Continuing with the standalone install."
+      warn "Failed to uninstall the existing $conflict_manager-managed Codex. Continuing with the standalone install."
     fi
   else
-    warn "Leaving the existing $manager-managed Codex installed. PATH order will determine which codex runs."
+    warn "Leaving the existing $conflict_manager-managed Codex installed. PATH order will determine which codex runs."
   fi
 }
 
 install_release() {
   release_dir="$1"
   vendor_root="$2"
-  stage_release="$tmp_dir/release"
+  stage_release="$RELEASES_DIR/.staging.$(basename "$release_dir").$$"
 
+  mkdir -p "$RELEASES_DIR"
   rm -rf "$stage_release"
-  if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
-    rm -rf "$release_dir"
-  fi
   mkdir -p "$stage_release/codex-resources"
   cp "$vendor_root/codex/codex" "$stage_release/codex"
   cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
   chmod 0755 "$stage_release/codex"
   chmod 0755 "$stage_release/codex-resources/rg"
 
-  mkdir -p "$RELEASES_DIR"
+  if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
+    rm -rf "$release_dir"
+  fi
   mv "$stage_release" "$release_dir"
 }
 
@@ -421,18 +566,18 @@ update_current_link() {
   release_dir="$1"
   tmp_link="$STANDALONE_ROOT/.current.$$"
 
-  rm -f "$tmp_link"
-  ln -s "$release_dir" "$tmp_link"
-  mv -f "$tmp_link" "$CURRENT_LINK"
+  replace_path_with_symlink "$CURRENT_LINK" "$release_dir" "$tmp_link"
 }
 
 update_visible_command() {
   mkdir -p "$BIN_DIR"
   tmp_link="$BIN_DIR/.codex.$$"
 
-  rm -f "$tmp_link"
-  ln -s "$CURRENT_LINK/codex" "$tmp_link"
-  mv -f "$tmp_link" "$BIN_PATH"
+  replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/codex" "$tmp_link"
+}
+
+verify_visible_command() {
+  "$BIN_PATH" --version >/dev/null
 }
 
 parse_args "$@"
@@ -511,13 +656,18 @@ fi
 step "Detected platform: $platform_label"
 step "Resolved version: $resolved_version"
 
-handle_conflicting_install
+detect_conflicting_install
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
-  rm -rf "$tmp_dir"
+  release_install_lock
+  if [ -n "$tmp_dir" ]; then
+    rm -rf "$tmp_dir"
+  fi
 }
 trap cleanup EXIT INT TERM
+
+acquire_install_lock
 
 if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"; then
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
@@ -528,7 +678,9 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   extract_dir="$tmp_dir/extract"
 
   step "Downloading Codex CLI"
+  expected_digest="$(release_asset_digest "$asset" "$resolved_version")"
   download_file "$download_url" "$archive_path"
+  verify_archive_digest "$archive_path" "$expected_digest"
 
   mkdir -p "$extract_dir"
   tar -xzf "$archive_path" -C "$extract_dir"
@@ -536,10 +688,12 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   step "Installing standalone package to $release_dir"
   install_release "$release_dir" "$extract_dir/package/vendor/$vendor_target"
 fi
-mkdir -p "$STANDALONE_ROOT"
 update_current_link "$release_dir"
 update_visible_command
 add_to_path
+verify_visible_command
+release_install_lock
+handle_conflicting_install
 
 case "$path_action" in
   added)

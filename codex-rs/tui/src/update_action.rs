@@ -106,4 +106,22 @@ mod tests {
             Some(UpdateAction::StandaloneWindows)
         );
     }
+
+    #[test]
+    fn standalone_update_commands_rerun_latest_installer() {
+        assert_eq!(
+            UpdateAction::StandaloneUnix.command_args(),
+            (
+                "sh",
+                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"][..],
+            )
+        );
+        assert_eq!(
+            UpdateAction::StandaloneWindows.command_args(),
+            (
+                "powershell",
+                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"][..],
+            )
+        );
+    }
 }

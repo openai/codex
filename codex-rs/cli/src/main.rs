@@ -493,9 +493,10 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
             match action {
                 UpdateAction::StandaloneWindows => {
                     let (cmd, args) = action.command_args();
-                    // Run PowerShell directly. If this goes through `cmd.exe`,
-                    // the `|iex` in the installer script is parsed as a cmd
-                    // pipeline instead of as part of the PowerShell command.
+                    // Run the standalone PowerShell installer with PowerShell
+                    // itself. Routing this through `cmd.exe /C` would parse
+                    // PowerShell metacharacters like `|` before PowerShell sees
+                    // the installer command.
                     std::process::Command::new(cmd).args(args).status()?
                 }
                 UpdateAction::NpmGlobalLatest
