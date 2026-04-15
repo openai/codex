@@ -3069,41 +3069,44 @@ impl CodexMessageProcessor {
             }
         };
 
-        if let Err(err) = state_db.reset_memory_data_for_fresh_start().await {
+        if let Err(err) = state_db.clear_memory_data().await {
             self.send_internal_error(
                 request_id,
-                format!("failed to reset memory rows in state db: {err}"),
+                format!("failed to clear memory rows in state db: {err}"),
             )
             .await;
             return;
         }
 
         let memory_root = self.config.codex_home.join("memories");
+        let memory_extensions_root = self.config.codex_home.join("memories_extensions");
         let clear_memory_root_result: std::io::Result<()> = async {
-            match tokio::fs::symlink_metadata(&memory_root).await {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!(
-                            "refusing to clear symlinked memory root {}",
-                            memory_root.display()
-                        ),
-                    ));
+            for directory in [memory_root.as_path(), memory_extensions_root.as_path()] {
+                match tokio::fs::symlink_metadata(directory).await {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "refusing to clear symlinked memory root {}",
+                                directory.display()
+                            ),
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
                 }
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err),
-            }
 
-            tokio::fs::create_dir_all(&memory_root).await?;
-            let mut entries = tokio::fs::read_dir(&memory_root).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                let file_type = entry.file_type().await?;
-                if file_type.is_dir() {
-                    tokio::fs::remove_dir_all(path).await?;
-                } else {
-                    tokio::fs::remove_file(path).await?;
+                tokio::fs::create_dir_all(directory).await?;
+                let mut entries = tokio::fs::read_dir(directory).await?;
+                while let Some(entry) = entries.next_entry().await? {
+                    let path = entry.path();
+                    let file_type = entry.file_type().await?;
+                    if file_type.is_dir() {
+                        tokio::fs::remove_dir_all(path).await?;
+                    } else {
+                        tokio::fs::remove_file(path).await?;
+                    }
                 }
             }
 
