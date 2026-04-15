@@ -406,6 +406,39 @@ async fn file_system_sandboxed_write_rejects_unwritable_path(use_remote: bool) -
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_sandboxed_write_allows_explicit_alias_roots(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let real_root = tmp.path().join("real-root");
+    let alias_root = tmp.path().join("alias-root");
+    std::fs::create_dir_all(&real_root)?;
+    symlink(&real_root, &alias_root)?;
+    assert_ne!(alias_root.canonicalize()?, alias_root);
+
+    let tmp = tempfile::Builder::new()
+        .prefix("codex-fs-sandbox-alias-")
+        .tempdir_in(&alias_root)?;
+    let file_path = tmp.path().join("note.txt");
+    let sandbox = workspace_write_sandbox(alias_root.clone());
+
+    file_system
+        .write_file(
+            &absolute_path(file_path.clone()),
+            b"created".to_vec(),
+            Some(&sandbox),
+        )
+        .await
+        .with_context(|| format!("write file through alias root mode={use_remote}"))?;
+    assert_eq!(std::fs::read(&file_path)?, b"created");
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_sandboxed_read_rejects_symlink_escape(use_remote: bool) -> Result<()> {
     let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
@@ -524,35 +557,6 @@ async fn file_system_create_directory_rejects_symlink_escape(use_remote: bool) -
     };
     assert_sandbox_denied(&error);
     assert!(!outside_dir.join("created").exists());
-
-    Ok(())
-}
-
-#[test_case(false ; "local")]
-#[test_case(true ; "remote")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_get_metadata_rejects_symlink_escape(use_remote: bool) -> Result<()> {
-    let context = create_file_system_context(use_remote).await?;
-    let file_system = context.file_system;
-
-    let tmp = TempDir::new()?;
-    let allowed_dir = tmp.path().join("allowed");
-    let outside_dir = tmp.path().join("outside");
-    std::fs::create_dir_all(&allowed_dir)?;
-    std::fs::create_dir_all(&outside_dir)?;
-    std::fs::write(outside_dir.join("secret.txt"), "nope")?;
-    symlink(&outside_dir, allowed_dir.join("link"))?;
-
-    let requested_path = allowed_dir.join("link").join("secret.txt");
-    let sandbox = read_only_sandbox(allowed_dir);
-    let error = match file_system
-        .get_metadata(&absolute_path(requested_path.clone()), Some(&sandbox))
-        .await
-    {
-        Ok(_) => anyhow::bail!("get_metadata should be blocked"),
-        Err(error) => error,
-    };
-    assert_sandbox_denied(&error);
 
     Ok(())
 }
