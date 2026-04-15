@@ -29,14 +29,14 @@ fn skip_test() -> bool {
 }
 
 #[expect(clippy::expect_used)]
-async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
+async fn run_test_cmd(tmp: TempDir, command: Vec<String>) -> Result<ExecToolCallOutput> {
     let sandbox_type = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
         .expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
     let cwd = tmp.path().abs();
 
     let params = ExecParams {
-        command: cmd.iter().map(ToString::to_string).collect(),
+        command,
         cwd: cwd.clone(),
         expiration: 1000.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
@@ -64,6 +64,11 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
     .await
 }
 
+#[expect(clippy::expect_used)]
+async fn run_test_cmd_strs(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
+    run_test_cmd(tmp, cmd.iter().map(ToString::to_string).collect()).await
+}
+
 /// Command succeeds with exit code 0 normally
 #[tokio::test]
 async fn exit_code_0_succeeds() {
@@ -74,7 +79,7 @@ async fn exit_code_0_succeeds() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let cmd = vec!["echo", "hello"];
 
-    let output = run_test_cmd(tmp, cmd).await.unwrap();
+    let output = run_test_cmd_strs(tmp, cmd).await.unwrap();
     assert_eq!(output.stdout.text, "hello\n");
     assert_eq!(output.stderr.text, "");
     assert_eq!(output.stdout.truncated_after_lines, None);
@@ -90,7 +95,7 @@ async fn truncates_output_lines() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let cmd = vec!["seq", "300"];
 
-    let output = run_test_cmd(tmp, cmd).await.unwrap();
+    let output = run_test_cmd_strs(tmp, cmd).await.unwrap();
 
     let expected_output = (1..=300)
         .map(|i| format!("{i}\n"))
@@ -111,7 +116,7 @@ async fn truncates_output_bytes() {
     // each line is 1000 bytes
     let cmd = vec!["bash", "-lc", "seq 15 | awk '{printf \"%-1000s\\n\", $0}'"];
 
-    let output = run_test_cmd(tmp, cmd).await.unwrap();
+    let output = run_test_cmd_strs(tmp, cmd).await.unwrap();
 
     assert!(output.stdout.text.len() >= 15000);
     assert_eq!(output.stdout.truncated_after_lines, None);
@@ -126,7 +131,38 @@ async fn exit_command_not_found_is_ok() {
 
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let cmd = vec!["/bin/bash", "-c", "nonexistent_command_12345"];
-    run_test_cmd(tmp, cmd).await.unwrap();
+    run_test_cmd_strs(tmp, cmd).await.unwrap();
+}
+
+#[tokio::test]
+async fn openpty_works_under_real_exec_seatbelt_path() {
+    if skip_test() {
+        return;
+    }
+
+    let python = match which::which("python3") {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python3 not found in PATH, skipping test.");
+            return;
+        }
+    };
+
+    let tmp = TempDir::new().expect("should be able to create temp dir");
+    let cmd = vec![
+        python.to_string_lossy().into_owned(),
+        "-c".to_string(),
+        r#"import os
+
+master, slave = os.openpty()
+os.write(slave, b"ping")
+assert os.read(master, 4) == b"ping""#
+            .to_string(),
+    ];
+
+    let output = run_test_cmd(tmp, cmd).await.unwrap();
+    assert_eq!(output.stdout.text, "");
+    assert_eq!(output.stderr.text, "");
 }
 
 /// Writing a file fails and should be considered a sandbox error
@@ -139,9 +175,9 @@ async fn write_file_fails_as_sandbox_error() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let path = tmp.path().join("test.txt");
     let cmd = vec![
-        "/user/bin/touch",
+        "/usr/bin/touch",
         path.to_str().expect("should be able to get path"),
     ];
 
-    assert!(run_test_cmd(tmp, cmd).await.is_err());
+    assert!(run_test_cmd_strs(tmp, cmd).await.is_err());
 }
