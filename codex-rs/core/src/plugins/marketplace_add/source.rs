@@ -148,6 +148,10 @@ fn resolve_local_source_path(source: &str) -> Result<PathBuf, MarketplaceAddErro
             .join(path)
     };
 
+    if !path.exists() && path.is_absolute() {
+        return Ok(path);
+    }
+
     path.canonicalize().map_err(|err| {
         MarketplaceAddError::InvalidRequest(format!(
             "failed to resolve local marketplace source {}: {err}",
