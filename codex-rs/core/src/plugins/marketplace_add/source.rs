@@ -83,7 +83,7 @@ where
             clone_source(url, ref_name.as_deref(), sparse_paths, staged_root)
         }
         MarketplaceSource::Local { .. } => unreachable!(
-            "local marketplace sources are added without staging a copied install root"
+            "local marketplace sources are recorded without staging a copied install root"
         ),
     }
 }
