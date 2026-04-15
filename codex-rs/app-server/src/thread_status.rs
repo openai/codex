@@ -720,9 +720,9 @@ mod tests {
     #[tokio::test]
     async fn status_change_emits_notification() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(8);
-        let manager = ThreadWatchManager::new_with_outgoing(Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-        )));
+        let manager = ThreadWatchManager::new_with_outgoing(Arc::new(
+            OutgoingMessageSender::new_for_tests(outgoing_tx),
+        ));
 
         manager
             .upsert_thread(test_thread(
@@ -762,9 +762,9 @@ mod tests {
     #[tokio::test]
     async fn silent_upsert_skips_initial_notification() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(8);
-        let manager = ThreadWatchManager::new_with_outgoing(Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-        )));
+        let manager = ThreadWatchManager::new_with_outgoing(Arc::new(
+            OutgoingMessageSender::new_for_tests(outgoing_tx),
+        ));
 
         manager
             .upsert_thread_silently(test_thread(
