@@ -6292,6 +6292,23 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
+        let fs = match self.thread_manager.environment_manager().current().await {
+            Ok(Some(environment)) => Some(environment.get_filesystem()),
+            Ok(None) => None,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to create environment: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
         let cli_overrides = self.current_cli_overrides();
         let mut data = Vec::new();
         for cwd in cwds {
@@ -6349,7 +6366,12 @@ impl CodexMessageProcessor {
                 config.bundled_skills_enabled(),
             );
             let outcome = skills_manager
-                .skills_for_cwd_with_extra_user_roots(&skills_input, force_reload, extra_roots)
+                .skills_for_cwd_with_extra_user_roots(
+                    &skills_input,
+                    force_reload,
+                    extra_roots,
+                    fs.clone(),
+                )
                 .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);

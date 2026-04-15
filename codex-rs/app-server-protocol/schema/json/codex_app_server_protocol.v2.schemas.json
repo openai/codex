@@ -4126,6 +4126,16 @@
         "description": {
           "type": "string"
         },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MigrationDetails"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "itemType": {
           "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
         }
@@ -4141,6 +4151,7 @@
         "AGENTS_MD",
         "CONFIG",
         "SKILLS",
+        "PLUGINS",
         "MCP_SERVER_CONFIG"
       ],
       "type": "string"
@@ -6357,6 +6368,20 @@
         }
       ]
     },
+    "MigrationDetails": {
+      "properties": {
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/PluginsMigration"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "plugins"
+      ],
+      "type": "object"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
@@ -7277,6 +7302,24 @@
     "PluginUninstallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "PluginUninstallResponse",
+      "type": "object"
+    },
+    "PluginsMigration": {
+      "properties": {
+        "marketplaceName": {
+          "type": "string"
+        },
+        "pluginNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "marketplaceName",
+        "pluginNames"
+      ],
       "type": "object"
     },
     "ProfileV2": {
