@@ -2470,6 +2470,7 @@ dependencies = [
 name = "codex-model-provider"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-api",
  "codex-login",
  "codex-model-provider-info",

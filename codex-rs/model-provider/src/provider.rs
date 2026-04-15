@@ -1,8 +1,7 @@
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use codex_api::AuthProvider;
 use codex_api::Provider;
 use codex_login::AuthManager;
@@ -17,6 +16,7 @@ use crate::auth::resolve_provider_auth;
 /// Implementations own provider-specific behavior for a model backend. The
 /// `ModelProviderInfo` returned by `info` is the serialized/configured provider
 /// metadata used by the default OpenAI-compatible implementation.
+#[async_trait]
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
@@ -25,15 +25,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn auth_manager(&self) -> Option<Arc<AuthManager>>;
 
     /// Resolves the auth and API-provider configuration for a request.
-    fn resolve_auth(&self) -> ModelProviderAuthFuture<'_>;
+    async fn resolve_auth(&self) -> codex_protocol::error::Result<ResolvedProviderAuth>;
 }
 
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
-
-/// Future returned while resolving model-provider auth.
-pub type ModelProviderAuthFuture<'a> =
-    Pin<Box<dyn Future<Output = codex_protocol::error::Result<ResolvedProviderAuth>> + Send + 'a>>;
 
 /// Auth and provider configuration resolved for a model-provider request.
 pub struct ResolvedProviderAuth {
@@ -62,6 +58,7 @@ struct ConfiguredModelProvider {
     auth_manager: Option<Arc<AuthManager>>,
 }
 
+#[async_trait]
 impl ModelProvider for ConfiguredModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         &self.info
@@ -71,21 +68,19 @@ impl ModelProvider for ConfiguredModelProvider {
         self.auth_manager.clone()
     }
 
-    fn resolve_auth(&self) -> ModelProviderAuthFuture<'_> {
-        Box::pin(async {
-            let auth = match self.auth_manager.as_ref() {
-                Some(auth_manager) => auth_manager.auth().await,
-                None => None,
-            };
-            let api_provider = self
-                .info
-                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-            let api_auth = resolve_provider_auth(auth.clone(), &self.info)?;
-            Ok(ResolvedProviderAuth {
-                auth,
-                api_provider,
-                api_auth,
-            })
+    async fn resolve_auth(&self) -> codex_protocol::error::Result<ResolvedProviderAuth> {
+        let auth = match self.auth_manager.as_ref() {
+            Some(auth_manager) => auth_manager.auth().await,
+            None => None,
+        };
+        let api_provider = self
+            .info
+            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+        let api_auth = resolve_provider_auth(auth.clone(), &self.info)?;
+        Ok(ResolvedProviderAuth {
+            auth,
+            api_provider,
+            api_auth,
         })
     }
 }

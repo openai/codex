@@ -11,12 +11,12 @@ use http::Method;
 use http::header::ETAG;
 use std::sync::Arc;
 
-pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
-    session: EndpointSession<T, A>,
+pub struct ModelsClient<T: HttpTransport> {
+    session: EndpointSession<T>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> ModelsClient<T> {
+    pub fn new(transport: T, provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -165,7 +165,7 @@ mod tests {
         let client = ModelsClient::new(
             transport.clone(),
             provider("https://example.com/api/codex"),
-            DummyAuth,
+            Arc::new(DummyAuth),
         );
 
         let (models, _) = client
@@ -229,7 +229,7 @@ mod tests {
         let client = ModelsClient::new(
             transport,
             provider("https://example.com/api/codex"),
-            DummyAuth,
+            Arc::new(DummyAuth),
         );
 
         let (models, _) = client
@@ -256,7 +256,7 @@ mod tests {
         let client = ModelsClient::new(
             transport,
             provider("https://example.com/api/codex"),
-            DummyAuth,
+            Arc::new(DummyAuth),
         );
 
         let (models, etag) = client

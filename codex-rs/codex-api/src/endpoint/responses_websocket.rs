@@ -279,13 +279,13 @@ impl ResponsesWebsocketConnection {
     }
 }
 
-pub struct ResponsesWebsocketClient<A: AuthProvider> {
+pub struct ResponsesWebsocketClient {
     provider: Provider,
-    auth: A,
+    auth: Arc<dyn AuthProvider>,
 }
 
-impl<A: AuthProvider> ResponsesWebsocketClient<A> {
-    pub fn new(provider: Provider, auth: A) -> Self {
+impl ResponsesWebsocketClient {
+    pub fn new(provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
         Self { provider, auth }
     }
 

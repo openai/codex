@@ -23,8 +23,8 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use tracing::instrument;
 
-pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
-    session: EndpointSession<T, A>,
+pub struct ResponsesClient<T: HttpTransport> {
+    session: EndpointSession<T>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
 }
 
@@ -37,8 +37,8 @@ pub struct ResponsesOptions {
     pub turn_state: Option<Arc<OnceLock<String>>>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> ResponsesClient<T> {
+    pub fn new(transport: T, provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
             sse_telemetry: None,
