@@ -18,6 +18,7 @@ use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
@@ -85,6 +86,26 @@ pub enum PathStyle {
     CodexApi,
     /// /wham/…
     ChatGptApi,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentAccountOptimizedResponse {
+    account: CurrentAccountOptimizedAccount,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentAccountOptimizedAccount {
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountGroupsResponse {
+    items: Vec<AccountGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountGroup {
+    name: String,
 }
 
 impl PathStyle {
@@ -263,6 +284,53 @@ impl Client {
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
         Ok(Self::rate_limit_snapshots_from_payload(payload))
+    }
+
+    pub async fn get_current_account_display_name(&self) -> Result<Option<String>> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => {
+                anyhow::bail!("current account display name is only available from ChatGPT API")
+            }
+            PathStyle::ChatGptApi => format!("{}/accounts/optimized/check", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        let payload: CurrentAccountOptimizedResponse = self.decode_json(&url, &ct, &body)?;
+        let display_name = payload
+            .account
+            .name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+        Ok(display_name)
+    }
+
+    pub async fn get_current_account_group_names(
+        &self,
+        account_id: &str,
+        chatgpt_user_id: &str,
+    ) -> Result<Option<Vec<String>>> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => {
+                anyhow::bail!("current account groups are only available from ChatGPT API")
+            }
+            PathStyle::ChatGptApi => {
+                let account_user_id = format!("{chatgpt_user_id}__{account_id}");
+                format!(
+                    "{}/accounts/{account_id}/users/{account_user_id}/groups",
+                    self.base_url
+                )
+            }
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        let payload: AccountGroupsResponse = self.decode_json(&url, &ct, &body)?;
+        let group_names = payload
+            .items
+            .into_iter()
+            .map(|group| group.name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>();
+        Ok((!group_names.is_empty()).then_some(group_names))
     }
 
     pub async fn list_tasks(

@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::GetAccountMetadataResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
@@ -169,6 +170,17 @@ pub(crate) enum AppEvent {
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
         result: Result<Vec<RateLimitSnapshot>, String>,
+    },
+
+    /// Refresh ChatGPT account metadata for a `/status` output.
+    RefreshStatusMetadata {
+        request_id: u64,
+    },
+
+    /// Result of loading ChatGPT account metadata for `/status`.
+    StatusMetadataLoaded {
+        request_id: u64,
+        result: Result<Option<GetAccountMetadataResponse>, String>,
     },
 
     /// Result of prefetching connectors.

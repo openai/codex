@@ -59,6 +59,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::status::StatusAccountMetadata;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -77,6 +78,8 @@ use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::GetAccountMetadataParams;
+use codex_app_server_protocol::GetAccountMetadataResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -2042,6 +2045,83 @@ impl App {
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
         });
+    }
+
+    fn refresh_status_metadata(&mut self, app_server: &AppServerSession, request_id: u64) {
+        tracing::info!(
+            target: "codex_tui::status_metadata",
+            "checking status metadata fetch eligibility"
+        );
+        let eligibility_request_handle = app_server.request_handle();
+        let metadata_request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let metadata_fetch_eligible =
+                    fetch_account_metadata_eligibility(eligibility_request_handle).await?;
+                tracing::info!(
+                    target: "codex_tui::status_metadata",
+                    eligible = metadata_fetch_eligible,
+                    "status metadata fetch eligibility returned"
+                );
+                if !metadata_fetch_eligible {
+                    tracing::info!(
+                        target: "codex_tui::status_metadata",
+                        "skipping status metadata fetch: ineligible"
+                    );
+                    return Ok(None);
+                }
+
+                tracing::info!(
+                    target: "codex_tui::status_metadata",
+                    "starting status metadata fetch"
+                );
+                fetch_account_metadata(metadata_request_handle)
+                    .await
+                    .map(Some)
+            }
+            .await
+            .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::StatusMetadataLoaded { request_id, result });
+        });
+    }
+
+    fn on_status_metadata_loaded(
+        &mut self,
+        request_id: u64,
+        result: Result<Option<GetAccountMetadataResponse>, String>,
+    ) {
+        let account_metadata = match result {
+            Ok(Some(metadata)) => {
+                let group_count = metadata.account_group_names.as_ref().map_or(0, Vec::len);
+                tracing::info!(
+                    target: "codex_tui::status_metadata",
+                    display_name_present = metadata.account_display_name.is_some(),
+                    group_count,
+                    "status metadata loaded"
+                );
+                Some(StatusAccountMetadata {
+                    account_display_name: metadata.account_display_name,
+                    account_group_names: metadata.account_group_names,
+                })
+            }
+            Ok(None) => {
+                tracing::info!(
+                    target: "codex_tui::status_metadata",
+                    "status metadata unavailable; rendering status without metadata"
+                );
+                None
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "codex_tui::status_metadata",
+                    "account/metadata/read failed before /status render: {err}"
+                );
+                None
+            }
+        };
+        self.chat_widget
+            .finish_status_metadata_fetch(request_id, account_metadata);
     }
 
     fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
@@ -4679,6 +4759,12 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
+            AppEvent::RefreshStatusMetadata { request_id } => {
+                self.refresh_status_metadata(app_server, request_id);
+            }
+            AppEvent::StatusMetadataLoaded { request_id, result } => {
+                self.on_status_metadata_loaded(request_id, result);
+            }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
                     for snapshot in snapshots {
@@ -6343,6 +6429,40 @@ async fn fetch_account_rate_limits(
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
     Ok(app_server_rate_limit_snapshots_to_core(response))
+}
+
+async fn fetch_account_metadata(
+    request_handle: AppServerRequestHandle,
+) -> Result<GetAccountMetadataResponse> {
+    let request_id = RequestId::String(format!("account-metadata-{}", Uuid::new_v4()));
+    let response: GetAccountMetadataResponse = request_handle
+        .request_typed(ClientRequest::GetAccountMetadata {
+            request_id,
+            params: GetAccountMetadataParams {
+                eligibility_only: false,
+            },
+        })
+        .await
+        .wrap_err("account/metadata/read failed in TUI")?;
+
+    Ok(response)
+}
+
+async fn fetch_account_metadata_eligibility(
+    request_handle: AppServerRequestHandle,
+) -> Result<bool> {
+    let request_id = RequestId::String(format!("account-metadata-eligibility-{}", Uuid::new_v4()));
+    let response: GetAccountMetadataResponse = request_handle
+        .request_typed(ClientRequest::GetAccountMetadata {
+            request_id,
+            params: GetAccountMetadataParams {
+                eligibility_only: true,
+            },
+        })
+        .await
+        .wrap_err("account/metadata/read eligibility check failed in TUI")?;
+
+    Ok(response.metadata_fetch_eligible)
 }
 
 async fn fetch_plugins_list(

@@ -1448,6 +1448,21 @@ Field notes:
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
 
+### 1a) Read ChatGPT account metadata
+
+```json
+{ "method": "account/metadata/read", "params": { "eligibilityOnly": false }, "id": 2 }
+```
+
+Response example:
+
+```json
+{ "id": 2, "result": { "metadataFetchEligible": true, "accountDisplayName": "Acme Corp", "accountGroupNames": ["Engineering"] } }
+```
+
+The metadata response returns nullable fields and may be empty for non-workspace accounts or providers outside the first-party OpenAI ChatGPT flow.
+Set `eligibilityOnly` to `true` to check whether a live metadata fetch would run without making the live metadata requests.
+
 ### 2) Log in with an API key
 
 1. Send:

@@ -69,6 +69,7 @@ use crate::model_catalog::ModelCatalog;
 use crate::multi_agents;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::StatusAccountDisplay;
+use crate::status::StatusAccountMetadata;
 use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -774,7 +775,9 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
+    loading_status_metadata_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
+    next_status_metadata_request_id: u64,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
@@ -4862,7 +4865,9 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
+            loading_status_metadata_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
+            next_status_metadata_request_id: 0,
             plan_type: initial_plan_type,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -7126,7 +7131,9 @@ impl ChatWidget {
     pub(crate) fn add_status_output(
         &mut self,
         refreshing_rate_limits: bool,
-        request_id: Option<u64>,
+        rate_limit_request_id: Option<u64>,
+        metadata_request_id: Option<u64>,
+        account_metadata: Option<StatusAccountMetadata>,
     ) {
         let default_usage = TokenUsage::default();
         let token_info = self.token_info.as_ref();
@@ -7142,6 +7149,7 @@ impl ChatWidget {
             .collect();
         let agents_summary =
             crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
+        let loading_account_metadata = metadata_request_id.is_some();
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
             self.status_account_display.as_ref(),
@@ -7158,35 +7166,85 @@ impl ChatWidget {
             reasoning_effort_override,
             agents_summary,
             refreshing_rate_limits,
+            account_metadata,
+            loading_account_metadata,
         );
-        if let Some(request_id) = request_id {
-            self.refreshing_status_outputs.push((request_id, handle));
+        if let Some(request_id) = rate_limit_request_id {
+            self.refreshing_status_outputs
+                .push((request_id, handle.clone()));
         }
-        self.add_to_history(cell);
+        if let Some(request_id) = metadata_request_id {
+            self.loading_status_metadata_outputs
+                .push((request_id, handle));
+        }
+        if loading_account_metadata {
+            self.flush_answer_stream_with_separator();
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(cell));
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        } else {
+            self.add_to_history(cell);
+        }
+    }
+
+    fn finish_pending_status_output(
+        pending_outputs: &mut Vec<(u64, StatusHistoryHandle)>,
+        request_id: u64,
+        finish: impl FnOnce(&StatusHistoryHandle),
+    ) -> bool {
+        if pending_outputs.is_empty() {
+            return false;
+        }
+
+        let mut remaining = Vec::with_capacity(pending_outputs.len());
+        let mut finish = Some(finish);
+        let mut updated_any = false;
+        for (pending_request_id, handle) in pending_outputs.drain(..) {
+            if pending_request_id == request_id {
+                updated_any = true;
+                if let Some(finish) = finish.take() {
+                    finish(&handle);
+                }
+            } else {
+                remaining.push((pending_request_id, handle));
+            }
+        }
+        *pending_outputs = remaining;
+        updated_any
     }
 
     pub(crate) fn finish_status_rate_limit_refresh(&mut self, request_id: u64) {
-        if self.refreshing_status_outputs.is_empty() {
-            return;
-        }
-
         let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
             .rate_limit_snapshots_by_limit_id
             .values()
             .cloned()
             .collect();
         let now = Local::now();
-        let mut remaining = Vec::with_capacity(self.refreshing_status_outputs.len());
-        let mut updated_any = false;
-        for (pending_request_id, handle) in self.refreshing_status_outputs.drain(..) {
-            if pending_request_id == request_id {
-                updated_any = true;
+        let updated_any = Self::finish_pending_status_output(
+            &mut self.refreshing_status_outputs,
+            request_id,
+            |handle| {
                 handle.finish_rate_limit_refresh(rate_limit_snapshots.as_slice(), now);
-            } else {
-                remaining.push((pending_request_id, handle));
-            }
+            },
+        );
+        if updated_any {
+            self.request_redraw();
         }
-        self.refreshing_status_outputs = remaining;
+    }
+
+    pub(crate) fn finish_status_metadata_fetch(
+        &mut self,
+        request_id: u64,
+        account_metadata: Option<StatusAccountMetadata>,
+    ) {
+        let updated_any = Self::finish_pending_status_output(
+            &mut self.loading_status_metadata_outputs,
+            request_id,
+            |handle| {
+                handle.finish_account_metadata_fetch(account_metadata);
+            },
+        );
         if updated_any {
             self.request_redraw();
         }

@@ -1,10 +1,12 @@
 use super::new_status_output;
 use super::new_status_output_with_rate_limits;
+use super::new_status_output_with_rate_limits_handle;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::status::StatusAccountDisplay;
+use crate::status::StatusAccountMetadata;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use chrono::Duration as ChronoDuration;
@@ -278,6 +280,58 @@ async fn status_snapshot_includes_forked_from() {
         &model_slug,
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_snapshot_includes_account_metadata() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.cwd = test_path_buf("/workspace/tests").abs();
+
+    let account_display = Some(StatusAccountDisplay::ChatGpt {
+        email: Some("dev@example.com".to_string()),
+        plan: Some("Business".to_string()),
+    });
+    let account_metadata = StatusAccountMetadata {
+        account_display_name: Some("Acme Corp".to_string()),
+        account_group_names: Some(vec!["Engineering".to_string(), "Codex Pilots".to_string()]),
+    };
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 8, 9, 10, 11, 12)
+        .single()
+        .expect("valid time");
+
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let (composite, _) = new_status_output_with_rate_limits_handle(
+        &config,
+        account_display.as_ref(),
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+        Some(account_metadata),
+        /*loading_account_metadata*/ false,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
     if cfg!(windows) {
