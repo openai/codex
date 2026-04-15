@@ -113,6 +113,60 @@ fn find_marketplace_plugin_supports_alternate_layout_and_string_local_source() {
 }
 
 #[test]
+fn find_marketplace_plugin_supports_git_subdir_sources() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "remote-plugin",
+      "source": {
+        "source": "git-subdir",
+        "url": "openai/joey_marketplace3",
+        "path": "plugins/toolkit",
+        "ref": "main",
+        "sha": "abc123"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "remote-plugin",
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved,
+        ResolvedMarketplacePlugin {
+            plugin_id: PluginId::new("remote-plugin".to_string(), "codex-curated".to_string())
+                .unwrap(),
+            source: MarketplacePluginSource::Git {
+                url: "https://github.com/openai/joey_marketplace3.git".to_string(),
+                path: Some("plugins/toolkit".to_string()),
+                ref_name: Some("main".to_string()),
+                sha: Some("abc123".to_string()),
+            },
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: None,
+            },
+            interface: None,
+            manifest: None,
+        }
+    );
+}
+
+#[test]
 fn find_marketplace_plugin_reports_missing_plugin() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
@@ -827,7 +881,7 @@ fn list_marketplaces_reports_marketplace_load_errors() {
 }
 
 #[test]
-fn list_marketplaces_skips_unsupported_plugin_sources_but_keeps_local_plugins() {
+fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
 
@@ -845,7 +899,7 @@ fn list_marketplaces_skips_unsupported_plugin_sources_but_keeps_local_plugins() 
       "name": "url-plugin",
       "source": {
         "source": "url",
-        "url": "https://github.com/example/plugin.git"
+        "url": "https://github.com/example/plugin"
       }
     },
     {
@@ -854,7 +908,8 @@ fn list_marketplaces_skips_unsupported_plugin_sources_but_keeps_local_plugins() 
         "source": "git-subdir",
         "url": "owner/repo",
         "path": "plugins/example",
-        "ref": "main"
+        "ref": "main",
+        "sha": "abc123"
       }
     }
   ]
@@ -869,14 +924,53 @@ fn list_marketplaces_skips_unsupported_plugin_sources_but_keeps_local_plugins() 
     .marketplaces;
 
     assert_eq!(marketplaces.len(), 1);
-    assert_eq!(marketplaces[0].name, "mixed-source-marketplace");
-    assert_eq!(marketplaces[0].plugins.len(), 1);
-    assert_eq!(marketplaces[0].plugins[0].name, "local-plugin");
     assert_eq!(
-        marketplaces[0].plugins[0].source,
-        MarketplacePluginSource::Local {
-            path: AbsolutePathBuf::try_from(repo_root.join("plugins/local-plugin")).unwrap(),
-        }
+        marketplaces[0].plugins,
+        vec![
+            MarketplacePlugin {
+                name: "local-plugin".to_string(),
+                source: MarketplacePluginSource::Local {
+                    path: AbsolutePathBuf::try_from(repo_root.join("plugins/local-plugin"))
+                        .unwrap(),
+                },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: None,
+            },
+            MarketplacePlugin {
+                name: "url-plugin".to_string(),
+                source: MarketplacePluginSource::Git {
+                    url: "https://github.com/example/plugin.git".to_string(),
+                    path: None,
+                    ref_name: None,
+                    sha: None,
+                },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: None,
+            },
+            MarketplacePlugin {
+                name: "git-subdir-plugin".to_string(),
+                source: MarketplacePluginSource::Git {
+                    url: "https://github.com/owner/repo.git".to_string(),
+                    path: Some("plugins/example".to_string()),
+                    ref_name: Some("main".to_string()),
+                    sha: Some("abc123".to_string()),
+                },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: None,
+            },
+        ]
     );
 }
 
@@ -1123,35 +1217,6 @@ fn find_marketplace_plugin_skips_invalid_local_paths() {
     assert_eq!(
         err.to_string(),
         "plugin `local-plugin` was not found in marketplace `codex-curated`"
-    );
-}
-
-#[test]
-fn find_marketplace_plugin_skips_unsupported_sources() {
-    let tmp = tempdir().unwrap();
-    let repo_root = tmp.path().join("repo");
-    fs::create_dir_all(repo_root.join(".git")).unwrap();
-    let marketplace_path = write_alternate_marketplace(
-        &repo_root,
-        r#"{
-  "name": "alternate-marketplace",
-  "plugins": [
-    {
-      "name": "remote-plugin",
-      "source": {
-        "source": "url",
-        "url": "https://github.com/example/plugin.git"
-      }
-    }
-  ]
-}"#,
-    );
-
-    let err = find_marketplace_plugin(&marketplace_path, "remote-plugin").unwrap_err();
-
-    assert_eq!(
-        err.to_string(),
-        "plugin `remote-plugin` was not found in marketplace `alternate-marketplace`"
     );
 }
 

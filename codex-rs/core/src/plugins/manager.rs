@@ -22,6 +22,7 @@ use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::loader::load_plugin_skills;
 use codex_core_plugins::loader::load_plugins_from_layer_stack;
 use codex_core_plugins::loader::log_plugin_load_errors;
+use codex_core_plugins::loader::materialize_marketplace_plugin_source;
 use codex_core_plugins::loader::plugin_telemetry_metadata_from_root;
 use codex_core_plugins::loader::refresh_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
@@ -585,10 +586,14 @@ impl PluginsManager {
                 )
             } else {
                 None
-            };
+        };
         let store = self.store.clone();
+        let codex_home = self.codex_home.clone();
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
-            let MarketplacePluginSource::Local { path: source_path } = resolved.source;
+            let materialized =
+                materialize_marketplace_plugin_source(codex_home.as_path(), &resolved.source)
+                    .map_err(PluginStoreError::Invalid)?;
+            let source_path = materialized.path;
             if let Some(plugin_version) = plugin_version {
                 store.install_with_version(source_path, resolved.plugin_id, plugin_version)
             } else {
@@ -753,6 +758,14 @@ impl PluginsManager {
             let plugin_key = plugin_id.as_key();
             let source_path = match plugin.source {
                 MarketplacePluginSource::Local { path } => path,
+                MarketplacePluginSource::Git { .. } => {
+                    warn!(
+                        plugin = plugin_name,
+                        marketplace = %marketplace_name,
+                        "skipping remote plugin source during remote sync"
+                    );
+                    continue;
+                }
             };
             let current_enabled = configured_plugins
                 .get(&plugin_key)
@@ -1031,9 +1044,17 @@ impl PluginsManager {
             });
         }
 
-        let source_path = match &plugin.source {
-            MarketplacePluginSource::Local { path } => path.clone(),
-        };
+        let codex_home = self.codex_home.clone();
+        let source = plugin.source.clone();
+        let materialized = tokio::task::spawn_blocking(move || {
+            materialize_marketplace_plugin_source(codex_home.as_path(), &source)
+        })
+        .await
+        .map_err(|err| {
+            MarketplaceError::InvalidPlugin(format!("failed to materialize plugin source: {err}"))
+        })?
+        .map_err(MarketplaceError::InvalidPlugin)?;
+        let source_path = materialized.path.clone();
         if !source_path.as_path().is_dir() {
             return Err(MarketplaceError::InvalidPlugin(
                 "path does not exist or is not a directory".to_string(),

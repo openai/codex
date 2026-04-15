@@ -32,7 +32,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tracing::warn;
 
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
@@ -150,6 +152,14 @@ pub fn refresh_curated_plugin_cache(
         }
         let source_path = match plugin.source {
             MarketplacePluginSource::Local { path } => path,
+            MarketplacePluginSource::Git { .. } => {
+                warn!(
+                    plugin = plugin_name,
+                    marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
+                    "skipping remote curated plugin source during cache refresh"
+                );
+                continue;
+            }
         };
         plugin_sources.insert(plugin_name, source_path);
     }
@@ -227,7 +237,7 @@ fn refresh_non_curated_plugin_cache_with_mode(
     let store = PluginStore::new(codex_home.to_path_buf());
     let marketplace_outcome = list_marketplaces(additional_roots)
         .map_err(|err| format!("failed to discover marketplaces for cache refresh: {err}"))?;
-    let mut plugin_sources = HashMap::<String, (AbsolutePathBuf, String)>::new();
+    let mut plugin_sources = HashMap::<String, MarketplacePluginSource>::new();
 
     for marketplace in marketplace_outcome.marketplaces {
         if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -256,19 +266,14 @@ fn refresh_non_curated_plugin_cache_with_mode(
                 continue;
             }
 
-            let source_path = match plugin.source {
-                MarketplacePluginSource::Local { path } => path,
-            };
-            let plugin_version = plugin_version_for_source(source_path.as_path())
-                .map_err(|err| format!("failed to read plugin version for {plugin_key}: {err}"))?;
-            plugin_sources.insert(plugin_key, (source_path, plugin_version));
+            plugin_sources.insert(plugin_key, plugin.source);
         }
     }
 
     let mut cache_refreshed = false;
     for plugin_id in configured_non_curated_plugin_ids {
         let plugin_key = plugin_id.as_key();
-        let Some((source_path, plugin_version)) = plugin_sources.get(&plugin_key).cloned() else {
+        let Some(source) = plugin_sources.get(&plugin_key).cloned() else {
             warn!(
                 plugin = plugin_id.plugin_name,
                 marketplace = plugin_id.marketplace_name,
@@ -276,6 +281,13 @@ fn refresh_non_curated_plugin_cache_with_mode(
             );
             continue;
         };
+        let materialized =
+            materialize_marketplace_plugin_source(codex_home, &source).map_err(|err| {
+                format!("failed to materialize plugin source for {plugin_key}: {err}")
+            })?;
+        let source_path = materialized.path.clone();
+        let plugin_version = plugin_version_for_source(source_path.as_path())
+            .map_err(|err| format!("failed to read plugin version for {plugin_key}: {err}"))?;
 
         if mode == NonCuratedCacheRefreshMode::IfVersionChanged
             && store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str())
@@ -835,4 +847,96 @@ fn normalize_plugin_mcp_server_value(
 #[derive(Debug, Default)]
 struct PluginMcpDiscovery {
     mcp_servers: HashMap<String, McpServerConfig>,
+}
+
+#[derive(Debug)]
+pub struct MaterializedMarketplacePluginSource {
+    pub path: AbsolutePathBuf,
+    _tempdir: Option<TempDir>,
+}
+
+pub fn materialize_marketplace_plugin_source(
+    codex_home: &Path,
+    source: &MarketplacePluginSource,
+) -> Result<MaterializedMarketplacePluginSource, String> {
+    match source {
+        MarketplacePluginSource::Local { path } => Ok(MaterializedMarketplacePluginSource {
+            path: path.clone(),
+            _tempdir: None,
+        }),
+        MarketplacePluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+        } => {
+            let staging_root = codex_home.join("plugins/.marketplace-plugin-source-staging");
+            fs::create_dir_all(&staging_root).map_err(|err| {
+                format!(
+                    "failed to create marketplace plugin source staging directory {}: {err}",
+                    staging_root.display()
+                )
+            })?;
+            let tempdir = tempfile::Builder::new()
+                .prefix("marketplace-plugin-source-")
+                .tempdir_in(&staging_root)
+                .map_err(|err| {
+                    format!(
+                        "failed to create marketplace plugin source staging directory in {}: {err}",
+                        staging_root.display()
+                    )
+                })?;
+            clone_git_plugin_source(url, ref_name.as_deref(), sha.as_deref(), tempdir.path())?;
+            let path = if let Some(path) = path {
+                AbsolutePathBuf::try_from(tempdir.path().join(path)).map_err(|err| {
+                    format!("failed to resolve materialized plugin source path: {err}")
+                })?
+            } else {
+                AbsolutePathBuf::try_from(tempdir.path().to_path_buf()).map_err(|err| {
+                    format!("failed to resolve materialized plugin source path: {err}")
+                })?
+            };
+            Ok(MaterializedMarketplacePluginSource {
+                path,
+                _tempdir: Some(tempdir),
+            })
+        }
+    }
+}
+
+fn clone_git_plugin_source(
+    url: &str,
+    ref_name: Option<&str>,
+    sha: Option<&str>,
+    destination: &Path,
+) -> Result<(), String> {
+    run_git(&["clone", url, destination.to_string_lossy().as_ref()], None)?;
+    if let Some(target) = sha.or(ref_name) {
+        run_git(&["checkout", target], Some(destination))?;
+    }
+    Ok(())
+}
+
+fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
+    let mut command = Command::new("git");
+    command.args(args);
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+
+    let output = command
+        .output()
+        .map_err(|err| format!("failed to run git {}: {err}", args.join(" ")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "git {} failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        output.status,
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
 }
