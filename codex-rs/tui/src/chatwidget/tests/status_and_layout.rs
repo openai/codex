@@ -540,7 +540,7 @@ async fn workspace_owner_limit_states_do_not_prompt_for_owner_nudge() {
         RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
         RateLimitReachedType::RateLimitReached,
     ] {
-        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         let mut limits = snapshot(/*percent*/ 100.0);
         limits.rate_limit_reached_type = Some(limit_type);
         chat.on_rate_limit_snapshot(Some(limits));
@@ -548,7 +548,43 @@ async fn workspace_owner_limit_states_do_not_prompt_for_owner_nudge() {
         chat.on_rate_limit_error("Usage limit reached.".to_string());
         let popup = render_bottom_popup(&chat, /*width*/ 90);
         assert!(!popup.contains("workspace owner"));
+        assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
     }
+}
+
+#[tokio::test]
+async fn workspace_owner_limit_states_render_state_specific_messages() {
+    let cases = [
+        (
+            RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+            "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.",
+        ),
+    ];
+
+    let mut rendered_cases = Vec::new();
+    for (limit_type, expected) in cases {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let mut limits = snapshot(/*percent*/ 100.0);
+        limits.rate_limit_reached_type = Some(limit_type);
+        chat.on_rate_limit_snapshot(Some(limits));
+
+        chat.on_rate_limit_error("Usage limit reached.".to_string());
+        let rendered = drain_insert_history(&mut rx)
+            .into_iter()
+            .map(|lines| lines_to_single_string(&lines))
+            .collect::<String>();
+        assert!(rendered.contains(expected), "rendered: {rendered}");
+        rendered_cases.push(rendered);
+    }
+
+    assert_chatwidget_snapshot!(
+        "workspace_owner_limit_state_messages",
+        rendered_cases.join("\n---\n")
+    );
 }
 
 #[tokio::test]
@@ -576,7 +612,7 @@ async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
 }
 
 #[tokio::test]
-async fn workspace_owner_nudge_completion_renders_feedback() {
+async fn workspace_owner_credits_nudge_completion_renders_feedback() {
     let cases = [
         (
             AddCreditsNudgeEmailResult::Sent,
@@ -597,6 +633,7 @@ async fn workspace_owner_nudge_completion_renders_feedback() {
     let mut rendered_cases = Vec::new();
     for (result, expected) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.start_add_credits_nudge_email_request(AddCreditsNudgeCreditType::Credits);
         chat.finish_add_credits_nudge_email_request(result);
         let rendered = drain_insert_history(&mut rx)
             .into_iter()
@@ -607,7 +644,45 @@ async fn workspace_owner_nudge_completion_renders_feedback() {
     }
 
     assert_chatwidget_snapshot!(
-        "workspace_owner_nudge_completion_feedback",
+        "workspace_owner_credits_nudge_completion_feedback",
+        rendered_cases.join("\n---\n")
+    );
+}
+
+#[tokio::test]
+async fn workspace_owner_usage_limit_nudge_completion_renders_feedback() {
+    let cases = [
+        (
+            AddCreditsNudgeEmailResult::Sent,
+            "Limit increase requested.",
+        ),
+        (
+            AddCreditsNudgeEmailResult::CooldownActive,
+            "A limit increase was already requested recently.",
+        ),
+        (
+            AddCreditsNudgeEmailResult::Failed {
+                message: "request failed".to_string(),
+            },
+            "Could not request a limit increase. Please try again.",
+        ),
+    ];
+
+    let mut rendered_cases = Vec::new();
+    for (result, expected) in cases {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.start_add_credits_nudge_email_request(AddCreditsNudgeCreditType::UsageLimit);
+        chat.finish_add_credits_nudge_email_request(result);
+        let rendered = drain_insert_history(&mut rx)
+            .into_iter()
+            .map(|lines| lines_to_single_string(&lines))
+            .collect::<String>();
+        assert!(rendered.contains(expected), "rendered: {rendered}");
+        rendered_cases.push(rendered);
+    }
+
+    assert_chatwidget_snapshot!(
+        "workspace_owner_usage_limit_nudge_completion_feedback",
         rendered_cases.join("\n---\n")
     );
 }

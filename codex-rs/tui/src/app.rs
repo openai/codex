@@ -4601,7 +4601,8 @@ impl App {
                 self.refresh_rate_limits(app_server, origin);
             }
             AppEvent::SendAddCreditsNudgeEmail { credit_type } => {
-                self.chat_widget.start_add_credits_nudge_email_request();
+                self.chat_widget
+                    .start_add_credits_nudge_email_request(credit_type);
                 self.send_add_credits_nudge_email(app_server, credit_type);
             }
             AppEvent::AddCreditsNudgeEmailFinished { result } => {

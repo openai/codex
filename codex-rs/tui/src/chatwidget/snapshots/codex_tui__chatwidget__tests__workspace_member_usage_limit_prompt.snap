@@ -2,8 +2,8 @@
 source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: popup
 ---
-  Workspace limit reached
-  Your workspace usage limit has been reached. Request an increase from your workspace owner?
+  Usage limit reached
+  Request a limit increase from your owner to continue using codex. Request increase?
 
   1. Yes (y)
 › 2. No (default) (n)
